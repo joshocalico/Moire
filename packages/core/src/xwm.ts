@@ -16,6 +16,18 @@ const x11 = require("x11") as {
   eventMask: Record<string, number>;
 };
 
+export type XwmWindowType =
+  | "normal"
+  | "dialog"
+  | "utility"
+  | "splash"
+  | "menu"
+  | "tooltip"
+  | "dropdown"
+  | "popup"
+  | "notification"
+  | "other";
+
 export type XwmWindow = {
   wid: number;
   serial: bigint | null;
@@ -26,6 +38,10 @@ export type XwmWindow = {
   height: number;
   title: string;
   overrideRedirect: boolean;
+  /** ICCCM WM_TRANSIENT_FOR parent wid, if any. */
+  transientFor: number | null;
+  windowType: XwmWindowType;
+  modal: boolean;
 };
 
 export type XwmEvents = {
@@ -35,6 +51,8 @@ export type XwmEvents = {
   configured: [win: XwmWindow];
   title: [win: XwmWindow];
   serial: [win: XwmWindow, serial: bigint];
+  /** Client requested activation via _NET_ACTIVE_WINDOW. */
+  activate: [win: XwmWindow];
 };
 
 type XClient = {
@@ -81,11 +99,47 @@ type XClient = {
     length: number,
     cb: (err: Error | null, prop: { data: Buffer; type: number }) => void,
   ) => void;
+  ChangeProperty: (
+    mode: number,
+    wid: number,
+    property: number,
+    type: number,
+    units: number,
+    data: Buffer,
+  ) => void;
+  CreateWindow: (
+    id: number,
+    parentId: number,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    borderWidth?: number,
+    depth?: number,
+    _class?: number,
+    visual?: number,
+    values?: Record<string, unknown>,
+  ) => void;
+  SendEvent: (
+    destination: number,
+    propagate: boolean,
+    eventMask: number,
+    eventRawData: Buffer,
+  ) => void;
+  DestroyWindow: (wid: number) => void;
+  UnmapWindow: (wid: number) => void;
   event_consumers: Record<number, EventEmitter>;
   on: (ev: string, cb: (...args: unknown[]) => void) => void;
   terminate?: () => void;
   init: (stream: net.Socket) => void;
 };
+
+/** XA_ATOM — type of WM_PROTOCOLS / _NET_WM_WINDOW_TYPE values. */
+const XA_ATOM = 4;
+/** XA_WINDOW — type of WM_TRANSIENT_FOR / _NET_SUPPORTING_WM_CHECK. */
+const XA_WINDOW = 33;
+/** ChangeProperty mode Replace. */
+const PROP_MODE_REPLACE = 0;
 
 type XDisplay = {
   client: XClient;
@@ -101,6 +155,8 @@ export class X11Wm extends EventEmitter {
   private windows = new Map<number, XwmWindow>();
   /** serial → wid waiting for Wayland surface (or already paired). */
   private bySerial = new Map<bigint, number>();
+  /** EWMH supporting-WM-check child window. */
+  private ewmhCheckWid = 0;
 
   /**
    * Connect as the Xwayland WM over the `-wm` socketpair fd.
@@ -201,11 +257,26 @@ export class X11Wm extends EventEmitter {
       "WM_NAME",
       "WM_PROTOCOLS",
       "WM_DELETE_WINDOW",
+      "WM_TRANSIENT_FOR",
       "_NET_WM_NAME",
       "_NET_SUPPORTED",
       "_NET_SUPPORTING_WM_CHECK",
       "_NET_WM_STATE",
+      "_NET_WM_STATE_MODAL",
+      "_NET_WM_STATE_MAXIMIZED_VERT",
+      "_NET_WM_STATE_MAXIMIZED_HORZ",
+      "_NET_WM_STATE_FULLSCREEN",
       "_NET_ACTIVE_WINDOW",
+      "_NET_WM_WINDOW_TYPE",
+      "_NET_WM_WINDOW_TYPE_NORMAL",
+      "_NET_WM_WINDOW_TYPE_DIALOG",
+      "_NET_WM_WINDOW_TYPE_UTILITY",
+      "_NET_WM_WINDOW_TYPE_SPLASH",
+      "_NET_WM_WINDOW_TYPE_MENU",
+      "_NET_WM_WINDOW_TYPE_TOOLTIP",
+      "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU",
+      "_NET_WM_WINDOW_TYPE_POPUP_MENU",
+      "_NET_WM_WINDOW_TYPE_NOTIFICATION",
       "WL_SURFACE_SERIAL",
       "WL_SURFACE_ID",
       "UTF8_STRING",
@@ -230,6 +301,8 @@ export class X11Wm extends EventEmitter {
         reject(new Error(`XWM: failed to become WM: ${err}`));
       }
     });
+
+    this.publishEwmh();
 
     // Rootless Xwayland only creates wl_surfaces for Composite-redirected
     // windows (RedirectDrawManual). Redirect all client subwindows.
@@ -277,6 +350,82 @@ export class X11Wm extends EventEmitter {
     });
 
     console.log(`[xwm] ready on root=${this.root} (wm fd)`);
+  }
+
+  /** Minimal EWMH so toolkits recognize us as a modern WM. */
+  private publishEwmh(): void {
+    const X = this.X;
+    if (!X) return;
+    try {
+      this.ewmhCheckWid = X.AllocID();
+      X.CreateWindow(this.ewmhCheckWid, this.root, -1, -1, 1, 1, 0);
+      const checkBuf = Buffer.alloc(4);
+      checkBuf.writeUInt32LE(this.ewmhCheckWid >>> 0, 0);
+      const checkAtom = this.atoms._NET_SUPPORTING_WM_CHECK!;
+      X.ChangeProperty(
+        PROP_MODE_REPLACE,
+        this.root,
+        checkAtom,
+        XA_WINDOW,
+        32,
+        checkBuf,
+      );
+      X.ChangeProperty(
+        PROP_MODE_REPLACE,
+        this.ewmhCheckWid,
+        checkAtom,
+        XA_WINDOW,
+        32,
+        checkBuf,
+      );
+      const name = Buffer.from("Moire", "utf8");
+      X.ChangeProperty(
+        PROP_MODE_REPLACE,
+        this.ewmhCheckWid,
+        this.atoms._NET_WM_NAME!,
+        this.atoms.UTF8_STRING!,
+        8,
+        name,
+      );
+
+      const supportedNames = [
+        "_NET_SUPPORTED",
+        "_NET_SUPPORTING_WM_CHECK",
+        "_NET_WM_NAME",
+        "_NET_WM_STATE",
+        "_NET_WM_STATE_MODAL",
+        "_NET_ACTIVE_WINDOW",
+        "_NET_WM_WINDOW_TYPE",
+        "_NET_WM_WINDOW_TYPE_NORMAL",
+        "_NET_WM_WINDOW_TYPE_DIALOG",
+        "_NET_WM_WINDOW_TYPE_UTILITY",
+        "_NET_WM_WINDOW_TYPE_SPLASH",
+        "_NET_WM_WINDOW_TYPE_MENU",
+        "_NET_WM_WINDOW_TYPE_TOOLTIP",
+        "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU",
+        "_NET_WM_WINDOW_TYPE_POPUP_MENU",
+        "_NET_WM_WINDOW_TYPE_NOTIFICATION",
+        "WM_DELETE_WINDOW",
+      ];
+      const atoms = supportedNames
+        .map((n) => this.atoms[n])
+        .filter((a): a is number => a != null);
+      const list = Buffer.alloc(atoms.length * 4);
+      for (let i = 0; i < atoms.length; i++) {
+        list.writeUInt32LE(atoms[i]! >>> 0, i * 4);
+      }
+      X.ChangeProperty(
+        PROP_MODE_REPLACE,
+        this.root,
+        this.atoms._NET_SUPPORTED!,
+        XA_ATOM,
+        32,
+        list,
+      );
+      console.log(`[xwm] EWMH published (_NET_SUPPORTED=${atoms.length})`);
+    } catch (err) {
+      console.warn("[xwm] EWMH publish failed:", err);
+    }
   }
 
   windowBySerial(serial: bigint): XwmWindow | null {
@@ -327,13 +476,95 @@ export class X11Wm extends EventEmitter {
     }
   }
 
+  /**
+   * ICCCM close: if the client lists WM_DELETE_WINDOW in WM_PROTOCOLS, send
+   * that ClientMessage; otherwise DestroyWindow. Never just Unmap — that hides
+   * the surface without telling the app to quit.
+   */
   closeWindow(wid: number): void {
     const X = this.X;
     if (!X) return;
+    const protocols = this.atoms.WM_PROTOCOLS;
+    const deleteAtom = this.atoms.WM_DELETE_WINDOW;
+    if (protocols == null || deleteAtom == null) {
+      this.destroyWindow(wid);
+      return;
+    }
+    X.GetProperty(0, wid, protocols, XA_ATOM, 0, 64, (err, prop) => {
+      if (err) {
+        console.warn(`[xwm] close GetProperty WM_PROTOCOLS wid=${wid}`, err);
+        this.destroyWindow(wid);
+        return;
+      }
+      const data = prop?.data;
+      let supportsDelete = false;
+      if (data && data.length >= 4) {
+        for (let i = 0; i + 4 <= data.length; i += 4) {
+          if (data.readUInt32LE(i) === deleteAtom) {
+            supportsDelete = true;
+            break;
+          }
+        }
+      }
+      if (supportsDelete) {
+        this.sendDeleteWindow(wid);
+      } else {
+        this.destroyWindow(wid);
+      }
+    });
+  }
+
+  private sendDeleteWindow(wid: number): void {
+    const X = this.X;
+    if (!X) return;
+    const protocols = this.atoms.WM_PROTOCOLS!;
+    const deleteAtom = this.atoms.WM_DELETE_WINDOW!;
+    // XClientMessageEvent — 32 bytes, format 32.
+    const ev = Buffer.alloc(32);
+    ev.writeUInt8(33, 0); // ClientMessage
+    ev.writeUInt8(32, 1); // format
+    ev.writeUInt32LE(wid >>> 0, 4);
+    ev.writeUInt32LE(protocols >>> 0, 8);
+    ev.writeUInt32LE(deleteAtom >>> 0, 12); // data.l[0]
+    ev.writeUInt32LE(0, 16); // data.l[1] = CurrentTime
     try {
-      (X as unknown as { UnmapWindow?: (id: number) => void }).UnmapWindow?.(wid);
-    } catch {
-      // ok
+      X.SendEvent(wid, false, 0, ev);
+      console.log(`[xwm] close wid=${wid} via WM_DELETE_WINDOW`);
+    } catch (err) {
+      console.warn(`[xwm] SendEvent WM_DELETE_WINDOW wid=${wid}`, err);
+      this.destroyWindow(wid);
+    }
+  }
+
+  private destroyWindow(wid: number): void {
+    const X = this.X;
+    if (!X) return;
+    try {
+      X.DestroyWindow(wid);
+      console.log(`[xwm] close wid=${wid} via DestroyWindow`);
+    } catch (err) {
+      console.warn(`[xwm] DestroyWindow wid=${wid}`, err);
+    }
+  }
+
+  /** Publish _NET_ACTIVE_WINDOW on the root (EWMH focus hint). */
+  setActiveWindow(wid: number | null): void {
+    const X = this.X;
+    const atom = this.atoms._NET_ACTIVE_WINDOW;
+    if (!X || atom == null) return;
+    try {
+      const buf = Buffer.alloc(4);
+      buf.writeUInt32LE((wid ?? 0) >>> 0, 0);
+      X.ChangeProperty(
+        PROP_MODE_REPLACE,
+        this.root,
+        atom,
+        XA_WINDOW,
+        32,
+        buf,
+      );
+    } catch (err) {
+      console.warn("[xwm] setActiveWindow failed:", err);
     }
   }
 
@@ -359,6 +590,9 @@ export class X11Wm extends EventEmitter {
         height: 0,
         title: "",
         overrideRedirect: false,
+        transientFor: null,
+        windowType: "normal",
+        modal: false,
       };
       this.windows.set(wid, win);
     }
@@ -421,15 +655,25 @@ export class X11Wm extends EventEmitter {
         win.y = g.yPos ?? g.y ?? 0;
         win.width = g.width ?? 0;
         win.height = g.height ?? 0;
-        X.MapWindow(wid);
-        win.mapped = true;
-        console.log(
-          `[xwm] mapped wid=${wid} ${win.width}x${win.height} @ ${win.x},${win.y} override=${win.overrideRedirect}`,
-        );
-        this.readTitle(wid);
-        this.emit("mapped", win);
+        void this.refreshHints(wid).then(() => {
+          X.MapWindow(wid);
+          win.mapped = true;
+          console.log(
+            `[xwm] mapped wid=${wid} ${win.width}x${win.height} @ ${win.x},${win.y} override=${win.overrideRedirect} transient=${win.transientFor ?? "-"} type=${win.windowType} modal=${win.modal ? 1 : 0}`,
+          );
+          this.readTitle(wid);
+          this.emit("mapped", win);
+        });
       });
     });
+  }
+
+  private refreshHints(wid: number): Promise<void> {
+    return Promise.all([
+      this.readTransientFor(wid),
+      this.readWindowType(wid),
+      this.readWmState(wid),
+    ]).then(() => undefined);
   }
 
   private onConfigureRequest(ev: Record<string, unknown>): void {
@@ -473,7 +717,105 @@ export class X11Wm extends EventEmitter {
       atom === this.atoms._NET_WM_NAME
     ) {
       this.readTitle(wid);
+    } else if (atom === this.atoms.WM_TRANSIENT_FOR) {
+      void this.readTransientFor(wid);
+    } else if (atom === this.atoms._NET_WM_WINDOW_TYPE) {
+      void this.readWindowType(wid);
+    } else if (atom === this.atoms._NET_WM_STATE) {
+      void this.readWmState(wid);
     }
+  }
+
+  private readTransientFor(wid: number): Promise<void> {
+    const X = this.X!;
+    const atom = this.atoms.WM_TRANSIENT_FOR;
+    if (atom == null) return Promise.resolve();
+    return new Promise((resolve) => {
+      X.GetProperty(0, wid, atom, XA_WINDOW, 0, 1, (err, prop) => {
+        const win = this.ensureWindow(wid);
+        if (!err) {
+          const data = prop?.data;
+          if (data && data.length >= 4) {
+            const parent = data.readUInt32LE(0);
+            win.transientFor = parent !== 0 ? parent : null;
+          } else {
+            win.transientFor = null;
+          }
+        }
+        resolve();
+      });
+    });
+  }
+
+  private readWindowType(wid: number): Promise<void> {
+    const X = this.X!;
+    const atom = this.atoms._NET_WM_WINDOW_TYPE;
+    if (atom == null) return Promise.resolve();
+    return new Promise((resolve) => {
+      X.GetProperty(0, wid, atom, XA_ATOM, 0, 16, (err, prop) => {
+        const win = this.ensureWindow(wid);
+        if (err || !prop?.data || prop.data.length < 4) {
+          win.windowType = "normal";
+          resolve();
+          return;
+        }
+        const data = prop.data;
+        let type: XwmWindowType = "other";
+        for (let i = 0; i + 4 <= data.length; i += 4) {
+          const a = data.readUInt32LE(i);
+          if (a === this.atoms._NET_WM_WINDOW_TYPE_DIALOG) type = "dialog";
+          else if (a === this.atoms._NET_WM_WINDOW_TYPE_UTILITY) type = "utility";
+          else if (a === this.atoms._NET_WM_WINDOW_TYPE_SPLASH) type = "splash";
+          else if (a === this.atoms._NET_WM_WINDOW_TYPE_MENU) type = "menu";
+          else if (a === this.atoms._NET_WM_WINDOW_TYPE_TOOLTIP) type = "tooltip";
+          else if (a === this.atoms._NET_WM_WINDOW_TYPE_DROPDOWN_MENU) {
+            type = "dropdown";
+          } else if (a === this.atoms._NET_WM_WINDOW_TYPE_POPUP_MENU) {
+            type = "popup";
+          } else if (a === this.atoms._NET_WM_WINDOW_TYPE_NOTIFICATION) {
+            type = "notification";
+          } else if (a === this.atoms._NET_WM_WINDOW_TYPE_NORMAL) type = "normal";
+          else continue;
+          break;
+        }
+        win.windowType = type;
+        resolve();
+      });
+    });
+  }
+
+  private readWmState(wid: number): Promise<void> {
+    const X = this.X!;
+    const atom = this.atoms._NET_WM_STATE;
+    if (atom == null) return Promise.resolve();
+    return new Promise((resolve) => {
+      X.GetProperty(0, wid, atom, XA_ATOM, 0, 32, (err, prop) => {
+        const win = this.ensureWindow(wid);
+        win.modal = false;
+        if (!err && prop?.data && prop.data.length >= 4) {
+          const modalAtom = this.atoms._NET_WM_STATE_MODAL;
+          for (let i = 0; i + 4 <= prop.data.length; i += 4) {
+            if (modalAtom != null && prop.data.readUInt32LE(i) === modalAtom) {
+              win.modal = true;
+              break;
+            }
+          }
+        }
+        resolve();
+      });
+    });
+  }
+
+  /** True when the window type should skip Moire SSD (menus/tooltips/splash). */
+  static isUndecoratedType(type: XwmWindowType): boolean {
+    return (
+      type === "menu" ||
+      type === "tooltip" ||
+      type === "dropdown" ||
+      type === "popup" ||
+      type === "splash" ||
+      type === "notification"
+    );
   }
 
   private onClientMessage(ev: Record<string, unknown>): void {
@@ -494,6 +836,10 @@ export class X11Wm extends EventEmitter {
       this.bySerial.set(serial, wid);
       console.log(`[xwm] WL_SURFACE_SERIAL wid=${wid} serial=${serial}`);
       this.emit("serial", win, serial);
+    } else if (type === this.atoms._NET_ACTIVE_WINDOW) {
+      // data.l[0]=source, [1]=timestamp, [2]=requestor — wid is the window.
+      const win = this.ensureWindow(wid);
+      if (win.mapped) this.emit("activate", win);
     }
   }
 

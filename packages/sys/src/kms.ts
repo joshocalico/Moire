@@ -127,6 +127,17 @@ export type KmsOutput = {
   modePtr: unknown;
   /** Durable connector id array for presentKms — avoid per-frame koffi.alloc. */
   connectorsPtr: unknown;
+  /** Cached drmModeSetCrtc — avoid loadLibdrm/func lookup every present. */
+  setCrtc: (
+    fd: number,
+    crtcId: number,
+    bufferId: number,
+    x: number,
+    y: number,
+    connectors: unknown,
+    count: number,
+    mode: unknown,
+  ) => number;
 };
 
 /**
@@ -353,6 +364,7 @@ export function openKmsOutput(cardPath = "/dev/dri/card1"): KmsOutput {
           map,
           modePtr,
           connectorsPtr: connectors,
+          setCrtc: drmModeSetCrtc as KmsOutput["setCrtc"],
         };
       } finally {
         drmModeFreeConnector(connPtr);
@@ -367,11 +379,7 @@ export function openKmsOutput(cardPath = "/dev/dri/card1"): KmsOutput {
 
 /** Re-apply the CRTC → FB mapping (forces some virtual GPUs to refresh). */
 export function presentKms(out: KmsOutput): void {
-  const libdrm = loadLibdrm();
-  const drmModeSetCrtc = libdrm.func(
-    "int drmModeSetCrtc(int fd, uint32_t crtcId, uint32_t bufferId, uint32_t x, uint32_t y, uint32_t *connectors, int count, void *mode)",
-  );
-  const set = drmModeSetCrtc(
+  const set = out.setCrtc(
     out.fd,
     out.crtcId,
     out.fbId,
@@ -380,7 +388,7 @@ export function presentKms(out: KmsOutput): void {
     out.connectorsPtr,
     1,
     out.modePtr,
-  ) as number;
+  );
   if (set !== 0) {
     throw new Error(`drmModeSetCrtc present failed (${set})`);
   }

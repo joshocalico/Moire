@@ -22,6 +22,8 @@ export {
   flushMmap,
   socketpairUnixStream,
   clearCloexec,
+  peerCredentials,
+  type PeerCredentials,
   PROT_READ,
   PROT_WRITE,
   MAP_SHARED,

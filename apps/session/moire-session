@@ -13,6 +13,10 @@ export GDK_BACKEND="${GDK_BACKEND:-wayland}"
 # GTK/GSK: virgl path still SIGSEGVs on Parallels; Cairo is the day-0 renderer.
 export GSK_RENDERER="${GSK_RENDERER:-cairo}"
 
+# Moire GTK theme helpers (LibreOffice GTK3 CSD + Nautilus/libadwaita dark chrome).
+# shellcheck source=apply-gtk-theme.sh
+source "${ROOT}/apps/session/apply-gtk-theme.sh"
+
 if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
   # Prefer a home-stable dir: /run/user/$UID is deleted by systemd when there
   # is no logind session / linger (common for our runuser-based guest session).
@@ -38,6 +42,8 @@ echo "Moire session: GSK_RENDERER=$GSK_RENDERER"
 
 session_inner() {
   set -euo pipefail
+  # Apply theme inside the D-Bus session so gsettings hits this bus.
+  moire_apply_gtk_theme
   rm -f "$SOCKET" "$SOCKET.lock"
 
   # shellcheck disable=SC2086
@@ -105,6 +111,7 @@ session_inner() {
 }
 
 export -f session_inner
+export -f moire_apply_gtk_theme
 export MOIRE_COMPOSITOR SOCKET ROOT
 # Run inside one D-Bus session so GTK apps share the bus with the compositor.
 exec dbus-run-session -- bash -c 'session_inner'

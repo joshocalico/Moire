@@ -1,0 +1,257 @@
+/* Moire GTK3 — Adwaita dark base + Moire chrome tokens.
+ * Tokens align with themes/default/theme.json and packages/shell TitleBar. */
+
+@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained-dark.css");
+
+@define-color moire_bg #1a1b1e;
+@define-color moire_panel #25262b;
+@define-color moire_titlebar #2a2e33;
+@define-color moire_titlebar_inactive #1e2126;
+@define-color moire_accent #74c0fc;
+@define-color moire_accent_line #1a6b7a;
+@define-color moire_fg #f1f3f5;
+@define-color moire_muted #9aa0a6;
+@define-color moire_btn #3a3f46;
+@define-color moire_base #141517;
+@define-color moire_border #3a3f46;
+
+@define-color theme_bg_color @moire_bg;
+@define-color theme_fg_color @moire_fg;
+@define-color theme_base_color @moire_base;
+@define-color theme_selected_bg_color @moire_accent;
+@define-color theme_selected_fg_color #0b0c0e;
+@define-color insensitive_bg_color @moire_panel;
+@define-color insensitive_fg_color @moire_muted;
+@define-color borders @moire_border;
+
+window,
+.background {
+  background-color: @moire_bg;
+  color: @moire_fg;
+  border-radius: 0;
+}
+
+/* Match Moire SSD titlebar height / colors for CSD apps (LibreOffice, etc.) */
+headerbar,
+.titlebar,
+decoration,
+decoration:backdrop {
+  border-radius: 0;
+}
+
+headerbar,
+.titlebar {
+  min-height: 32px;
+  padding: 2px 6px;
+  background-color: @moire_titlebar;
+  background-image: none;
+  color: @moire_fg;
+  border: none;
+  border-bottom: 1px solid @moire_accent_line;
+  box-shadow: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+headerbar:backdrop,
+.titlebar:backdrop {
+  background-color: @moire_titlebar_inactive;
+  color: @moire_muted;
+  border-bottom-color: #2a3236;
+}
+
+headerbar label,
+headerbar .title,
+.titlebar label {
+  color: inherit;
+  font-weight: 600;
+}
+
+headerbar button,
+.titlebar button {
+  min-height: 28px;
+  min-width: 28px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background-color: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  color: inherit;
+}
+
+headerbar button:hover,
+.titlebar button:hover {
+  background-color: @moire_btn;
+}
+
+headerbar button:active,
+headerbar button:checked,
+.titlebar button:active,
+.titlebar button:checked {
+  background-color: alpha(@moire_accent, 0.25);
+  color: @moire_fg;
+}
+
+headerbar button.close:hover {
+  background-color: #c92a2a;
+  color: #ffffff;
+}
+
+toolbar,
+.toolbar {
+  background-color: @moire_panel;
+  background-image: none;
+  border: none;
+  border-bottom: 1px solid @moire_border;
+  color: @moire_fg;
+}
+
+notebook > header {
+  background-color: @moire_panel;
+  border-color: @moire_border;
+}
+
+notebook > header > tabs > tab {
+  background-color: transparent;
+  color: @moire_muted;
+  border: none;
+  padding: 6px 12px;
+}
+
+notebook > header > tabs > tab:checked {
+  background-color: @moire_bg;
+  color: @moire_fg;
+  box-shadow: inset 0 -2px 0 @moire_accent;
+}
+
+entry,
+spinbutton,
+combobox > .linked > entry {
+  background-color: @moire_base;
+  color: @moire_fg;
+  border: 1px solid @moire_border;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+entry:focus {
+  border-color: @moire_accent;
+}
+
+button {
+  background-image: none;
+  background-color: @moire_btn;
+  color: @moire_fg;
+  border: 1px solid @moire_border;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+button:hover {
+  background-color: #464b54;
+}
+
+button:checked,
+button.suggested-action {
+  background-color: alpha(@moire_accent, 0.3);
+  border-color: @moire_accent;
+  color: @moire_fg;
+}
+
+button.suggested-action {
+  background-color: @moire_accent;
+  color: #0b0c0e;
+  border-color: @moire_accent;
+}
+
+button.destructive-action {
+  background-color: #c92a2a;
+  color: #ffffff;
+  border-color: #c92a2a;
+}
+
+menu,
+.menu,
+.context-menu {
+  background-color: @moire_panel;
+  color: @moire_fg;
+  border: 1px solid @moire_border;
+}
+
+menuitem:hover,
+.menuitem:hover,
+modelbutton:hover {
+  background-color: alpha(@moire_accent, 0.22);
+  color: @moire_fg;
+}
+
+scrollbar slider {
+  background-color: #5c636d;
+  border-radius: 4px;
+  min-width: 8px;
+  min-height: 8px;
+}
+
+scrollbar slider:hover {
+  background-color: @moire_accent;
+}
+
+scrollbar trough {
+  background-color: @moire_bg;
+}
+
+sidebar,
+.sidebar,
+placessidebar {
+  background-color: @moire_panel;
+  color: @moire_fg;
+  border: none;
+}
+
+.sidebar row:selected,
+placessidebar row:selected,
+list row:selected {
+  background-color: alpha(@moire_accent, 0.28);
+  color: @moire_fg;
+}
+
+tooltip {
+  background-color: @moire_panel;
+  color: @moire_fg;
+  border: 1px solid @moire_border;
+  border-radius: 4px;
+}
+
+separator {
+  background-color: @moire_border;
+}
+
+progressbar trough {
+  background-color: @moire_base;
+  border: 1px solid @moire_border;
+}
+
+progressbar progress {
+  background-color: @moire_accent;
+  background-image: none;
+}
+
+treeview,
+.view {
+  background-color: @moire_bg;
+  color: @moire_fg;
+}
+
+treeview:selected,
+.view:selected {
+  background-color: alpha(@moire_accent, 0.28);
+  color: @moire_fg;
+}
+
+/* LibreOffice / VCL often uses these class names via GTK */
+.libreoffice-base,
+.soffice {
+  background-color: @moire_bg;
+  color: @moire_fg;
+}

@@ -10,7 +10,7 @@ import net from "node:net";
 import { EventEmitter } from "node:events";
 import koffi from "koffi";
 import { assertLinux } from "./platform.js";
-import { getLibc } from "./libc.js";
+import { getLibc, peerCredentials } from "./libc.js";
 
 const SOL_SOCKET = 1;
 const SCM_RIGHTS = 1;
@@ -130,6 +130,8 @@ export class WaylandSocketServer extends EventEmitter {
 export class WaylandClientConn extends EventEmitter {
   private readonly sock: net.Socket;
   private readonly fd: number;
+  /** Peer process id from SO_PEERCRED (Linux), if available. */
+  readonly peerPid: number | null;
   private reading = false;
   private readonly recvmsg: (sockfd: number, msg: unknown, flags: number) => number | bigint;
   private readonly sendmsg: (sockfd: number, msg: unknown, flags: number) => number | bigint;
@@ -153,6 +155,7 @@ export class WaylandClientConn extends EventEmitter {
     super();
     this.sock = sock;
     this.fd = socketFd(sock);
+    this.peerPid = peerCredentials(this.fd)?.pid ?? null;
     const libc = getLibc();
     this.recvmsg = libc.func(
       "long recvmsg(int sockfd, void *msg, int flags)",

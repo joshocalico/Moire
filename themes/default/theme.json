@@ -1,11 +1,16 @@
 {
   "name": "moire-default",
   "version": "0.0.0",
+  "gtkTheme": "Moire",
   "tokens": {
     "bg": "#1a1b1e",
     "panel": "#25262b",
+    "titlebar": "#2a2e33",
+    "titlebarInactive": "#1e2126",
     "accent": "#74c0fc",
+    "accentLine": "#1a6b7a",
     "text": "#f1f3f5",
+    "muted": "#9aa0a6",
     "titlebarHeight": 32,
     "panelHeight": 36
   }

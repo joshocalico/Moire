@@ -19,7 +19,8 @@ packages/
   react-host/     # react-reconciler + Yoga → scene graph
   app-discovery/  # Freedesktop .desktop + icons
   shell/          # SSD, launcher, panel, Alt+Tab
-themes/default/
+themes/default/   # compositor tokens (JSON)
+themes/Moire/     # GTK3/GTK4 theme for CSD apps (LibreOffice, etc.)
 docs/dev-vm.md    # Parallels Ubuntu VM + DRM/VT runbook
 ```
 

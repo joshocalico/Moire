@@ -4,6 +4,8 @@ export const SSD_PANEL_H = 36;
 
 export type SsdWindowInfo = {
   surfaceId: number;
+  /** Distinguishes clients — Wayland object ids are per-connection. */
+  clientId: number;
   /** Frame origin (titlebar top-left). */
   x: number;
   y: number;
@@ -14,7 +16,7 @@ export type SsdWindowInfo = {
 };
 
 export type SsdAction =
-  | { kind: "drag"; surfaceId: number }
-  | { kind: "close"; surfaceId: number }
-  | { kind: "maximize"; surfaceId: number }
-  | { kind: "minimize"; surfaceId: number };
+  | { kind: "drag"; surfaceId: number; clientId: number }
+  | { kind: "close"; surfaceId: number; clientId: number }
+  | { kind: "maximize"; surfaceId: number; clientId: number }
+  | { kind: "minimize"; surfaceId: number; clientId: number };

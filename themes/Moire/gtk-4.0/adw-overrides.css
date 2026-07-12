@@ -1,0 +1,122 @@
+/* Moire overlays for GTK4 / libadwaita (loaded as user gtk.css).
+ * Tokens align with themes/default/theme.json and packages/shell TitleBar. */
+
+@define-color moire_bg #1a1b1e;
+@define-color moire_panel #25262b;
+@define-color moire_titlebar #2a2e33;
+@define-color moire_titlebar_inactive #1e2126;
+@define-color moire_accent #74c0fc;
+@define-color moire_accent_line #1a6b7a;
+@define-color moire_fg #f1f3f5;
+@define-color moire_muted #9aa0a6;
+@define-color moire_btn #3a3f46;
+@define-color moire_base #141517;
+@define-color moire_border #3a3f46;
+
+window {
+  background-color: @moire_bg;
+  color: @moire_fg;
+  border-radius: 0;
+}
+
+headerbar {
+  min-height: 32px;
+  background-color: @moire_titlebar;
+  color: @moire_fg;
+  border-bottom: 1px solid @moire_accent_line;
+  box-shadow: none;
+  border-radius: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+headerbar:backdrop {
+  background-color: @moire_titlebar_inactive;
+  color: @moire_muted;
+  border-bottom-color: #2a3236;
+}
+
+headerbar windowcontrols button {
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 4px;
+}
+
+headerbar windowcontrols button:hover {
+  background-color: @moire_btn;
+}
+
+headerbar windowcontrols button.close:hover {
+  background-color: #c92a2a;
+  color: #ffffff;
+}
+
+toolbar {
+  background-color: @moire_panel;
+  color: @moire_fg;
+}
+
+entry {
+  background-color: @moire_base;
+  color: @moire_fg;
+  border: 1px solid @moire_border;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+entry:focus {
+  border-color: @moire_accent;
+  outline: none;
+  box-shadow: 0 0 0 1px alpha(@moire_accent, 0.4);
+}
+
+button {
+  border-radius: 4px;
+}
+
+button:checked,
+button.suggested-action {
+  background-color: alpha(@moire_accent, 0.3);
+}
+
+button.suggested-action {
+  background-color: @moire_accent;
+  color: #0b0c0e;
+}
+
+popover,
+menu {
+  background-color: @moire_panel;
+  color: @moire_fg;
+  border: 1px solid @moire_border;
+}
+
+scrollbar slider {
+  background-color: #5c636d;
+  border-radius: 4px;
+  min-width: 8px;
+}
+
+scrollbar slider:hover {
+  background-color: @moire_accent;
+}
+
+/* libadwaita surfaces */
+.sidebar,
+navigation-view,
+navigation-split-view {
+  background-color: @moire_panel;
+  color: @moire_fg;
+}
+
+listview row:selected,
+list row:selected {
+  background-color: alpha(@moire_accent, 0.28);
+  color: @moire_fg;
+}
+
+toast {
+  background-color: @moire_panel;
+  color: @moire_fg;
+  border: 1px solid @moire_border;
+}

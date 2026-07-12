@@ -58,6 +58,8 @@ export type ShellBridge = {
     y: number;
   }): boolean;
   isLauncherOpen(): boolean;
+  /** True when panel/launcher content changed (e.g. clock). */
+  needsRepaint(): boolean;
 };
 
 const KEY_ESC = 1;
@@ -346,11 +348,12 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     height: number,
     window: SsdWindowInfo,
   ) => {
-    const stripKey = `${window.surfaceId}:${window.contentW}:${window.title}:${window.focused ? 1 : 0}`;
+    const stripKey = `${window.clientId}:${window.surfaceId}:${window.contentW}:${window.title}:${window.focused ? 1 : 0}`;
     let strip = ssdStripCache.get(stripKey);
     if (!strip) {
       ssdPending = { current: null };
       const sid = window.surfaceId;
+      const cid = window.clientId;
       renderShell(
         ssdScratchRoot,
         createElement(TitleBar, {
@@ -360,16 +363,24 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           title: window.title,
           focused: window.focused,
           onDrag: () => {
-            ssdPending.current = { kind: "drag", surfaceId: sid };
+            ssdPending.current = { kind: "drag", surfaceId: sid, clientId: cid };
           },
           onClose: () => {
-            ssdPending.current = { kind: "close", surfaceId: sid };
+            ssdPending.current = { kind: "close", surfaceId: sid, clientId: cid };
           },
           onMaximize: () => {
-            ssdPending.current = { kind: "maximize", surfaceId: sid };
+            ssdPending.current = {
+              kind: "maximize",
+              surfaceId: sid,
+              clientId: cid,
+            };
           },
           onMinimize: () => {
-            ssdPending.current = { kind: "minimize", surfaceId: sid };
+            ssdPending.current = {
+              kind: "minimize",
+              surfaceId: sid,
+              clientId: cid,
+            };
           },
         }),
       );
@@ -386,7 +397,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       };
       ssdStripCache.set(stripKey, strip);
       for (const k of [...ssdStripCache.keys()]) {
-        if (k !== stripKey && k.startsWith(`${window.surfaceId}:`)) {
+        if (k !== stripKey && k.startsWith(`${window.clientId}:${window.surfaceId}:`)) {
           ssdStripCache.delete(k);
         }
       }
@@ -535,6 +546,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     },
 
     isLauncherOpen: () => open,
+    needsRepaint: () => dirty,
   };
 }
 

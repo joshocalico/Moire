@@ -80,6 +80,54 @@ export function clearCloexec(fd: number): void {
   }
 }
 
+/** Linux SO_PEERCRED — pid/uid/gid of the connected UNIX socket peer. */
+const SOL_SOCKET = 1;
+const SO_PEERCRED = 17;
+
+const Ucred = koffi.struct("ucred_moire", {
+  pid: "int",
+  uid: "uint32_t",
+  gid: "uint32_t",
+});
+
+export type PeerCredentials = {
+  pid: number;
+  uid: number;
+  gid: number;
+};
+
+export function peerCredentials(fd: number): PeerCredentials | null {
+  const libc = getLibc();
+  const getsockopt = libc.func(
+    "int getsockopt(int sockfd, int level, int optname, _Out_ void *optval, _Inout_ uint32_t *optlen)",
+  );
+  const cred = koffi.alloc(Ucred, 1);
+  const len = koffi.alloc("uint32_t", 1);
+  koffi.encode(len, "uint32_t", koffi.sizeof(Ucred));
+  const rc = getsockopt(fd, SOL_SOCKET, SO_PEERCRED, cred, len) as number;
+  if (rc !== 0) {
+    freePtrSafe(cred);
+    freePtrSafe(len);
+    return null;
+  }
+  const decoded = koffi.decode(cred, Ucred) as PeerCredentials;
+  freePtrSafe(cred);
+  freePtrSafe(len);
+  return {
+    pid: decoded.pid | 0,
+    uid: decoded.uid >>> 0,
+    gid: decoded.gid >>> 0,
+  };
+}
+
+function freePtrSafe(ptr: unknown): void {
+  try {
+    koffi.free(ptr);
+  } catch {
+    // ok
+  }
+}
+
 /** Copy `length` bytes from a Node Buffer/TypedArray into an mmap pointer. */
 export function memcpyTo(dest: unknown, src: Uint8Array, length = src.byteLength): void {
   const memcpy = getLibc().func(

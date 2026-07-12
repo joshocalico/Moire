@@ -19,5 +19,5 @@ export {
   findFreeXDisplay,
   type XwaylandHandle,
 } from "./xwayland.js";
-export { X11Wm, type XwmWindow } from "./xwm.js";
+export { X11Wm, type XwmWindow, type XwmWindowType } from "./xwm.js";
 

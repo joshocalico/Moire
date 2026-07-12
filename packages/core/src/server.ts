@@ -117,6 +117,19 @@ const OP = {
   xdg_toplevel_set_fullscreen: 11,
   xdg_toplevel_unset_fullscreen: 12,
   xdg_toplevel_set_minimized: 13,
+  xdg_positioner_destroy: 0,
+  xdg_positioner_set_size: 1,
+  xdg_positioner_set_anchor_rect: 2,
+  xdg_positioner_set_anchor: 3,
+  xdg_positioner_set_gravity: 4,
+  xdg_positioner_set_constraint_adjustment: 5,
+  xdg_positioner_set_offset: 6,
+  xdg_positioner_set_reactive: 7,
+  xdg_positioner_set_parent_size: 8,
+  xdg_positioner_set_parent_configure: 9,
+  xdg_popup_destroy: 0,
+  xdg_popup_grab: 1,
+  xdg_popup_reposition: 2,
   region_destroy: 0,
   region_add: 1,
   linux_dmabuf_destroy: 0,
@@ -171,6 +184,9 @@ const EV = {
   xdg_surface_configure: 0,
   xdg_toplevel_configure: 0,
   xdg_toplevel_close: 1,
+  xdg_popup_configure: 0,
+  xdg_popup_popup_done: 1,
+  xdg_popup_repositioned: 2,
   linux_dmabuf_format: 0,
   linux_dmabuf_modifier: 1,
   linux_buffer_params_created: 0,
@@ -224,7 +240,158 @@ const XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM = 2;
 const XDG_TOPLEVEL_RESIZE_EDGE_LEFT = 4;
 const XDG_TOPLEVEL_RESIZE_EDGE_RIGHT = 8;
 
-/** zxdg_toplevel_decoration_v1 mode — prefer CLIENT for GTK CSD; SSD if unset. */
+/** xdg_positioner.anchor / gravity (xdg-shell stable). */
+const XDG_ANCHOR_NONE = 0;
+const XDG_ANCHOR_TOP = 1;
+const XDG_ANCHOR_BOTTOM = 2;
+const XDG_ANCHOR_LEFT = 3;
+const XDG_ANCHOR_RIGHT = 4;
+const XDG_ANCHOR_TOP_LEFT = 5;
+const XDG_ANCHOR_BOTTOM_LEFT = 6;
+const XDG_ANCHOR_TOP_RIGHT = 7;
+const XDG_ANCHOR_BOTTOM_RIGHT = 8;
+
+const XDG_CONSTRAINT_SLIDE_X = 1;
+const XDG_CONSTRAINT_SLIDE_Y = 2;
+
+const KEY_ESC = 1;
+
+type PositionerState = {
+  width: number;
+  height: number;
+  anchorX: number;
+  anchorY: number;
+  anchorW: number;
+  anchorH: number;
+  anchor: number;
+  gravity: number;
+  constraintAdjustment: number;
+  offsetX: number;
+  offsetY: number;
+};
+
+function emptyPositioner(): PositionerState {
+  return {
+    width: 0,
+    height: 0,
+    anchorX: 0,
+    anchorY: 0,
+    anchorW: 0,
+    anchorH: 0,
+    anchor: XDG_ANCHOR_NONE,
+    gravity: XDG_ANCHOR_NONE,
+    constraintAdjustment: 0,
+    offsetX: 0,
+    offsetY: 0,
+  };
+}
+
+function xdgAnchorPoint(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  anchor: number,
+): { x: number; y: number } {
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  switch (anchor) {
+    case XDG_ANCHOR_TOP:
+      return { x: cx, y };
+    case XDG_ANCHOR_BOTTOM:
+      return { x: cx, y: y + h };
+    case XDG_ANCHOR_LEFT:
+      return { x, y: cy };
+    case XDG_ANCHOR_RIGHT:
+      return { x: x + w, y: cy };
+    case XDG_ANCHOR_TOP_LEFT:
+      return { x, y };
+    case XDG_ANCHOR_BOTTOM_LEFT:
+      return { x, y: y + h };
+    case XDG_ANCHOR_TOP_RIGHT:
+      return { x: x + w, y };
+    case XDG_ANCHOR_BOTTOM_RIGHT:
+      return { x: x + w, y: y + h };
+    default:
+      return { x: cx, y: cy };
+  }
+}
+
+/** Offset from popup top-left to the gravity point. */
+function xdgGravityOffset(
+  w: number,
+  h: number,
+  gravity: number,
+): { dx: number; dy: number } {
+  switch (gravity) {
+    case XDG_ANCHOR_TOP:
+      return { dx: w / 2, dy: 0 };
+    case XDG_ANCHOR_BOTTOM:
+      return { dx: w / 2, dy: h };
+    case XDG_ANCHOR_LEFT:
+      return { dx: 0, dy: h / 2 };
+    case XDG_ANCHOR_RIGHT:
+      return { dx: w, dy: h / 2 };
+    case XDG_ANCHOR_TOP_LEFT:
+      return { dx: 0, dy: 0 };
+    case XDG_ANCHOR_BOTTOM_LEFT:
+      return { dx: 0, dy: h };
+    case XDG_ANCHOR_TOP_RIGHT:
+      return { dx: w, dy: 0 };
+    case XDG_ANCHOR_BOTTOM_RIGHT:
+      return { dx: w, dy: h };
+    default:
+      return { dx: w / 2, dy: h / 2 };
+  }
+}
+
+/** Place popup window-geometry relative to parent window-geometry. */
+function placePopupRelative(
+  pos: PositionerState,
+  outputW: number,
+  outputH: number,
+  parentGeomScreenX: number,
+  parentGeomScreenY: number,
+): { x: number; y: number; w: number; h: number } {
+  const pw = Math.max(1, pos.width);
+  const ph = Math.max(1, pos.height);
+  const anchor = xdgAnchorPoint(
+    pos.anchorX,
+    pos.anchorY,
+    pos.anchorW,
+    pos.anchorH,
+    pos.anchor,
+  );
+  const grav = xdgGravityOffset(pw, ph, pos.gravity);
+  let relX = anchor.x - grav.dx + pos.offsetX;
+  let relY = anchor.y - grav.dy + pos.offsetY;
+  let w = pw;
+  let h = ph;
+
+  // Slide into output bounds (parent-relative → screen → clamp → relative).
+  const adj = pos.constraintAdjustment;
+  let screenX = parentGeomScreenX + relX;
+  let screenY = parentGeomScreenY + relY;
+  if (adj & XDG_CONSTRAINT_SLIDE_X) {
+    if (screenX + w > outputW) screenX = outputW - w;
+    if (screenX < 0) screenX = 0;
+  }
+  if (adj & XDG_CONSTRAINT_SLIDE_Y) {
+    if (screenY + h > outputH) screenY = outputH - h;
+    if (screenY < 0) screenY = 0;
+  }
+  // Always soft-clamp so menus stay visible even if client omitted slide flags.
+  if (screenX + w > outputW) screenX = Math.max(0, outputW - w);
+  if (screenY + h > outputH) screenY = Math.max(0, outputH - h);
+  if (screenX < 0) screenX = 0;
+  if (screenY < 0) screenY = 0;
+
+  relX = screenX - parentGeomScreenX;
+  relY = screenY - parentGeomScreenY;
+  return { x: Math.round(relX), y: Math.round(relY), w, h };
+}
+
+/** zxdg_toplevel_decoration_v1 mode — prefer SERVER (React SSD). */
 const XDG_DECORATION_MODE_CLIENT = 1;
 const XDG_DECORATION_MODE_SERVER = 2;
 
@@ -294,14 +461,27 @@ type SurfaceState = {
   pixels: Uint8Array | null;
   /** Buffer ids waiting for wl_buffer.release after composite. */
   releaseBuffers: number[];
-  role: "none" | "toplevel" | "subsurface" | "cursor";
+  /**
+   * True after attach until we schedule release for that buffer.
+   * Prevents double wl_buffer.release on empty/re-commits (GTK aborts).
+   */
+  bufferAttached: boolean;
+  role: "none" | "toplevel" | "subsurface" | "cursor" | "popup";
   parentId: number | null;
   /** Child wl_surface object ids. */
   children: number[];
   /** Owning wl_surface object id. */
   id: number;
   xdgToplevelId: number | null;
+  xdgPopupId: number | null;
   xdgSurfaceId: number | null;
+  /** Popup position relative to parent window geometry (from configure). */
+  popupRelX: number;
+  popupRelY: number;
+  popupConfW: number;
+  popupConfH: number;
+  /** Explicit xdg_popup.grab is active. */
+  popupGrabbed: boolean;
   /** xdg_surface window geometry (content box within the buffer). */
   geomX: number;
   geomY: number;
@@ -387,6 +567,8 @@ type InteractiveGrab =
 /** Optional in-process DE chrome (panel / launcher / SSD). */
 export type SsdWindowInfo = {
   surfaceId: number;
+  /** Distinguishes clients — Wayland object ids are per-connection. */
+  clientId: number;
   x: number;
   y: number;
   contentW: number;
@@ -396,10 +578,10 @@ export type SsdWindowInfo = {
 };
 
 export type SsdAction =
-  | { kind: "drag"; surfaceId: number }
-  | { kind: "close"; surfaceId: number }
-  | { kind: "maximize"; surfaceId: number }
-  | { kind: "minimize"; surfaceId: number };
+  | { kind: "drag"; surfaceId: number; clientId: number }
+  | { kind: "close"; surfaceId: number; clientId: number }
+  | { kind: "maximize"; surfaceId: number; clientId: number }
+  | { kind: "minimize"; surfaceId: number; clientId: number };
 
 export type CompositorShell = {
   paint(
@@ -433,6 +615,8 @@ export type CompositorShell = {
     y: number;
   }): boolean;
   isLauncherOpen(): boolean;
+  /** True when panel/launcher content changed (e.g. clock). */
+  needsRepaint?(): boolean;
 };
 
 /** Seat clipboard selection (wl_data_device.set_selection). */
@@ -482,8 +666,17 @@ export class CompositorServer {
   private grab: InteractiveGrab | null = null;
   private toplevelCount = 0;
   private lastPainted = 0;
+  /** Allocates unique clientIds for SSD / stack lookups. */
+  private nextClientId = 1;
+  /**
+   * When false, skip full composite + presentKms (idle CPU).
+   * Set by markDirty() on commits, pointer motion, shell clock, etc.
+   */
+  private needsComposite = true;
   /** Bottom → top paint/focus order for mapped toplevels. */
   private stack: { session: ClientSession; surfaceId: number }[] = [];
+  /** Bottom → top mapped xdg_popups (painted/hit above toplevels). */
+  private popupStack: { session: ClientSession; surfaceId: number }[] = [];
   private focusedToplevel: { session: ClientSession; surfaceId: number } | null =
     null;
   private altHeld = false;
@@ -580,7 +773,7 @@ export class CompositorServer {
     }
     this.socket = new WaylandSocketServer(this.socketPath);
     this.socket.on("connection", (conn: WaylandClientConn) => {
-      const session = new ClientSession(this, conn);
+      const session = new ClientSession(this, conn, this.nextClientId++);
       this.clients.add(session);
       conn.on("close", () => {
         if (this.focused === session) this.focused = null;
@@ -592,6 +785,7 @@ export class CompositorServer {
           this.selection = null;
         }
         this.stack = this.stack.filter((e) => e.session !== session);
+        this.popupStack = this.popupStack.filter((e) => e.session !== session);
         for (const [wid, pair] of this.xwayByWid) {
           if (pair.session === session) this.xwayByWid.delete(wid);
         }
@@ -658,6 +852,12 @@ export class CompositorServer {
     return this.globals;
   }
 
+  /** Globals visible to a specific client (hides xwayland_shell from others). */
+  getGlobalsForClient(session: ClientSession) {
+    if (session.isXwayland) return this.globals;
+    return this.globals.filter((g) => g.iface !== "xwayland_shell_v1");
+  }
+
   /** Attach in-process shell chrome (panel + launcher). */
   setShell(shell: CompositorShell | null): void {
     this.shell = shell;
@@ -714,6 +914,11 @@ export class CompositorServer {
         surf.mapped = false;
         this.unregisterToplevel(pair.session, pair.surfaceId);
       }
+    });
+    wm.on("activate", (win: XwmWindow) => {
+      const pair = this.xwayByWid.get(win.wid);
+      if (!pair) return;
+      this.focusClient(pair.session, pair.surfaceId);
     });
     console.log("[xwm] attached to compositor");
   }
@@ -793,14 +998,48 @@ export class CompositorServer {
     surf.x11Wid = win.wid;
     surf.xwaylandSerial = serial;
     surf.role = "toplevel";
-    surf.decoration = "server";
     if (win.title) surf.title = win.title;
-    // Rootless surfaces skip xdg_toplevel — assign a cascade slot if needed.
-    if (surf.x === 0 && surf.y === 0 && win.x === 0 && win.y === 0) {
+
+    const undecorated =
+      win.overrideRedirect || X11Wm.isUndecoratedType(win.windowType);
+    surf.decoration = undecorated ? "none" : "server";
+
+    const parentPair =
+      win.transientFor != null ? this.xwayByWid.get(win.transientFor) : null;
+    const parentSurf = parentPair
+      ? parentPair.session.surfaceById(parentPair.surfaceId)
+      : null;
+
+    // Place transients/dialogs/modals over their parent; otherwise cascade if unset.
+    const wantsParentPlace =
+      !!parentSurf &&
+      parentSurf.mapped &&
+      (win.transientFor != null ||
+        win.windowType === "dialog" ||
+        win.modal);
+    if (wantsParentPlace && parentSurf) {
+      const parentFrame = this.frameBox(parentSurf);
+      const childW = win.width > 0 ? win.width : Math.max(1, surf.width);
+      const childH = win.height > 0 ? win.height : Math.max(1, surf.height);
+      const frameH = childH + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
+      const kms = this.kms;
+      let x = parentFrame.x + Math.floor((parentFrame.w - childW) / 2);
+      let y = parentFrame.y + Math.floor((parentFrame.h - frameH) / 2);
+      if (kms) {
+        x = Math.max(0, Math.min(x, Math.max(0, kms.width - childW)));
+        y = Math.max(0, Math.min(y, Math.max(0, kms.height - frameH - SSD_PANEL_H)));
+      }
+      surf.x = x;
+      surf.y = y;
+      // Push geometry to X so the client matches the centered position.
+      win.x = x;
+      win.y = y + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
+    } else if (surf.x === 0 && surf.y === 0 && win.x === 0 && win.y === 0) {
       const slot = this.allocToplevelSlot();
       surf.x = slot.x;
       surf.y = slot.y;
     }
+
     this.applyXwaylandGeometry(pending.session, pending.surfaceId, win);
     // Align X11 window with the Wayland content box so XQueryPointer matches.
     const contentY =
@@ -815,10 +1054,14 @@ export class CompositorServer {
     if (surf.mapped && surf.pixels) {
       const firstMap = !this.isStacked(pending.session, surf.id);
       this.registerToplevel(pending.session, surf.id);
+      if (parentPair) {
+        // Keep transient above its parent in the stack.
+        this.raiseToplevel(pending.session, surf.id);
+      }
       if (firstMap) this.focusClient(pending.session, surf.id);
     }
     console.log(
-      `[xwm] paired wid=${win.wid} serial=${serial} surface=${surf.id} ${win.width}x${win.height} title=${JSON.stringify(win.title)}`,
+      `[xwm] paired wid=${win.wid} serial=${serial} surface=${surf.id} ${win.width}x${win.height} @ ${surf.x},${surf.y} deco=${surf.decoration} type=${win.windowType} transient=${win.transientFor ?? "-"} title=${JSON.stringify(win.title)}`,
     );
   }
 
@@ -853,6 +1096,17 @@ export class CompositorServer {
 
   getGbm(): GbmDevice | null {
     return this.gbm;
+  }
+
+  getKmsSize(): { width: number; height: number } {
+    return {
+      width: this.kms?.width ?? 1920,
+      height: this.kms?.height ?? 1080,
+    };
+  }
+
+  setFocusedSession(session: ClientSession): void {
+    this.focused = session;
   }
 
   getDmabufFeedback(): {
@@ -939,6 +1193,7 @@ export class CompositorServer {
   registerToplevel(session: ClientSession, surfaceId: number): void {
     if (this.isStacked(session, surfaceId)) return;
     this.stack.push({ session, surfaceId });
+    this.markDirty();
   }
 
   unregisterToplevel(session: ClientSession, surfaceId: number): void {
@@ -951,6 +1206,165 @@ export class CompositorServer {
     ) {
       this.focusedToplevel = null;
     }
+    this.markDirty();
+  }
+
+  registerPopup(session: ClientSession, surfaceId: number): void {
+    if (
+      this.popupStack.some(
+        (e) => e.session === session && e.surfaceId === surfaceId,
+      )
+    ) {
+      return;
+    }
+    this.popupStack.push({ session, surfaceId });
+  }
+
+  /** Move a popup to the top of the popup stack (nested menus). */
+  raisePopup(session: ClientSession, surfaceId: number): void {
+    this.popupStack = this.popupStack.filter(
+      (e) => !(e.session === session && e.surfaceId === surfaceId),
+    );
+    this.popupStack.push({ session, surfaceId });
+  }
+
+  unregisterPopup(session: ClientSession, surfaceId: number): void {
+    this.popupStack = this.popupStack.filter(
+      (e) => !(e.session === session && e.surfaceId === surfaceId),
+    );
+  }
+
+  /** Read-only access for seat focus checks. */
+  getPopupStack(): readonly { session: ClientSession; surfaceId: number }[] {
+    return this.popupStack;
+  }
+
+  /** Screen coords of a surface's xdg window-geometry top-left. */
+  windowGeomOrigin(surf: SurfaceState): { x: number; y: number } {
+    if (surf.role === "toplevel" && this.usesSsd(surf)) {
+      return { x: surf.x, y: surf.y + SSD_TITLEBAR_H };
+    }
+    return {
+      x: surf.x + (surf.geomW > 0 ? surf.geomX : 0),
+      y: surf.y + (surf.geomH > 0 ? surf.geomY : 0),
+    };
+  }
+
+  /** Apply popupRel* into absolute surface.x/y from live parent position. */
+  layoutPopup(session: ClientSession, surf: SurfaceState): void {
+    if (surf.role !== "popup" || surf.parentId == null) return;
+    const seen = new Set<number>();
+    const walk = (s: SurfaceState): void => {
+      if (s.role !== "popup" || s.parentId == null) return;
+      if (seen.has(s.id)) return;
+      seen.add(s.id);
+      const parent = session.surfaceById(s.parentId);
+      if (!parent) return;
+      walk(parent);
+      const origin = this.windowGeomOrigin(parent);
+      const gx = origin.x + s.popupRelX;
+      const gy = origin.y + s.popupRelY;
+      s.x = gx - (s.geomW > 0 ? s.geomX : 0);
+      s.y = gy - (s.geomH > 0 ? s.geomY : 0);
+    };
+    walk(surf);
+  }
+
+  dismissPopup(
+    session: ClientSession,
+    surfaceId: number,
+    sendDone = true,
+  ): void {
+    const surf = session.surfaceById(surfaceId);
+    if (!surf || surf.role !== "popup") {
+      this.unregisterPopup(session, surfaceId);
+      return;
+    }
+    // Dismiss nested children first (top of stack → this popup's descendants).
+    const children = this.popupStack
+      .filter((e) => {
+        const s = e.session.surfaceById(e.surfaceId);
+        return s?.role === "popup" && s.parentId === surfaceId;
+      })
+      .map((e) => e.surfaceId);
+    for (const childId of children) {
+      this.dismissPopup(session, childId, sendDone);
+    }
+    if (sendDone && surf.xdgPopupId != null) {
+      session.sendPopupDone(surf.xdgPopupId);
+      console.log(`[popup] popup_done surface=${surfaceId}`);
+    }
+    surf.mapped = false;
+    surf.popupGrabbed = false;
+    surf.xdgPopupId = null;
+    if (surf.role === "popup") surf.role = "none";
+    surf.pixels = null;
+    this.unregisterPopup(session, surfaceId);
+  }
+
+  /** Dismiss all grabbed popups (and their children), top-first. */
+  dismissGrabbedPopups(session?: ClientSession): void {
+    const grabbed = [...this.popupStack].reverse().filter((e) => {
+      if (session && e.session !== session) return false;
+      const s = e.session.surfaceById(e.surfaceId);
+      return s?.popupGrabbed;
+    });
+    for (const e of grabbed) {
+      this.dismissPopup(e.session, e.surfaceId, true);
+    }
+    // Restore keyboard focus to the focused toplevel when clearing all grabs.
+    if (!session && this.focusedToplevel) {
+      this.focusedToplevel.session.keyboardEnter(
+        this.focusedToplevel.surfaceId,
+      );
+    }
+  }
+
+  /** Dismiss every popup for a client (grabbed or not), top-first. */
+  dismissSessionPopups(session: ClientSession): void {
+    const mine = [...this.popupStack]
+      .reverse()
+      .filter((e) => e.session === session);
+    for (const e of mine) {
+      this.dismissPopup(e.session, e.surfaceId, true);
+    }
+  }
+
+  hasGrabbedPopup(): boolean {
+    return this.popupStack.some((e) => {
+      const s = e.session.surfaceById(e.surfaceId);
+      return !!s?.popupGrabbed;
+    });
+  }
+
+  /** True if (session, surfaceId) is a mapped popup under an active grab. */
+  isUnderPopupGrab(session: ClientSession, surfaceId: number): boolean {
+    let s = session.surfaceById(surfaceId);
+    while (s) {
+      if (s.role === "popup" && s.popupGrabbed) return true;
+      if (s.role === "popup" && s.parentId != null) {
+        s = session.surfaceById(s.parentId);
+        continue;
+      }
+      break;
+    }
+    // Also: any popup in the grab chain that is this surface
+    for (const e of this.popupStack) {
+      if (e.session === session && e.surfaceId === surfaceId) {
+        const p = e.session.surfaceById(e.surfaceId);
+        if (p?.popupGrabbed) return true;
+        // Child of a grabbed popup?
+        let cur = p;
+        while (cur?.parentId != null) {
+          const parent = e.session.surfaceById(cur.parentId);
+          if (!parent) break;
+          if (parent.popupGrabbed) return true;
+          if (parent.role !== "popup") break;
+          cur = parent;
+        }
+      }
+    }
+    return false;
   }
 
   /** Move toplevel to the top of the stack (painted last / hit first). */
@@ -960,11 +1374,28 @@ export class CompositorServer {
       (e) => !(e.session === session && e.surfaceId === surfaceId),
     );
     this.stack.push({ session, surfaceId });
+    this.markDirty();
   }
 
   focusClient(session: ClientSession, surfaceId: number): void {
     const top = session.toplevelFor(surfaceId);
     const topId = top?.id ?? surfaceId;
+
+    // xdg_popup.grab requires exclusive seat focus until popup_done. Mapping a
+    // dialog (About, Properties, …) from a menu must end the grab first or
+    // GTK/libadwaita aborts on the protocol violation.
+    if (top?.role === "toplevel" && this.hasGrabbedPopup()) {
+      const hadGrab = this.popupStack.some((e) => {
+        if (e.session !== session) return false;
+        return !!e.session.surfaceById(e.surfaceId)?.popupGrabbed;
+      });
+      if (hadGrab) {
+        console.log(
+          `[popup] dismiss grabs before focus toplevel=${topId}`,
+        );
+        this.dismissGrabbedPopups(session);
+      }
+    }
 
     const already =
       this.focusedToplevel?.session === session &&
@@ -990,7 +1421,11 @@ export class CompositorServer {
       top.minimized = false;
       this.raiseToplevel(session, topId);
       if (!already) this.sendToplevelStates(session, top, true);
+      this.xwm?.setActiveWindow(top.x11Wid ?? null);
+    } else {
+      this.xwm?.setActiveWindow(null);
     }
+    this.markDirty();
   }
 
   private sendToplevelStates(
@@ -1023,6 +1458,7 @@ export class CompositorServer {
       }
     }
     console.log(`[wm] minimized surface=${surfaceId}`);
+    this.markDirty();
   }
 
   restoreToplevel(session: ClientSession, surfaceId: number): void {
@@ -1079,6 +1515,12 @@ export class CompositorServer {
       return;
     }
 
+    // Escape dismisses grabbing popups (context menus).
+    if (ev.code === KEY_ESC && ev.value === 1 && this.hasGrabbedPopup()) {
+      this.dismissGrabbedPopups();
+      return;
+    }
+
     if (this.shell?.onKey(ev)) return;
 
     if (!this.focused) {
@@ -1096,9 +1538,15 @@ export class CompositorServer {
   private onPointerMotion(ev: EvdevPointerMotion): void {
     const kms = this.kms;
     if (!kms) return;
-    this.cursorX = Math.max(0, Math.min(kms.width - 1, this.cursorX + ev.dx));
-    this.cursorY = Math.max(0, Math.min(kms.height - 1, this.cursorY + ev.dy));
-    if (this.applyGrab()) return;
+    const nx = Math.max(0, Math.min(kms.width - 1, this.cursorX + ev.dx));
+    const ny = Math.max(0, Math.min(kms.height - 1, this.cursorY + ev.dy));
+    if (nx !== this.cursorX || ny !== this.cursorY) this.markDirty();
+    this.cursorX = nx;
+    this.cursorY = ny;
+    if (this.applyGrab()) {
+      this.markDirty();
+      return;
+    }
     this.updatePointerFocus(ev.timeMs, true);
     this.updateHoverEdges();
     this.syncXwaylandPointer();
@@ -1107,15 +1555,21 @@ export class CompositorServer {
   private onPointerAbsolute(ev: EvdevPointerAbsolute): void {
     const kms = this.kms;
     if (!kms) return;
-    this.cursorX = Math.max(
+    const nx = Math.max(
       0,
       Math.min(kms.width - 1, Math.round(ev.x * (kms.width - 1))),
     );
-    this.cursorY = Math.max(
+    const ny = Math.max(
       0,
       Math.min(kms.height - 1, Math.round(ev.y * (kms.height - 1))),
     );
-    if (this.applyGrab()) return;
+    if (nx !== this.cursorX || ny !== this.cursorY) this.markDirty();
+    this.cursorX = nx;
+    this.cursorY = ny;
+    if (this.applyGrab()) {
+      this.markDirty();
+      return;
+    }
     this.updatePointerFocus(ev.timeMs, true);
     this.updateHoverEdges();
     this.syncXwaylandPointer();
@@ -1166,6 +1620,7 @@ export class CompositorServer {
   }
 
   private onPointerButton(ev: EvdevPointerButton): void {
+    this.markDirty();
     if (ev.value === 0 && this.grab) {
       this.endGrab();
     }
@@ -1187,6 +1642,7 @@ export class CompositorServer {
       this.ssdWindows = this.collectSsdWindows();
       const action = this.hitSsd(this.cursorX, this.cursorY);
       if (action) {
+        if (this.hasGrabbedPopup()) this.dismissGrabbedPopups();
         this.handleSsdAction(action);
         return;
       }
@@ -1195,10 +1651,31 @@ export class CompositorServer {
     this.updatePointerFocus(ev.timeMs, false);
     this.updateHoverEdges();
     const hit = this.pointerFocus;
+
+    // Grabbing popup: press outside the grab tree dismisses and consumes.
+    if (ev.value === 1 && this.hasGrabbedPopup()) {
+      if (
+        !hit ||
+        !this.isUnderPopupGrab(hit.session, hit.surfaceId)
+      ) {
+        this.dismissGrabbedPopups();
+        return;
+      }
+    }
+
     if (hit && ev.value === 1) {
       const top = hit.session.toplevelFor(hit.surfaceId);
-      if (top) {
+      const hitSurf = hit.session.surfaceById(hit.surfaceId);
+      if (hitSurf?.role === "popup") {
+        // Keep keyboard on the popup; still raise the parent toplevel.
+        if (top) {
+          this.raiseToplevel(hit.session, top.id);
+          this.focused = hit.session;
+          this.focusedToplevel = { session: hit.session, surfaceId: top.id };
+        }
+      } else if (top) {
         this.focusClient(hit.session, top.id);
+        // Don't start resize when interacting with a popup.
         if (!this.grab && !top.maximized && !top.fullscreen) {
           const edges = this.resizeEdgesAt(top, this.cursorX, this.cursorY);
           if (edges) this.beginResize(hit.session, top.id, edges);
@@ -1225,9 +1702,15 @@ export class CompositorServer {
   }
 
   private handleSsdAction(action: SsdAction): void {
-    const entry = this.stack.find((e) => e.surfaceId === action.surfaceId);
+    const entry = this.stack.find(
+      (e) =>
+        e.surfaceId === action.surfaceId &&
+        e.session.clientId === action.clientId,
+    );
     if (!entry) {
-      console.warn(`[ssd] action ${action.kind} missing surface=${action.surfaceId}`);
+      console.warn(
+        `[ssd] action ${action.kind} missing surface=${action.surfaceId} client=${action.clientId}`,
+      );
       return;
     }
     const surf = entry.session.surfaceById(action.surfaceId);
@@ -1264,16 +1747,16 @@ export class CompositorServer {
       const minX0 = maxX0 - SSD_TITLEBAR_BTN_GAP - SSD_TITLEBAR_BTN;
       if (inBtnRow) {
         if (localX >= closeX0 && localX < closeX0 + SSD_TITLEBAR_BTN) {
-          return { kind: "close", surfaceId: w.surfaceId };
+          return { kind: "close", surfaceId: w.surfaceId, clientId: w.clientId };
         }
         if (localX >= maxX0 && localX < maxX0 + SSD_TITLEBAR_BTN) {
-          return { kind: "maximize", surfaceId: w.surfaceId };
+          return { kind: "maximize", surfaceId: w.surfaceId, clientId: w.clientId };
         }
         if (localX >= minX0 && localX < minX0 + SSD_TITLEBAR_BTN) {
-          return { kind: "minimize", surfaceId: w.surfaceId };
+          return { kind: "minimize", surfaceId: w.surfaceId, clientId: w.clientId };
         }
       }
-      return { kind: "drag", surfaceId: w.surfaceId };
+      return { kind: "drag", surfaceId: w.surfaceId, clientId: w.clientId };
     }
     return null;
   }
@@ -1291,6 +1774,7 @@ export class CompositorServer {
         this.focusedToplevel.surfaceId === surf.id;
       windows.push({
         surfaceId: surf.id,
+        clientId: entry.session.clientId,
         x: surf.x,
         y: surf.y,
         contentW: size.w,
@@ -1604,6 +2088,31 @@ export class CompositorServer {
     x: number,
     y: number,
   ): { session: ClientSession; surface: SurfaceState } | null {
+    // Popups sit above all toplevels.
+    for (let i = this.popupStack.length - 1; i >= 0; i--) {
+      const entry = this.popupStack[i]!;
+      entry.session.layout();
+      const surf = entry.session.surfaceById(entry.surfaceId);
+      if (!surf || !surf.mapped || !surf.pixels) continue;
+      if (entry.session.isHidden(surf)) continue;
+      this.layoutPopup(entry.session, surf);
+      const gw = surf.geomW > 0 ? surf.geomW : surf.width;
+      const gh = surf.geomH > 0 ? surf.geomH : surf.height;
+      const ox = surf.x + (surf.geomW > 0 ? surf.geomX : 0);
+      const oy = surf.y + (surf.geomH > 0 ? surf.geomY : 0);
+      if (x >= ox && y >= oy && x < ox + gw && y < oy + gh) {
+        return { session: entry.session, surface: surf };
+      }
+      if (
+        x >= surf.x &&
+        y >= surf.y &&
+        x < surf.x + surf.width &&
+        y < surf.y + surf.height
+      ) {
+        return { session: entry.session, surface: surf };
+      }
+    }
+
     // Walk top → bottom so the raised window wins.
     for (let i = this.stack.length - 1; i >= 0; i--) {
       const entry = this.stack[i]!;
@@ -1669,7 +2178,10 @@ export class CompositorServer {
     }
 
     if (hit) {
-      const ssdY = this.usesSsd(hit.surface) ? SSD_TITLEBAR_H : 0;
+      const ssdY =
+        hit.surface.role === "toplevel" && this.usesSsd(hit.surface)
+          ? SSD_TITLEBAR_H
+          : 0;
       const localX = this.cursorX - hit.surface.x;
       const localY = this.cursorY - hit.surface.y - ssdY;
       if (this.pointerFocus?.surfaceId !== hit.surface.id) {
@@ -1709,7 +2221,7 @@ export class CompositorServer {
     if (this.pointerFocus?.session !== session) return;
     const surf = session.surfaceById(surfaceId);
     if (!surf) return;
-    if (surf.role === "toplevel" || surf.role === "subsurface") return;
+    if (surf.role === "toplevel" || surf.role === "subsurface" || surf.role === "popup") return;
     if (
       this.clientCursor &&
       (this.clientCursor.session !== session ||
@@ -1985,14 +2497,27 @@ export class CompositorServer {
     );
   }
 
+  /** Request a composite + present on the next loop tick. */
+  markDirty(): void {
+    this.needsComposite = true;
+  }
+
   private async loop(): Promise<void> {
     while (this.running) {
-      try {
-        this.composite();
-      } catch (err) {
-        console.error("[composite]", err);
+      if (this.shell?.needsRepaint?.()) this.markDirty();
+      if (this.needsComposite) {
+        this.needsComposite = false;
+        try {
+          this.composite();
+        } catch (err) {
+          console.error("[composite]", err);
+          this.markDirty();
+        }
+        await new Promise((r) => setTimeout(r, 16));
+      } else {
+        // Idle — no wallpaper fill / flushMmap / presentKms.
+        await new Promise((r) => setTimeout(r, 50));
       }
-      await new Promise((r) => setTimeout(r, 16));
     }
   }
 
@@ -2123,6 +2648,63 @@ export class CompositorServer {
           }
         }
       }
+
+      // xdg_popup surfaces — above all toplevels.
+      for (const entry of this.popupStack) {
+        const client = entry.session;
+        const surf = client.surfaceById(entry.surfaceId);
+        if (!surf || !surf.mapped || !surf.pixels) continue;
+        this.layoutPopup(client, surf);
+        const hidden = client.isHidden(surf);
+        if (
+          !hidden &&
+          !(
+            surf.x >= kms.width ||
+            surf.y >= kms.height ||
+            surf.x + surf.width <= 0 ||
+            surf.y + surf.height <= 0
+          )
+        ) {
+          try {
+            const useGeom = surf.geomW > 0 && surf.geomH > 0;
+            this.blitArgb(
+              fb,
+              pitchPx,
+              kms.width,
+              kms.height,
+              surf.x,
+              surf.y,
+              surf.pixels,
+              surf.width,
+              surf.height,
+              surf.stride,
+              useGeom
+                ? {
+                    x: surf.geomX,
+                    y: surf.geomY,
+                    w: surf.geomW,
+                    h: surf.geomH,
+                  }
+                : undefined,
+            );
+            painted++;
+          } catch (err) {
+            console.error(
+              `[composite] popup blit failed ${surf.width}x${surf.height}:`,
+              err,
+            );
+          }
+        }
+        for (const cbId of surf.frameCallbacks) {
+          client.sendCallbackDone(cbId, monotonicMs());
+          client.deleteId(cbId);
+        }
+        surf.frameCallbacks = [];
+        for (const bufId of surf.releaseBuffers) {
+          client.sendBufferRelease(bufId);
+        }
+        surf.releaseBuffers = [];
+      }
     } finally {
       try {
         this.ssdWindows = this.collectSsdWindows();
@@ -2177,19 +2759,27 @@ class ClientSession {
   private focusedSurfaceId: number | null = null;
   private pointerSurfaceId: number | null = null;
   private pressedKeys = new Set<number>();
+  /** Last serial from pointer enter/button (for xdg_popup.grab). */
+  private lastInputSerial = 0;
   /** Bound wl_data_device object ids for this client. */
   private dataDeviceIds = new Set<number>();
+  /** True when peer looks like Xwayland (SO_PEERCRED + /proc/exe). */
+  readonly isXwayland: boolean;
 
   constructor(
     private readonly server: CompositorServer,
     private readonly conn: WaylandClientConn,
+    readonly clientId: number,
   ) {
     this.objects.set(WL_DISPLAY_ID, {
       id: WL_DISPLAY_ID,
       iface: "wl_display",
       version: 1,
     });
-    console.log("[client] connected");
+    this.isXwayland = looksLikeXwayland(conn.peerPid);
+    console.log(
+      `[client] connected id=${clientId} pid=${conn.peerPid ?? "?"} xwayland=${this.isXwayland ? 1 : 0}`,
+    );
     conn.on("message", (chunk: WaylandChunk) => this.onChunk(chunk));
   }
 
@@ -2211,7 +2801,7 @@ class ClientSession {
   /** Walk up to the toplevel for a surface (itself if already toplevel). */
   toplevelFor(surfaceId: number): SurfaceState | null {
     let s = this.surfaceById(surfaceId);
-    while (s && s.role === "subsurface" && s.parentId != null) {
+    while (s && (s.role === "subsurface" || s.role === "popup") && s.parentId != null) {
       s = this.surfaceById(s.parentId);
     }
     return s && s.role === "toplevel" ? s : null;
@@ -2244,10 +2834,16 @@ class ClientSession {
 
   requestClose(surface: SurfaceState): void {
     if (surface.x11Wid != null) {
+      console.log(
+        `[ssd] close x11 client=${this.clientId} surface=${surface.id} wid=${surface.x11Wid} @ ${surface.x},${surface.y} ${surface.width}x${surface.height}`,
+      );
       this.server.getXwm()?.closeWindow(surface.x11Wid);
       return;
     }
     if (surface.xdgToplevelId == null) return;
+    console.log(
+      `[ssd] close xdg client=${this.clientId} surface=${surface.id}`,
+    );
     this.send(surface.xdgToplevelId, EV.xdg_toplevel_close, () => {});
   }
 
@@ -2443,6 +3039,26 @@ class ClientSession {
 
   keyboardEnter(surfaceId: number): void {
     if (this.keyboardId == null) return;
+    // Never leave keyboard on a grabbing popup without popup_done — if focus
+    // is moving to a normal surface, end this client's grabs first.
+    const target = this.surfaceById(surfaceId);
+    if (!target || target.role !== "popup") {
+      let grabbing = false;
+      for (const e of this.server.getPopupStack()) {
+        if (e.session !== this) continue;
+        const s = e.session.surfaceById(e.surfaceId);
+        if (s?.popupGrabbed) {
+          grabbing = true;
+          break;
+        }
+      }
+      if (grabbing) {
+        console.log(
+          `[popup] dismiss grabs before keyboard_enter surface=${surfaceId} (from=${this.focusedSurfaceId})`,
+        );
+        this.server.dismissGrabbedPopups(this);
+      }
+    }
     if (this.focusedSurfaceId === surfaceId) return;
     if (this.focusedSurfaceId != null) {
       const serial = this.serial++;
@@ -2509,6 +3125,7 @@ class ClientSession {
     }
     this.pointerSurfaceId = surfaceId;
     const serial = this.serial++;
+    this.lastInputSerial = serial;
     this.send(this.pointerId, EV.pointer_enter, (b) => {
       b.uint(serial).object(surfaceId).fixed(sx).fixed(sy);
     });
@@ -2540,6 +3157,7 @@ class ClientSession {
         ? WL_POINTER_BUTTON_STATE_RELEASED
         : WL_POINTER_BUTTON_STATE_PRESSED;
     const serial = this.serial++;
+    this.lastInputSerial = serial;
     this.send(this.pointerId, EV.pointer_button, (b) => {
       b.uint(serial).uint(ev.timeMs >>> 0).uint(ev.code).uint(state);
     });
@@ -2689,6 +3307,10 @@ class ClientSession {
         this.handleXdgToplevel(obj, opcode, r);
         break;
       case "xdg_positioner":
+        this.handleXdgPositioner(obj, opcode, r);
+        break;
+      case "xdg_popup":
+        this.handleXdgPopup(obj, opcode, r);
         break;
       case "zwp_linux_dmabuf_v1":
         this.handleLinuxDmabuf(opcode, r);
@@ -2727,7 +3349,7 @@ class ClientSession {
     } else if (opcode === OP.display_get_registry) {
       const id = r.newId();
       this.objects.set(id, { id, iface: "wl_registry", version: 1 });
-      for (const g of this.server.getGlobals()) {
+      for (const g of this.server.getGlobalsForClient(this)) {
         this.send(id, EV.registry_global, (b) => {
           b.uint(g.name).string(g.iface).uint(g.version);
         });
@@ -2764,6 +3386,18 @@ class ClientSession {
     } else if (iface === "wl_drm") {
       this.sendDrmBind(id);
     } else if (iface === "xwayland_shell_v1") {
+      if (!this.isXwayland) {
+        console.warn(
+          `[xwayland_shell] rejected bind from non-Xwayland client id=${this.clientId}`,
+        );
+        this.objects.delete(id);
+        this.sendError(
+          WL_DISPLAY_ID,
+          0,
+          `xwayland_shell_v1 is only for Xwayland`,
+        );
+        return;
+      }
       console.log(`[xwayland_shell] bound id=${id}`);
     }
   }
@@ -3220,14 +3854,14 @@ class ClientSession {
       });
       const topObj = this.objects.get(toplevelId);
       const surface = topObj ? this.surfaceFromToplevel(topObj) : null;
-      // Prefer CLIENT for toolkits with their own chrome (GTK/Nautilus).
-      // Clients that want SSD call set_mode(SERVER).
-      if (surface) surface.decoration = "client";
+      // Compositor preference is SERVER (React SSD). Clients may still
+      // set_mode(CLIENT); we honor that to avoid double decorations.
+      if (surface) surface.decoration = "server";
       this.send(id, EV.xdg_toplevel_decoration_configure, (b) =>
-        b.uint(XDG_DECORATION_MODE_CLIENT),
+        b.uint(XDG_DECORATION_MODE_SERVER),
       );
       console.log(
-        `[deco] get_toplevel_decoration toplevel=${toplevelId} surface=${surface?.id ?? "?"} → CLIENT`,
+        `[deco] get_toplevel_decoration toplevel=${toplevelId} surface=${surface?.id ?? "?"} → SERVER`,
       );
     }
   }
@@ -3244,25 +3878,30 @@ class ClientSession {
       const toplevelId = obj.data?.toplevelId as number | undefined;
       const topObj = toplevelId ? this.objects.get(toplevelId) : undefined;
       const surface = topObj ? this.surfaceFromToplevel(topObj) : null;
-      if (mode === XDG_DECORATION_MODE_SERVER) {
+      if (mode === XDG_DECORATION_MODE_CLIENT) {
+        if (surface) surface.decoration = "client";
+        this.send(obj.id, EV.xdg_toplevel_decoration_configure, (b) =>
+          b.uint(XDG_DECORATION_MODE_CLIENT),
+        );
+        console.log(
+          `[deco] set_mode CLIENT toplevel=${toplevelId} surface=${surface?.id ?? "?"}`,
+        );
+      } else {
         if (surface) surface.decoration = "server";
         this.send(obj.id, EV.xdg_toplevel_decoration_configure, (b) =>
           b.uint(XDG_DECORATION_MODE_SERVER),
         );
-      } else {
-        if (surface) surface.decoration = "client";
-        this.send(obj.id, EV.xdg_toplevel_decoration_configure, (b) =>
-          b.uint(XDG_DECORATION_MODE_CLIENT),
+        console.log(
+          `[deco] set_mode SERVER toplevel=${toplevelId} surface=${surface?.id ?? "?"}`,
         );
       }
     } else if (opcode === OP.xdg_toplevel_decoration_unset_mode) {
       const toplevelId = obj.data?.toplevelId as number | undefined;
       const topObj = toplevelId ? this.objects.get(toplevelId) : undefined;
       const surface = topObj ? this.surfaceFromToplevel(topObj) : null;
-      // Unset → compositor choice: keep CLIENT for toolkit apps.
-      if (surface) surface.decoration = "client";
+      if (surface) surface.decoration = "server";
       this.send(obj.id, EV.xdg_toplevel_decoration_configure, (b) =>
-        b.uint(XDG_DECORATION_MODE_CLIENT),
+        b.uint(XDG_DECORATION_MODE_SERVER),
       );
     }
   }
@@ -3285,11 +3924,18 @@ class ClientSession {
         title: "",
         pixels: null,
         releaseBuffers: [],
+        bufferAttached: false,
         role: "none",
         parentId: null,
         children: [],
         xdgToplevelId: null,
+        xdgPopupId: null,
         xdgSurfaceId: null,
+        popupRelX: 0,
+        popupRelY: 0,
+        popupConfW: 0,
+        popupConfH: 0,
+        popupGrabbed: false,
         geomX: 0,
         geomY: 0,
         geomW: 0,
@@ -3397,10 +4043,7 @@ class ClientSession {
       if (surface) {
         surface.title = title;
         // Rootful Xwayland has no CSD — give it Moire SSD.
-        if (
-          surface.decoration === "none" &&
-          /^Xwayland\b/i.test(title)
-        ) {
+        if (surface.decoration === "none" && /^Xwayland\b/i.test(title)) {
           surface.decoration = "server";
         }
       }
@@ -3468,6 +4111,9 @@ class ClientSession {
       r.int(); // attach x — unused for layout
       r.int(); // attach y
       surface.bufferId = bufId === 0 ? null : bufId;
+      // New attach starts a release cycle; empty re-commits must not
+      // wl_buffer.release again (GDK SHM asserts / aborts on double release).
+      surface.bufferAttached = true;
       if (bufId) {
         const buf = this.getBuffer(bufId);
         if (buf) {
@@ -3508,12 +4154,13 @@ class ClientSession {
         }
       }
 
-      if (surface.bufferId) {
+      if (surface.bufferId && surface.bufferAttached) {
         const buf = this.getBuffer(surface.bufferId);
         if (!buf) {
           console.error(
             `[surface] commit missing buffer id=${surface.bufferId}`,
           );
+          surface.bufferAttached = false;
         } else {
           try {
             if (buf.kind === "shm") {
@@ -3554,20 +4201,27 @@ class ClientSession {
             if (!surface.releaseBuffers.includes(surface.bufferId)) {
               surface.releaseBuffers.push(surface.bufferId);
             }
+            surface.bufferAttached = false;
             // Fallback: if set_serial was missed on the wire but this surface
             // was claimed via xwayland_shell and the XWM has an unpaired serial.
             if (surface.xwaylandPending && surface.xwaylandSerial == null) {
               this.server.tryPairOrphanXwaylandSurface(this, surface.id);
             }
             if (surface.role === "toplevel") {
-              // Do not auto-enable SSD. GTK draws CSD without always finishing
-              // decoration negotiation first; promoting none→server causes
-              // double titlebars and broken move/resize geometry.
-              // SSD only when decoration === "server" (explicit set_mode).
+              // Do not auto-promote none→server. Apps that draw their own
+              // chrome without finishing zxdg_decoration (LibreOffice/GTK)
+              // would get double titlebars. SSD only after SERVER negotiate
+              // (or explicit Xwayland rootful title hack above).
               const firstMap = !this.server.isStacked(this, surface.id);
               this.server.registerToplevel(this, surface.id);
               // Focus / raise only on first map — not every commit.
+              // Ends any xdg_popup.grab for this client before keyboard_enter.
               if (firstMap) this.server.focusClient(this, surface.id);
+            } else if (surface.role === "popup") {
+              this.server.layoutPopup(this, surface);
+              this.server.registerPopup(this, surface.id);
+              // Nested grab: ensure parent chain is laid out above siblings.
+              this.server.raisePopup(this, surface.id);
             }
             if (
               surface.role !== "cursor" &&
@@ -3579,12 +4233,20 @@ class ClientSession {
             }
           } catch (err) {
             console.error(`[surface] snapshot failed`, err);
+            surface.bufferAttached = false;
           }
         }
+      } else if (surface.bufferAttached && !surface.bufferId) {
+        // Explicit attach(null) — detach; keep last pixels for now.
+        surface.bufferAttached = false;
       }
+      // Commits (buffer, frame callback, or xwayland serial) need a composite pass.
+      this.server.markDirty();
     } else if (opcode === OP.surface_destroy) {
       if (surface.role === "toplevel") {
         this.server.unregisterToplevel(this, surface.id);
+      } else if (surface.role === "popup") {
+        this.server.dismissPopup(this, surface.id, false);
       }
       this.finishSurfaceFrame(surface);
       surface.pixels = null;
@@ -3595,7 +4257,12 @@ class ClientSession {
   private handleXdgWmBase(opcode: number, r: MessageReader): void {
     if (opcode === OP.xdg_wm_base_create_positioner) {
       const id = r.newId();
-      this.objects.set(id, { id, iface: "xdg_positioner", version: 3 });
+      this.objects.set(id, {
+        id,
+        iface: "xdg_positioner",
+        version: 3,
+        data: { positioner: emptyPositioner() },
+      });
     } else if (opcode === OP.xdg_wm_base_get_xdg_surface) {
       const id = r.newId();
       const surfaceId = r.object();
@@ -3609,6 +4276,40 @@ class ClientSession {
       r.uint();
     } else if (opcode === OP.xdg_wm_base_destroy) {
       // ok
+    }
+  }
+
+  private handleXdgPositioner(obj: WlObject, opcode: number, r: MessageReader): void {
+    const pos = (obj.data?.positioner as PositionerState | undefined) ?? emptyPositioner();
+    if (!obj.data) obj.data = {};
+    obj.data.positioner = pos;
+
+    if (opcode === OP.xdg_positioner_destroy) {
+      this.destroyObject(obj.id);
+    } else if (opcode === OP.xdg_positioner_set_size) {
+      pos.width = r.int();
+      pos.height = r.int();
+    } else if (opcode === OP.xdg_positioner_set_anchor_rect) {
+      pos.anchorX = r.int();
+      pos.anchorY = r.int();
+      pos.anchorW = r.int();
+      pos.anchorH = r.int();
+    } else if (opcode === OP.xdg_positioner_set_anchor) {
+      pos.anchor = r.uint();
+    } else if (opcode === OP.xdg_positioner_set_gravity) {
+      pos.gravity = r.uint();
+    } else if (opcode === OP.xdg_positioner_set_constraint_adjustment) {
+      pos.constraintAdjustment = r.uint();
+    } else if (opcode === OP.xdg_positioner_set_offset) {
+      pos.offsetX = r.int();
+      pos.offsetY = r.int();
+    } else if (opcode === OP.xdg_positioner_set_reactive) {
+      // day-0: ignore
+    } else if (opcode === OP.xdg_positioner_set_parent_size) {
+      r.int();
+      r.int();
+    } else if (opcode === OP.xdg_positioner_set_parent_configure) {
+      r.uint();
     }
   }
 
@@ -3638,6 +4339,72 @@ class ClientSession {
           XDG_TOPLEVEL_STATE_ACTIVATED,
         ]);
       }
+    } else if (opcode === OP.xdg_surface_get_popup) {
+      const id = r.newId();
+      const parentXdgId = r.object(); // nullable
+      const positionerId = r.object();
+      const wlSurfaceId = obj.data!.wlSurfaceId as number;
+      const parentXdg = parentXdgId
+        ? this.objects.get(parentXdgId)
+        : undefined;
+      const parentWlId = (parentXdg?.data?.wlSurfaceId as number | undefined) ?? null;
+      const posObj = this.objects.get(positionerId);
+      const posSnap: PositionerState = {
+        ...((posObj?.data?.positioner as PositionerState | undefined) ??
+          emptyPositioner()),
+      };
+
+      this.objects.set(id, {
+        id,
+        iface: "xdg_popup",
+        version: 3,
+        data: {
+          wlSurfaceId,
+          xdgSurfaceId: obj.id,
+          parentXdgId,
+          parentWlId,
+          positioner: posSnap,
+        },
+      });
+
+      const surface = this.objects.get(wlSurfaceId)?.data?.surface as
+        | SurfaceState
+        | undefined;
+      if (!surface || parentWlId == null) {
+        console.warn(
+          `[popup] get_popup missing surface/parent popup=${id} parent=${parentXdgId}`,
+        );
+        return;
+      }
+      surface.role = "popup";
+      surface.xdgPopupId = id;
+      surface.xdgSurfaceId = obj.id;
+      surface.parentId = parentWlId;
+      surface.popupGrabbed = false;
+      // Never keep a popup on the toplevel stack (SSD / focus path).
+      this.server.unregisterToplevel(this, surface.id);
+
+      const parent = this.surfaceById(parentWlId);
+      const kms = this.server.getKmsSize();
+      const origin = parent
+        ? this.server.windowGeomOrigin(parent)
+        : { x: 0, y: 0 };
+      const placed = placePopupRelative(
+        posSnap,
+        kms.width,
+        kms.height,
+        origin.x,
+        origin.y,
+      );
+      surface.popupRelX = placed.x;
+      surface.popupRelY = placed.y;
+      surface.popupConfW = placed.w;
+      surface.popupConfH = placed.h;
+      this.server.layoutPopup(this, surface);
+      this.configurePopup(surface, placed.x, placed.y, placed.w, placed.h);
+      console.log(
+        `[popup] get_popup surface=${wlSurfaceId} parent=${parentWlId} @ ${placed.x},${placed.y} ${placed.w}x${placed.h}`,
+      );
     } else if (opcode === OP.xdg_surface_set_window_geometry) {
       const gx = r.int();
       const gy = r.int();
@@ -3656,11 +4423,102 @@ class ClientSession {
         if (surface.maximized || surface.fullscreen) {
           this.server.placeMaximized(surface);
         }
+        if (surface.role === "popup") {
+          this.server.layoutPopup(this, surface);
+        }
       }
     } else if (opcode === OP.xdg_surface_ack_configure) {
       r.uint();
       obj.data!.configured = true;
+    } else if (opcode === OP.xdg_surface_destroy) {
+      this.destroyObject(obj.id);
     }
+  }
+
+  private handleXdgPopup(obj: WlObject, opcode: number, r: MessageReader): void {
+    const wlSurfaceId = obj.data?.wlSurfaceId as number | undefined;
+    const surface = wlSurfaceId
+      ? (this.objects.get(wlSurfaceId)?.data?.surface as SurfaceState | undefined)
+      : undefined;
+
+    if (opcode === OP.xdg_popup_destroy) {
+      if (surface) {
+        this.server.dismissPopup(this, surface.id, false);
+        surface.xdgPopupId = null;
+        if (surface.role === "popup") surface.role = "none";
+      }
+      this.destroyObject(obj.id);
+    } else if (opcode === OP.xdg_popup_grab) {
+      r.object(); // seat
+      const serial = r.uint();
+      if (!surface) return;
+      // Day-0: accept grab leniently (serial from pointer button / enter).
+      const last = this.lastInputSerial;
+      if (last !== 0 && serial > last) {
+        console.warn(
+          `[popup] grab serial=${serial} ahead of lastInput=${last} — accepting`,
+        );
+      }
+      surface.popupGrabbed = true;
+      this.server.registerPopup(this, surface.id);
+      // Keyboard focus on the popup for arrow-key menu navigation.
+      this.server.setFocusedSession(this);
+      this.keyboardEnter(surface.id);
+      console.log(
+        `[popup] grab surface=${surface.id} serial=${serial} lastInput=${last}`,
+      );
+    } else if (opcode === OP.xdg_popup_reposition) {
+      const positionerId = r.object();
+      const token = r.uint();
+      if (!surface) return;
+      const posObj = this.objects.get(positionerId);
+      const posSnap: PositionerState = {
+        ...((posObj?.data?.positioner as PositionerState | undefined) ??
+          emptyPositioner()),
+      };
+      const parent = surface.parentId
+        ? this.surfaceById(surface.parentId)
+        : null;
+      const kms = this.server.getKmsSize();
+      const origin = parent
+        ? this.server.windowGeomOrigin(parent)
+        : { x: 0, y: 0 };
+      const placed = placePopupRelative(
+        posSnap,
+        kms.width,
+        kms.height,
+        origin.x,
+        origin.y,
+      );
+      surface.popupRelX = placed.x;
+      surface.popupRelY = placed.y;
+      surface.popupConfW = placed.w;
+      surface.popupConfH = placed.h;
+      this.server.layoutPopup(this, surface);
+      this.send(obj.id, EV.xdg_popup_repositioned, (b) => b.uint(token));
+      this.configurePopup(surface, placed.x, placed.y, placed.w, placed.h);
+    }
+  }
+
+  configurePopup(
+    surface: SurfaceState,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): void {
+    if (surface.xdgPopupId == null || surface.xdgSurfaceId == null) return;
+    this.send(surface.xdgPopupId, EV.xdg_popup_configure, (b) => {
+      b.int(x).int(y).int(width).int(height);
+    });
+    const serial = this.serial++;
+    this.send(surface.xdgSurfaceId, EV.xdg_surface_configure, (b) =>
+      b.uint(serial),
+    );
+  }
+
+  sendPopupDone(popupId: number): void {
+    this.send(popupId, EV.xdg_popup_popup_done, () => {});
   }
 
   sendCallbackDone(id: number, time: number): void {
@@ -3923,6 +4781,12 @@ class ClientSession {
     this.objects.delete(id);
   }
 
+  private sendError(objectId: number, code: number, message: string): void {
+    this.send(WL_DISPLAY_ID, EV.display_error, (b) => {
+      b.uint(objectId).uint(code).string(message);
+    });
+  }
+
   private send(
     objectId: number,
     opcode: number,
@@ -3932,5 +4796,16 @@ class ClientSession {
     build(b);
     const { data, fds } = b.build(objectId, opcode);
     this.conn.send(data, fds);
+  }
+}
+
+/** True when /proc/<pid>/exe looks like Xwayland. */
+function looksLikeXwayland(pid: number | null): boolean {
+  if (pid == null || pid <= 0) return false;
+  try {
+    const exe = fs.readlinkSync(`/proc/${pid}/exe`);
+    return /Xwayland/i.test(exe);
+  } catch {
+    return false;
   }
 }

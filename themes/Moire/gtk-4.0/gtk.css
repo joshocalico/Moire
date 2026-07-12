@@ -1,0 +1,6 @@
+/* Moire GTK4 — Default dark base + Moire chrome tokens.
+ * Note: libadwaita apps (Nautilus) largely ignore GtkTheme; session also
+ * installs gtk-4.0/adw-overrides.css as ~/.config/gtk-4.0/gtk.css. */
+
+@import url("resource:///org/gtk/libgtk/theme/Default/gtk-dark.css");
+@import url("adw-overrides.css");
