@@ -8,7 +8,7 @@
 
 ## Gradual memory leak → OOM (logged 2026-07-12, patched same day)
 
-**Symptom:** Compositor RSS grows steadily while the session runs (foot + Nautilus). CPU stays high (~30–40% on MoireDev) from the CPU composite path. After ~2h on MoireDev the kernel OOM-killed `node` (compositor):
+**Symptom:** Compositor RSS grows steadily while the session runs (foot + Files). CPU stays high (~30–40% on MoireDev) from the CPU composite path. After ~2h on MoireDev the kernel OOM-killed `node` (compositor):
 
 ```
 Out of memory: Killed process … (node) total-vm:45671280kB, anon-rss:7774460kB

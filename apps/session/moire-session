@@ -13,7 +13,7 @@ export GDK_BACKEND="${GDK_BACKEND:-wayland}"
 # GTK/GSK: virgl path still SIGSEGVs on Parallels; Cairo is the day-0 renderer.
 export GSK_RENDERER="${GSK_RENDERER:-cairo}"
 
-# Moire GTK theme helpers (LibreOffice GTK3 CSD + Nautilus/libadwaita dark chrome).
+# Moire GTK theme helpers (LibreOffice GTK3 CSD + libadwaita dark chrome).
 # shellcheck source=apply-gtk-theme.sh
 source "${ROOT}/apps/session/apply-gtk-theme.sh"
 

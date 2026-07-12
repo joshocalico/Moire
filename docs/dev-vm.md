@@ -106,7 +106,7 @@ From the Moire session (launcher / later tooling):
 | App | Notes |
 | --- | --- |
 | **foot** | Native Wayland terminal |
-| **Nautilus** | Needs session D-Bus + gvfs |
+| **Moire Files** | Day-0 file manager (`@moire/files`); desktop icons via shell |
 | **LibreOffice** | May use XWayland; install `xwayland` |
 
 ## 6. Troubleshooting
