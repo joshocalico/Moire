@@ -12,7 +12,10 @@
   },
   "dependencies": {
     "@moire/app-discovery": "workspace:*",
+    "@moire/prefs": "workspace:*",
     "@moire/react-host": "workspace:*",
+    "@moire/theme": "workspace:*",
+    "@moire/ui": "workspace:*",
     "react": "^19.0.0"
   },
   "devDependencies": {

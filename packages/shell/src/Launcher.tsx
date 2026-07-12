@@ -1,7 +1,9 @@
 import type { DesktopEntry } from "@moire/app-discovery";
 import { createElement, type ReactNode } from "react";
-import { FONT_H, Group, Rect, Text, measureText } from "@moire/react-host";
+import { Group, Rect, Text } from "@moire/react-host";
+import { themePalette } from "@moire/theme";
 import { PANEL_H } from "./Panel.js";
+import { Label, Surface } from "./widgets.js";
 
 export type LauncherProps = {
   open: boolean;
@@ -19,16 +21,18 @@ export type LauncherProps = {
 const BOX_W = 440;
 const ROW_H = 28;
 const PAD = 16;
+const FONT = 13;
 
 /** Super-key app launcher overlay. */
 export function Launcher(props: LauncherProps): ReactNode {
   if (!props.open) return null;
+  const pal = themePalette();
 
   const boxH = PAD * 2 + 36 + props.apps.length * ROW_H + 24;
   const x = Math.floor((props.screenW - BOX_W) / 2);
   const y = Math.floor((props.screenH - PANEL_H - boxH) / 2);
   const q = props.query.length > 0 ? props.query : "Type to filter...";
-  const qColor = props.query.length > 0 ? 0xffe8f4f6 : 0xff6a8a92;
+  const qColor = props.query.length > 0 ? pal.text : pal.muted;
 
   const rows = props.apps.map((app, i) => {
     const rowY = PAD + 40 + i * ROW_H;
@@ -42,7 +46,7 @@ export function Launcher(props: LauncherProps): ReactNode {
             y: 0,
             width: BOX_W - PAD * 2,
             height: ROW_H - 2,
-            fill: 0xff1a6b7a,
+            fill: pal.accentLine,
           })
         : null,
       createElement(Rect, {
@@ -55,9 +59,10 @@ export function Launcher(props: LauncherProps): ReactNode {
       }),
       createElement(Text, {
         x: 10,
-        y: Math.floor((ROW_H - FONT_H) / 2) - 1,
+        y: Math.floor((ROW_H - FONT) / 2) - 1,
         text: truncate(app.name, 48),
-        color: 0xfff2f8fa,
+        color: pal.text,
+        fontSize: FONT,
       }),
     );
   });
@@ -65,7 +70,6 @@ export function Launcher(props: LauncherProps): ReactNode {
   return createElement(
     Group,
     { x: 0, y: 0, width: props.screenW, height: props.screenH },
-    // Dim backdrop — click dismisses via controller outside-hit path.
     createElement(Rect, {
       x: 0,
       y: 0,
@@ -75,27 +79,28 @@ export function Launcher(props: LauncherProps): ReactNode {
       onPress: props.onDismiss,
     }),
     createElement(
-      Group,
-      { x, y, width: BOX_W, height: boxH },
-      createElement(Rect, {
-        x: 0,
-        y: 0,
+      Surface,
+      {
+        x,
+        y,
         width: BOX_W,
         height: boxH,
         fill: 0xf2141c22,
-      }),
+      },
       createElement(Rect, {
         x: 0,
         y: 0,
         width: BOX_W,
         height: 2,
-        fill: 0xff2a8a9a,
+        fill: pal.accent,
       }),
-      createElement(Text, {
+      createElement(Label, {
         x: PAD,
         y: PAD,
         text: "Launch",
-        color: 0xff8ec4ce,
+        color: pal.accent,
+        fontSize: 14,
+        fontWeight: "medium",
       }),
       createElement(Rect, {
         x: PAD,
@@ -107,8 +112,9 @@ export function Launcher(props: LauncherProps): ReactNode {
       createElement(Text, {
         x: PAD + 8,
         y: PAD + 22,
-        text: truncate(q, Math.floor((BOX_W - PAD * 2 - 16) / 6)),
+        text: truncate(q, 40),
         color: qColor,
+        fontSize: FONT,
       }),
       ...rows,
     ),
@@ -119,5 +125,3 @@ function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, Math.max(0, max - 1)) + "…";
 }
-
-void measureText;

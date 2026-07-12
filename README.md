@@ -16,10 +16,11 @@ packages/
   protocol/       # Wayland wire codec
   core/           # surfaces, xdg-shell, scene, spawn
   sys/            # koffi FFI → libdrm, gbm, EGL, libinput, libc
-  react-host/     # react-reconciler + Yoga → scene graph
+  theme/          # design tokens + wallpaper (theme.json loader)
+  react-host/     # react-reconciler → CPU scene graph + bitmap UI font
   app-discovery/  # Freedesktop .desktop + icons
-  shell/          # SSD, launcher, panel, Alt+Tab
-themes/default/   # compositor tokens (JSON)
+  shell/          # SSD, launcher, panel, widget primitives
+themes/default/   # theme.json + wallpaper config
 themes/Moire/     # GTK3/GTK4 theme for CSD apps (LibreOffice, etc.)
 docs/dev-vm.md    # Parallels Ubuntu VM + DRM/VT runbook
 ```

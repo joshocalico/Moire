@@ -10,7 +10,11 @@ import {
   type HitRegion,
   type ShellRoot,
 } from "@moire/react-host";
+import { installUiFonts, setUiScaleFactor } from "@moire/ui";
+import { loadSettings } from "@moire/prefs";
 import { createElement, useEffect, useMemo } from "react";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Panel } from "./Panel.js";
 import { Launcher } from "./Launcher.js";
 import { TitleBar, TITLEBAR_H } from "./TitleBar.js";
@@ -60,6 +64,8 @@ export type ShellBridge = {
   isLauncherOpen(): boolean;
   /** True when panel/launcher content changed (e.g. clock). */
   needsRepaint(): boolean;
+  /** Drop panel/SSD caches after theme or prefs change. */
+  invalidateChrome(): void;
 };
 
 const KEY_ESC = 1;
@@ -166,14 +172,37 @@ function ShellApp(props: ShellAppProps) {
  */
 export function createShell(spawn: ShellSpawn): ShellBridge {
   const root: ShellRoot = createShellRoot();
-  let apps = discoverApplications(
-    process.env.XDG_CURRENT_DESKTOP ?? "Moire",
-  );
+  const moireRoot =
+    process.env.MOIRE_ROOT ??
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const settingsExec = `pnpm --dir ${moireRoot} --filter @moire/settings start`;
+  const builtinApps: DesktopEntry[] = [
+    {
+      id: "moire-settings.desktop",
+      name: "Settings",
+      comment: "Moire system settings",
+      exec: settingsExec,
+      terminal: false,
+      categories: ["Settings", "System"],
+    },
+  ];
+  const mergeApps = (): DesktopEntry[] => [
+    ...builtinApps,
+    ...discoverApplications(process.env.XDG_CURRENT_DESKTOP ?? "Moire").filter(
+      (a) => a.id !== "moire-settings.desktop",
+    ),
+  ];
+  let apps = mergeApps();
   let open = process.env.MOIRE_SHELL_START_OPEN === "1";
   let query = "";
   let selected = 0;
   let clock = formatClock();
   let dirty = true;
+  setUiScaleFactor(loadSettings().uiScale);
+  void installUiFonts().then(() => {
+    dirty = true;
+    console.log("[shell] TTF fonts ready (@moire/ui)");
+  });
   if (open) console.log("[shell] launcher start-open (MOIRE_SHELL_START_OPEN)");
   let hits: HitRegion[] = [];
   let overlay: Uint8Array | null = null;
@@ -191,7 +220,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   const ssdScratchRoot: ShellRoot = createShellRoot();
 
   const refreshApps = () => {
-    apps = discoverApplications(process.env.XDG_CURRENT_DESKTOP ?? "Moire");
+    apps = mergeApps();
     dirty = true;
   };
   setInterval(refreshApps, 30_000).unref?.();
@@ -458,7 +487,12 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           x < h.x + h.width &&
           y < h.y + h.height
         ) {
-          h.onPress();
+          h.onPress({
+            x,
+            y,
+            localX: x - h.x,
+            localY: y - h.y,
+          });
           return ssdPending.current;
         }
       }
@@ -530,7 +564,12 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           ev.x < h.x + h.width &&
           ev.y < h.y + h.height
         ) {
-          h.onPress();
+          h.onPress({
+            x: ev.x,
+            y: ev.y,
+            localX: ev.x - h.x,
+            localY: ev.y - h.y,
+          });
           dirty = true;
           return true;
         }
@@ -547,6 +586,15 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
     isLauncherOpen: () => open,
     needsRepaint: () => dirty,
+    invalidateChrome: () => {
+      dirty = true;
+      overlay = null;
+      ow = 0;
+      oh = 0;
+      ssdStripCache.clear();
+      setUiScaleFactor(loadSettings().uiScale);
+      console.log("[shell] chrome invalidated (prefs/theme)");
+    },
   };
 }
 

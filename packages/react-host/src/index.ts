@@ -6,14 +6,27 @@ import {
   DiscreteEventPriority,
   LegacyRoot,
 } from "react-reconciler/constants.js";
-import { drawText, FONT_H, measureText } from "./font.js";
+import { drawText as drawBitmapText, FONT_H, measureText as measureBitmapText } from "./font.js";
+import {
+  getTextRenderer,
+  type TextDrawStyle,
+} from "./text-renderer.js";
 
 // Present at runtime in React 19; @types/react-reconciler may lag.
 const NoEventPriority = 0;
 
 export type SceneKind = "group" | "rect" | "text";
 
-export type HitHandler = () => void;
+export type HitPressEvent = {
+  /** Absolute position in the root framebuffer. */
+  x: number;
+  y: number;
+  /** Position relative to the hit region's top-left. */
+  localX: number;
+  localY: number;
+};
+
+export type HitHandler = (ev: HitPressEvent) => void;
 
 export type SceneNode = {
   kind: SceneKind;
@@ -25,6 +38,11 @@ export type SceneNode = {
   fill?: number;
   color?: number;
   text?: string;
+  /** Integer pixel scale for bitmap glyphs (1 = default). */
+  scale?: number;
+  fontSize?: number;
+  fontWeight?: string;
+  fontFamily?: string;
   onPress?: HitHandler;
   children: SceneNode[];
   parent: SceneNode | null;
@@ -55,10 +73,31 @@ function makeNode(
     fill: props.fill as number | undefined,
     color: props.color as number | undefined,
     text: props.text as string | undefined,
+    scale: props.scale != null ? Number(props.scale) : undefined,
+    fontSize: props.fontSize != null ? Number(props.fontSize) : undefined,
+    fontWeight: props.fontWeight as string | undefined,
+    fontFamily: props.fontFamily as string | undefined,
     onPress: props.onPress as HitHandler | undefined,
     children: [],
     parent: null,
   };
+}
+
+function textStyleOf(node: SceneNode): TextDrawStyle {
+  return {
+    color: node.color,
+    scale: node.scale,
+    fontSize: node.fontSize,
+    fontWeight: node.fontWeight,
+    fontFamily: node.fontFamily,
+  };
+}
+
+function measureNodeText(text: string, style: TextDrawStyle): { width: number; height: number } {
+  const custom = getTextRenderer();
+  if (custom) return custom.measure(text, style);
+  const s = style.scale ?? 1;
+  return { width: measureBitmapText(text, s), height: FONT_H * s };
 }
 
 function applyProps(node: SceneNode, props: Record<string, unknown>): void {
@@ -69,7 +108,24 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   if ("fill" in props) node.fill = props.fill as number | undefined;
   if ("color" in props) node.color = props.color as number | undefined;
   if ("text" in props) node.text = props.text as string | undefined;
+  if ("scale" in props) {
+    node.scale = props.scale != null ? Number(props.scale) : undefined;
+  }
+  if ("fontSize" in props) {
+    node.fontSize = props.fontSize != null ? Number(props.fontSize) : undefined;
+  }
+  if ("fontWeight" in props) {
+    node.fontWeight = props.fontWeight as string | undefined;
+  }
+  if ("fontFamily" in props) {
+    node.fontFamily = props.fontFamily as string | undefined;
+  }
   if ("onPress" in props) node.onPress = props.onPress as HitHandler | undefined;
+  if (node.kind === "text" && node.text) {
+    const m = measureNodeText(node.text, textStyleOf(node));
+    node.width = m.width;
+    node.height = m.height;
+  }
 }
 
 type HostContext = Record<string, never>;
@@ -134,7 +190,12 @@ const hostConfig = {
     child.parent = parent;
     parent.children.push(child);
   },
-  finalizeInitialChildren(): boolean {
+  finalizeInitialChildren(node: SceneNode): boolean {
+    if (node.kind === "text" && node.text) {
+      const m = measureNodeText(node.text, textStyleOf(node));
+      node.width = m.width;
+      node.height = m.height;
+    }
     return false;
   },
   prepareUpdate(): unknown {
@@ -144,12 +205,13 @@ const hostConfig = {
     return false;
   },
   createTextInstance(text: string): SceneNode {
+    const m = measureNodeText(text, {});
     return makeNode("text", {
       text,
       x: 0,
       y: 0,
-      width: measureText(text),
-      height: FONT_H,
+      width: m.width,
+      height: m.height,
     });
   },
   getPublicInstance(instance: SceneNode): SceneNode {
@@ -201,7 +263,9 @@ const hostConfig = {
   },
   commitTextUpdate(node: SceneNode, _old: string, next: string): void {
     node.text = next;
-    node.width = measureText(next);
+    const m = measureNodeText(next, textStyleOf(node));
+    node.width = m.width;
+    node.height = m.height;
   },
   hideInstance(): void {},
   hideTextInstance(): void {},
@@ -316,16 +380,24 @@ export function rasterize(
     if (node.kind === "rect" && node.fill != null) {
       fillRect(fb, pitchPx, fbW, fbH, x, y, node.width, node.height, node.fill);
     } else if (node.kind === "text" && node.text) {
-      drawText(
-        fb,
-        pitchPx,
-        fbW,
-        fbH,
-        x,
-        y,
-        node.text,
-        node.color ?? 0xffffffff,
-      );
+      const style = textStyleOf(node);
+      style.color = node.color ?? 0xffffffff;
+      const custom = getTextRenderer();
+      if (custom) {
+        custom.draw(fb, pitchPx, fbW, fbH, x, y, node.text, style);
+      } else {
+        drawBitmapText(
+          fb,
+          pitchPx,
+          fbW,
+          fbH,
+          x,
+          y,
+          node.text,
+          style.color,
+          node.scale ?? 1,
+        );
+      }
     }
     for (const c of node.children) paint(c);
   };
@@ -381,4 +453,33 @@ export const Rect = "rect";
 export const Text = "text";
 export const Group = "group";
 
-export { FONT_H, FONT_W, measureText, drawText } from "./font.js";
+export function measureText(text: string, scale = 1): number {
+  return measureNodeText(text, { scale }).width;
+}
+
+export function drawText(
+  fb: Uint32Array,
+  pitchPx: number,
+  fbW: number,
+  fbH: number,
+  x: number,
+  y: number,
+  text: string,
+  color = 0xffffffff,
+  scale = 1,
+): void {
+  const custom = getTextRenderer();
+  if (custom) {
+    custom.draw(fb, pitchPx, fbW, fbH, x, y, text, { color, scale });
+    return;
+  }
+  drawBitmapText(fb, pitchPx, fbW, fbH, x, y, text, color, scale);
+}
+
+export { FONT_H, FONT_W } from "./font.js";
+export {
+  setTextRenderer,
+  getTextRenderer,
+  type TextRenderer,
+  type TextDrawStyle,
+} from "./text-renderer.js";

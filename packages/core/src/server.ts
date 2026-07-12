@@ -43,6 +43,12 @@ import {
   type DrmFeedbackDevice,
 } from "./dmabuf-feedback.js";
 import { X11Wm, type XwmWindow } from "./xwm.js";
+import {
+  paintWallpaper,
+  hexToArgb,
+  type MoireTheme,
+} from "@moire/theme";
+import { createPrefsWatcher, loadRuntimeTheme, type PrefsWatcher } from "@moire/prefs";
 
 const WL_DISPLAY_ID = 1;
 
@@ -617,6 +623,8 @@ export type CompositorShell = {
   isLauncherOpen(): boolean;
   /** True when panel/launcher content changed (e.g. clock). */
   needsRepaint?(): boolean;
+  /** Drop SSD/panel caches after theme or prefs change. */
+  invalidateChrome?(): void;
 };
 
 /** Seat clipboard selection (wl_data_device.set_selection). */
@@ -706,6 +714,9 @@ export class CompositorServer {
   >();
   /** Last SSD window list from composite — used for reliable hit-testing. */
   private ssdWindows: SsdWindowInfo[] = [];
+  /** Desktop theme (tokens + wallpaper). */
+  private theme: MoireTheme = loadRuntimeTheme();
+  private prefsWatcher: PrefsWatcher | null = null;
 
   constructor(
     private readonly runtimeDir: string,
@@ -727,7 +738,20 @@ export class CompositorServer {
   async start(cardPath?: string): Promise<void> {
     fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
     this.kms = openKmsOutput(cardPath);
-    fillKmsColor(this.kms, { r: 24, g: 90, b: 110 });
+    const bootBg = hexToArgb(this.theme.tokens.bg);
+    fillKmsColor(this.kms, {
+      r: (bootBg >>> 16) & 0xff,
+      g: (bootBg >>> 8) & 0xff,
+      b: bootBg & 0xff,
+    });
+    console.log(
+      `[theme] ${this.theme.name} wallpaper=${this.theme.wallpaper.mode}`,
+    );
+    this.prefsWatcher = createPrefsWatcher((theme) => {
+      this.theme = theme;
+      this.shell?.invalidateChrome?.();
+      this.markDirty();
+    });
     try {
       this.gbm = GbmDevice.openForImport(this.kms.fd);
       console.log("[dmabuf] GBM device ready");
@@ -2504,6 +2528,7 @@ export class CompositorServer {
 
   private async loop(): Promise<void> {
     while (this.running) {
+      this.prefsWatcher?.poll();
       if (this.shell?.needsRepaint?.()) this.markDirty();
       if (this.needsComposite) {
         this.needsComposite = false;
@@ -2535,17 +2560,9 @@ export class CompositorServer {
       stage.byteOffset,
       stage.byteLength >>> 2,
     );
+    // Wallpaper from theme (gradient or solid) — replaces the old fixed teal fill.
     const pitchPx = kms.pitch >>> 2;
-
-    // Wallpaper (XRGB8888 LE) — use >>> 0 so the word is unsigned
-    const wallpaper = (0xff000000 | (24 << 16) | (90 << 8) | 110) >>> 0;
-    if (kms.pitch === kms.width * 4) {
-      fb.fill(wallpaper, 0, kms.width * kms.height);
-    } else {
-      for (let y = 0; y < kms.height; y++) {
-        fb.fill(wallpaper, y * pitchPx, y * pitchPx + kms.width);
-      }
-    }
+    paintWallpaper(fb, pitchPx, kms.width, kms.height, this.theme);
 
     let painted = 0;
     try {
@@ -4335,7 +4352,9 @@ class ClientSession {
         const slot = this.server.allocToplevelSlot();
         surface.x = slot.x;
         surface.y = slot.y;
-        this.configureToplevel(surface, 800, 600, [
+        // 0×0 = client picks its own size (xdg-shell). A fixed 800×600 hint
+        // forced toolkit apps away from their requested geometry.
+        this.configureToplevel(surface, 0, 0, [
           XDG_TOPLEVEL_STATE_ACTIVATED,
         ]);
       }

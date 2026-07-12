@@ -1,0 +1,33 @@
+{
+  "name": "@moire/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "moire-ui-smoke": "./src/smoke.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "smoke": "tsx src/smoke.ts"
+  },
+  "dependencies": {
+    "@moire/prefs": "workspace:*",
+    "@moire/protocol": "workspace:*",
+    "@moire/react-host": "workspace:*",
+    "@moire/sys": "workspace:*",
+    "@moire/theme": "workspace:*",
+    "opentype.js": "^1.3.4",
+    "react": "^19.0.0",
+    "yoga-layout": "^3.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/opentype.js": "^1.3.10",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.7.2"
+  }
+}

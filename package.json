@@ -13,5 +13,10 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "opentype.js": "^2.0.0",
+    "react": "^19.0.0",
+    "yoga-layout": "^3.2.1"
   }
 }

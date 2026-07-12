@@ -8,3 +8,10 @@ export {
   type SsdWindowInfo,
   type SsdAction,
 } from "./ssd.js";
+export {
+  Label,
+  Button,
+  Surface,
+  Divider,
+  usePalette,
+} from "./widgets.js";

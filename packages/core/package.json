@@ -11,8 +11,10 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@moire/prefs": "workspace:*",
     "@moire/protocol": "workspace:*",
     "@moire/sys": "workspace:*",
+    "@moire/theme": "workspace:*",
     "koffi": "^2.10.1",
     "x11": "^2.3.0"
   },

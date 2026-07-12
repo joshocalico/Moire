@@ -77,8 +77,9 @@ const GLYPHS: Record<string, number[]> = {
 export const FONT_W = 6; // 5 px glyph + 1 px gap
 export const FONT_H = 8;
 
-export function measureText(text: string): number {
-  return text.length * FONT_W;
+export function measureText(text: string, scale = 1): number {
+  const s = Math.max(1, scale | 0);
+  return text.length * FONT_W * s;
 }
 
 export function drawText(
@@ -90,22 +91,30 @@ export function drawText(
   y: number,
   text: string,
   color: number,
+  scale = 1,
 ): void {
+  const s = Math.max(1, scale | 0);
   let cx = x | 0;
   const cy = y | 0;
+  const colorU = color >>> 0;
   for (const ch of text) {
     const rows = GLYPHS[ch] ?? GLYPHS["?"]!;
     for (let row = 0; row < 7; row++) {
       const bits = rows[row]!;
-      const py = cy + row;
-      if (py < 0 || py >= fbH) continue;
       for (let col = 0; col < 5; col++) {
         if (((bits >> (4 - col)) & 1) === 0) continue;
-        const px = cx + col;
-        if (px < 0 || px >= fbW) continue;
-        fb[py * pitchPx + px] = color >>> 0;
+        for (let dy = 0; dy < s; dy++) {
+          const py = cy + row * s + dy;
+          if (py < 0 || py >= fbH) continue;
+          const rowOff = py * pitchPx;
+          for (let dx = 0; dx < s; dx++) {
+            const px = cx + col * s + dx;
+            if (px < 0 || px >= fbW) continue;
+            fb[rowOff + px] = colorU;
+          }
+        }
       }
     }
-    cx += FONT_W;
+    cx += FONT_W * s;
   }
 }

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=Moire system settings
+Exec=pnpm --dir /home/moire/moire --filter @moire/settings start
+Icon=preferences-system
+Terminal=false
+Categories=Settings;System;
+OnlyShowIn=Moire;
+StartupNotify=true

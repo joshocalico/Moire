@@ -1,0 +1,26 @@
+{
+  "name": "moire-light",
+  "version": "0.1.0",
+  "gtkTheme": "Moire",
+  "wallpaper": {
+    "mode": "gradient",
+    "from": "#e8eef2",
+    "to": "#a8d4dc",
+    "mid": "#d5e4ea",
+    "midAt": 0.55
+  },
+  "tokens": {
+    "bg": "#f4f6f8",
+    "panel": "#ffffff",
+    "titlebar": "#e8ecef",
+    "titlebarInactive": "#dfe3e6",
+    "accent": "#1a6b7a",
+    "accentLine": "#1a6b7a",
+    "text": "#1a1b1e",
+    "muted": "#5c636a",
+    "danger": "#a33b3b",
+    "surface": "#dce3e8",
+    "titlebarHeight": 32,
+    "panelHeight": 36
+  }
+}

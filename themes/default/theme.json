@@ -1,7 +1,14 @@
 {
   "name": "moire-default",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "gtkTheme": "Moire",
+  "wallpaper": {
+    "mode": "gradient",
+    "from": "#0e1216",
+    "to": "#1a6b7a",
+    "mid": "#152028",
+    "midAt": 0.55
+  },
   "tokens": {
     "bg": "#1a1b1e",
     "panel": "#25262b",
@@ -11,6 +18,8 @@
     "accentLine": "#1a6b7a",
     "text": "#f1f3f5",
     "muted": "#9aa0a6",
+    "danger": "#a33b3b",
+    "surface": "#3a3f46",
     "titlebarHeight": 32,
     "panelHeight": 36
   }

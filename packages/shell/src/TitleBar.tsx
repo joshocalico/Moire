@@ -1,5 +1,7 @@
 import { createElement, type ReactNode } from "react";
-import { FONT_H, Group, Rect, Text, measureText } from "@moire/react-host";
+import { Group, Rect, measureText } from "@moire/react-host";
+import { themePalette } from "@moire/theme";
+import { Button, Label } from "./widgets.js";
 
 export const TITLEBAR_H = 32;
 export const TITLEBAR_BTN = 28;
@@ -20,16 +22,17 @@ export type TitleBarProps = {
 
 /** Server-side decoration titlebar — painted via react-host into the scene. */
 export function TitleBar(props: TitleBarProps): ReactNode {
+  const pal = themePalette();
   const focused = props.focused !== false;
-  const bg = focused ? 0xff2a2e33 : 0xff1e2126;
-  const fg = focused ? 0xfff1f3f5 : 0xff9aa0a6;
-  const accent = 0xff1a6b7a;
+  const bg = focused ? pal.titlebar : pal.titlebarInactive;
+  const fg = focused ? pal.text : pal.muted;
   const btnY = Math.floor((TITLEBAR_H - TITLEBAR_BTN) / 2);
   const closeX = props.width - TITLEBAR_BTN_PAD - TITLEBAR_BTN;
   const maxX = closeX - TITLEBAR_BTN_GAP - TITLEBAR_BTN;
   const minX = maxX - TITLEBAR_BTN_GAP - TITLEBAR_BTN;
   const title = props.title || "Window";
   const titleMaxW = Math.max(0, minX - 12);
+  const fontSize = 13;
   let shown = title;
   while (shown.length > 1 && measureText(shown) > titleMaxW) {
     shown = shown.slice(0, -1);
@@ -52,55 +55,44 @@ export function TitleBar(props: TitleBarProps): ReactNode {
       y: TITLEBAR_H - 1,
       width: props.width,
       height: 1,
-      fill: accent,
+      fill: pal.accentLine,
     }),
-    createElement(Text, {
+    createElement(Label, {
       x: 10,
-      y: Math.floor((TITLEBAR_H - FONT_H) / 2),
+      y: Math.floor((TITLEBAR_H - fontSize) / 2),
       text: shown,
       color: fg,
+      fontSize,
     }),
-    createElement(Rect, {
+    createElement(Button, {
       x: minX,
       y: btnY,
       width: TITLEBAR_BTN,
       height: TITLEBAR_BTN,
-      fill: 0xff3a3f46,
+      label: "-",
+      fill: pal.surface,
+      color: fg,
       onPress: props.onMinimize,
     }),
-    createElement(Text, {
-      x: minX + 10,
-      y: btnY + Math.floor((TITLEBAR_BTN - FONT_H) / 2),
-      text: "-",
-      color: fg,
-    }),
-    createElement(Rect, {
+    createElement(Button, {
       x: maxX,
       y: btnY,
       width: TITLEBAR_BTN,
       height: TITLEBAR_BTN,
-      fill: 0xff3a3f46,
+      label: "+",
+      fill: pal.surface,
+      color: fg,
       onPress: props.onMaximize,
     }),
-    createElement(Text, {
-      x: maxX + 8,
-      y: btnY + Math.floor((TITLEBAR_BTN - FONT_H) / 2),
-      text: "+",
-      color: fg,
-    }),
-    createElement(Rect, {
+    createElement(Button, {
       x: closeX,
       y: btnY,
       width: TITLEBAR_BTN,
       height: TITLEBAR_BTN,
-      fill: focused ? 0xffa33b3b : 0xff5a3030,
-      onPress: props.onClose,
-    }),
-    createElement(Text, {
-      x: closeX + 10,
-      y: btnY + Math.floor((TITLEBAR_BTN - FONT_H) / 2),
-      text: "x",
+      label: "x",
+      fill: focused ? pal.danger : 0xff5a3030,
       color: 0xffffffff,
+      onPress: props.onClose,
     }),
   );
 }

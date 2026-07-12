@@ -48,3 +48,11 @@ Out of memory: Killed process … (node) total-vm:45671280kB, anon-rss:7774460kB
 **Rootful fallback:** `MOIRE_XWAYLAND=rootful` for the nested screen.
 
 **Still later:** fuller EWMH (maximize state sync, workspaces); confirm why Ubuntu’s Xwayland 23.2 sometimes skips `set_serial` on the wire.
+
+## DE chrome foundation (2026-07-12)
+
+- **`@moire/theme`** loads `themes/default/theme.json` (tokens + wallpaper)
+- Shell TitleBar/Panel/Launcher use `themePalette()`; panel brand is 2× bitmap font
+- Widget primitives: `Label`, `Button`, `Surface`, `Divider` in `@moire/shell`
+- Compositor paints wallpaper from theme (`gradient` by default) instead of fixed teal
+
