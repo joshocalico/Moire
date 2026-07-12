@@ -3,7 +3,7 @@ import { Group, Rect, measureText } from "@moire/react-host";
 import { themePalette } from "@moire/theme";
 import { Button, Label } from "./widgets.js";
 
-export const TITLEBAR_H = 32;
+export const TITLEBAR_H = 34;
 export const TITLEBAR_BTN = 28;
 export const TITLEBAR_BTN_GAP = 4;
 export const TITLEBAR_BTN_PAD = 6;
@@ -23,10 +23,11 @@ export type TitleBarProps = {
 /** Server-side decoration titlebar — painted via react-host into the scene. */
 export function TitleBar(props: TitleBarProps): ReactNode {
   const pal = themePalette();
+  const titlebarH = pal.titlebarHeight;
   const focused = props.focused !== false;
   const bg = focused ? pal.titlebar : pal.titlebarInactive;
   const fg = focused ? pal.text : pal.muted;
-  const btnY = Math.floor((TITLEBAR_H - TITLEBAR_BTN) / 2);
+  const btnY = Math.floor((titlebarH - TITLEBAR_BTN) / 2);
   const closeX = props.width - TITLEBAR_BTN_PAD - TITLEBAR_BTN;
   const maxX = closeX - TITLEBAR_BTN_GAP - TITLEBAR_BTN;
   const minX = maxX - TITLEBAR_BTN_GAP - TITLEBAR_BTN;
@@ -41,28 +42,29 @@ export function TitleBar(props: TitleBarProps): ReactNode {
 
   return createElement(
     Group,
-    { x: props.x, y: props.y, width: props.width, height: TITLEBAR_H },
+    { x: props.x, y: props.y, width: props.width, height: titlebarH },
     createElement(Rect, {
       x: 0,
       y: 0,
       width: props.width,
-      height: TITLEBAR_H,
+      height: titlebarH,
       fill: bg,
       onPress: props.onDrag,
     }),
     createElement(Rect, {
       x: 0,
-      y: TITLEBAR_H - 1,
+      y: titlebarH - 1,
       width: props.width,
       height: 1,
-      fill: pal.accentLine,
+      fill: pal.rimLight,
     }),
     createElement(Label, {
       x: 10,
-      y: Math.floor((TITLEBAR_H - fontSize) / 2),
+      y: Math.floor((titlebarH - fontSize) / 2),
       text: shown,
       color: fg,
       fontSize,
+      fontWeight: "medium",
     }),
     createElement(Button, {
       x: minX,
@@ -70,7 +72,7 @@ export function TitleBar(props: TitleBarProps): ReactNode {
       width: TITLEBAR_BTN,
       height: TITLEBAR_BTN,
       label: "-",
-      fill: pal.surface,
+      variant: "ghost",
       color: fg,
       onPress: props.onMinimize,
     }),
@@ -80,7 +82,7 @@ export function TitleBar(props: TitleBarProps): ReactNode {
       width: TITLEBAR_BTN,
       height: TITLEBAR_BTN,
       label: "+",
-      fill: pal.surface,
+      variant: "ghost",
       color: fg,
       onPress: props.onMaximize,
     }),
@@ -90,8 +92,8 @@ export function TitleBar(props: TitleBarProps): ReactNode {
       width: TITLEBAR_BTN,
       height: TITLEBAR_BTN,
       label: "x",
-      fill: focused ? pal.danger : 0xff5a3030,
-      color: 0xffffffff,
+      variant: "ghost",
+      color: focused ? pal.danger : fg,
       onPress: props.onClose,
     }),
   );

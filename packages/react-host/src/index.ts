@@ -15,16 +15,20 @@ import {
 // Present at runtime in React 19; @types/react-reconciler may lag.
 const NoEventPriority = 0;
 
-export type SceneKind = "group" | "rect" | "text";
+export type SceneKind = "group" | "rect" | "text" | "image";
 
-export type HitPressEvent = {
+export type HitPointerEvent = {
   /** Absolute position in the root framebuffer. */
   x: number;
   y: number;
   /** Position relative to the hit region's top-left. */
   localX: number;
   localY: number;
+  deltaY?: number;
 };
+
+/** Backward-compatible alias for pointer events delivered to press handlers. */
+export type HitPressEvent = HitPointerEvent;
 
 export type HitHandler = (ev: HitPressEvent) => void;
 
@@ -38,12 +42,23 @@ export type SceneNode = {
   fill?: number;
   color?: number;
   text?: string;
+  clip?: boolean;
+  imagePixels?: Uint8Array;
+  imageWidth?: number;
+  imageHeight?: number;
+  opacity?: number;
   /** Integer pixel scale for bitmap glyphs (1 = default). */
   scale?: number;
   fontSize?: number;
   fontWeight?: string;
   fontFamily?: string;
   onPress?: HitHandler;
+  onPointerEnter?: HitHandler;
+  onPointerLeave?: HitHandler;
+  onPointerDown?: HitHandler;
+  onPointerMove?: HitHandler;
+  onPointerUp?: HitHandler;
+  onWheel?: (ev: HitPointerEvent) => void;
   children: SceneNode[];
   parent: SceneNode | null;
 };
@@ -53,7 +68,13 @@ export type HitRegion = {
   y: number;
   width: number;
   height: number;
-  onPress: HitHandler;
+  onPress?: HitHandler;
+  onPointerEnter?: HitHandler;
+  onPointerLeave?: HitHandler;
+  onPointerDown?: HitHandler;
+  onPointerMove?: HitHandler;
+  onPointerUp?: HitHandler;
+  onWheel?: (ev: HitPointerEvent) => void;
 };
 
 let nextId = 1;
@@ -73,11 +94,22 @@ function makeNode(
     fill: props.fill as number | undefined,
     color: props.color as number | undefined,
     text: props.text as string | undefined,
+    clip: props.clip as boolean | undefined,
+    imagePixels: props.imagePixels as Uint8Array | undefined,
+    imageWidth: props.imageWidth != null ? Number(props.imageWidth) : undefined,
+    imageHeight: props.imageHeight != null ? Number(props.imageHeight) : undefined,
+    opacity: props.opacity != null ? Number(props.opacity) : undefined,
     scale: props.scale != null ? Number(props.scale) : undefined,
     fontSize: props.fontSize != null ? Number(props.fontSize) : undefined,
     fontWeight: props.fontWeight as string | undefined,
     fontFamily: props.fontFamily as string | undefined,
     onPress: props.onPress as HitHandler | undefined,
+    onPointerEnter: props.onPointerEnter as HitHandler | undefined,
+    onPointerLeave: props.onPointerLeave as HitHandler | undefined,
+    onPointerDown: props.onPointerDown as HitHandler | undefined,
+    onPointerMove: props.onPointerMove as HitHandler | undefined,
+    onPointerUp: props.onPointerUp as HitHandler | undefined,
+    onWheel: props.onWheel as ((ev: HitPointerEvent) => void) | undefined,
     children: [],
     parent: null,
   };
@@ -108,6 +140,17 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   if ("fill" in props) node.fill = props.fill as number | undefined;
   if ("color" in props) node.color = props.color as number | undefined;
   if ("text" in props) node.text = props.text as string | undefined;
+  if ("clip" in props) node.clip = props.clip as boolean | undefined;
+  if ("imagePixels" in props) node.imagePixels = props.imagePixels as Uint8Array | undefined;
+  if ("imageWidth" in props) {
+    node.imageWidth = props.imageWidth != null ? Number(props.imageWidth) : undefined;
+  }
+  if ("imageHeight" in props) {
+    node.imageHeight = props.imageHeight != null ? Number(props.imageHeight) : undefined;
+  }
+  if ("opacity" in props) {
+    node.opacity = props.opacity != null ? Number(props.opacity) : undefined;
+  }
   if ("scale" in props) {
     node.scale = props.scale != null ? Number(props.scale) : undefined;
   }
@@ -121,6 +164,24 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
     node.fontFamily = props.fontFamily as string | undefined;
   }
   if ("onPress" in props) node.onPress = props.onPress as HitHandler | undefined;
+  if ("onPointerEnter" in props) {
+    node.onPointerEnter = props.onPointerEnter as HitHandler | undefined;
+  }
+  if ("onPointerLeave" in props) {
+    node.onPointerLeave = props.onPointerLeave as HitHandler | undefined;
+  }
+  if ("onPointerDown" in props) {
+    node.onPointerDown = props.onPointerDown as HitHandler | undefined;
+  }
+  if ("onPointerMove" in props) {
+    node.onPointerMove = props.onPointerMove as HitHandler | undefined;
+  }
+  if ("onPointerUp" in props) {
+    node.onPointerUp = props.onPointerUp as HitHandler | undefined;
+  }
+  if ("onWheel" in props) {
+    node.onWheel = props.onWheel as ((ev: HitPointerEvent) => void) | undefined;
+  }
   if (node.kind === "text" && node.text) {
     const m = measureNodeText(node.text, textStyleOf(node));
     node.width = m.width;
@@ -183,7 +244,9 @@ const hostConfig = {
   prepareForCommit: () => null,
   resetAfterCommit: () => {},
   createInstance(type: string, props: Record<string, unknown>): SceneNode {
-    const kind = (type === "rect" || type === "text" ? type : "group") as SceneKind;
+    const kind = (
+      type === "image" || type === "rect" || type === "text" ? type : "group"
+    ) as SceneKind;
     return makeNode(kind, props);
   },
   appendInitialChild(parent: SceneNode, child: SceneNode): void {
@@ -353,13 +416,29 @@ function absPos(node: SceneNode): { x: number; y: number } {
 
 export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[] {
   const { x, y } = absPos(node);
-  if (node.onPress && node.width > 0 && node.height > 0) {
+  if (
+    (node.onPress ||
+      node.onPointerEnter ||
+      node.onPointerLeave ||
+      node.onPointerDown ||
+      node.onPointerMove ||
+      node.onPointerUp ||
+      node.onWheel) &&
+    node.width > 0 &&
+    node.height > 0
+  ) {
     out.push({
       x,
       y,
       width: node.width,
       height: node.height,
       onPress: node.onPress,
+      onPointerEnter: node.onPointerEnter,
+      onPointerLeave: node.onPointerLeave,
+      onPointerDown: node.onPointerDown,
+      onPointerMove: node.onPointerMove,
+      onPointerUp: node.onPointerUp,
+      onWheel: node.onWheel,
     });
   }
   for (const c of node.children) collectHits(c, out);
@@ -375,22 +454,39 @@ export function rasterize(
   const fb = new Uint32Array(pixels.buffer);
   const pitchPx = fbW;
 
-  const paint = (node: SceneNode) => {
-    const { x, y } = absPos(node);
+  const paint = (
+    node: SceneNode,
+    target: Uint32Array,
+    targetW: number,
+    targetH: number,
+    targetPitch: number,
+    x: number,
+    y: number,
+  ) => {
     if (node.kind === "rect" && node.fill != null) {
-      fillRect(fb, pitchPx, fbW, fbH, x, y, node.width, node.height, node.fill);
+      fillRect(
+        target,
+        targetPitch,
+        targetW,
+        targetH,
+        x,
+        y,
+        node.width,
+        node.height,
+        node.fill,
+      );
     } else if (node.kind === "text" && node.text) {
       const style = textStyleOf(node);
       style.color = node.color ?? 0xffffffff;
       const custom = getTextRenderer();
       if (custom) {
-        custom.draw(fb, pitchPx, fbW, fbH, x, y, node.text, style);
+        custom.draw(target, targetPitch, targetW, targetH, x, y, node.text, style);
       } else {
         drawBitmapText(
-          fb,
-          pitchPx,
-          fbW,
-          fbH,
+          target,
+          targetPitch,
+          targetW,
+          targetH,
           x,
           y,
           node.text,
@@ -398,11 +494,196 @@ export function rasterize(
           node.scale ?? 1,
         );
       }
+    } else if (
+      node.kind === "image" &&
+      node.imagePixels &&
+      node.imageWidth &&
+      node.imageHeight
+    ) {
+      blitImage(
+        target,
+        targetPitch,
+        targetW,
+        targetH,
+        x,
+        y,
+        node.width,
+        node.height,
+        node.imagePixels,
+        node.imageWidth,
+        node.imageHeight,
+        node.opacity,
+      );
     }
-    for (const c of node.children) paint(c);
+
+    if (node.kind === "group" && node.clip) {
+      const clipW = Math.max(0, node.width | 0);
+      const clipH = Math.max(0, node.height | 0);
+      if (clipW === 0 || clipH === 0) return;
+      const layer = new Uint32Array(clipW * clipH);
+      for (const c of node.children) {
+        paint(c, layer, clipW, clipH, clipW, c.x, c.y);
+      }
+      blitPixels(
+        target,
+        targetPitch,
+        targetW,
+        targetH,
+        x,
+        y,
+        layer,
+        clipW,
+        clipW,
+        clipH,
+        node.opacity,
+      );
+      return;
+    }
+    for (const c of node.children) {
+      paint(c, target, targetW, targetH, targetPitch, x + c.x, y + c.y);
+    }
   };
-  paint(root);
+  paint(root, fb, fbW, fbH, pitchPx, root.x, root.y);
   return { pixels, hits: collectHits(root) };
+}
+
+function blitImage(
+  fb: Uint32Array,
+  pitchPx: number,
+  fbW: number,
+  fbH: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  source: Uint8Array,
+  sourceWidth: number,
+  sourceHeight: number,
+  opacity = 1,
+): void {
+  const w = width | 0;
+  const h = height | 0;
+  if (w <= 0 || h <= 0 || sourceWidth <= 0 || sourceHeight <= 0) return;
+  const alpha = Math.max(0, Math.min(1, opacity));
+  const x0 = Math.max(0, x | 0);
+  const y0 = Math.max(0, y | 0);
+  const x1 = Math.min(fbW, (x | 0) + w);
+  const y1 = Math.min(fbH, (y | 0) + h);
+  for (let py = y0; py < y1; py++) {
+    const sy = Math.floor(((py - (y | 0)) * sourceHeight) / h);
+    for (let px = x0; px < x1; px++) {
+      const sx = Math.floor(((px - (x | 0)) * sourceWidth) / w);
+      const si = (sy * sourceWidth + sx) * 4;
+      if (si + 3 >= source.length) continue;
+      blendRgba(
+        fb,
+        py * pitchPx + px,
+        source[si]!,
+        source[si + 1]!,
+        source[si + 2]!,
+        source[si + 3]!,
+        alpha,
+      );
+    }
+  }
+}
+
+function blitPixels(
+  fb: Uint32Array,
+  pitchPx: number,
+  fbW: number,
+  fbH: number,
+  x: number,
+  y: number,
+  source: Uint32Array,
+  sourcePitch: number,
+  sourceW: number,
+  sourceH: number,
+  opacity = 1,
+): void {
+  const alpha = Math.max(0, Math.min(1, opacity));
+  const x0 = Math.max(0, x | 0);
+  const y0 = Math.max(0, y | 0);
+  const x1 = Math.min(fbW, (x | 0) + sourceW);
+  const y1 = Math.min(fbH, (y | 0) + sourceH);
+  for (let py = y0; py < y1; py++) {
+    for (let px = x0; px < x1; px++) {
+      const src = source[(py - (y | 0)) * sourcePitch + px - (x | 0)]!;
+      blendPremultiplied(
+        fb,
+        py * pitchPx + px,
+        (src >>> 16) & 0xff,
+        (src >>> 8) & 0xff,
+        src & 0xff,
+        (src >>> 24) & 0xff,
+        alpha,
+      );
+    }
+  }
+}
+
+function blendRgba(
+  fb: Uint32Array,
+  index: number,
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+  opacity: number,
+): void {
+  const alpha = Math.round(a * opacity);
+  if (alpha === 0) return;
+  if (alpha === 255) {
+    fb[index] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
+    return;
+  }
+  const dst = fb[index]!;
+  const inv = 255 - alpha;
+  const sr = Math.round((r * alpha) / 255);
+  const sg = Math.round((g * alpha) / 255);
+  const sb = Math.round((b * alpha) / 255);
+  const dr = (dst >>> 16) & 0xff;
+  const dg = (dst >>> 8) & 0xff;
+  const db = dst & 0xff;
+  const da = (dst >>> 24) & 0xff;
+  const outA = alpha + Math.round((da * inv) / 255);
+  const outR = sr + Math.round((dr * inv) / 255);
+  const outG = sg + Math.round((dg * inv) / 255);
+  const outB = sb + Math.round((db * inv) / 255);
+  fb[index] =
+    ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
+}
+
+function blendPremultiplied(
+  fb: Uint32Array,
+  index: number,
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+  opacity: number,
+): void {
+  const alpha = Math.round(a * opacity);
+  if (alpha === 0) return;
+  const sr = Math.round(r * opacity);
+  const sg = Math.round(g * opacity);
+  const sb = Math.round(b * opacity);
+  if (alpha === 255) {
+    fb[index] = (0xff000000 | (sr << 16) | (sg << 8) | sb) >>> 0;
+    return;
+  }
+  const dst = fb[index]!;
+  const inv = 255 - alpha;
+  const dr = (dst >>> 16) & 0xff;
+  const dg = (dst >>> 8) & 0xff;
+  const db = dst & 0xff;
+  const da = (dst >>> 24) & 0xff;
+  const outA = alpha + Math.round((da * inv) / 255);
+  const outR = sr + Math.round((dr * inv) / 255);
+  const outG = sg + Math.round((dg * inv) / 255);
+  const outB = sb + Math.round((db * inv) / 255);
+  fb[index] =
+    ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
 }
 
 function fillRect(
@@ -452,6 +733,7 @@ function fillRect(
 export const Rect = "rect";
 export const Text = "text";
 export const Group = "group";
+export const Image = "image";
 
 export function measureText(text: string, scale = 1): number {
   return measureNodeText(text, { scale }).width;

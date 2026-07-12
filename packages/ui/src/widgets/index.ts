@@ -1,6 +1,8 @@
 /**
- * Widget suite — OS-agnostic React components on @moire/react-host.
- * No Wayland / koffi / platform imports.
+ * @moire/ui widget suite — OS-agnostic React components on @moire/react-host.
+ * No Wayland / koffi / platform imports anywhere in this tree.
+ *
+ * All interactive widgets are in individual modules; re-exported here.
  */
 import {
   Children,
@@ -21,14 +23,47 @@ import { themePalette } from "../theme.js";
 import { layoutFlex, type FlexChildSpec } from "../layout/yoga.js";
 import { getUiScaleFactor } from "../font/index.js";
 
+// Import Button for use in Dialog/IconButton below, also re-exported.
+import { Button } from "./button.js";
+import { Pressable } from "./pressable.js";
+
+/* ---------- Re-exports from split modules ---------- */
+
+export { Pressable } from "./pressable.js";
+export type { PressableProps } from "./pressable.js";
+
+export { Button } from "./button.js";
+export type { ButtonProps, ButtonVariant } from "./button.js";
+
+export { ScrollArea } from "./scroll.js";
+export type { ScrollAreaProps } from "./scroll.js";
+
+export { List, ListItem } from "./list.js";
+export type { ListProps, ListItemProps } from "./list.js";
+
+export { Grid, GridItem } from "./grid.js";
+export type { GridProps, GridItemProps } from "./grid.js";
+
+export { ImageWidget } from "./image-widget.js";
+export type { ImageWidgetProps, ImageFit } from "./image-widget.js";
+
+export { Icon } from "./icon.js";
+export type { IconProps, IconName } from "./icon.js";
+
+export { Draggable, DropTarget, setDndBridge } from "./dnd.js";
+export type { DraggableProps, DropTargetProps } from "./dnd.js";
+
+export { Tabs } from "./tabs.js";
+export type { TabsProps } from "./tabs.js";
+
+/* ---------- Layout helpers ---------- */
+
 const DEFAULT_FONT = 14;
 
 function textH(scale = 1, fontSize?: number): number {
   const base = fontSize ?? DEFAULT_FONT * scale;
   return Math.ceil(base * getUiScaleFactor());
 }
-
-/* ---------- Layout ---------- */
 
 export type BoxProps = {
   x?: number;
@@ -62,7 +97,6 @@ type FlexItemProps = {
   flexShrink?: number;
   minWidth?: number;
   minHeight?: number;
-  children?: ReactNode;
 };
 
 function collectFlexChildren(children: ReactNode): {
@@ -96,7 +130,6 @@ export type RowProps = {
   padding?: number;
   justify?: "start" | "center" | "end" | "space-between" | "space-around";
   align?: "start" | "center" | "end" | "stretch";
-  /** Used when this Row/Column is a flex child of another Row/Column. */
   flexGrow?: number;
   flexShrink?: number;
   minWidth?: number;
@@ -130,13 +163,7 @@ export function Row(props: RowProps): ReactNode {
       const box = laid.children[i]!;
       return createElement(
         Group,
-        {
-          key: el.key ?? i,
-          x: box.x,
-          y: box.y,
-          width: box.width,
-          height: box.height,
-        },
+        { key: el.key ?? i, x: box.x, y: box.y, width: box.width, height: box.height },
         el,
       );
     }),
@@ -171,20 +198,14 @@ export function Column(props: ColumnProps): ReactNode {
       const box = laid.children[i]!;
       return createElement(
         Group,
-        {
-          key: el.key ?? i,
-          x: box.x,
-          y: box.y,
-          width: box.width,
-          height: box.height,
-        },
+        { key: el.key ?? i, x: box.x, y: box.y, width: box.width, height: box.height },
         el,
       );
     }),
   );
 }
 
-/* ---------- Basics ---------- */
+/* ---------- Label ---------- */
 
 export type LabelProps = {
   x?: number;
@@ -211,7 +232,6 @@ export function Label(props: LabelProps): ReactNode {
     fontWeight: props.fontWeight,
     fontFamily: props.fontFamily,
   };
-  // Wrap when width/height provided so Yoga flex parents get a real box.
   if (props.width != null || props.height != null) {
     return createElement(
       Group,
@@ -224,12 +244,10 @@ export function Label(props: LabelProps): ReactNode {
       createElement(Text, { x: 0, y: 0, ...textEl }),
     );
   }
-  return createElement(Text, {
-    x: props.x ?? 0,
-    y: props.y ?? 0,
-    ...textEl,
-  });
+  return createElement(Text, { x: props.x ?? 0, y: props.y ?? 0, ...textEl });
 }
+
+/* ---------- Surface / Panel ---------- */
 
 export type SurfaceProps = {
   x?: number;
@@ -267,11 +285,10 @@ export type PanelProps = SurfaceProps;
 
 export function Panel(props: PanelProps): ReactNode {
   const pal = themePalette();
-  return createElement(Surface, {
-    ...props,
-    fill: props.fill ?? pal.surface,
-  });
+  return createElement(Surface, { ...props, fill: props.fill ?? pal.surface });
 }
+
+/* ---------- Separator ---------- */
 
 export type SeparatorProps = {
   x?: number;
@@ -288,59 +305,14 @@ export function Separator(props: SeparatorProps): ReactNode {
     y: props.y ?? 0,
     width: props.width,
     height: props.height ?? 1,
-    fill: props.color ?? pal.accentLine,
+    fill: props.color ?? pal.border,
   });
 }
 
 /** @deprecated use Separator */
 export const Divider = Separator;
 
-export type ButtonProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  height: number;
-  label: string;
-  fill?: number;
-  color?: number;
-  fontSize?: number;
-  onPress?: () => void;
-};
-
-export function Button(props: ButtonProps): ReactNode {
-  const pal = themePalette();
-  const fill = props.fill ?? pal.accentLine;
-  const color = props.color ?? 0xffffffff;
-  const fontSize = props.fontSize ?? DEFAULT_FONT;
-  const tw = measureText(props.label, fontSize / 14);
-  const th = textH(1, fontSize);
-  const tx = Math.max(4, Math.floor((props.width - tw) / 2));
-  const ty = Math.floor((props.height - th) / 2);
-  return createElement(
-    Group,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: props.height,
-    },
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: props.height,
-      fill,
-      onPress: props.onPress,
-    }),
-    createElement(Text, {
-      x: tx,
-      y: ty,
-      text: props.label,
-      color,
-      fontSize,
-    }),
-  );
-}
+/* ---------- IconButton ---------- */
 
 export type IconButtonProps = {
   x?: number;
@@ -355,10 +327,18 @@ export type IconButtonProps = {
 
 export function IconButton(props: IconButtonProps): ReactNode {
   return createElement(Button, {
-    ...props,
+    x: props.x,
+    y: props.y,
+    width: props.width,
+    height: props.height,
     label: props.icon,
+    fill: props.fill,
+    color: props.color,
+    onPress: props.onPress,
   });
 }
+
+/* ---------- Checkbox ---------- */
 
 export type CheckboxProps = {
   x?: number;
@@ -406,6 +386,8 @@ export function Checkbox(props: CheckboxProps): ReactNode {
       : null,
   );
 }
+
+/* ---------- Toggle ---------- */
 
 export type ToggleProps = {
   x?: number;
@@ -456,6 +438,8 @@ export function Toggle(props: ToggleProps): ReactNode {
   );
 }
 
+/* ---------- Slider ---------- */
+
 export type SliderProps = {
   x?: number;
   y?: number;
@@ -501,7 +485,6 @@ export function Slider(props: SliderProps): ReactNode {
       height: thumb,
       fill: 0xffffffff,
     }),
-    // Full-height hit target — value from click X (not +0.1 only).
     createElement(Rect, {
       x: 0,
       y: 0,
@@ -512,6 +495,8 @@ export function Slider(props: SliderProps): ReactNode {
     }),
   );
 }
+
+/* ---------- TextField ---------- */
 
 export type TextFieldProps = {
   x?: number;
@@ -527,10 +512,7 @@ export type TextFieldProps = {
 export function TextField(props: TextFieldProps): ReactNode {
   const pal = themePalette();
   const h = props.height ?? 32;
-  const shown =
-    props.value.length > 0
-      ? props.value
-      : (props.placeholder ?? "");
+  const shown = props.value.length > 0 ? props.value : (props.placeholder ?? "");
   const color = props.value.length > 0 ? pal.text : pal.muted;
   return createElement(
     Group,
@@ -543,13 +525,7 @@ export function TextField(props: TextFieldProps): ReactNode {
       fill: pal.surface,
     }),
     props.focused
-      ? createElement(Rect, {
-          x: 0,
-          y: h - 2,
-          width: props.width,
-          height: 2,
-          fill: pal.accentLine,
-        })
+      ? createElement(Rect, { x: 0, y: h - 2, width: props.width, height: 2, fill: pal.accentLine })
       : null,
     createElement(Text, {
       x: 10,
@@ -559,6 +535,8 @@ export function TextField(props: TextFieldProps): ReactNode {
     }),
   );
 }
+
+/* ---------- ProgressBar ---------- */
 
 export type ProgressBarProps = {
   x?: number;
@@ -575,175 +553,12 @@ export function ProgressBar(props: ProgressBarProps): ReactNode {
   return createElement(
     Group,
     { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h },
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: h,
-      fill: pal.surface,
-    }),
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: Math.floor(props.width * v),
-      height: h,
-      fill: pal.accentLine,
-    }),
+    createElement(Rect, { x: 0, y: 0, width: props.width, height: h, fill: pal.surface }),
+    createElement(Rect, { x: 0, y: 0, width: Math.floor(props.width * v), height: h, fill: pal.accentLine }),
   );
 }
 
-export type ScrollAreaProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  height: number;
-  scrollY?: number;
-  children?: ReactNode;
-};
-
-export function ScrollArea(props: ScrollAreaProps): ReactNode {
-  const pal = themePalette();
-  return createElement(
-    Group,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: props.height,
-    },
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: props.height,
-      fill: pal.panel,
-    }),
-    createElement(
-      Group,
-      {
-        x: 0,
-        y: -(props.scrollY ?? 0),
-        width: props.width,
-        height: props.height,
-      },
-      props.children,
-    ),
-  );
-}
-
-export type ListItemProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  height?: number;
-  label: string;
-  selected?: boolean;
-  onPress?: () => void;
-};
-
-export function ListItem(props: ListItemProps): ReactNode {
-  const pal = themePalette();
-  const h = props.height ?? 28;
-  return createElement(
-    Group,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: h,
-    },
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: h,
-      fill: props.selected ? pal.accentLine : 0x00000000,
-      onPress: props.onPress,
-    }),
-    createElement(Text, {
-      x: 10,
-      y: Math.floor((h - FONT_H) / 2),
-      text: props.label,
-      color: pal.text,
-    }),
-  );
-}
-
-export type ListProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  height: number;
-  items: string[];
-  selected?: number;
-  onSelect?: (index: number) => void;
-};
-
-export function List(props: ListProps): ReactNode {
-  const rowH = 28;
-  return createElement(
-    Group,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: props.height,
-    },
-    ...props.items.map((label, i) =>
-      createElement(ListItem, {
-        key: i,
-        x: 0,
-        y: i * rowH,
-        width: props.width,
-        height: rowH,
-        label,
-        selected: i === props.selected,
-        onPress: () => props.onSelect?.(i),
-      }),
-    ),
-  );
-}
-
-export type TabsProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  tabs: string[];
-  active: number;
-  onChange?: (index: number) => void;
-  height?: number;
-};
-
-export function Tabs(props: TabsProps): ReactNode {
-  const pal = themePalette();
-  const h = props.height ?? 32;
-  const n = Math.max(1, props.tabs.length);
-  const tw = Math.floor(props.width / n);
-  return createElement(
-    Group,
-    { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h },
-    ...props.tabs.map((tab, i) =>
-      createElement(
-        Group,
-        { key: i, x: i * tw, y: 0, width: tw, height: h },
-        createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: tw,
-          height: h,
-          fill: i === props.active ? pal.accentLine : pal.surface,
-          onPress: () => props.onChange?.(i),
-        }),
-        createElement(Text, {
-          x: 10,
-          y: Math.floor((h - FONT_H) / 2),
-          text: tab,
-          color: pal.text,
-        }),
-      ),
-    ),
-  );
-}
+/* ---------- Dialog ---------- */
 
 export type DialogProps = {
   x?: number;
@@ -766,13 +581,7 @@ export function Dialog(props: DialogProps): ReactNode {
       height: props.height,
       fill: pal.panel,
     },
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: 36,
-      fill: pal.titlebar,
-    }),
+    createElement(Rect, { x: 0, y: 0, width: props.width, height: 36, fill: pal.titlebar }),
     createElement(Text, {
       x: 12,
       y: 10,
@@ -786,7 +595,7 @@ export function Dialog(props: DialogProps): ReactNode {
       width: 28,
       height: 28,
       label: "x",
-      fill: pal.danger,
+      variant: "danger",
       onPress: props.onClose,
     }),
     createElement(
@@ -796,6 +605,8 @@ export function Dialog(props: DialogProps): ReactNode {
     ),
   );
 }
+
+/* ---------- Menu ---------- */
 
 export type MenuItemProps = {
   x?: number;
@@ -807,14 +618,21 @@ export type MenuItemProps = {
 };
 
 export function MenuItem(props: MenuItemProps): ReactNode {
-  return createElement(ListItem, {
-    x: props.x,
-    y: props.y,
-    width: props.width,
-    height: props.height ?? 28,
-    label: props.label,
-    onPress: props.onPress,
-  });
+  const pal = themePalette();
+  const h = props.height ?? 28;
+  return createElement(
+    Group,
+    { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h },
+    createElement(Pressable, {
+      x: 0, y: 0, width: props.width, height: h, onPress: props.onPress,
+    }),
+    createElement(Text, {
+      x: 10,
+      y: Math.floor((h - FONT_H) / 2),
+      text: props.label,
+      color: pal.text,
+    }),
+  );
 }
 
 export type MenuProps = {
@@ -830,18 +648,10 @@ export function Menu(props: MenuProps): ReactNode {
   const h = props.items.length * rowH + 8;
   return createElement(
     Surface,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: h,
-      fill: pal.panel,
-    },
+    { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h, fill: pal.panel },
     ...props.items.map((item, i) =>
       createElement(MenuItem, {
-        key: i,
-        x: 4,
-        y: 4 + i * rowH,
+        key: i, x: 4, y: 4 + i * rowH,
         width: props.width - 8,
         label: item.label,
         onPress: item.onPress,
@@ -849,6 +659,8 @@ export function Menu(props: MenuProps): ReactNode {
     ),
   );
 }
+
+/* ---------- Utility ---------- */
 
 export function usePalette() {
   return themePalette();

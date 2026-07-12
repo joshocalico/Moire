@@ -4,10 +4,12 @@
 export type PointerButton = "left" | "right" | "middle";
 
 export type UiPointerEvent = {
-  type: "move" | "down" | "up";
+  type: "move" | "down" | "up" | "wheel";
   x: number;
   y: number;
   button?: PointerButton;
+  /** Scroll delta in pixels (positive = scroll down). Only set for type="wheel". */
+  deltaY?: number;
   timeMs: number;
 };
 
@@ -47,6 +49,35 @@ export interface PlatformBackend {
   createWindow(opts: PlatformWindowOpts): PlatformWindow;
   pump(): void;
   disconnect(): void;
+}
+
+/** A single item in a drag-and-drop transfer. */
+export type UiDataTransferItem = {
+  mimeType: string;
+  /** Returns the item data as a Buffer/string (async for DnD from compositor). */
+  getData(): Promise<Buffer | string>;
+};
+
+/** Payload carried during a DnD operation. */
+export type UiDataTransfer = {
+  /** MIME types available in this transfer. */
+  readonly types: readonly string[];
+  getItem(mimeType: string): UiDataTransferItem | null;
+};
+
+/** DnD capability that PlatformBackend implementations may opt into. */
+export interface DndCapable {
+  /**
+   * Start a Wayland DnD drag.  Called by Draggable widgets via setDndBridge.
+   * @param mimeTypes  MIME types offered.
+   * @param getPayload Callback that returns serialisable data for a given MIME type.
+   * @param serial     Input serial from the triggering pointer-press event.
+   */
+  startDrag(
+    mimeTypes: string[],
+    getPayload: (mime: string) => string | Buffer | null,
+    serial: number,
+  ): void;
 }
 
 export type PlatformKind = "wayland" | "headless";

@@ -33,7 +33,9 @@ import type {
   UiKeyEvent,
   UiPointerEvent,
   PointerButton,
+  DndCapable,
 } from "../../platform.js";
+import { setDndBridge } from "../../widgets/dnd.js";
 
 const WL_DISPLAY_ID = 1;
 const WL_SHM_FORMAT_ARGB8888 = 0;
@@ -71,6 +73,22 @@ const OP = {
   xdg_toplevel_set_min_size: 8,
   xdg_decoration_manager_get_toplevel_decoration: 1,
   xdg_toplevel_decoration_set_mode: 1,
+  // wl_data_device_manager
+  data_device_manager_create_data_source: 0,
+  data_device_manager_get_data_device: 1,
+  // wl_data_source
+  data_source_offer: 0,
+  data_source_destroy: 1,
+  data_source_set_actions: 2,
+  // wl_data_device
+  data_device_start_drag: 0,
+  data_device_release: 2,
+  // wl_data_offer
+  data_offer_accept: 0,
+  data_offer_receive: 1,
+  data_offer_destroy: 2,
+  data_offer_finish: 3,
+  data_offer_set_actions: 4,
 } as const;
 
 const EV = {
@@ -84,13 +102,34 @@ const EV = {
   pointer_leave: 1,
   pointer_motion: 2,
   pointer_button: 3,
+  pointer_axis: 4,
   keyboard_keymap: 0,
   keyboard_key: 3,
   xdg_wm_base_ping: 0,
   xdg_surface_configure: 0,
   xdg_toplevel_configure: 0,
   xdg_toplevel_close: 1,
+  // wl_data_source events (compositor → client/source)
+  data_source_send: 1,
+  data_source_cancelled: 2,
+  data_source_dnd_drop_performed: 3,
+  data_source_dnd_finished: 4,
+  // wl_data_device events (compositor → client/target)
+  data_device_data_offer: 0,
+  data_device_enter: 1,
+  data_device_leave: 2,
+  data_device_motion: 3,
+  data_device_drop: 4,
+  data_device_selection: 5,
+  // wl_data_offer events (compositor → client)
+  data_offer_offer: 0,
+  data_offer_source_actions: 1,
+  data_offer_action: 2,
 } as const;
+
+/** DnD action bitmask constants. */
+const WL_DND_ACTION_COPY = 1;
+const WL_DND_ACTION_MOVE = 2;
 
 type GlobalInfo = { name: number; iface: string; version: number };
 
@@ -139,7 +178,7 @@ function buttonName(code: number): PointerButton | undefined {
   return undefined;
 }
 
-export class WaylandPlatform implements PlatformBackend {
+export class WaylandPlatform implements PlatformBackend, DndCapable {
   readonly name = "wayland";
   private conn: WaylandClientConn | null = null;
   private nextId = 2;
@@ -159,6 +198,19 @@ export class WaylandPlatform implements PlatformBackend {
   private seatId = 0;
   private pointerId = 0;
   private keyboardId = 0;
+  /** wl_data_device_manager object id. */
+  private dataDeviceManagerId = 0;
+  /** wl_data_device for the seat. */
+  private dataDeviceId = 0;
+  /** Active drag: data source and payload resolver. */
+  private activeDrag: {
+    sourceId: number;
+    getPayload: (mime: string) => string | Buffer | null;
+  } | null = null;
+  /** Last pointer-button event serial from compositor. */
+  private lastPointerSerial = 0;
+  /** Surface id of the currently focused window for DnD origin. */
+  private pointerSurfaceId = 0;
   private windows = new Set<WaylandWindow>();
   private surfaceToWindow = new Map<number, WaylandWindow>();
   private pointerFocus: WaylandWindow | null = null;
@@ -247,7 +299,161 @@ export class WaylandPlatform implements PlatformBackend {
       });
     }
 
+    // Bind wl_data_device_manager and get a wl_data_device for the seat.
+    if (this.globals.has("wl_data_device_manager") && this.seatId) {
+      this.dataDeviceManagerId = this.bindGlobal("wl_data_device_manager", 3);
+      this.handlers.set(this.dataDeviceManagerId, () => {});
+      this.dataDeviceId = this.allocId();
+      this.send(
+        this.dataDeviceManagerId,
+        OP.data_device_manager_get_data_device,
+        (b) => b.newId(this.dataDeviceId).object(this.seatId),
+      );
+      this.handlers.set(this.dataDeviceId, (op, rr) =>
+        this.handleDataDevice(op, rr),
+      );
+    }
+
     await this.roundtrip();
+
+    // Wire the DnD bridge so Draggable widgets call startDrag.
+    setDndBridge({
+      startDrag: (payload, mimeTypes) => {
+        const mime0 = mimeTypes[0];
+        if (!mime0 || !this.conn) return;
+        this.startDrag(mimeTypes, (mime) => {
+          if (typeof payload === "string" || Buffer.isBuffer(payload)) {
+            return payload;
+          }
+          if (Array.isArray(payload)) {
+            if (mime === "text/uri-list") return payload.join("\r\n");
+            if (mime === "text/plain") return payload.join("\n");
+          }
+          try { return JSON.stringify(payload); } catch { return null; }
+        }, this.lastPointerSerial);
+      },
+    });
+  }
+
+  startDrag(
+    mimeTypes: string[],
+    getPayload: (mime: string) => string | Buffer | null,
+    serial: number,
+  ): void {
+    if (!this.conn || !this.dataDeviceManagerId || !this.dataDeviceId) return;
+    if (this.activeDrag) {
+      // Cancel previous drag source if still alive.
+      try {
+        this.send(this.activeDrag.sourceId, OP.data_source_destroy, () => {});
+      } catch { /* ok */ }
+      this.activeDrag = null;
+    }
+
+    const sourceId = this.allocId();
+    this.send(
+      this.dataDeviceManagerId,
+      OP.data_device_manager_create_data_source,
+      (b) => b.newId(sourceId),
+    );
+    for (const mime of mimeTypes) {
+      this.send(sourceId, OP.data_source_offer, (b) => b.string(mime));
+    }
+    // Prefer move so file managers move items instead of copying.
+    const actions = WL_DND_ACTION_COPY | WL_DND_ACTION_MOVE;
+    this.send(sourceId, OP.data_source_set_actions, (b) => b.uint(actions));
+
+    this.activeDrag = { sourceId, getPayload };
+
+    this.handlers.set(sourceId, (op, rr) =>
+      this.handleDataSource(op, rr, sourceId),
+    );
+
+    // start_drag(source, origin, icon, serial)
+    this.send(this.dataDeviceId, OP.data_device_start_drag, (b) =>
+      b.object(sourceId).object(this.pointerSurfaceId).object(0).uint(serial),
+    );
+    console.log(
+      `[ui/dnd] startDrag source=${sourceId} mimes=${mimeTypes.join(",")} serial=${serial}`,
+    );
+  }
+
+  private handleDataSource(
+    opcode: number,
+    r: MessageReader,
+    sourceId: number,
+  ): void {
+    if (opcode === EV.data_source_send) {
+      const mime = r.string() ?? "";
+      const fd = r.fd();
+      const drag = this.activeDrag;
+      if (drag?.sourceId !== sourceId) {
+        try { closeFd(fd); } catch { /* ok */ }
+        return;
+      }
+      const data = drag.getPayload(mime);
+      if (data == null) {
+        try { closeFd(fd); } catch { /* ok */ }
+        return;
+      }
+      // Write payload to the fd provided by the compositor, then close.
+      try {
+        const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data), "utf8");
+        const written = Buffer.alloc(buf.length);
+        buf.copy(written);
+        fs.writeSync(fd, written);
+      } catch { /* target closed early — ignore */ }
+      try { closeFd(fd); } catch { /* ok */ }
+    } else if (
+      opcode === EV.data_source_cancelled ||
+      opcode === EV.data_source_dnd_finished
+    ) {
+      if (this.activeDrag?.sourceId === sourceId) {
+        console.log(
+          `[ui/dnd] source ${opcode === EV.data_source_cancelled ? "cancelled" : "finished"} source=${sourceId}`,
+        );
+        this.activeDrag = null;
+        this.handlers.delete(sourceId);
+        this.send(sourceId, OP.data_source_destroy, () => {});
+      }
+    } else if (opcode === EV.data_source_dnd_drop_performed) {
+      // Drop occurred — we'll wait for finished/cancelled.
+      console.log(`[ui/dnd] drop performed source=${sourceId}`);
+    }
+  }
+
+  private handleDataDevice(opcode: number, r: MessageReader): void {
+    if (opcode === EV.data_device_data_offer) {
+      const offerId = r.uint();
+      // Register a minimal handler for offers we receive as drop target.
+      this.handlers.set(offerId, (op, rr) =>
+        this.handleIncomingOffer(op, rr, offerId),
+      );
+    } else if (opcode === EV.data_device_enter) {
+      r.uint(); // serial
+      r.object(); // surface
+      readFixed(r); // x
+      readFixed(r); // y
+      r.object(); // offer id (already registered above)
+    } else if (opcode === EV.data_device_leave) {
+      // nothing
+    } else if (opcode === EV.data_device_motion) {
+      r.uint(); // time
+      readFixed(r); // x
+      readFixed(r); // y
+    } else if (opcode === EV.data_device_drop) {
+      // nothing (we are rarely the drop target in @moire/ui client windows)
+    } else if (opcode === EV.data_device_selection) {
+      r.object(); // offer id (clipboard selection — not used by widgets yet)
+    }
+  }
+
+  private handleIncomingOffer(
+    opcode: number,
+    _r: MessageReader,
+    _offerId: number,
+  ): void {
+    // We don't implement receiving drops into UI windows yet — just consume.
+    void opcode;
   }
 
   createWindow(opts: PlatformWindowOpts): PlatformWindow {
@@ -374,8 +580,10 @@ export class WaylandPlatform implements PlatformBackend {
   private handlePointer(opcode: number, r: MessageReader): void {
     const now = Date.now();
     if (opcode === EV.pointer_enter) {
-      r.uint();
+      const serial = r.uint();
       const surfaceId = r.object();
+      this.lastPointerSerial = serial;
+      this.pointerSurfaceId = surfaceId;
       this.pointerX = readFixed(r);
       this.pointerY = readFixed(r);
       this.pointerFocus = this.surfaceToWindow.get(surfaceId) ?? null;
@@ -400,10 +608,11 @@ export class WaylandPlatform implements PlatformBackend {
         timeMs: now,
       });
     } else if (opcode === EV.pointer_button) {
-      r.uint();
+      const serial = r.uint();
       r.uint();
       const button = r.uint();
       const state = r.uint();
+      this.lastPointerSerial = serial;
       this.pointerFocus?.emitPointer({
         type: state === 1 ? "down" : "up",
         x: this.pointerX,
@@ -411,6 +620,20 @@ export class WaylandPlatform implements PlatformBackend {
         button: buttonName(button),
         timeMs: now,
       });
+    } else if (opcode === EV.pointer_axis) {
+      r.uint(); // time
+      const axis = r.uint(); // 0 = vertical, 1 = horizontal
+      const value = readFixed(r); // scroll amount in surface coordinates
+      if (axis === 0) {
+        // Vertical scroll: positive = down (matches DOM deltaY convention)
+        this.pointerFocus?.emitPointer({
+          type: "wheel",
+          x: this.pointerX,
+          y: this.pointerY,
+          deltaY: value,
+          timeMs: now,
+        });
+      }
     }
   }
 

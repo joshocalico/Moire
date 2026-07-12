@@ -16,6 +16,9 @@ export {
   type UiPointerEvent,
   type UiKeyEvent,
   type PointerButton,
+  type UiDataTransferItem,
+  type UiDataTransfer,
+  type DndCapable,
 } from "./platform.js";
 export {
   installUiFonts,
@@ -31,6 +34,15 @@ export {
 export { layoutFlex, type FlexChildSpec, type FlexContainerOpts } from "./layout/index.js";
 export { themePalette, getTheme, loadTheme, hexToArgb } from "./theme.js";
 export type { MoireTheme, ThemePalette, MoireTokens } from "./theme.js";
+
+// Motion system
+export { createMotionValue, easeTo, tickAllMotions, type MotionValue } from "./motion.js";
+
+// Image loading
+export { loadImage, getCachedImage, clearImageCache, type ImageData } from "./image/load.js";
+
+// Theme design tokens (re-exported for widget consumers)
+export { TYPE_ROLES, SPACE } from "@moire/theme";
 
 export {
   Box,
@@ -51,23 +63,48 @@ export {
   ScrollArea,
   List,
   ListItem,
+  Grid,
+  GridItem,
   Tabs,
   Dialog,
   Menu,
   MenuItem,
+  Pressable,
+  ImageWidget,
+  Icon,
+  Draggable,
+  DropTarget,
+  setDndBridge,
   usePalette,
 } from "./widgets/index.js";
 export type {
+  BoxProps,
   LabelProps,
   ButtonProps,
+  ButtonVariant,
   SurfaceProps,
+  PanelProps,
   RowProps,
   ColumnProps,
   CheckboxProps,
   ToggleProps,
   SliderProps,
   TextFieldProps,
+  ProgressBarProps,
+  ScrollAreaProps,
+  ListProps,
+  ListItemProps,
+  GridProps,
+  GridItemProps,
   TabsProps,
   DialogProps,
-  ListProps,
+  MenuProps,
+  MenuItemProps,
+  PressableProps,
+  ImageWidgetProps,
+  ImageFit,
+  IconProps,
+  IconName,
+  DraggableProps,
+  DropTargetProps,
 } from "./widgets/index.js";

@@ -10,23 +10,25 @@ export type PanelProps = {
   onLauncherClick?: () => void;
 };
 
-export const PANEL_H = 36;
+/** Default metric; live chrome reads themePalette().panelHeight. */
+export const PANEL_H = 42;
 
 /** Bottom panel — brand + Apps affordance + clock. */
 export function Panel(props: PanelProps): ReactNode {
   const pal = themePalette();
-  const y = props.screenH - PANEL_H;
+  const panelH = pal.panelHeight;
+  const y = props.screenH - panelH;
   const clock = props.clock ?? "";
   const clockW = measureText(clock) + 16;
-  const brandSize = 22;
+  const brandSize = 24;
   return createElement(
     Group,
-    { x: 0, y, width: props.screenW, height: PANEL_H },
+    { x: 0, y, width: props.screenW, height: panelH },
     createElement(Rect, {
       x: 0,
       y: 0,
       width: props.screenW,
-      height: PANEL_H,
+      height: panelH,
       fill: pal.panel,
     }),
     createElement(Rect, {
@@ -34,11 +36,11 @@ export function Panel(props: PanelProps): ReactNode {
       y: 0,
       width: props.screenW,
       height: 1,
-      fill: pal.accentLine,
+      fill: pal.rimLight,
     }),
     createElement(Label, {
       x: 14,
-      y: Math.floor((PANEL_H - brandSize) / 2),
+      y: Math.floor((panelH - brandSize) / 2),
       text: "Moire",
       color: pal.text,
       fontSize: brandSize,
@@ -46,20 +48,20 @@ export function Panel(props: PanelProps): ReactNode {
     }),
     createElement(Button, {
       x: 100,
-      y: 6,
-      width: 64,
-      height: PANEL_H - 12,
+      y: Math.floor((panelH - 28) / 2),
+      width: 68,
+      height: 28,
       label: "Apps",
-      fill: pal.accentLine,
-      color: 0xffffffff,
+      variant: "secondary",
+      fontSize: 13,
       onPress: props.onLauncherClick,
     }),
     createElement(Text, {
       x: props.screenW - clockW,
-      y: Math.floor((PANEL_H - 14) / 2),
+      y: Math.floor((panelH - 12) / 2),
       text: clock,
       color: pal.muted,
-      fontSize: 13,
+      fontSize: 12,
     }),
   );
 }

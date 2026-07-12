@@ -2,8 +2,7 @@ import type { DesktopEntry } from "@moire/app-discovery";
 import { createElement, type ReactNode } from "react";
 import { Group, Rect, Text } from "@moire/react-host";
 import { themePalette } from "@moire/theme";
-import { PANEL_H } from "./Panel.js";
-import { Label, Surface } from "./widgets.js";
+import { Label, ListItem, Surface } from "./widgets.js";
 
 export type LauncherProps = {
   open: boolean;
@@ -19,50 +18,36 @@ export type LauncherProps = {
 };
 
 const BOX_W = 440;
-const ROW_H = 28;
-const PAD = 16;
+const ROW_H = 36;
+const PAD = 18;
 const FONT = 13;
 
 /** Super-key app launcher overlay. */
 export function Launcher(props: LauncherProps): ReactNode {
   if (!props.open) return null;
   const pal = themePalette();
+  const panelH = pal.panelHeight;
 
-  const boxH = PAD * 2 + 36 + props.apps.length * ROW_H + 24;
+  const boxH = PAD * 2 + 46 + props.apps.length * ROW_H + 10;
   const x = Math.floor((props.screenW - BOX_W) / 2);
-  const y = Math.floor((props.screenH - PANEL_H - boxH) / 2);
+  const y = Math.floor((props.screenH - panelH - boxH) / 2);
   const q = props.query.length > 0 ? props.query : "Type to filter...";
   const qColor = props.query.length > 0 ? pal.text : pal.muted;
 
   const rows = props.apps.map((app, i) => {
-    const rowY = PAD + 40 + i * ROW_H;
+    const rowY = PAD + 46 + i * ROW_H;
     const selected = i === props.selected;
     return createElement(
       Group,
       { key: app.id, x: PAD, y: rowY, width: BOX_W - PAD * 2, height: ROW_H },
-      selected
-        ? createElement(Rect, {
-            x: 0,
-            y: 0,
-            width: BOX_W - PAD * 2,
-            height: ROW_H - 2,
-            fill: pal.accentLine,
-          })
-        : null,
-      createElement(Rect, {
+      createElement(ListItem, {
         x: 0,
         y: 0,
         width: BOX_W - PAD * 2,
         height: ROW_H - 2,
-        fill: 0x00000000,
+        title: truncate(app.name, 48),
+        selected,
         onPress: () => props.onLaunch(app),
-      }),
-      createElement(Text, {
-        x: 10,
-        y: Math.floor((ROW_H - FONT) / 2) - 1,
-        text: truncate(app.name, 48),
-        color: pal.text,
-        fontSize: FONT,
       }),
     );
   });
@@ -74,8 +59,8 @@ export function Launcher(props: LauncherProps): ReactNode {
       x: 0,
       y: 0,
       width: props.screenW,
-      height: props.screenH - PANEL_H,
-      fill: 0x99080c0e,
+      height: props.screenH - panelH,
+      fill: pal.overlay,
       onPress: props.onDismiss,
     }),
     createElement(
@@ -85,14 +70,14 @@ export function Launcher(props: LauncherProps): ReactNode {
         y,
         width: BOX_W,
         height: boxH,
-        fill: 0xf2141c22,
+        fill: pal.surface,
       },
       createElement(Rect, {
         x: 0,
         y: 0,
         width: BOX_W,
-        height: 2,
-        fill: pal.accent,
+        height: 1,
+        fill: pal.rimLight,
       }),
       createElement(Label, {
         x: PAD,
@@ -104,14 +89,14 @@ export function Launcher(props: LauncherProps): ReactNode {
       }),
       createElement(Rect, {
         x: PAD,
-        y: PAD + 18,
+        y: PAD + 19,
         width: BOX_W - PAD * 2,
         height: 22,
-        fill: 0xff0c1216,
+        fill: pal.panel,
       }),
       createElement(Text, {
         x: PAD + 8,
-        y: PAD + 22,
+        y: PAD + 23,
         text: truncate(q, 40),
         color: qColor,
         fontSize: FONT,

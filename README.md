@@ -2,7 +2,7 @@
 
 A TypeScript **compositing Wayland desktop environment** — DRM/KMS-first, always-on scene compositing, React/Yoga shell (SSD, launcher, panel), Freedesktop app discovery, and XWayland for broad app support.
 
-> Day-0 bar: session D-Bus, Nautilus, foot, LibreOffice, overlapping composited windows with React decorations.
+> Day-0 bar: session D-Bus, Moire Files, foot, LibreOffice, overlapping composited windows with React decorations.
 
 ## Monorepo
 

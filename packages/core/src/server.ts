@@ -28,6 +28,7 @@ import {
   closeFd,
   flushMmap,
   GbmDevice,
+  getLibc,
 } from "@moire/sys";
 import { mmapShm, munmapShm, copyFromPool } from "./shm-map.js";
 import {
@@ -46,6 +47,8 @@ import { X11Wm, type XwmWindow } from "./xwm.js";
 import {
   paintWallpaper,
   hexToArgb,
+  loadPngFile,
+  setWallpaperImagePixels,
   type MoireTheme,
 } from "@moire/theme";
 import { createPrefsWatcher, loadRuntimeTheme, type PrefsWatcher } from "@moire/prefs";
@@ -402,11 +405,11 @@ const XDG_DECORATION_MODE_CLIENT = 1;
 const XDG_DECORATION_MODE_SERVER = 2;
 
 /** SSD titlebar height — keep in sync with @moire/shell TitleBar. */
-const SSD_TITLEBAR_H = 32;
+const SSD_TITLEBAR_H = 34;
 const SSD_TITLEBAR_BTN = 28;
 const SSD_TITLEBAR_BTN_GAP = 4;
 const SSD_TITLEBAR_BTN_PAD = 6;
-const SSD_PANEL_H = 36;
+const SSD_PANEL_H = 42;
 
 const WL_SHM_FORMAT_ARGB8888 = 0;
 const WL_SHM_FORMAT_XRGB8888 = 1;
@@ -625,6 +628,17 @@ export type CompositorShell = {
   needsRepaint?(): boolean;
   /** Drop SSD/panel caches after theme or prefs change. */
   invalidateChrome?(): void;
+  /** Called when a drag-and-drop lands on the desktop with no client target. */
+  acceptDesktopDrop?(uris: string[]): void;
+  /** Paint desktop icons / drop highlight after wallpaper, before windows. */
+  paintDesktop?(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+  ): void;
+  /** Return true when (x,y) is a valid desktop drop zone (defaults true). */
+  hitDesktop?(x: number, y: number): boolean;
 };
 
 /** Seat clipboard selection (wl_data_device.set_selection). */
@@ -636,6 +650,8 @@ type ClipboardSelection = {
 
 type DataSourceState = {
   mimeTypes: string[];
+  /** DnD action bitmask (1=copy, 2=move, 4=ask). */
+  dndActions: number;
 };
 
 type DataOfferState = {
@@ -645,6 +661,27 @@ type DataOfferState = {
   mimeTypes: string[];
   /** wl_data_device that received this offer. */
   deviceId: number;
+  /** True when this offer was created for a DnD session (vs clipboard). */
+  isDnd: boolean;
+};
+
+/** Active compositor-managed drag-and-drop session. */
+type DragSession = {
+  sourceSession: ClientSession;
+  sourceId: number;
+  mimeTypes: string[];
+  /** DnD action bitmask from source. */
+  actions: number;
+  iconId: number | null;
+  /** Current drag target surface, or null if over desktop / no surface. */
+  currentTarget: {
+    session: ClientSession;
+    surfaceId: number;
+    offerId: number;
+    deviceId: number;
+  } | null;
+  /** Wayland serial sent with data_device.enter. */
+  enterSerial: number;
 };
 
 export class CompositorServer {
@@ -696,6 +733,8 @@ export class CompositorServer {
   /** DRM device advertised via zwp_linux_dmabuf_feedback_v1.main_device. */
   /** Seat-wide clipboard selection. */
   private selection: ClipboardSelection | null = null;
+  /** Active DnD session (one at a time). */
+  private drag: DragSession | null = null;
   private shell: CompositorShell | null = null;
   private drmFeedback: DrmFeedbackDevice | null = null;
   /** Shared format table memfd for feedback events. */
@@ -749,6 +788,22 @@ export class CompositorServer {
     );
     this.prefsWatcher = createPrefsWatcher((theme) => {
       this.theme = theme;
+      if (theme.wallpaper.mode === "image") {
+        const wp = theme.wallpaper as { mode: "image"; path?: string };
+        if (wp.path) {
+          try {
+            const img = loadPngFile(wp.path);
+            setWallpaperImagePixels(img);
+          } catch (err) {
+            console.warn("[compositor] wallpaper image load failed:", err);
+            setWallpaperImagePixels(null);
+          }
+        } else {
+          setWallpaperImagePixels(null);
+        }
+      } else {
+        setWallpaperImagePixels(null);
+      }
       this.shell?.invalidateChrome?.();
       this.markDirty();
     });
@@ -846,7 +901,7 @@ export class CompositorServer {
     this.pointerFocus = null;
     for (const c of this.clients) c.destroy();
     this.clients.clear();
-    this.socket?.close();
+    this.socket?.stop();
     if (this.keymap) {
       try {
         closeFd(this.keymap.fd);
@@ -1200,6 +1255,216 @@ export class CompositorServer {
 
   getKeymap(): KeymapMemfd | null {
     return this.keymap;
+  }
+
+  getDrag(): DragSession | null {
+    return this.drag;
+  }
+
+  startDrag(
+    sourceSession: ClientSession,
+    sourceId: number,
+    _originId: number,
+    iconId: number | null,
+    _serial: number,
+  ): void {
+    if (this.drag) this.cancelDrag();
+    const mimes = sourceSession.dataSourceMimes(sourceId);
+    if (!mimes || mimes.length === 0) {
+      sourceSession.sendDataSourceCancelled(sourceId);
+      return;
+    }
+    const actions = sourceSession.dataSourceActions(sourceId);
+    this.drag = {
+      sourceSession,
+      sourceId,
+      mimeTypes: [...mimes],
+      actions,
+      iconId,
+      currentTarget: null,
+      enterSerial: 0,
+    };
+    console.log(
+      `[dnd] start source=${sourceId} mimes=${mimes.join(",")} actions=${actions}`,
+    );
+    this.markDirty();
+  }
+
+  cancelDrag(): void {
+    const drag = this.drag;
+    if (!drag) return;
+    if (drag.currentTarget) {
+      drag.currentTarget.session.sendDndLeave(drag.currentTarget.deviceId);
+    }
+    drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
+    this.drag = null;
+    console.log("[dnd] cancel");
+    this.markDirty();
+  }
+
+  private updateDragFocus(timeMs: number): void {
+    const drag = this.drag;
+    if (!drag) return;
+
+    const hit = this.hitTest(this.cursorX, this.cursorY);
+    const prev = drag.currentTarget;
+    const sameTarget =
+      prev !== null &&
+      hit !== null &&
+      prev.session === hit.session &&
+      prev.surfaceId === hit.surface.id;
+
+    if (sameTarget && hit && prev) {
+      const ssdY =
+        hit.surface.role === "toplevel" && this.usesSsd(hit.surface)
+          ? SSD_TITLEBAR_H
+          : 0;
+      const localX = this.cursorX - hit.surface.x;
+      const localY = this.cursorY - hit.surface.y - ssdY;
+      prev.session.sendDndMotion(prev.deviceId, timeMs, localX, localY);
+      return;
+    }
+
+    if (prev) {
+      prev.session.sendDndLeave(prev.deviceId);
+      console.log(`[dnd] leave surface=${prev.surfaceId}`);
+      drag.currentTarget = null;
+    }
+
+    if (hit) {
+      const deviceId = hit.session.firstDataDeviceId();
+      if (deviceId != null) {
+        const offerId = hit.session.createDndOffer(
+          deviceId,
+          drag.sourceSession,
+          drag.sourceId,
+          drag.mimeTypes,
+          drag.actions,
+        );
+        if (offerId != null) {
+          const ssdY =
+            hit.surface.role === "toplevel" && this.usesSsd(hit.surface)
+              ? SSD_TITLEBAR_H
+              : 0;
+          const localX = this.cursorX - hit.surface.x;
+          const localY = this.cursorY - hit.surface.y - ssdY;
+          const serial = hit.session.nextSerial();
+          drag.enterSerial = serial;
+          hit.session.sendDndEnter(
+            deviceId,
+            serial,
+            hit.surface.id,
+            localX,
+            localY,
+            offerId,
+            drag.actions,
+          );
+          drag.currentTarget = {
+            session: hit.session,
+            surfaceId: hit.surface.id,
+            offerId,
+            deviceId,
+          };
+          console.log(
+            `[dnd] enter surface=${hit.surface.id} client=${hit.session.clientId}`,
+          );
+        }
+      }
+    }
+  }
+
+  endDrag(_timeMs: number): void {
+    const drag = this.drag;
+    if (!drag) return;
+    this.drag = null;
+
+    if (drag.currentTarget) {
+      const target = drag.currentTarget;
+      target.session.sendDndDrop(target.deviceId);
+      drag.sourceSession.sendDataSourceDndDropPerformed(drag.sourceId);
+      console.log(
+        `[dnd] drop surface=${target.surfaceId} client=${target.session.clientId}`,
+      );
+      // offer.finish from target will trigger dnd_finished; source destroyed
+      // by the client when done.
+    } else {
+      // Drop on desktop — request URI list and forward to shell.
+      const shell = this.shell;
+      if (
+        shell?.acceptDesktopDrop &&
+        drag.mimeTypes.includes("text/uri-list") &&
+        (shell.hitDesktop?.(this.cursorX, this.cursorY) ?? true)
+      ) {
+        console.log("[dnd] desktop-drop requesting text/uri-list");
+        this.readDndData(drag, "text/uri-list", (data) => {
+          if (!data) {
+            drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
+            return;
+          }
+          const uris = data
+            .toString("utf8")
+            .split(/\r?\n/)
+            .map((u) => u.trim())
+            .filter((u) => u.length > 0 && !u.startsWith("#"));
+          console.log(`[dnd] desktop-drop uris=${uris.join(",")}`);
+          if (uris.length > 0) shell.acceptDesktopDrop!(uris);
+          drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
+        });
+      } else {
+        drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
+      }
+    }
+    this.markDirty();
+  }
+
+  private readDndData(
+    drag: DragSession,
+    mime: string,
+    cb: (data: Buffer | null) => void,
+  ): void {
+    try {
+      const libc = getLibc();
+      const pipe2 = libc.func("int pipe2(int *pipefd, int flags)") as (
+        pipefd: Buffer,
+        flags: number,
+      ) => number;
+      const O_CLOEXEC_FLAG = 0o2000000;
+      const pfds = Buffer.alloc(8);
+      const rc = pipe2(pfds, O_CLOEXEC_FLAG);
+      if (rc !== 0) {
+        cb(null);
+        return;
+      }
+      const readFd = pfds.readInt32LE(0);
+      const writeFd = pfds.readInt32LE(4);
+      // Source client will write into writeFd (transferred via SCM_RIGHTS).
+      drag.sourceSession.sendDataSourceSend(drag.sourceId, mime, writeFd);
+      // sendDataSourceSend closes writeFd on our side after sending.
+      const readable = fs.createReadStream("", {
+        fd: readFd,
+        autoClose: true,
+        start: 0,
+      });
+      const chunks: Buffer[] = [];
+      readable.on("data", (chunk: Buffer | string) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      readable.on("end", () => cb(Buffer.concat(chunks)));
+      readable.on("error", () => cb(null));
+    } catch (err) {
+      console.warn("[dnd] readDndData failed:", err);
+      cb(null);
+    }
+  }
+
+  /** Forward a DnD data_offer.receive to the drag source (like clipboard). */
+  forwardDndReceive(
+    sourceSession: ClientSession,
+    sourceId: number,
+    mime: string,
+    fd: number,
+  ): void {
+    sourceSession.sendDataSourceSend(sourceId, mime, fd);
   }
 
   allocToplevelSlot(): { x: number; y: number } {
@@ -1567,6 +1832,10 @@ export class CompositorServer {
     if (nx !== this.cursorX || ny !== this.cursorY) this.markDirty();
     this.cursorX = nx;
     this.cursorY = ny;
+    if (this.drag) {
+      this.updateDragFocus(ev.timeMs);
+      return;
+    }
     if (this.applyGrab()) {
       this.markDirty();
       return;
@@ -1590,6 +1859,10 @@ export class CompositorServer {
     if (nx !== this.cursorX || ny !== this.cursorY) this.markDirty();
     this.cursorX = nx;
     this.cursorY = ny;
+    if (this.drag) {
+      this.updateDragFocus(ev.timeMs);
+      return;
+    }
     if (this.applyGrab()) {
       this.markDirty();
       return;
@@ -1645,6 +1918,10 @@ export class CompositorServer {
 
   private onPointerButton(ev: EvdevPointerButton): void {
     this.markDirty();
+    if (ev.value === 0 && this.drag) {
+      this.endDrag(ev.timeMs);
+      return;
+    }
     if (ev.value === 0 && this.grab) {
       this.endGrab();
     }
@@ -2560,9 +2837,21 @@ export class CompositorServer {
       stage.byteOffset,
       stage.byteLength >>> 2,
     );
-    // Wallpaper from theme (gradient or solid) — replaces the old fixed teal fill.
+    // Wallpaper from theme (atmosphere / gradient / image) — cached in @moire/theme.
     const pitchPx = kms.pitch >>> 2;
-    paintWallpaper(fb, pitchPx, kms.width, kms.height, this.theme);
+    const wallPhase = (Date.now() / 60000) % 1; // ~60s period
+    paintWallpaper(fb, pitchPx, kms.width, kms.height, this.theme, wallPhase);
+    // Keep atmosphere drifting even when otherwise idle.
+    if (this.theme.wallpaper.mode === "atmosphere") {
+      this.markDirty();
+    }
+
+    // Desktop icons / DnD drop-zone overlay (after wallpaper, before windows).
+    try {
+      this.shell?.paintDesktop?.(fb, pitchPx, kms.width, kms.height);
+    } catch (err) {
+      console.error("[shell] paintDesktop:", err);
+    }
 
     let painted = 0;
     try {
@@ -2654,6 +2943,7 @@ export class CompositorServer {
               this.focusedToplevel?.session === entry.session &&
               this.focusedToplevel.surfaceId === top.id;
             this.shell.paintSsdWindow(fb, pitchPx, kms.width, kms.height, {
+              clientId: entry.session.clientId,
               surfaceId: top.id,
               x: top.x,
               y: top.y,
@@ -3695,7 +3985,7 @@ class ClientSession {
         id,
         iface: "wl_data_source",
         version: 3,
-        data: { source: { mimeTypes: [] } satisfies DataSourceState },
+        data: { source: { mimeTypes: [], dndActions: 0 } satisfies DataSourceState },
       });
     } else if (opcode === OP.data_device_manager_get_data_device) {
       const id = r.newId();
@@ -3715,7 +4005,8 @@ class ClientSession {
         source.mimeTypes.push(mime);
       }
     } else if (opcode === OP.data_source_set_actions) {
-      r.uint(); // dnd actions — clipboard path ignores
+      const actions = r.uint();
+      if (source) source.dndActions = actions;
     } else if (opcode === OP.data_source_destroy) {
       if (
         this.server.getSelection()?.sourceSession === this &&
@@ -3723,19 +4014,25 @@ class ClientSession {
       ) {
         this.server.clearSelection("cancelled");
       }
+      const drag = this.server.getDrag();
+      if (drag?.sourceSession === this && drag.sourceId === obj.id) {
+        this.server.cancelDrag();
+      }
       this.destroyObject(obj.id);
     }
   }
 
   private handleDataDevice(obj: WlObject, opcode: number, r: MessageReader): void {
     if (opcode === OP.data_device_start_drag) {
-      // DnD not implemented yet — cancel any offered source.
       const sourceId = r.object();
-      r.object(); // origin
-      r.object(); // icon
-      r.uint(); // serial
-      if (sourceId) this.sendDataSourceCancelled(sourceId);
-      console.log("[clipboard] start_drag ignored (DnD not implemented)");
+      const originId = r.object();
+      const iconId = r.object();
+      const serial = r.uint();
+      if (!sourceId) {
+        console.warn("[dnd] start_drag: no source id");
+        return;
+      }
+      this.server.startDrag(this, sourceId, originId, iconId || null, serial);
     } else if (opcode === OP.data_device_set_selection) {
       const sourceId = r.object();
       const serial = r.uint();
@@ -3755,35 +4052,35 @@ class ClientSession {
       const mime = r.string() ?? "";
       const fd = r.fd();
       if (!offer) {
-        try {
-          closeFd(fd);
-        } catch {
-          // ok
-        }
+        try { closeFd(fd); } catch { /* ok */ }
         return;
       }
-      // Only the seat selection is supported; ignore dangling drag offers.
-      const sel = this.server.getSelection();
-      if (
-        !sel ||
-        sel.sourceSession !== offer.sourceSession ||
-        sel.sourceId !== offer.sourceId
-      ) {
-        try {
-          closeFd(fd);
-        } catch {
-          // ok
+      if (offer.isDnd) {
+        // DnD receive: relay to drag source.
+        this.server.forwardDndReceive(offer.sourceSession, offer.sourceId, mime, fd);
+      } else {
+        // Clipboard receive: only allowed when offer matches current selection.
+        const sel = this.server.getSelection();
+        if (
+          !sel ||
+          sel.sourceSession !== offer.sourceSession ||
+          sel.sourceId !== offer.sourceId
+        ) {
+          try { closeFd(fd); } catch { /* ok */ }
+          return;
         }
-        return;
+        this.server.forwardSelectionReceive(mime, fd);
       }
-      this.server.forwardSelectionReceive(mime, fd);
     } else if (opcode === OP.data_offer_destroy) {
       this.destroyObject(obj.id);
     } else if (opcode === OP.data_offer_finish) {
-      // DnD only
+      // Target finished reading drop data — notify source.
+      if (offer?.isDnd) {
+        offer.sourceSession.sendDataSourceDndFinished(offer.sourceId);
+      }
     } else if (opcode === OP.data_offer_set_actions) {
-      r.uint();
-      r.uint();
+      r.uint(); // dnd_actions
+      r.uint(); // preferred_action
     }
   }
 
@@ -3792,6 +4089,107 @@ class ClientSession {
     if (obj?.iface !== "wl_data_source") return null;
     const source = obj.data?.source as DataSourceState | undefined;
     return source ? [...source.mimeTypes] : null;
+  }
+
+  dataSourceActions(sourceId: number): number {
+    const obj = this.objects.get(sourceId);
+    if (obj?.iface !== "wl_data_source") return 1; // default copy
+    const source = obj.data?.source as DataSourceState | undefined;
+    return source?.dndActions ?? 1;
+  }
+
+  nextSerial(): number {
+    return this.serial++;
+  }
+
+  firstDataDeviceId(): number | null {
+    for (const id of this.dataDeviceIds) return id;
+    return null;
+  }
+
+  /**
+   * Allocate a wl_data_offer for DnD on the given device, announce it,
+   * and send source_actions + preferred action. Returns the new offer id,
+   * or null if the device object is gone.
+   */
+  createDndOffer(
+    deviceId: number,
+    sourceSession: ClientSession,
+    sourceId: number,
+    mimeTypes: string[],
+    actions: number,
+  ): number | null {
+    if (!this.objects.has(deviceId)) return null;
+    const offerId = this.allocServerId();
+    const offer: DataOfferState = {
+      sourceSession,
+      sourceId,
+      mimeTypes: [...mimeTypes],
+      deviceId,
+      isDnd: true,
+    };
+    this.objects.set(offerId, {
+      id: offerId,
+      iface: "wl_data_offer",
+      version: 3,
+      data: { offer },
+    });
+    this.send(deviceId, EV.data_device_data_offer, (b) => b.newId(offerId));
+    for (const mime of mimeTypes) {
+      this.send(offerId, EV.data_offer_offer, (b) => b.string(mime));
+    }
+    // Advertise source actions and select preferred (prefer move over copy).
+    const WL_DND_ACTION_MOVE = 2;
+    const WL_DND_ACTION_COPY = 1;
+    const preferred =
+      (actions & WL_DND_ACTION_MOVE) !== 0
+        ? WL_DND_ACTION_MOVE
+        : WL_DND_ACTION_COPY;
+    this.send(offerId, EV.data_offer_source_actions, (b) => b.uint(actions));
+    this.send(offerId, EV.data_offer_action, (b) => b.uint(preferred));
+    return offerId;
+  }
+
+  sendDndEnter(
+    deviceId: number,
+    serial: number,
+    surfaceId: number,
+    x: number,
+    y: number,
+    offerId: number,
+    actions: number,
+  ): void {
+    void actions; // already sent via createDndOffer
+    this.send(deviceId, EV.data_device_enter, (b) =>
+      b.uint(serial).object(surfaceId).fixed(x).fixed(y).object(offerId),
+    );
+  }
+
+  sendDndLeave(deviceId: number): void {
+    if (!this.objects.has(deviceId)) return;
+    this.send(deviceId, EV.data_device_leave, () => {});
+  }
+
+  sendDndMotion(deviceId: number, timeMs: number, x: number, y: number): void {
+    if (!this.objects.has(deviceId)) return;
+    this.send(deviceId, EV.data_device_motion, (b) =>
+      b.uint(timeMs >>> 0).fixed(x).fixed(y),
+    );
+  }
+
+  sendDndDrop(deviceId: number): void {
+    if (!this.objects.has(deviceId)) return;
+    this.send(deviceId, EV.data_device_drop, () => {});
+  }
+
+  sendDataSourceDndDropPerformed(sourceId: number): void {
+    if (!this.objects.has(sourceId)) return;
+    this.send(sourceId, EV.data_source_dnd_drop_performed, () => {});
+  }
+
+  sendDataSourceDndFinished(sourceId: number): void {
+    if (!this.objects.has(sourceId)) return;
+    this.send(sourceId, EV.data_source_dnd_finished, () => {});
   }
 
   sendDataSourceCancelled(sourceId: number): void {
@@ -3842,6 +4240,7 @@ class ClientSession {
         sourceId: sel.sourceId,
         mimeTypes: [...sel.mimeTypes],
         deviceId,
+        isDnd: false,
       };
       this.objects.set(offerId, {
         id: offerId,

@@ -1,6 +1,6 @@
 /** Shared SSD chrome metrics (keep in sync with TitleBar / Panel). */
-export const SSD_TITLEBAR_H = 32;
-export const SSD_PANEL_H = 36;
+export const SSD_TITLEBAR_H = 34;
+export const SSD_PANEL_H = 42;
 
 export type SsdWindowInfo = {
   surfaceId: number;

@@ -3,6 +3,16 @@ export { Launcher } from "./Launcher.js";
 export { Panel, PANEL_H } from "./Panel.js";
 export { createShell, type ShellBridge, type ShellSpawn } from "./controller.js";
 export {
+  DesktopIcons,
+  listDesktopEntries,
+  loadDesktopLayout,
+  saveDesktopLayout,
+  desktopDir,
+  desktopLayoutPath,
+  type DesktopIconsProps,
+  type DesktopLayout,
+} from "./DesktopIcons.js";
+export {
   SSD_TITLEBAR_H,
   SSD_PANEL_H,
   type SsdWindowInfo,

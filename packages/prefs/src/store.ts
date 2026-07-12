@@ -5,6 +5,14 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
+export type WallpaperSettings = {
+  mode: "atmosphere" | "gradient" | "solid" | "image";
+  /** Absolute path; only used when mode === "image". */
+  path?: string;
+  /** Optional preset name hint for future use. */
+  preset?: string;
+};
+
 export type MoireSettings = {
   /** Prefer dark tokens + GTK dark scheme. */
   dark: boolean;
@@ -14,6 +22,10 @@ export type MoireSettings = {
   uiScale: number;
   /** Last requested sink volume 0..1 (also applied via wpctl/pactl when available). */
   volume: number;
+  /** Show file icons on the desktop background. */
+  showDesktopIcons: boolean;
+  /** Wallpaper override; null means use the bundled theme's wallpaper. */
+  wallpaper: WallpaperSettings | null;
 };
 
 export const DEFAULT_SETTINGS: MoireSettings = {
@@ -21,6 +33,8 @@ export const DEFAULT_SETTINGS: MoireSettings = {
   notifications: true,
   uiScale: 1,
   volume: 0.7,
+  showDesktopIcons: true,
+  wallpaper: null,
 };
 
 export function configDir(): string {
@@ -49,11 +63,21 @@ export function loadSettings(): MoireSettings {
 }
 
 export function normalizeSettings(s: MoireSettings): MoireSettings {
+  const wp = s.wallpaper as WallpaperSettings | null | undefined;
+  let wallpaper: WallpaperSettings | null = null;
+  if (wp && typeof wp === "object" && typeof wp.mode === "string") {
+    const mode = wp.mode as WallpaperSettings["mode"];
+    if (mode === "atmosphere" || mode === "gradient" || mode === "solid" || mode === "image") {
+      wallpaper = { mode, path: wp.path, preset: wp.preset };
+    }
+  }
   return {
     dark: !!s.dark,
     notifications: !!s.notifications,
     uiScale: clamp(Number(s.uiScale) || 1, 0.75, 2),
     volume: clamp(Number(s.volume) || 0, 0, 1),
+    showDesktopIcons: s.showDesktopIcons !== false,
+    wallpaper,
   };
 }
 

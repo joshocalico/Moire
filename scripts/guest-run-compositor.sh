@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync tree into guest worktree and start moire-session (compositor + foot + nautilus).
+# Sync tree into guest worktree and start moire-session (compositor + foot + Files).
 set -euo pipefail
 
 SRC=/media/psf/moire
@@ -34,11 +34,12 @@ pkill -u moire -f 'moire-session' 2>/dev/null || true
 pkill -u moire -f 'dbus-run-session' 2>/dev/null || true
 pkill -u moire -x foot 2>/dev/null || true
 pkill -u moire -x nautilus 2>/dev/null || true
+pkill -u moire -f '@moire/files' 2>/dev/null || true
 sleep 0.3
 
-rm -f /tmp/moire-compositor.log /tmp/moire-foot.log /tmp/moire-nautilus.log /tmp/moire-session.log
-touch /tmp/moire-compositor.log /tmp/moire-foot.log /tmp/moire-nautilus.log /tmp/moire-session.log
-chmod 666 /tmp/moire-compositor.log /tmp/moire-foot.log /tmp/moire-nautilus.log /tmp/moire-session.log
+rm -f /tmp/moire-compositor.log /tmp/moire-foot.log /tmp/moire-files.log /tmp/moire-session.log
+touch /tmp/moire-compositor.log /tmp/moire-foot.log /tmp/moire-files.log /tmp/moire-session.log
+chmod 666 /tmp/moire-compositor.log /tmp/moire-foot.log /tmp/moire-files.log /tmp/moire-session.log
 
 # Session owns dbus + compositor + day-0 apps. Compositor stdout still goes to
 # the session log; clients write their own logs from moire-session.
@@ -59,9 +60,9 @@ tail -40 /tmp/moire-session.log
 echo "=== socket ==="
 ls -la "$RUNTIME"/wayland-1 2>/dev/null || echo "(no socket yet)"
 echo "=== procs ==="
-ps -eo pid,cmd | grep -E 'tsx src/main|[/]foot|[/]nautilus|moire-session|dbus-run-session' | grep -v grep || true
+ps -eo pid,cmd | grep -E 'tsx src/main|[/]foot|@moire/files|moire-session|dbus-run-session' | grep -v grep || true
 echo "=== recent commits ==="
 grep 'commit mapped' /tmp/moire-session.log | tail -12 || true
-echo "=== foot / nautilus ==="
+echo "=== foot / files ==="
 tail -5 /tmp/moire-foot.log 2>/dev/null || true
-tail -10 /tmp/moire-nautilus.log 2>/dev/null || true
+tail -10 /tmp/moire-files.log 2>/dev/null || true

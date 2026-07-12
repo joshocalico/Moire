@@ -5,11 +5,17 @@
 export {
   Label,
   Button,
+  ListItem,
+  Icon,
+  Pressable,
   Surface,
   Separator as Divider,
   Separator,
   usePalette,
   type LabelProps,
   type ButtonProps,
+  type ListItemProps,
+  type IconProps,
+  type PressableProps,
   type SurfaceProps,
 } from "@moire/ui";

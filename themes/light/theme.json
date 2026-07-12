@@ -1,17 +1,13 @@
 {
   "name": "moire-light",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "gtkTheme": "Moire",
   "wallpaper": {
-    "mode": "gradient",
-    "from": "#e8eef2",
-    "to": "#a8d4dc",
-    "mid": "#d5e4ea",
-    "midAt": 0.55
+    "mode": "atmosphere"
   },
   "tokens": {
-    "bg": "#f4f6f8",
-    "panel": "#ffffff",
+    "bg": "#e8eef2",
+    "panel": "#f7f9fb",
     "titlebar": "#e8ecef",
     "titlebarInactive": "#dfe3e6",
     "accent": "#1a6b7a",
@@ -20,7 +16,16 @@
     "muted": "#5c636a",
     "danger": "#a33b3b",
     "surface": "#dce3e8",
-    "titlebarHeight": 32,
-    "panelHeight": 36
+    "hover": "#d0d8de",
+    "pressed": "#c4ced6",
+    "focusRing": "#1a6b7a",
+    "selection": "#1a6b7a33",
+    "border": "#c5ced6",
+    "borderSubtle": "#d8e0e6",
+    "overlay": "#1a1b1e88",
+    "rimLight": "#ffffffaa",
+    "rimShade": "#00000018",
+    "titlebarHeight": 34,
+    "panelHeight": 42
   }
 }

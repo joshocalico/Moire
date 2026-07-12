@@ -5,11 +5,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadTheme, type MoireTheme } from "@moire/theme";
+import { loadTheme, type MoireTheme, type WallpaperSpec } from "@moire/theme";
 import {
   activeThemePath,
   configDir,
   type MoireSettings,
+  type WallpaperSettings,
   saveSettings,
 } from "./store.js";
 
@@ -27,9 +28,25 @@ export function themeForSettings(settings: MoireSettings): MoireTheme {
   return loadTheme(bundledThemePath(settings.dark));
 }
 
+function settingsWallpaperToSpec(
+  wp: WallpaperSettings,
+  theme: MoireTheme,
+): WallpaperSpec {
+  if (wp.mode === "atmosphere") return { mode: "atmosphere" };
+  if (wp.mode === "gradient") {
+    return { mode: "gradient", from: theme.tokens.bg, to: theme.tokens.accentLine };
+  }
+  if (wp.mode === "solid") return { mode: "solid", color: theme.tokens.bg };
+  if (wp.mode === "image" && wp.path) return { mode: "image", path: wp.path };
+  return { mode: "atmosphere" };
+}
+
 /** Write ~/.config/moire/active-theme.json for compositor/shell to load. */
 export function writeActiveTheme(settings: MoireSettings): MoireTheme {
-  const theme = themeForSettings(settings);
+  const base = themeForSettings(settings);
+  const theme: MoireTheme = settings.wallpaper
+    ? { ...base, wallpaper: settingsWallpaperToSpec(settings.wallpaper, base) }
+    : base;
   fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
   const out = `${JSON.stringify(theme, null, 2)}\n`;
   const dest = activeThemePath();

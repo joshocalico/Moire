@@ -99,13 +99,13 @@ session_inner() {
     echo "moire-session: foot not found (skip)" >&2
   fi
 
-  if command -v nautilus >/dev/null 2>&1; then
-    GSK_RENDERER=cairo GDK_BACKEND=wayland nautilus --no-desktop \
-      >/tmp/moire-nautilus.log 2>&1 &
-    echo "Moire session: started nautilus (GSK_RENDERER=cairo)"
-  else
-    echo "moire-session: nautilus not found (skip)" >&2
-  fi
+  (
+    cd "$ROOT" && \
+    MOIRE_UI_PLATFORM=wayland \
+    pnpm --filter @moire/files start \
+      >/tmp/moire-files.log 2>&1 &
+  )
+  echo "Moire session: started Files"
 
   wait "$comp_pid"
 }

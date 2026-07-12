@@ -12,12 +12,21 @@ import {
 } from "@moire/react-host";
 import { installUiFonts, setUiScaleFactor } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
+import { themePalette } from "@moire/theme";
 import { createElement, useEffect, useMemo } from "react";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Panel } from "./Panel.js";
 import { Launcher } from "./Launcher.js";
-import { TitleBar, TITLEBAR_H } from "./TitleBar.js";
+import { TitleBar } from "./TitleBar.js";
+import {
+  DesktopIcons,
+  listDesktopEntries,
+  loadDesktopLayout,
+  desktopDir,
+  type DesktopLayout,
+} from "./DesktopIcons.js";
 import type { SsdAction, SsdWindowInfo } from "./ssd.js";
 
 export type ShellSpawn = (opts: { exec: string }) => { unref?: () => void };
@@ -66,6 +75,21 @@ export type ShellBridge = {
   needsRepaint(): boolean;
   /** Drop panel/SSD caches after theme or prefs change. */
   invalidateChrome(): void;
+  /**
+   * Rasterize desktop icons and blend non-transparent pixels onto fb.
+   * Call after wallpaper and before windows so icons appear under windows.
+   * No-ops when showDesktopIcons is false.
+   */
+  paintDesktop(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+  ): void;
+  /** Parse file:// URIs, copy files to ~/Desktop, refresh icon list. */
+  acceptDesktopDrop(uris: string[]): void;
+  /** True if (x,y) is over a desktop icon hit region. */
+  hitDesktop(x: number, y: number): boolean;
 };
 
 const KEY_ESC = 1;
@@ -176,6 +200,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     process.env.MOIRE_ROOT ??
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
   const settingsExec = `pnpm --dir ${moireRoot} --filter @moire/settings start`;
+  const filesExec = `pnpm --dir ${moireRoot} --filter @moire/files start`;
   const builtinApps: DesktopEntry[] = [
     {
       id: "moire-settings.desktop",
@@ -184,6 +209,14 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       exec: settingsExec,
       terminal: false,
       categories: ["Settings", "System"],
+    },
+    {
+      id: "moire-files.desktop",
+      name: "Files",
+      comment: "Moire file browser",
+      exec: filesExec,
+      terminal: false,
+      categories: ["FileManager", "System"],
     },
   ];
   const mergeApps = (): DesktopEntry[] => [
@@ -219,11 +252,41 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   >();
   const ssdScratchRoot: ShellRoot = createShellRoot();
 
+  // ── Desktop icons state ────────────────────────────────────────────────────
+  const desktopRoot: ShellRoot = createShellRoot();
+  let desktopEntries: string[] = listDesktopEntries();
+  let desktopLayout: DesktopLayout = loadDesktopLayout();
+  let desktopSelectedName: string | undefined;
+  let desktopHits: HitRegion[] = [];
+  let desktopOverlay: Uint8Array | null = null;
+  let desktopW = 0;
+  let desktopH = 0;
+  let desktopDirty = true;
+
   const refreshApps = () => {
     apps = mergeApps();
     dirty = true;
   };
   setInterval(refreshApps, 30_000).unref?.();
+
+  const refreshDesktop = () => {
+    desktopEntries = listDesktopEntries();
+    desktopLayout = loadDesktopLayout();
+    desktopDirty = true;
+  };
+  // Refresh desktop list every 2s to catch external changes
+  setInterval(refreshDesktop, 2_000).unref?.();
+
+  const openDesktopEntry = (name: string) => {
+    const filePath = path.join(desktopDir(), name);
+    try {
+      const child = spawn({ exec: `xdg-open ${filePath}` });
+      child.unref?.();
+      console.log(`[shell] desktop open: ${filePath}`);
+    } catch (err) {
+      console.error(`[shell] desktop open failed:`, err);
+    }
+  };
   setInterval(() => {
     const next = formatClock();
     if (next !== clock) {
@@ -370,6 +433,32 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     }
   };
 
+  const rebuildDesktop = (width: number, height: number) => {
+    const pal = themePalette();
+    renderShell(
+      desktopRoot,
+      createElement(DesktopIcons, {
+        screenW: width,
+        screenH: height,
+        panelH: pal.panelHeight,
+        entries: desktopEntries,
+        layout: desktopLayout,
+        selectedName: desktopSelectedName,
+        onSelect: (name) => {
+          desktopSelectedName = name;
+          desktopDirty = true;
+        },
+        onOpen: openDesktopEntry,
+      }),
+    );
+    const painted = rasterize(desktopRoot.container, width, height);
+    desktopOverlay = painted.pixels;
+    desktopHits = painted.hits;
+    desktopW = width;
+    desktopH = height;
+    desktopDirty = false;
+  };
+
   const paintSsdWindow = (
     fb: Uint32Array,
     pitchPx: number,
@@ -378,6 +467,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     window: SsdWindowInfo,
   ) => {
     const stripKey = `${window.clientId}:${window.surfaceId}:${window.contentW}:${window.title}:${window.focused ? 1 : 0}`;
+    const titlebarH = themePalette().titlebarHeight;
     let strip = ssdStripCache.get(stripKey);
     if (!strip) {
       ssdPending = { current: null };
@@ -416,12 +506,12 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       const painted = rasterize(
         ssdScratchRoot.container,
         Math.max(1, window.contentW),
-        TITLEBAR_H,
+        titlebarH,
       );
       strip = {
         pixels: painted.pixels,
         w: window.contentW,
-        h: TITLEBAR_H,
+        h: titlebarH,
         hits: painted.hits,
       };
       ssdStripCache.set(stripKey, strip);
@@ -487,7 +577,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           x < h.x + h.width &&
           y < h.y + h.height
         ) {
-          h.onPress({
+          h.onPress?.({
             x,
             y,
             localX: x - h.x,
@@ -564,7 +654,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           ev.x < h.x + h.width &&
           ev.y < h.y + h.height
         ) {
-          h.onPress({
+          h.onPress?.({
             x: ev.x,
             y: ev.y,
             localX: ev.x - h.x,
@@ -592,8 +682,54 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       ow = 0;
       oh = 0;
       ssdStripCache.clear();
-      setUiScaleFactor(loadSettings().uiScale);
+      desktopOverlay = null;
+      desktopDirty = true;
+      desktopW = 0;
+      desktopH = 0;
+      const settings = loadSettings();
+      setUiScaleFactor(settings.uiScale);
       console.log("[shell] chrome invalidated (prefs/theme)");
+    },
+
+    paintDesktop(fb, pitchPx, width, height) {
+      const settings = loadSettings();
+      if (!settings.showDesktopIcons) return;
+      if (desktopDirty || !desktopOverlay || desktopW !== width || desktopH !== height) {
+        rebuildDesktop(width, height);
+      }
+      if (!desktopOverlay) return;
+      blendOverlay(fb, pitchPx, width, height, desktopOverlay);
+    },
+
+    acceptDesktopDrop(uris) {
+      const dest = desktopDir();
+      try {
+        fs.mkdirSync(dest, { recursive: true });
+      } catch {
+        // ignore
+      }
+      for (const uri of uris) {
+        if (!uri.startsWith("file://")) continue;
+        const src = decodeURIComponent(uri.slice("file://".length));
+        try {
+          const base = path.basename(src);
+          fs.copyFileSync(src, path.join(dest, base));
+          console.log(`[shell] desktop drop: ${src} → ${dest}/${base}`);
+        } catch (err) {
+          console.error(`[shell] desktop drop failed for ${src}:`, err);
+        }
+      }
+      refreshDesktop();
+    },
+
+    hitDesktop(x, y) {
+      for (let i = desktopHits.length - 1; i >= 0; i--) {
+        const h = desktopHits[i]!;
+        if (x >= h.x && y >= h.y && x < h.x + h.width && y < h.y + h.height) {
+          return true;
+        }
+      }
+      return false;
     },
   };
 }

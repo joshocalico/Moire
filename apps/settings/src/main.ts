@@ -27,11 +27,12 @@ import {
   loadSettings,
   readSystemVolume,
   type MoireSettings,
+  type WallpaperSettings,
 } from "@moire/prefs";
 
 /** Appearance / Sound body height so parent Yoga gets a real flex slot (nested
  *  Columns without height collapse to 0 and overlap siblings). */
-const BODY_MIN_H = 168;
+const BODY_MIN_H = 300;
 
 function SettingsApp(
   props: WindowSize & {
@@ -45,6 +46,8 @@ function SettingsApp(
   const [notifs, setNotifs] = useState(props.initial.notifications);
   const [volume, setVolume] = useState(props.initial.volume);
   const [scale, setScale] = useState(sliderFromUiScale(props.initial.uiScale));
+  const [showDesktopIcons, setShowDesktopIcons] = useState(props.initial.showDesktopIcons);
+  const [wallpaper, setWallpaper] = useState<WallpaperSettings | null>(props.initial.wallpaper);
   const [status, setStatus] = useState("");
   const volumeReady = useRef(false);
   const ui = getUiScaleFactor();
@@ -66,12 +69,16 @@ function SettingsApp(
       notifications: notifs,
       volume,
       uiScale: uiScaleFromSlider(scale),
+      showDesktopIcons,
+      wallpaper,
       ...patch,
     };
     if (patch.dark != null) setDark(patch.dark);
     if (patch.notifications != null) setNotifs(patch.notifications);
     if (patch.volume != null) setVolume(patch.volume);
     if (patch.uiScale != null) setScale(sliderFromUiScale(patch.uiScale));
+    if (patch.showDesktopIcons != null) setShowDesktopIcons(patch.showDesktopIcons);
+    if ("wallpaper" in patch) setWallpaper(patch.wallpaper ?? null);
     const result = applySettings(next);
     setUiScaleFactor(next.uiScale);
     setStatus(
@@ -185,6 +192,57 @@ function SettingsApp(
               onChange: setScaleLive,
               height: sliderH,
             }),
+            createElement(Separator, { width: innerW, height: 1 }),
+            createElement(Label, {
+              text: "Wallpaper",
+              fontWeight: "medium",
+              width: innerW,
+              height: labelH,
+            }),
+            createElement(
+              Row,
+              {
+                width: innerW,
+                height: btnH,
+                gap: Math.round(8 * ui),
+                align: "center",
+              },
+              createElement(Button, {
+                width: Math.round(100 * ui),
+                height: btnH,
+                label: "Atmosphere",
+                variant: wallpaper?.mode === "atmosphere" || wallpaper == null ? "primary" : "secondary",
+                onPress: () =>
+                  push({ wallpaper: { mode: "atmosphere" } }, "Wallpaper: Atmosphere"),
+              }),
+              createElement(Button, {
+                width: Math.round(88 * ui),
+                height: btnH,
+                label: "Gradient",
+                variant: wallpaper?.mode === "gradient" ? "primary" : "secondary",
+                onPress: () =>
+                  push({ wallpaper: { mode: "gradient" } }, "Wallpaper: Gradient"),
+              }),
+              createElement(Button, {
+                width: Math.round(76 * ui),
+                height: btnH,
+                label: "Solid",
+                variant: wallpaper?.mode === "solid" ? "primary" : "secondary",
+                onPress: () =>
+                  push({ wallpaper: { mode: "solid" } }, "Wallpaper: Solid"),
+              }),
+            ),
+            createElement(Checkbox, {
+              checked: showDesktopIcons,
+              label: "Show desktop icons",
+              onChange: (v) =>
+                push(
+                  { showDesktopIcons: v },
+                  v ? "Desktop icons on" : "Desktop icons off",
+                ),
+              width: Math.min(Math.round(360 * ui), innerW),
+              height: rowH,
+            }),
           )
         : null,
       tab === 1
@@ -276,7 +334,7 @@ function SettingsApp(
           width: Math.round(96 * ui),
           height: btnH,
           label: "Close",
-          fill: pal.accentLine,
+          variant: "primary",
           onPress: props.onQuit,
         }),
       ),
@@ -306,7 +364,7 @@ async function main() {
     title: "Settings",
     appId: "org.moire.Settings",
     width: Math.round(480 * ui),
-    height: Math.round(360 * ui),
+    height: Math.round(480 * ui),
     resizable: false,
   });
   win.setContent((size) =>
