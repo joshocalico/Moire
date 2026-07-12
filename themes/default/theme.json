@@ -1,0 +1,12 @@
+{
+  "name": "moire-default",
+  "version": "0.0.0",
+  "tokens": {
+    "bg": "#1a1b1e",
+    "panel": "#25262b",
+    "accent": "#74c0fc",
+    "text": "#f1f3f5",
+    "titlebarHeight": 32,
+    "panelHeight": 36
+  }
+}

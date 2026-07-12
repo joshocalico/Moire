@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# moire-session — start a Moire Wayland session with a D-Bus session bus,
+# then launch day-0 apps once the compositor socket is ready.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-Moire}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-Moire}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
+export GDK_BACKEND="${GDK_BACKEND:-wayland}"
+# GTK/GSK: virgl path still SIGSEGVs on Parallels; Cairo is the day-0 renderer.
+export GSK_RENDERER="${GSK_RENDERER:-cairo}"
+
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+  # Prefer a home-stable dir: /run/user/$UID is deleted by systemd when there
+  # is no logind session / linger (common for our runuser-based guest session).
+  export XDG_RUNTIME_DIR="$HOME/.moire-runtime"
+fi
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+if [[ -z "${MOIRE_COMPOSITOR:-}" ]]; then
+  MOIRE_COMPOSITOR="pnpm --dir ${ROOT} --filter @moire/compositor exec tsx src/main.ts"
+fi
+SOCKET="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+
+if ! command -v dbus-run-session >/dev/null 2>&1; then
+  echo "moire-session: dbus-run-session not found; install dbus" >&2
+  exit 1
+fi
+
+echo "Moire session: XDG_CURRENT_DESKTOP=$XDG_CURRENT_DESKTOP"
+echo "Moire session: XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+echo "Moire session: WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+echo "Moire session: GSK_RENDERER=$GSK_RENDERER"
+
+session_inner() {
+  set -euo pipefail
+  rm -f "$SOCKET" "$SOCKET.lock"
+
+  # shellcheck disable=SC2086
+  bash -c "$MOIRE_COMPOSITOR" &
+  local comp_pid=$!
+
+  cleanup() {
+    kill "$comp_pid" 2>/dev/null || true
+    jobs -p | xargs -r kill 2>/dev/null || true
+  }
+  trap cleanup EXIT INT TERM
+
+  local i
+  for i in $(seq 1 150); do
+    if [[ -S "$SOCKET" ]]; then
+      break
+    fi
+    if ! kill -0 "$comp_pid" 2>/dev/null; then
+      echo "moire-session: compositor exited before socket appeared" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  if [[ ! -S "$SOCKET" ]]; then
+    echo "moire-session: timed out waiting for $SOCKET" >&2
+    exit 1
+  fi
+  echo "Moire session: compositor ready ($SOCKET)"
+
+  # Wait for Xwayland to publish DISPLAY (written to $XDG_RUNTIME_DIR/moire-display).
+  DISPLAY_FILE="$XDG_RUNTIME_DIR/moire-display"
+  for i in $(seq 1 100); do
+    if [[ -f "$DISPLAY_FILE" ]]; then
+      DISPLAY="$(tr -d '[:space:]' < "$DISPLAY_FILE")"
+      export DISPLAY
+      export MOIRE_XWAYLAND=1
+      echo "Moire session: X11 DISPLAY=$DISPLAY"
+      break
+    fi
+    if ! kill -0 "$comp_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -z "${DISPLAY:-}" ]]; then
+    echo "Moire session: Xwayland DISPLAY not ready (X11 apps need DISPLAY)" >&2
+  fi
+
+  if command -v foot >/dev/null 2>&1; then
+    foot >/tmp/moire-foot.log 2>&1 &
+    echo "Moire session: started foot"
+  else
+    echo "moire-session: foot not found (skip)" >&2
+  fi
+
+  if command -v nautilus >/dev/null 2>&1; then
+    GSK_RENDERER=cairo GDK_BACKEND=wayland nautilus --no-desktop \
+      >/tmp/moire-nautilus.log 2>&1 &
+    echo "Moire session: started nautilus (GSK_RENDERER=cairo)"
+  else
+    echo "moire-session: nautilus not found (skip)" >&2
+  fi
+
+  wait "$comp_pid"
+}
+
+export -f session_inner
+export MOIRE_COMPOSITOR SOCKET ROOT
+# Run inside one D-Bus session so GTK apps share the bus with the compositor.
+exec dbus-run-session -- bash -c 'session_inner'

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.turbo/
+*.node
+.pnpm-store/
+.cursor/
+# Secrets / local credentials
+**/CREDENTIALS.txt
+# Local Parallels / cloud images (multi‑GB) + screen captures
+vm/
+!vm/.gitkeep
+!scripts/

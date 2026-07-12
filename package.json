@@ -1,0 +1,17 @@
+{
+  "name": "moire",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Moire — a TypeScript compositing Wayland desktop environment",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev:compositor": "pnpm --filter @moire/compositor dev",
+    "typecheck": "pnpm -r run typecheck",
+    "probe:drm": "pnpm --filter @moire/sys probe:drm",
+    "clear-color": "pnpm --filter @moire/sys clear-color"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

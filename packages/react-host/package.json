@@ -1,0 +1,23 @@
+{
+  "name": "@moire/react-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-reconciler": "^0.31.0",
+    "yoga-layout": "^3.2.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-reconciler": "^0.28.9",
+    "typescript": "^5.7.2"
+  }
+}

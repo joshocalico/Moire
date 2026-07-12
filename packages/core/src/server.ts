@@ -1,0 +1,3936 @@
+import fs from "node:fs";
+import path from "node:path";
+import {
+  CORE_GLOBALS,
+  decodeHeader,
+  MessageBuilder,
+  MessageReader,
+  WL_HEADER_SIZE,
+} from "@moire/protocol";
+import {
+  fillKmsColor,
+  presentKms,
+  openKmsOutput,
+  closeKmsOutput,
+  type KmsOutput,
+  WaylandSocketServer,
+  type WaylandClientConn,
+  type WaylandChunk,
+  createXkbKeymapMemfd,
+  type KeymapMemfd,
+  EvdevKeyboard,
+  type EvdevKeyEvent,
+  EvdevPointer,
+  type EvdevPointerMotion,
+  type EvdevPointerAbsolute,
+  type EvdevPointerButton,
+  type EvdevPointerAxis,
+  closeFd,
+  flushMmap,
+  GbmDevice,
+} from "@moire/sys";
+import { mmapShm, munmapShm, copyFromPool } from "./shm-map.js";
+import {
+  closeDmabufPlanes,
+  copyFromDmabuf,
+  type DmabufBuffer,
+  type DmabufPlane,
+} from "./dmabuf-map.js";
+import {
+  createDmabufFormatTableMemfd,
+  DMABUF_FEEDBACK_FORMAT_COUNT,
+  resolveDrmFeedbackDevice,
+  type DrmFeedbackDevice,
+} from "./dmabuf-feedback.js";
+import { X11Wm, type XwmWindow } from "./xwm.js";
+
+const WL_DISPLAY_ID = 1;
+
+// opcodes
+const OP = {
+  display_sync: 0,
+  display_get_registry: 1,
+  registry_bind: 0,
+  compositor_create_surface: 0,
+  compositor_create_region: 1,
+  shm_create_pool: 0,
+  shm_pool_create_buffer: 0,
+  shm_pool_destroy: 1,
+  shm_pool_resize: 2,
+  surface_destroy: 0,
+  surface_attach: 1,
+  surface_damage: 2,
+  surface_frame: 3,
+  surface_set_opaque_region: 4,
+  surface_set_input_region: 5,
+  surface_commit: 6,
+  surface_set_buffer_transform: 7,
+  surface_set_buffer_scale: 8,
+  surface_damage_buffer: 9,
+  buffer_destroy: 0,
+  subcompositor_destroy: 0,
+  subcompositor_get_subsurface: 1,
+  seat_get_pointer: 0,
+  seat_get_keyboard: 1,
+  seat_get_touch: 2,
+  seat_release: 3,
+  pointer_set_cursor: 0,
+  pointer_release: 1,
+  data_device_manager_create_data_source: 0,
+  data_device_manager_get_data_device: 1,
+  data_source_offer: 0,
+  data_source_destroy: 1,
+  data_source_set_actions: 2,
+  data_device_start_drag: 0,
+  data_device_set_selection: 1,
+  data_device_release: 2,
+  data_offer_accept: 0,
+  data_offer_receive: 1,
+  data_offer_destroy: 2,
+  data_offer_finish: 3,
+  data_offer_set_actions: 4,
+  xdg_decoration_manager_destroy: 0,
+  xdg_decoration_manager_get_toplevel_decoration: 1,
+  xdg_toplevel_decoration_destroy: 0,
+  xdg_toplevel_decoration_set_mode: 1,
+  xdg_toplevel_decoration_unset_mode: 2,
+  xdg_wm_base_destroy: 0,
+  xdg_wm_base_create_positioner: 1,
+  xdg_wm_base_get_xdg_surface: 2,
+  xdg_wm_base_pong: 3,
+  xdg_surface_destroy: 0,
+  xdg_surface_get_toplevel: 1,
+  xdg_surface_get_popup: 2,
+  xdg_surface_set_window_geometry: 3,
+  xdg_surface_ack_configure: 4,
+  xdg_toplevel_destroy: 0,
+  xdg_toplevel_set_parent: 1,
+  xdg_toplevel_set_title: 2,
+  xdg_toplevel_set_app_id: 3,
+  xdg_toplevel_show_window_menu: 4,
+  xdg_toplevel_move: 5,
+  xdg_toplevel_resize: 6,
+  xdg_toplevel_set_max_size: 7,
+  xdg_toplevel_set_min_size: 8,
+  xdg_toplevel_set_maximized: 9,
+  xdg_toplevel_unset_maximized: 10,
+  xdg_toplevel_set_fullscreen: 11,
+  xdg_toplevel_unset_fullscreen: 12,
+  xdg_toplevel_set_minimized: 13,
+  region_destroy: 0,
+  region_add: 1,
+  linux_dmabuf_destroy: 0,
+  linux_dmabuf_create_params: 1,
+  linux_dmabuf_get_default_feedback: 2,
+  linux_dmabuf_get_surface_feedback: 3,
+  linux_buffer_params_destroy: 0,
+  linux_buffer_params_add: 1,
+  linux_buffer_params_create: 2,
+  linux_buffer_params_create_immed: 3,
+  linux_dmabuf_feedback_destroy: 0,
+  /** Mesa wayland-drm (not in wayland.xml — still required by Xwayland Glamor). */
+  drm_authenticate: 0,
+  drm_create_buffer: 1,
+  drm_create_planar_buffer: 2,
+  drm_create_prime_buffer: 3,
+
+  xwayland_shell_destroy: 0,
+  xwayland_shell_get_xwayland_surface: 1,
+  xwayland_surface_destroy: 0,
+  xwayland_surface_set_serial: 1,
+} as const;
+
+const EV = {
+  display_error: 0,
+  display_delete_id: 1,
+  registry_global: 0,
+  callback_done: 0,
+  shm_format: 0,
+  buffer_release: 0,
+  seat_capabilities: 0,
+  seat_name: 1,
+  pointer_enter: 0,
+  pointer_leave: 1,
+  pointer_motion: 2,
+  pointer_button: 3,
+  pointer_axis: 4,
+  pointer_frame: 5,
+  keyboard_keymap: 0,
+  keyboard_enter: 1,
+  keyboard_leave: 2,
+  keyboard_key: 3,
+  keyboard_modifiers: 4,
+  keyboard_repeat_info: 5,
+  output_geometry: 0,
+  output_mode: 1,
+  output_done: 2,
+  output_scale: 3,
+  surface_enter: 0,
+  surface_leave: 1,
+  xdg_wm_base_ping: 0,
+  xdg_surface_configure: 0,
+  xdg_toplevel_configure: 0,
+  xdg_toplevel_close: 1,
+  linux_dmabuf_format: 0,
+  linux_dmabuf_modifier: 1,
+  linux_buffer_params_created: 0,
+  linux_buffer_params_failed: 1,
+  linux_dmabuf_feedback_done: 0,
+  linux_dmabuf_feedback_format_table: 1,
+  linux_dmabuf_feedback_main_device: 2,
+  linux_dmabuf_feedback_tranche_done: 3,
+  linux_dmabuf_feedback_tranche_target_device: 4,
+  linux_dmabuf_feedback_tranche_formats: 5,
+  linux_dmabuf_feedback_tranche_flags: 6,
+  data_offer_offer: 0,
+  data_offer_source_actions: 1,
+  data_offer_action: 2,
+  data_source_target: 0,
+  data_source_send: 1,
+  data_source_cancelled: 2,
+  data_source_dnd_drop_performed: 3,
+  data_source_dnd_finished: 4,
+  data_source_action: 5,
+  data_device_data_offer: 0,
+  data_device_enter: 1,
+  data_device_leave: 2,
+  data_device_motion: 3,
+  data_device_drop: 4,
+  data_device_selection: 5,
+  xdg_toplevel_decoration_configure: 0,
+  drm_device: 0,
+  drm_format: 1,
+  drm_authenticated: 2,
+  drm_capabilities: 3,
+} as const;
+
+const WL_SEAT_CAPABILITY_POINTER = 1;
+const WL_SEAT_CAPABILITY_KEYBOARD = 2;
+const WL_OUTPUT_MODE_CURRENT = 0x1;
+const WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 = 1;
+const WL_KEYBOARD_KEY_STATE_RELEASED = 0;
+const WL_KEYBOARD_KEY_STATE_PRESSED = 1;
+const WL_POINTER_BUTTON_STATE_RELEASED = 0;
+const WL_POINTER_BUTTON_STATE_PRESSED = 1;
+const WL_POINTER_AXIS_VERTICAL_SCROLL = 0;
+
+const XDG_TOPLEVEL_STATE_MAXIMIZED = 1;
+const XDG_TOPLEVEL_STATE_FULLSCREEN = 2;
+const XDG_TOPLEVEL_STATE_RESIZING = 3;
+const XDG_TOPLEVEL_STATE_ACTIVATED = 4;
+
+const XDG_TOPLEVEL_RESIZE_EDGE_TOP = 1;
+const XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM = 2;
+const XDG_TOPLEVEL_RESIZE_EDGE_LEFT = 4;
+const XDG_TOPLEVEL_RESIZE_EDGE_RIGHT = 8;
+
+/** zxdg_toplevel_decoration_v1 mode — prefer CLIENT for GTK CSD; SSD if unset. */
+const XDG_DECORATION_MODE_CLIENT = 1;
+const XDG_DECORATION_MODE_SERVER = 2;
+
+/** SSD titlebar height — keep in sync with @moire/shell TitleBar. */
+const SSD_TITLEBAR_H = 32;
+const SSD_TITLEBAR_BTN = 28;
+const SSD_TITLEBAR_BTN_GAP = 4;
+const SSD_TITLEBAR_BTN_PAD = 6;
+const SSD_PANEL_H = 36;
+
+const WL_SHM_FORMAT_ARGB8888 = 0;
+const WL_SHM_FORMAT_XRGB8888 = 1;
+
+/** wl_drm capability: PRIME fd buffers. */
+const WL_DRM_CAPABILITY_PRIME = 1;
+
+/** DRM fourcc — little-endian ASCII 'AR24' / 'XR24'. */
+const DRM_FORMAT_ARGB8888 = 0x34325241;
+const DRM_FORMAT_XRGB8888 = 0x34325258;
+/** DRM_FORMAT_MOD_INVALID — linear / unspecified. */
+const DRM_FORMAT_MOD_INVALID_HI = 0xffffffff;
+const DRM_FORMAT_MOD_INVALID_LO = 0xffffffff;
+
+/** XRGB leaves A=0; blit skips a===0 — force opaque for CPU paint. */
+function forceOpaqueAlpha(pixels: Uint8Array): void {
+  const words = new Uint32Array(
+    pixels.buffer,
+    pixels.byteOffset,
+    pixels.byteLength >>> 2,
+  );
+  for (let i = 0; i < words.length; i++) {
+    words[i] = (words[i]! | 0xff000000) >>> 0;
+  }
+}
+
+const OP_SUBSURFACE = {
+  destroy: 0,
+  set_position: 1,
+  place_above: 2,
+  place_below: 3,
+  set_sync: 4,
+  set_desync: 5,
+} as const;
+
+type WlObject = {
+  id: number;
+  iface: string;
+  version: number;
+  data?: Record<string, unknown>;
+};
+
+type SurfaceState = {
+  bufferId: number | null;
+  frameCallbacks: number[];
+  mapped: boolean;
+  /** Absolute desktop position (computed for subsurfaces). */
+  x: number;
+  y: number;
+  /** Subsurface offset relative to parent. */
+  subX: number;
+  subY: number;
+  width: number;
+  height: number;
+  stride: number;
+  title: string;
+  /** CPU snapshot of the last committed buffer (ARGB/XRGB). */
+  pixels: Uint8Array | null;
+  /** Buffer ids waiting for wl_buffer.release after composite. */
+  releaseBuffers: number[];
+  role: "none" | "toplevel" | "subsurface" | "cursor";
+  parentId: number | null;
+  /** Child wl_surface object ids. */
+  children: number[];
+  /** Owning wl_surface object id. */
+  id: number;
+  xdgToplevelId: number | null;
+  xdgSurfaceId: number | null;
+  /** xdg_surface window geometry (content box within the buffer). */
+  geomX: number;
+  geomY: number;
+  geomW: number;
+  geomH: number;
+  maximized: boolean;
+  fullscreen: boolean;
+  minimized: boolean;
+  savedX: number;
+  savedY: number;
+  savedW: number;
+  savedH: number;
+  /** Client-requested size constraints (0 = unset). */
+  minW: number;
+  minH: number;
+  maxW: number;
+  maxH: number;
+  /** Decoration mode: server = React SSD; client/none = client draws chrome. */
+  decoration: "none" | "client" | "server";
+  /** Pending / applied xwayland_shell serial (rootless). */
+  xwaylandSerial: bigint | null;
+  /** Paired X11 window id (rootless). */
+  x11Wid: number | null;
+  /**
+   * True after get_xwayland_surface — survives xwayland_surface_v1.destroy,
+   * which Xwayland may do before the first buffer commit.
+   */
+  xwaylandPending: boolean;
+};
+
+type ShmBufferState = {
+  kind: "shm";
+  poolId: number;
+  /** Kept alive even after wl_shm_pool.destroy (Wayland allows that). */
+  pool: PoolState;
+  offset: number;
+  width: number;
+  height: number;
+  stride: number;
+  format: number;
+};
+
+type BufferState = ShmBufferState | DmabufBuffer;
+
+type DmabufParamsState = {
+  planes: DmabufPlane[];
+  created: boolean;
+};
+
+type PoolState = {
+  fd: number;
+  size: number;
+  map: unknown | null;
+  /** Buffers still referencing this pool. */
+  refCount: number;
+  /** True after wl_shm_pool.destroy — munmap when refCount hits 0. */
+  destroyed: boolean;
+};
+
+type InteractiveGrab =
+  | {
+      kind: "move";
+      session: ClientSession;
+      surfaceId: number;
+      originX: number;
+      originY: number;
+      cursorX: number;
+      cursorY: number;
+    }
+  | {
+      kind: "resize";
+      session: ClientSession;
+      surfaceId: number;
+      edges: number;
+      originX: number;
+      originY: number;
+      originW: number;
+      originH: number;
+      cursorX: number;
+      cursorY: number;
+    };
+
+/** Optional in-process DE chrome (panel / launcher / SSD). */
+export type SsdWindowInfo = {
+  surfaceId: number;
+  x: number;
+  y: number;
+  contentW: number;
+  contentH: number;
+  title: string;
+  focused: boolean;
+};
+
+export type SsdAction =
+  | { kind: "drag"; surfaceId: number }
+  | { kind: "close"; surfaceId: number }
+  | { kind: "maximize"; surfaceId: number }
+  | { kind: "minimize"; surfaceId: number };
+
+export type CompositorShell = {
+  paint(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+  ): void;
+  beginSsdFrame?(): void;
+  paintSsdWindow?(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+    window: SsdWindowInfo,
+  ): void;
+  paintSsd?(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+    windows: SsdWindowInfo[],
+  ): void;
+  hitSsd?(x: number, y: number): SsdAction | null;
+  onKey(ev: { code: number; value: number }): boolean;
+  onPointerButton(ev: {
+    timeMs: number;
+    button: number;
+    value: number;
+    x: number;
+    y: number;
+  }): boolean;
+  isLauncherOpen(): boolean;
+};
+
+/** Seat clipboard selection (wl_data_device.set_selection). */
+type ClipboardSelection = {
+  sourceSession: ClientSession;
+  sourceId: number;
+  mimeTypes: string[];
+};
+
+type DataSourceState = {
+  mimeTypes: string[];
+};
+
+type DataOfferState = {
+  /** Source that backs this offer (may be in another client). */
+  sourceSession: ClientSession;
+  sourceId: number;
+  mimeTypes: string[];
+  /** wl_data_device that received this offer. */
+  deviceId: number;
+};
+
+export class CompositorServer {
+  private socket: WaylandSocketServer | null = null;
+  private kms: KmsOutput | null = null;
+  private clients = new Set<ClientSession>();
+  private running = false;
+  private nextGlobalName = 1;
+  private globals: { name: number; iface: string; version: number }[] = [];
+  private keymap: KeymapMemfd | null = null;
+  private evdev: EvdevKeyboard | null = null;
+  private pointerDev: EvdevPointer | null = null;
+  private focused: ClientSession | null = null;
+  private pointerFocus: { session: ClientSession; surfaceId: number } | null =
+    null;
+  private cursorX = 100;
+  private cursorY = 100;
+  /** Client cursor from wl_pointer.set_cursor (not part of the scene). */
+  private clientCursor: {
+    session: ClientSession;
+    surfaceId: number;
+    hotspotX: number;
+    hotspotY: number;
+  } | null = null;
+  /** Resize edges under the pointer (compositor grip), for cursor fallback. */
+  private hoverEdges = 0;
+  private grab: InteractiveGrab | null = null;
+  private toplevelCount = 0;
+  private lastPainted = 0;
+  /** Bottom → top paint/focus order for mapped toplevels. */
+  private stack: { session: ClientSession; surfaceId: number }[] = [];
+  private focusedToplevel: { session: ClientSession; surfaceId: number } | null =
+    null;
+  private altHeld = false;
+  private shiftHeld = false;
+  /** CPU staging buffer — paint here, then flushMmap + presentKms. */
+  private stage: Buffer | null = null;
+  /** Optional GBM device for dmabuf CPU import (same DRM fd as KMS). */
+  private gbm: GbmDevice | null = null;
+  /** DRM device advertised via zwp_linux_dmabuf_feedback_v1.main_device. */
+  /** Seat-wide clipboard selection. */
+  private selection: ClipboardSelection | null = null;
+  private shell: CompositorShell | null = null;
+  private drmFeedback: DrmFeedbackDevice | null = null;
+  /** Shared format table memfd for feedback events. */
+  private dmabufFormatTable: { fd: number; size: number } | null = null;
+  /** Rootless XWM (optional). */
+  private xwm: X11Wm | null = null;
+  /** Wayland surfaces waiting for X11 serial match. */
+  private xwayPendingBySerial = new Map<
+    bigint,
+    { session: ClientSession; surfaceId: number }
+  >();
+  /** X11 wid → paired Wayland surface. */
+  private xwayByWid = new Map<
+    number,
+    { session: ClientSession; surfaceId: number }
+  >();
+  /** Last SSD window list from composite — used for reliable hit-testing. */
+  private ssdWindows: SsdWindowInfo[] = [];
+
+  constructor(
+    private readonly runtimeDir: string,
+    private readonly displayName = "wayland-1",
+  ) {
+    for (const [iface, version] of Object.entries(CORE_GLOBALS)) {
+      this.globals.push({
+        name: this.nextGlobalName++,
+        iface,
+        version,
+      });
+    }
+  }
+
+  get socketPath(): string {
+    return path.join(this.runtimeDir, this.displayName);
+  }
+
+  async start(cardPath?: string): Promise<void> {
+    fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
+    this.kms = openKmsOutput(cardPath);
+    fillKmsColor(this.kms, { r: 24, g: 90, b: 110 });
+    try {
+      this.gbm = GbmDevice.openForImport(this.kms.fd);
+      console.log("[dmabuf] GBM device ready");
+    } catch (err) {
+      console.warn("[dmabuf] GBM unavailable (mmap-only import):", err);
+      this.gbm = null;
+    }
+    try {
+      this.drmFeedback = resolveDrmFeedbackDevice(this.kms.cardPath);
+      this.dmabufFormatTable = createDmabufFormatTableMemfd();
+      console.log(
+        `[dmabuf] feedback device=${this.drmFeedback.path} rdev=0x${this.drmFeedback.deviceBytes.readBigUInt64LE(0).toString(16)} formats=${DMABUF_FEEDBACK_FORMAT_COUNT}`,
+      );
+    } catch (err) {
+      console.warn("[dmabuf] feedback setup failed:", err);
+      this.drmFeedback = null;
+      this.dmabufFormatTable = null;
+    }
+
+    try {
+      this.keymap = createXkbKeymapMemfd();
+      console.log(`[seat] keymap memfd size=${this.keymap.size}`);
+    } catch (err) {
+      console.warn("[seat] keymap unavailable:", err);
+    }
+
+    this.evdev = new EvdevKeyboard();
+    this.evdev.on("key", (ev: EvdevKeyEvent) => this.onKey(ev));
+    this.evdev.start();
+
+    this.pointerDev = new EvdevPointer();
+    this.pointerDev.on("motion", (ev: EvdevPointerMotion) => this.onPointerMotion(ev));
+    this.pointerDev.on("absolute", (ev: EvdevPointerAbsolute) =>
+      this.onPointerAbsolute(ev),
+    );
+    this.pointerDev.on("button", (ev: EvdevPointerButton) => this.onPointerButton(ev));
+    this.pointerDev.on("axis", (ev: EvdevPointerAxis) => this.onPointerAxis(ev));
+    this.pointerDev.start();
+
+    if (this.kms) {
+      this.cursorX = Math.floor(this.kms.width / 2);
+      this.cursorY = Math.floor(this.kms.height / 2);
+    }
+    this.socket = new WaylandSocketServer(this.socketPath);
+    this.socket.on("connection", (conn: WaylandClientConn) => {
+      const session = new ClientSession(this, conn);
+      this.clients.add(session);
+      conn.on("close", () => {
+        if (this.focused === session) this.focused = null;
+        if (this.focusedToplevel?.session === session) this.focusedToplevel = null;
+        if (this.pointerFocus?.session === session) this.pointerFocus = null;
+        if (this.grab?.session === session) this.grab = null;
+        if (this.clientCursor?.session === session) this.clientCursor = null;
+        if (this.selection?.sourceSession === session) {
+          this.selection = null;
+        }
+        this.stack = this.stack.filter((e) => e.session !== session);
+        for (const [wid, pair] of this.xwayByWid) {
+          if (pair.session === session) this.xwayByWid.delete(wid);
+        }
+        for (const [serial, pair] of this.xwayPendingBySerial) {
+          if (pair.session === session) this.xwayPendingBySerial.delete(serial);
+        }
+        session.destroy();
+        this.clients.delete(session);
+      });
+    });
+    this.socket.start();
+
+    console.log(`Wayland display: ${this.displayName}`);
+    console.log(`Socket: ${this.socketPath}`);
+    console.log(
+      `KMS: ${this.kms.width}x${this.kms.height} on ${this.kms.cardPath}`,
+    );
+    console.log(
+      `Export: WAYLAND_DISPLAY=${this.displayName} XDG_RUNTIME_DIR=${this.runtimeDir}`,
+    );
+
+    this.running = true;
+    this.loop();
+  }
+
+  stop(): void {
+    this.running = false;
+    this.xwm?.stop();
+    this.xwm = null;
+    this.evdev?.stop();
+    this.evdev = null;
+    this.pointerDev?.stop();
+    this.pointerDev = null;
+    this.pointerFocus = null;
+    for (const c of this.clients) c.destroy();
+    this.clients.clear();
+    this.socket?.close();
+    if (this.keymap) {
+      try {
+        closeFd(this.keymap.fd);
+      } catch {
+        // ok
+      }
+      this.keymap = null;
+    }
+    if (this.kms) {
+      this.gbm?.destroy();
+      this.gbm = null;
+      if (this.dmabufFormatTable) {
+        try {
+          closeFd(this.dmabufFormatTable.fd);
+        } catch {
+          // ok
+        }
+        this.dmabufFormatTable = null;
+      }
+      this.drmFeedback = null;
+      closeKmsOutput(this.kms);
+      this.kms = null;
+    }
+  }
+
+  getGlobals() {
+    return this.globals;
+  }
+
+  /** Attach in-process shell chrome (panel + launcher). */
+  setShell(shell: CompositorShell | null): void {
+    this.shell = shell;
+  }
+
+  /**
+   * Attach rootless XWM. Pairs WL_SURFACE_SERIAL with xwayland_shell surfaces.
+   */
+  attachXwm(wm: X11Wm): void {
+    this.xwm = wm;
+    wm.on("serial", (win: XwmWindow, serial: bigint) => {
+      this.tryPairXwayland(serial, win);
+      // set_serial may be missing/raced; claim any unpaired xwayland surface.
+      if (!this.xwayByWid.has(win.wid)) this.claimOrphanXwaylandSurface(serial, win);
+    });
+    wm.on("mapped", (win: XwmWindow) => {
+      if (win.serial != null) {
+        this.tryPairXwayland(win.serial, win);
+        if (!this.xwayByWid.has(win.wid)) {
+          this.claimOrphanXwaylandSurface(win.serial, win);
+        }
+      }
+      const pair = this.xwayByWid.get(win.wid);
+      if (pair) this.applyXwaylandGeometry(pair.session, pair.surfaceId, win);
+    });
+    wm.on("configured", (win: XwmWindow) => {
+      const pair = this.xwayByWid.get(win.wid);
+      if (pair) this.applyXwaylandGeometry(pair.session, pair.surfaceId, win);
+    });
+    wm.on("title", (win: XwmWindow) => {
+      const pair = this.xwayByWid.get(win.wid);
+      if (!pair) return;
+      const surf = pair.session.surfaceById(pair.surfaceId);
+      if (surf) surf.title = win.title || surf.title;
+    });
+    wm.on("unmapped", (win: XwmWindow) => {
+      const pair = this.xwayByWid.get(win.wid);
+      if (!pair) return;
+      const surf = pair.session.surfaceById(pair.surfaceId);
+      if (surf) {
+        surf.mapped = false;
+        this.unregisterToplevel(pair.session, pair.surfaceId);
+      }
+    });
+    wm.on("destroyed", (win: XwmWindow) => {
+      const pair = this.xwayByWid.get(win.wid);
+      this.xwayByWid.delete(win.wid);
+      if (win.serial != null) this.xwayPendingBySerial.delete(win.serial);
+      if (!pair) return;
+      const surf = pair.session.surfaceById(pair.surfaceId);
+      if (surf) {
+        surf.x11Wid = null;
+        surf.xwaylandSerial = null;
+        surf.mapped = false;
+        this.unregisterToplevel(pair.session, pair.surfaceId);
+      }
+    });
+    console.log("[xwm] attached to compositor");
+  }
+
+  /** Called when an xwayland_surface serial is committed on a wl_surface. */
+  noteXwaylandSerial(
+    session: ClientSession,
+    surfaceId: number,
+    serial: bigint,
+  ): void {
+    if (serial === 0n) return;
+    const surf = session.surfaceById(surfaceId);
+    if (surf) surf.xwaylandSerial = serial;
+    this.xwayPendingBySerial.set(serial, { session, surfaceId });
+    const win = this.xwm?.windowBySerial(serial) ?? null;
+    if (win) this.tryPairXwayland(serial, win);
+  }
+
+  /**
+   * Fallback when set_serial is missing from the Wayland stream but the
+   * surface was created via xwayland_shell and XWM already saw WL_SURFACE_SERIAL.
+   */
+  tryPairOrphanXwaylandSurface(
+    session: ClientSession,
+    surfaceId: number,
+  ): void {
+    const surf = session.surfaceById(surfaceId);
+    if (
+      !surf ||
+      !surf.xwaylandPending ||
+      surf.xwaylandSerial != null ||
+      surf.x11Wid != null
+    ) {
+      return;
+    }
+    const win =
+      this.xwm?.takeUnpairedSerialWindow((wid) => !this.xwayByWid.has(wid)) ??
+      null;
+    if (!win || win.serial == null) return;
+    console.warn(
+      `[xwm] orphan pair surface=${surfaceId} ← wid=${win.wid} serial=${win.serial}`,
+    );
+    this.noteXwaylandSerial(session, surfaceId, win.serial);
+  }
+
+  /** XWM-side orphan: serial arrived before/without Wayland set_serial. */
+  private claimOrphanXwaylandSurface(serial: bigint, win: XwmWindow): void {
+    if (this.xwayByWid.has(win.wid) || this.xwayPendingBySerial.has(serial)) {
+      return;
+    }
+    for (const session of this.clients) {
+      for (const surf of session.surfaces()) {
+        if (
+          !surf.xwaylandPending ||
+          surf.xwaylandSerial != null ||
+          surf.x11Wid != null
+        ) {
+          continue;
+        }
+        console.warn(
+          `[xwm] claim orphan surface=${surf.id} ← wid=${win.wid} serial=${serial}`,
+        );
+        this.noteXwaylandSerial(session, surf.id, serial);
+        return;
+      }
+    }
+  }
+
+  private tryPairXwayland(serial: bigint, win: XwmWindow): void {
+    const pending = this.xwayPendingBySerial.get(serial);
+    if (!pending) return;
+    const surf = pending.session.surfaceById(pending.surfaceId);
+    if (!surf) return;
+
+    this.xwayPendingBySerial.delete(serial);
+    this.xwayByWid.set(win.wid, pending);
+    surf.x11Wid = win.wid;
+    surf.xwaylandSerial = serial;
+    surf.role = "toplevel";
+    surf.decoration = "server";
+    if (win.title) surf.title = win.title;
+    // Rootless surfaces skip xdg_toplevel — assign a cascade slot if needed.
+    if (surf.x === 0 && surf.y === 0 && win.x === 0 && win.y === 0) {
+      const slot = this.allocToplevelSlot();
+      surf.x = slot.x;
+      surf.y = slot.y;
+    }
+    this.applyXwaylandGeometry(pending.session, pending.surfaceId, win);
+    // Align X11 window with the Wayland content box so XQueryPointer matches.
+    const contentY =
+      surf.y + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
+    this.xwm?.configureWindow(
+      win.wid,
+      surf.x,
+      contentY,
+      win.width > 0 ? win.width : surf.width,
+      win.height > 0 ? win.height : surf.height,
+    );
+    if (surf.mapped && surf.pixels) {
+      const firstMap = !this.isStacked(pending.session, surf.id);
+      this.registerToplevel(pending.session, surf.id);
+      if (firstMap) this.focusClient(pending.session, surf.id);
+    }
+    console.log(
+      `[xwm] paired wid=${win.wid} serial=${serial} surface=${surf.id} ${win.width}x${win.height} title=${JSON.stringify(win.title)}`,
+    );
+  }
+
+  private applyXwaylandGeometry(
+    session: ClientSession,
+    surfaceId: number,
+    win: XwmWindow,
+  ): void {
+    const surf = session.surfaceById(surfaceId);
+    if (!surf) return;
+    // Keep compositor slot placement when X still reports 0,0.
+    if (win.x !== 0 || win.y !== 0) {
+      surf.x = win.x;
+      surf.y = Math.max(0, win.y - (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0));
+    }
+    if (win.width > 0) {
+      surf.geomW = win.width;
+      surf.geomH = win.height;
+      surf.geomX = 0;
+      surf.geomY = 0;
+    }
+  }
+
+  getXwm(): X11Wm | null {
+    return this.xwm;
+  }
+
+  getKms(): KmsOutput {
+    if (!this.kms) throw new Error("KMS not started");
+    return this.kms;
+  }
+
+  getGbm(): GbmDevice | null {
+    return this.gbm;
+  }
+
+  getDmabufFeedback(): {
+    device: DrmFeedbackDevice;
+    formatTable: { fd: number; size: number };
+  } | null {
+    if (!this.drmFeedback || !this.dmabufFormatTable) return null;
+    return { device: this.drmFeedback, formatTable: this.dmabufFormatTable };
+  }
+
+  /** Clear seat selection and notify the previous source. */
+  clearSelection(reason: "cancelled" | "cleared" = "cancelled"): void {
+    const prev = this.selection;
+    this.selection = null;
+    if (prev && reason === "cancelled") {
+      prev.sourceSession.sendDataSourceCancelled(prev.sourceId);
+    }
+    for (const c of this.clients) c.sendSelection(null);
+  }
+
+  setSelection(
+    sourceSession: ClientSession,
+    sourceId: number | null,
+    _serial: number,
+  ): void {
+    if (sourceId == null || sourceId === 0) {
+      this.clearSelection("cancelled");
+      console.log("[clipboard] selection cleared");
+      return;
+    }
+    const mimes = sourceSession.dataSourceMimes(sourceId);
+    if (!mimes) {
+      console.warn(`[clipboard] set_selection unknown source=${sourceId}`);
+      return;
+    }
+    const prev = this.selection;
+    if (
+      prev &&
+      (prev.sourceSession !== sourceSession || prev.sourceId !== sourceId)
+    ) {
+      prev.sourceSession.sendDataSourceCancelled(prev.sourceId);
+    }
+    this.selection = { sourceSession, sourceId, mimeTypes: [...mimes] };
+    console.log(
+      `[clipboard] selection set source=${sourceId} mimes=${mimes.join(",")}`,
+    );
+    for (const c of this.clients) c.sendSelection(this.selection);
+  }
+
+  getSelection(): ClipboardSelection | null {
+    return this.selection;
+  }
+
+  /** Source client writes clipboard bytes into `fd` (from offer.receive). */
+  forwardSelectionReceive(mime: string, fd: number): void {
+    const sel = this.selection;
+    if (!sel) {
+      try {
+        closeFd(fd);
+      } catch {
+        // ok
+      }
+      return;
+    }
+    sel.sourceSession.sendDataSourceSend(sel.sourceId, mime, fd);
+  }
+
+  getKeymap(): KeymapMemfd | null {
+    return this.keymap;
+  }
+
+  allocToplevelSlot(): { x: number; y: number } {
+    const n = this.toplevelCount++;
+    return { x: 48 + (n % 6) * 36, y: 48 + (n % 6) * 36 };
+  }
+
+  /** True if this toplevel is already on the stacking list. */
+  isStacked(session: ClientSession, surfaceId: number): boolean {
+    return this.stack.some(
+      (e) => e.session === session && e.surfaceId === surfaceId,
+    );
+  }
+
+  registerToplevel(session: ClientSession, surfaceId: number): void {
+    if (this.isStacked(session, surfaceId)) return;
+    this.stack.push({ session, surfaceId });
+  }
+
+  unregisterToplevel(session: ClientSession, surfaceId: number): void {
+    this.stack = this.stack.filter(
+      (e) => !(e.session === session && e.surfaceId === surfaceId),
+    );
+    if (
+      this.focusedToplevel?.session === session &&
+      this.focusedToplevel.surfaceId === surfaceId
+    ) {
+      this.focusedToplevel = null;
+    }
+  }
+
+  /** Move toplevel to the top of the stack (painted last / hit first). */
+  raiseToplevel(session: ClientSession, surfaceId: number): void {
+    // Reorder only — do not clear focusedToplevel (unregister would).
+    this.stack = this.stack.filter(
+      (e) => !(e.session === session && e.surfaceId === surfaceId),
+    );
+    this.stack.push({ session, surfaceId });
+  }
+
+  focusClient(session: ClientSession, surfaceId: number): void {
+    const top = session.toplevelFor(surfaceId);
+    const topId = top?.id ?? surfaceId;
+
+    const already =
+      this.focusedToplevel?.session === session &&
+      this.focusedToplevel.surfaceId === topId;
+
+    if (!already && this.focusedToplevel) {
+      const prev = this.focusedToplevel.session.surfaceById(
+        this.focusedToplevel.surfaceId,
+      );
+      if (prev?.role === "toplevel") {
+        this.sendToplevelStates(this.focusedToplevel.session, prev, false);
+      }
+    }
+
+    if (this.focused && this.focused !== session) {
+      this.focused.keyboardLeave();
+    }
+    this.focused = session;
+    this.focusedToplevel = { session, surfaceId: topId };
+    session.keyboardEnter(surfaceId);
+
+    if (top?.role === "toplevel") {
+      top.minimized = false;
+      this.raiseToplevel(session, topId);
+      if (!already) this.sendToplevelStates(session, top, true);
+    }
+  }
+
+  private sendToplevelStates(
+    session: ClientSession,
+    surf: SurfaceState,
+    activated: boolean,
+  ): void {
+    const w = surf.geomW > 0 ? surf.geomW : surf.width;
+    const h = surf.geomH > 0 ? surf.geomH : surf.height;
+    if (w <= 0 || h <= 0) return;
+    const states: number[] = [];
+    if (surf.maximized) states.push(XDG_TOPLEVEL_STATE_MAXIMIZED);
+    if (surf.fullscreen) states.push(XDG_TOPLEVEL_STATE_FULLSCREEN);
+    if (activated) states.push(XDG_TOPLEVEL_STATE_ACTIVATED);
+    session.configureToplevel(surf, w, h, states);
+  }
+
+  setMinimized(session: ClientSession, surfaceId: number): void {
+    const surf = session.surfaceById(surfaceId);
+    if (!surf || surf.role !== "toplevel") return;
+    surf.minimized = true;
+    if (
+      this.focusedToplevel?.session === session &&
+      this.focusedToplevel.surfaceId === surfaceId
+    ) {
+      this.focusedToplevel = null;
+      if (this.focused === session) {
+        this.focused.keyboardLeave();
+        this.focused = null;
+      }
+    }
+    console.log(`[wm] minimized surface=${surfaceId}`);
+  }
+
+  restoreToplevel(session: ClientSession, surfaceId: number): void {
+    const surf = session.surfaceById(surfaceId);
+    if (!surf || surf.role !== "toplevel") return;
+    surf.minimized = false;
+    this.focusClient(session, surfaceId);
+    console.log(`[wm] restored surface=${surfaceId}`);
+  }
+
+  /** Alt+Tab — cycle to the next (or previous with Shift) toplevel. */
+  private cycleToplevel(backward = false): void {
+    const mapped = this.stack.filter((e) => {
+      const s = e.session.surfaceById(e.surfaceId);
+      return s?.mapped && s.role === "toplevel" && !s.minimized;
+    });
+    if (mapped.length === 0) return;
+    const curIdx = this.focusedToplevel
+      ? mapped.findIndex(
+          (e) =>
+            e.session === this.focusedToplevel!.session &&
+            e.surfaceId === this.focusedToplevel!.surfaceId,
+        )
+      : -1;
+    let next: number;
+    if (backward) {
+      next = curIdx <= 0 ? mapped.length - 1 : curIdx - 1;
+    } else {
+      next = curIdx < 0 || curIdx >= mapped.length - 1 ? 0 : curIdx + 1;
+    }
+    const e = mapped[next]!;
+    const surf = e.session.surfaceById(e.surfaceId);
+    if (surf) {
+      surf.minimized = false;
+      this.focusClient(e.session, e.surfaceId);
+    }
+  }
+
+  private onKey(ev: EvdevKeyEvent): void {
+    const KEY_LEFTALT = 56;
+    const KEY_RIGHTALT = 100;
+    const KEY_TAB = 15;
+    const KEY_LEFTSHIFT = 42;
+    const KEY_RIGHTSHIFT = 54;
+
+    if (ev.code === KEY_LEFTALT || ev.code === KEY_RIGHTALT) {
+      this.altHeld = ev.value !== 0;
+    }
+    if (ev.code === KEY_LEFTSHIFT || ev.code === KEY_RIGHTSHIFT) {
+      this.shiftHeld = ev.value !== 0;
+    }
+    if (this.altHeld && ev.code === KEY_TAB && ev.value === 1) {
+      this.cycleToplevel(this.shiftHeld);
+      return;
+    }
+
+    if (this.shell?.onKey(ev)) return;
+
+    if (!this.focused) {
+      for (const c of this.clients) {
+        const id = c.primaryToplevelSurfaceId();
+        if (id != null) {
+          this.focusClient(c, id);
+          break;
+        }
+      }
+    }
+    this.focused?.keyboardKey(ev);
+  }
+
+  private onPointerMotion(ev: EvdevPointerMotion): void {
+    const kms = this.kms;
+    if (!kms) return;
+    this.cursorX = Math.max(0, Math.min(kms.width - 1, this.cursorX + ev.dx));
+    this.cursorY = Math.max(0, Math.min(kms.height - 1, this.cursorY + ev.dy));
+    if (this.applyGrab()) return;
+    this.updatePointerFocus(ev.timeMs, true);
+    this.updateHoverEdges();
+    this.syncXwaylandPointer();
+  }
+
+  private onPointerAbsolute(ev: EvdevPointerAbsolute): void {
+    const kms = this.kms;
+    if (!kms) return;
+    this.cursorX = Math.max(
+      0,
+      Math.min(kms.width - 1, Math.round(ev.x * (kms.width - 1))),
+    );
+    this.cursorY = Math.max(
+      0,
+      Math.min(kms.height - 1, Math.round(ev.y * (kms.height - 1))),
+    );
+    if (this.applyGrab()) return;
+    this.updatePointerFocus(ev.timeMs, true);
+    this.updateHoverEdges();
+    this.syncXwaylandPointer();
+  }
+
+  /**
+   * Rootless Xwayland only updates its X pointer from wl_pointer. Xeyes uses
+   * XQueryPointer, so tracking freezes when the cursor is over native clients.
+   * Ghost-feed motion to an X11 surface (separate Wayland client) without
+   * stealing this.pointerFocus from foot/etc.
+   */
+  private syncXwaylandPointer(): void {
+    const target = this.pickXwaylandPointerTarget();
+    if (!target) return;
+    if (
+      this.pointerFocus?.session === target.session &&
+      this.pointerFocus.surfaceId === target.surface.id
+    ) {
+      return; // real hit-test path already delivers events
+    }
+    const ssdY = this.usesSsd(target.surface) ? SSD_TITLEBAR_H : 0;
+    const localX = this.cursorX - target.surface.x;
+    const localY = this.cursorY - target.surface.y - ssdY;
+    target.session.pointerEnter(target.surface.id, localX, localY);
+    target.session.pointerMotion(monotonicMs(), localX, localY);
+  }
+
+  private pickXwaylandPointerTarget(): {
+    session: ClientSession;
+    surface: SurfaceState;
+  } | null {
+    if (this.focusedToplevel) {
+      const surf = this.focusedToplevel.session.surfaceById(
+        this.focusedToplevel.surfaceId,
+      );
+      if (surf?.x11Wid != null && surf.mapped) {
+        return { session: this.focusedToplevel.session, surface: surf };
+      }
+    }
+    for (let i = this.stack.length - 1; i >= 0; i--) {
+      const e = this.stack[i]!;
+      const surf = e.session.surfaceById(e.surfaceId);
+      if (surf?.x11Wid != null && surf.mapped) {
+        return { session: e.session, surface: surf };
+      }
+    }
+    return null;
+  }
+
+  private onPointerButton(ev: EvdevPointerButton): void {
+    if (ev.value === 0 && this.grab) {
+      this.endGrab();
+    }
+
+    if (
+      this.shell?.onPointerButton({
+        timeMs: ev.timeMs,
+        button: ev.code,
+        value: ev.value,
+        x: this.cursorX,
+        y: this.cursorY,
+      })
+    ) {
+      return;
+    }
+
+    // Geometric SSD hit-test — refresh list so positions match latest moves.
+    if (ev.value === 1) {
+      this.ssdWindows = this.collectSsdWindows();
+      const action = this.hitSsd(this.cursorX, this.cursorY);
+      if (action) {
+        this.handleSsdAction(action);
+        return;
+      }
+    }
+
+    this.updatePointerFocus(ev.timeMs, false);
+    this.updateHoverEdges();
+    const hit = this.pointerFocus;
+    if (hit && ev.value === 1) {
+      const top = hit.session.toplevelFor(hit.surfaceId);
+      if (top) {
+        this.focusClient(hit.session, top.id);
+        if (!this.grab && !top.maximized && !top.fullscreen) {
+          const edges = this.resizeEdgesAt(top, this.cursorX, this.cursorY);
+          if (edges) this.beginResize(hit.session, top.id, edges);
+        }
+      } else {
+        this.focusClient(hit.session, hit.surfaceId);
+      }
+    } else if (ev.value === 1 && !hit && !this.grab) {
+      // CSD shadows / SSD frame: click may sit just outside geom — still start resize.
+      for (let i = this.stack.length - 1; i >= 0; i--) {
+        const entry = this.stack[i]!;
+        const surf = entry.session.surfaceById(entry.surfaceId);
+        if (!surf || !surf.mapped || entry.session.isHidden(surf)) continue;
+        if (surf.maximized || surf.fullscreen) continue;
+        const edges = this.resizeEdgesAt(surf, this.cursorX, this.cursorY);
+        if (edges) {
+          this.focusClient(entry.session, surf.id);
+          this.beginResize(entry.session, surf.id, edges);
+          break;
+        }
+      }
+    }
+    hit?.session.pointerButton(ev);
+  }
+
+  private handleSsdAction(action: SsdAction): void {
+    const entry = this.stack.find((e) => e.surfaceId === action.surfaceId);
+    if (!entry) {
+      console.warn(`[ssd] action ${action.kind} missing surface=${action.surfaceId}`);
+      return;
+    }
+    const surf = entry.session.surfaceById(action.surfaceId);
+    if (!surf) return;
+    this.focusClient(entry.session, action.surfaceId);
+    if (action.kind === "drag") {
+      this.beginMove(entry.session, action.surfaceId);
+    } else if (action.kind === "close") {
+      entry.session.requestClose(surf);
+    } else if (action.kind === "maximize") {
+      this.toggleMaximized(entry.session, action.surfaceId, !surf.maximized);
+    } else if (action.kind === "minimize") {
+      this.setMinimized(entry.session, action.surfaceId);
+    }
+  }
+
+  /**
+   * Hit-test Moire SSD titlebars by geometry (matches TitleBar.tsx layout).
+   * Topmost SSD window wins.
+   */
+  private hitSsd(x: number, y: number): SsdAction | null {
+    for (let i = this.ssdWindows.length - 1; i >= 0; i--) {
+      const w = this.ssdWindows[i]!;
+      if (x < w.x || y < w.y || x >= w.x + w.contentW || y >= w.y + SSD_TITLEBAR_H) {
+        continue;
+      }
+      const localX = x - w.x;
+      const btnY0 = Math.floor((SSD_TITLEBAR_H - SSD_TITLEBAR_BTN) / 2);
+      const btnY1 = btnY0 + SSD_TITLEBAR_BTN;
+      const inBtnRow = y >= w.y + btnY0 && y < w.y + btnY1;
+      const closeX0 =
+        w.contentW - SSD_TITLEBAR_BTN_PAD - SSD_TITLEBAR_BTN;
+      const maxX0 = closeX0 - SSD_TITLEBAR_BTN_GAP - SSD_TITLEBAR_BTN;
+      const minX0 = maxX0 - SSD_TITLEBAR_BTN_GAP - SSD_TITLEBAR_BTN;
+      if (inBtnRow) {
+        if (localX >= closeX0 && localX < closeX0 + SSD_TITLEBAR_BTN) {
+          return { kind: "close", surfaceId: w.surfaceId };
+        }
+        if (localX >= maxX0 && localX < maxX0 + SSD_TITLEBAR_BTN) {
+          return { kind: "maximize", surfaceId: w.surfaceId };
+        }
+        if (localX >= minX0 && localX < minX0 + SSD_TITLEBAR_BTN) {
+          return { kind: "minimize", surfaceId: w.surfaceId };
+        }
+      }
+      return { kind: "drag", surfaceId: w.surfaceId };
+    }
+    return null;
+  }
+
+  private collectSsdWindows(): SsdWindowInfo[] {
+    const windows: SsdWindowInfo[] = [];
+    for (const entry of this.stack) {
+      const surf = entry.session.surfaceById(entry.surfaceId);
+      if (!surf || !surf.mapped || entry.session.isHidden(surf)) continue;
+      if (!this.usesSsd(surf)) continue;
+      const size = this.contentSize(surf);
+      if (size.w <= 0 || size.h <= 0) continue;
+      const focused =
+        this.focusedToplevel?.session === entry.session &&
+        this.focusedToplevel.surfaceId === surf.id;
+      windows.push({
+        surfaceId: surf.id,
+        x: surf.x,
+        y: surf.y,
+        contentW: size.w,
+        contentH: size.h,
+        title: surf.title || "Window",
+        focused,
+      });
+    }
+    return windows;
+  }
+
+  private onPointerAxis(ev: EvdevPointerAxis): void {
+    this.updatePointerFocus(ev.timeMs, false);
+    this.pointerFocus?.session.pointerAxis(ev);
+  }
+
+  beginMove(session: ClientSession, surfaceId: number): void {
+    const surf = session.surfaceById(surfaceId);
+    if (!surf || surf.role !== "toplevel") return;
+    if (surf.maximized || surf.fullscreen) return;
+    const frame = this.frameBox(surf);
+    this.grab = {
+      kind: "move",
+      session,
+      surfaceId,
+      originX: frame.x,
+      originY: frame.y,
+      cursorX: this.cursorX,
+      cursorY: this.cursorY,
+    };
+    console.log(`[wm] begin move surface=${surfaceId}`);
+  }
+
+  beginResize(session: ClientSession, surfaceId: number, edges: number): void {
+    const surf = session.surfaceById(surfaceId);
+    if (!surf || surf.role !== "toplevel") return;
+    if (surf.maximized || surf.fullscreen) return;
+    if (!edges) return;
+    const size = this.contentSize(surf);
+    const frame = this.frameBox(surf);
+    this.grab = {
+      kind: "resize",
+      session,
+      surfaceId,
+      edges,
+      originX: frame.x,
+      originY: frame.y,
+      originW: size.w,
+      originH: size.h,
+      cursorX: this.cursorX,
+      cursorY: this.cursorY,
+    };
+    this.hoverEdges = edges;
+    console.log(`[wm] begin resize surface=${surfaceId} edges=${edges}`);
+  }
+
+  /** Outer geometry border (incl. corners) used for compositor-initiated resize. */
+  private resizeEdgesAt(surf: SurfaceState, x: number, y: number): number {
+    const border = 6;
+    const frame = this.frameBox(surf);
+    const gx = frame.x;
+    const gy = frame.y;
+    const gw = frame.w;
+    const gh = frame.h;
+    if (gw < border * 2 || gh < border * 2) return 0;
+    if (x < gx - border || y < gy - border || x >= gx + gw + border || y >= gy + gh + border) {
+      return 0;
+    }
+    const onLeft = x < gx + border;
+    const onRight = x >= gx + gw - border;
+    const onTop = y < gy + border;
+    const onBottom = y >= gy + gh - border;
+    if (!onLeft && !onRight && !onTop && !onBottom) return 0;
+    // Titlebar drag owns the top edge for SSD windows.
+    if (this.usesSsd(surf) && onTop && !onLeft && !onRight) return 0;
+    let edges = 0;
+    if (onLeft) edges |= XDG_TOPLEVEL_RESIZE_EDGE_LEFT;
+    if (onRight) edges |= XDG_TOPLEVEL_RESIZE_EDGE_RIGHT;
+    if (onTop) edges |= XDG_TOPLEVEL_RESIZE_EDGE_TOP;
+    if (onBottom) edges |= XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM;
+    return edges;
+  }
+
+  private updateHoverEdges(): void {
+    if (this.grab?.kind === "resize") {
+      this.hoverEdges = this.grab.edges;
+      return;
+    }
+    if (this.grab) {
+      this.hoverEdges = 0;
+      return;
+    }
+    const hit = this.hitTest(this.cursorX, this.cursorY);
+    const top = hit ? hit.session.toplevelFor(hit.surface.id) : null;
+    if (!top || top.maximized || top.fullscreen) {
+      this.hoverEdges = 0;
+      return;
+    }
+    this.hoverEdges = this.resizeEdgesAt(top, this.cursorX, this.cursorY);
+  }
+
+  private endGrab(): void {
+    const g = this.grab;
+    this.grab = null;
+    if (!g) return;
+    if (g.kind === "resize") {
+      const surf = g.session.surfaceById(g.surfaceId);
+      if (surf) {
+        const gw = surf.geomW > 0 ? surf.geomW : surf.width;
+        const gh = surf.geomH > 0 ? surf.geomH : surf.height;
+        g.session.configureToplevel(surf, gw, gh, [
+          XDG_TOPLEVEL_STATE_ACTIVATED,
+        ]);
+      }
+    }
+    console.log(`[wm] end ${g.kind}`);
+  }
+
+  /** Place toplevel so its window-geometry top-left is at (gx, gy). */
+  private setGeometryPosition(surf: SurfaceState, gx: number, gy: number): void {
+    if (this.usesSsd(surf)) {
+      // For SSD, (x,y) is the frame origin (titlebar top-left).
+      surf.x = gx;
+      surf.y = gy;
+    } else {
+      surf.x = gx - surf.geomX;
+      surf.y = gy - surf.geomY;
+    }
+    if (surf.x11Wid != null) {
+      const contentY = surf.y + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
+      const size = this.contentSize(surf);
+      this.xwm?.configureWindow(
+        surf.x11Wid,
+        surf.x,
+        contentY,
+        size.w,
+        size.h,
+      );
+    }
+  }
+
+  usesSsd(surf: SurfaceState): boolean {
+    return surf.decoration === "server" && !surf.fullscreen;
+  }
+
+  /** Outer interactive frame in screen coords (includes SSD titlebar). */
+  frameBox(surf: SurfaceState): { x: number; y: number; w: number; h: number } {
+    const cw = surf.geomW > 0 ? surf.geomW : surf.width;
+    const ch = surf.geomH > 0 ? surf.geomH : surf.height;
+    if (this.usesSsd(surf)) {
+      return {
+        x: surf.x,
+        y: surf.y,
+        w: cw,
+        h: ch + SSD_TITLEBAR_H,
+      };
+    }
+    return {
+      x: surf.x + surf.geomX,
+      y: surf.y + surf.geomY,
+      w: cw,
+      h: ch,
+    };
+  }
+
+  contentSize(surf: SurfaceState): { w: number; h: number } {
+    return {
+      w: surf.geomW > 0 ? surf.geomW : surf.width,
+      h: surf.geomH > 0 ? surf.geomH : surf.height,
+    };
+  }
+
+  /** Apply interactive move/resize; returns true if a grab consumed the motion. */
+  private applyGrab(): boolean {
+    const g = this.grab;
+    const kms = this.kms;
+    if (!g || !kms) return false;
+    const surf = g.session.surfaceById(g.surfaceId);
+    if (!surf || !surf.mapped) {
+      this.grab = null;
+      return false;
+    }
+    const dx = this.cursorX - g.cursorX;
+    const dy = this.cursorY - g.cursorY;
+
+    if (g.kind === "move") {
+      let gx = g.originX + dx;
+      let gy = g.originY + dy;
+      const frame = this.frameBox(surf);
+      const fw = frame.w;
+      const fh = frame.h;
+      gx = Math.max(0, Math.min(kms.width - Math.min(fw, kms.width), gx));
+      gy = Math.max(0, Math.min(kms.height - Math.min(fh, kms.height), gy));
+      this.setGeometryPosition(surf, gx, gy);
+      return true;
+    }
+
+    let gx = g.originX;
+    let gy = g.originY;
+    let w = g.originW;
+    let h = g.originH;
+    if (g.edges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT) {
+      gx = g.originX + dx;
+      w = g.originW - dx;
+    }
+    if (g.edges & XDG_TOPLEVEL_RESIZE_EDGE_RIGHT) {
+      w = g.originW + dx;
+    }
+    if (g.edges & XDG_TOPLEVEL_RESIZE_EDGE_TOP) {
+      gy = g.originY + dy;
+      h = g.originH - dy;
+    }
+    if (g.edges & XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM) {
+      h = g.originH + dy;
+    }
+    const minW = Math.max(200, surf.minW || 0);
+    const minH = Math.max(100, surf.minH || 0);
+    if (w < minW) {
+      if (g.edges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT) gx -= minW - w;
+      w = minW;
+    }
+    if (h < minH) {
+      if (g.edges & XDG_TOPLEVEL_RESIZE_EDGE_TOP) gy -= minH - h;
+      h = minH;
+    }
+    if (surf.maxW > 0) w = Math.min(w, surf.maxW);
+    if (surf.maxH > 0) h = Math.min(h, surf.maxH);
+    w = Math.min(w, kms.width);
+    h = Math.min(h, kms.height);
+    gx = Math.max(0, Math.min(kms.width - w, gx));
+    gy = Math.max(0, Math.min(kms.height - h, gy));
+    this.setGeometryPosition(surf, gx, gy);
+    g.session.configureToplevel(surf, w | 0, h | 0, [
+      XDG_TOPLEVEL_STATE_RESIZING,
+      XDG_TOPLEVEL_STATE_ACTIVATED,
+    ]);
+    return true;
+  }
+
+  /** Align a maximized/fullscreen toplevel so window geometry fills the output. */
+  placeMaximized(surf: SurfaceState): void {
+    this.setGeometryPosition(surf, 0, 0);
+  }
+
+  toggleMaximized(session: ClientSession, surfaceId: number, want: boolean): void {
+    const surf = session.surfaceById(surfaceId);
+    const kms = this.kms;
+    if (!surf || !kms || surf.role !== "toplevel") return;
+    if (want && !surf.maximized) {
+      const frame = this.frameBox(surf);
+      const size = this.contentSize(surf);
+      surf.savedX = frame.x;
+      surf.savedY = frame.y;
+      surf.savedW = size.w;
+      surf.savedH = size.h;
+      surf.maximized = true;
+      surf.fullscreen = false;
+      this.placeMaximized(surf);
+      const contentH = this.usesSsd(surf)
+        ? Math.max(100, kms.height - SSD_PANEL_H - SSD_TITLEBAR_H)
+        : kms.height;
+      session.configureToplevel(surf, kms.width, contentH, [
+        XDG_TOPLEVEL_STATE_MAXIMIZED,
+        XDG_TOPLEVEL_STATE_ACTIVATED,
+      ]);
+    } else if (!want && surf.maximized) {
+      surf.maximized = false;
+      this.setGeometryPosition(surf, surf.savedX, surf.savedY);
+      session.configureToplevel(surf, surf.savedW, surf.savedH, [
+        XDG_TOPLEVEL_STATE_ACTIVATED,
+      ]);
+    }
+  }
+
+  toggleFullscreen(session: ClientSession, surfaceId: number, want: boolean): void {
+    const surf = session.surfaceById(surfaceId);
+    const kms = this.kms;
+    if (!surf || !kms || surf.role !== "toplevel") return;
+    if (want && !surf.fullscreen) {
+      if (!surf.maximized) {
+        surf.savedX = surf.x + surf.geomX;
+        surf.savedY = surf.y + surf.geomY;
+        surf.savedW = surf.geomW > 0 ? surf.geomW : surf.width;
+        surf.savedH = surf.geomH > 0 ? surf.geomH : surf.height;
+      }
+      surf.fullscreen = true;
+      this.placeMaximized(surf);
+      session.configureToplevel(surf, kms.width, kms.height, [
+        XDG_TOPLEVEL_STATE_FULLSCREEN,
+        XDG_TOPLEVEL_STATE_ACTIVATED,
+      ]);
+    } else if (!want && surf.fullscreen) {
+      surf.fullscreen = false;
+      if (surf.maximized) {
+        this.placeMaximized(surf);
+        session.configureToplevel(surf, kms.width, kms.height, [
+          XDG_TOPLEVEL_STATE_MAXIMIZED,
+          XDG_TOPLEVEL_STATE_ACTIVATED,
+        ]);
+      } else {
+        this.setGeometryPosition(surf, surf.savedX, surf.savedY);
+        session.configureToplevel(surf, surf.savedW, surf.savedH, [
+          XDG_TOPLEVEL_STATE_ACTIVATED,
+        ]);
+      }
+    }
+  }
+
+  /** Topmost mapped surface under the cursor (last in stack wins). */
+  private hitTest(
+    x: number,
+    y: number,
+  ): { session: ClientSession; surface: SurfaceState } | null {
+    // Walk top → bottom so the raised window wins.
+    for (let i = this.stack.length - 1; i >= 0; i--) {
+      const entry = this.stack[i]!;
+      entry.session.layout();
+      const tree = entry.session.paintTree(entry.surfaceId);
+      for (let j = tree.length - 1; j >= 0; j--) {
+        const surf = tree[j]!;
+        if (!surf.mapped || !surf.pixels) continue;
+        if (surf.role === "cursor") continue;
+        if (entry.session.isHidden(surf)) continue;
+        if (surf.role === "toplevel") {
+          if (this.usesSsd(surf)) {
+            const size = this.contentSize(surf);
+            const cx = surf.x;
+            const cy = surf.y + SSD_TITLEBAR_H;
+            if (
+              x >= cx &&
+              y >= cy &&
+              x < cx + size.w &&
+              y < cy + size.h
+            ) {
+              return { session: entry.session, surface: surf };
+            }
+            continue;
+          }
+          const frame = this.frameBox(surf);
+          if (
+            x >= frame.x &&
+            y >= frame.y &&
+            x < frame.x + frame.w &&
+            y < frame.y + frame.h
+          ) {
+            return { session: entry.session, surface: surf };
+          }
+          continue;
+        }
+        // Subsurfaces: full buffer bounds
+        if (
+          surf.role === "subsurface" &&
+          x >= surf.x &&
+          y >= surf.y &&
+          x < surf.x + surf.width &&
+          y < surf.y + surf.height
+        ) {
+          return { session: entry.session, surface: surf };
+        }
+      }
+    }
+    return null;
+  }
+
+  private updatePointerFocus(timeMs: number, sendMotion: boolean): void {
+    const hit = this.hitTest(this.cursorX, this.cursorY);
+    const prev = this.pointerFocus;
+    const nextId = hit?.surface.id ?? null;
+    const prevId = prev?.surfaceId ?? null;
+
+    if (prev && (nextId == null || prev.session !== hit?.session || prevId !== nextId)) {
+      prev.session.pointerLeave();
+      // Cursor is undefined after leave until the next set_cursor (xdg/wl).
+      this.clearClientCursor(prev.session);
+      this.pointerFocus = null;
+    }
+
+    if (hit) {
+      const ssdY = this.usesSsd(hit.surface) ? SSD_TITLEBAR_H : 0;
+      const localX = this.cursorX - hit.surface.x;
+      const localY = this.cursorY - hit.surface.y - ssdY;
+      if (this.pointerFocus?.surfaceId !== hit.surface.id) {
+        this.pointerFocus = { session: hit.session, surfaceId: hit.surface.id };
+        hit.session.pointerEnter(hit.surface.id, localX, localY);
+      } else if (sendMotion) {
+        hit.session.pointerMotion(timeMs, localX, localY);
+      }
+    } else {
+      // Over the desktop — no client owns the cursor.
+      this.clearClientCursor();
+    }
+  }
+
+  private clearClientCursor(session?: ClientSession): void {
+    const cc = this.clientCursor;
+    if (!cc) return;
+    if (session && cc.session !== session) return;
+    const prev = cc.session.surfaceById(cc.surfaceId);
+    if (prev?.role === "cursor") prev.role = "none";
+    this.clientCursor = null;
+  }
+
+  /** wl_pointer.set_cursor — surface is drawn at the hotspot, never as a window. */
+  setClientCursor(
+    session: ClientSession,
+    surfaceId: number,
+    hotspotX: number,
+    hotspotY: number,
+  ): void {
+    if (surfaceId === 0) {
+      this.clearClientCursor(session);
+      return;
+    }
+    // Ignore set_cursor unless this session currently has pointer focus
+    // (matches the protocol: only valid after enter, with that serial).
+    if (this.pointerFocus?.session !== session) return;
+    const surf = session.surfaceById(surfaceId);
+    if (!surf) return;
+    if (surf.role === "toplevel" || surf.role === "subsurface") return;
+    if (
+      this.clientCursor &&
+      (this.clientCursor.session !== session ||
+        this.clientCursor.surfaceId !== surfaceId)
+    ) {
+      const prev = this.clientCursor.session.surfaceById(
+        this.clientCursor.surfaceId,
+      );
+      if (prev?.role === "cursor") prev.role = "none";
+    }
+    surf.role = "cursor";
+    this.clientCursor = { session, surfaceId, hotspotX, hotspotY };
+  }
+
+  private blitArgb(
+    fb: Uint32Array,
+    pitchPx: number,
+    fbW: number,
+    fbH: number,
+    dx: number,
+    dy: number,
+    src: Uint8Array,
+    srcW: number,
+    srcH: number,
+    srcStride: number,
+    /**
+     * Window-geometry box in source coords. Inside: normal blit.
+     * Outside: blend translucent pixels (CSD soft shadows); skip opaque
+     * (often solid black margins from clients that don't use real alpha).
+     */
+    geom?: { x: number; y: number; w: number; h: number },
+  ): void {
+    // Wayland wl_shm / linux-dmabuf ARGB8888 is premultiplied.
+    const srcWords = new Uint32Array(
+      src.buffer,
+      src.byteOffset,
+      src.byteLength >>> 2,
+    );
+    const stridePx = srcStride >>> 2;
+    const gx0 = geom?.x ?? 0;
+    const gy0 = geom?.y ?? 0;
+    const gx1 = geom ? geom.x + geom.w : srcW;
+    const gy1 = geom ? geom.y + geom.h : srcH;
+
+    for (let row = 0; row < srcH; row++) {
+      const py = dy + row;
+      if (py < 0 || py >= fbH) continue;
+      let si = row * stridePx;
+      for (let col = 0; col < srcW; col++, si++) {
+        const px = dx + col;
+        if (px < 0 || px >= fbW) continue;
+        const pixel = srcWords[si]!;
+        const a = (pixel >>> 24) & 0xff;
+        if (a === 0) continue;
+        const inGeom =
+          !geom || (col >= gx0 && col < gx1 && row >= gy0 && row < gy1);
+        // Opaque pixels outside window geometry are almost always fake CSD
+        // "shadow" fill (solid black) — skip them so soft alpha shadows show.
+        if (!inGeom && a === 255) continue;
+        const di = py * pitchPx + px;
+        if (a === 255) {
+          fb[di] = pixel;
+          continue;
+        }
+        const dst = fb[di]!;
+        const inv = 255 - a;
+        const r =
+          (((pixel >>> 16) & 0xff) + ((((dst >>> 16) & 0xff) * inv) / 255)) | 0;
+        const g =
+          (((pixel >>> 8) & 0xff) + ((((dst >>> 8) & 0xff) * inv) / 255)) | 0;
+        const b = ((pixel & 0xff) + (((dst & 0xff) * inv) / 255)) | 0;
+        fb[di] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
+      }
+    }
+  }
+
+  private drawShapeCursor(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+    shape: string[],
+    hotX: number,
+    hotY: number,
+  ): void {
+    const white = 0xffffffff >>> 0;
+    const black = 0xff000000 >>> 0;
+    const ox = (this.cursorX | 0) - hotX;
+    const oy = (this.cursorY | 0) - hotY;
+    for (let row = 0; row < shape.length; row++) {
+      const line = shape[row]!;
+      const py = oy + row;
+      if (py < 0 || py >= height) continue;
+      for (let col = 0; col < line.length; col++) {
+        const ch = line[col]!;
+        if (ch === " ") continue;
+        const px = ox + col;
+        if (px < 0 || px >= width) continue;
+        fb[py * pitchPx + px] = ch === "X" ? black : white;
+      }
+    }
+  }
+
+  private fallbackCursorShape(): { shape: string[]; hotX: number; hotY: number } {
+    const g = this.grab;
+    const edges =
+      g?.kind === "resize" ? g.edges : this.hoverEdges;
+    const left = !!(edges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT);
+    const right = !!(edges & XDG_TOPLEVEL_RESIZE_EDGE_RIGHT);
+    const top = !!(edges & XDG_TOPLEVEL_RESIZE_EDGE_TOP);
+    const bottom = !!(edges & XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM);
+
+    // Diagonal corners: NW-SE (\) vs NE-SW (/)
+    if ((left && top) || (right && bottom)) {
+      return {
+        hotX: 7,
+        hotY: 7,
+        shape: [
+          "XX            ",
+          "X.X           ",
+          "X..X          ",
+          " X..X         ",
+          "  X..X        ",
+          "   X..X       ",
+          "    X..X      ",
+          "     X..X     ",
+          "      X..X    ",
+          "       X..X   ",
+          "        X..X  ",
+          "         X..X ",
+          "          X.X ",
+          "           XX ",
+        ],
+      };
+    }
+    if ((right && top) || (left && bottom)) {
+      return {
+        hotX: 7,
+        hotY: 7,
+        shape: [
+          "            XX",
+          "           X.X",
+          "          X..X",
+          "         X..X ",
+          "        X..X  ",
+          "       X..X   ",
+          "      X..X    ",
+          "     X..X     ",
+          "    X..X      ",
+          "   X..X       ",
+          "  X..X        ",
+          " X..X         ",
+          " X.X          ",
+          " XX           ",
+        ],
+      };
+    }
+    if (left || right) {
+      return {
+        hotX: 10,
+        hotY: 5,
+        shape: [
+          "     XX     ",
+          "    X..X    ",
+          "   X....X   ",
+          "XXX......XXX",
+          "X..........X",
+          "XXX......XXX",
+          "   X....X   ",
+          "    X..X    ",
+          "     XX     ",
+        ],
+      };
+    }
+    if (top || bottom) {
+      return {
+        hotX: 5,
+        hotY: 10,
+        shape: [
+          "   XXXXX   ",
+          "   X...X   ",
+          "  XX...XX  ",
+          " X.......X ",
+          "X.........X",
+          "X.........X",
+          " X.......X ",
+          "  XX...XX  ",
+          "   X...X   ",
+          "   XXXXX   ",
+        ],
+      };
+    }
+    if (g?.kind === "move") {
+      return {
+        hotX: 8,
+        hotY: 8,
+        shape: [
+          "      X      ",
+          "     X.X     ",
+          "    X...X    ",
+          "   X.....X   ",
+          "XXX.......XXX",
+          "X...........X",
+          "XXX.......XXX",
+          "   X.....X   ",
+          "    X...X    ",
+          "     X.X     ",
+          "      X      ",
+        ],
+      };
+    }
+    // Default arrow
+    return {
+      hotX: 0,
+      hotY: 0,
+      shape: [
+        "X               ",
+        "XX              ",
+        "X.X             ",
+        "X..X            ",
+        "X...X           ",
+        "X....X          ",
+        "X.....X         ",
+        "X......X        ",
+        "X.......X       ",
+        "X........X      ",
+        "X.....XXXXX     ",
+        "X..X..X         ",
+        "X.X X.X         ",
+        "XX  X.X         ",
+        "X    X.X        ",
+        "     X.X        ",
+        "      X.X       ",
+        "      XXX       ",
+      ],
+    };
+  }
+
+  private drawCursor(fb: Uint32Array, pitchPx: number, width: number, height: number): void {
+    // Always prefer the client's wl_pointer.set_cursor surface (foot's theme
+    // glyphs for arrow / resize / text / etc.). Fallback shapes only when the
+    // client hasn't set one (or the buffer isn't ready yet).
+    const cc = this.clientCursor;
+    if (cc) {
+      const surf = cc.session.surfaceById(cc.surfaceId);
+      if (surf?.pixels && surf.width > 0 && surf.height > 0) {
+        this.blitArgb(
+          fb,
+          pitchPx,
+          width,
+          height,
+          (this.cursorX | 0) - cc.hotspotX,
+          (this.cursorY | 0) - cc.hotspotY,
+          surf.pixels,
+          surf.width,
+          surf.height,
+          surf.stride,
+        );
+        cc.session.finishSurfaceFrame(surf);
+        return;
+      }
+      if (surf) cc.session.finishSurfaceFrame(surf);
+    }
+    const fbShape = this.fallbackCursorShape();
+    this.drawShapeCursor(
+      fb,
+      pitchPx,
+      width,
+      height,
+      fbShape.shape,
+      fbShape.hotX,
+      fbShape.hotY,
+    );
+  }
+
+  private async loop(): Promise<void> {
+    while (this.running) {
+      try {
+        this.composite();
+      } catch (err) {
+        console.error("[composite]", err);
+      }
+      await new Promise((r) => setTimeout(r, 16));
+    }
+  }
+
+  /** Paint wallpaper + all mapped surfaces into the KMS dumb buffer. */
+  composite(): void {
+    const kms = this.kms;
+    if (!kms) return;
+
+    if (!this.stage || this.stage.byteLength !== kms.size) {
+      this.stage = Buffer.alloc(kms.size);
+    }
+    const stage = this.stage;
+    const fb = new Uint32Array(
+      stage.buffer,
+      stage.byteOffset,
+      stage.byteLength >>> 2,
+    );
+    const pitchPx = kms.pitch >>> 2;
+
+    // Wallpaper (XRGB8888 LE) — use >>> 0 so the word is unsigned
+    const wallpaper = (0xff000000 | (24 << 16) | (90 << 8) | 110) >>> 0;
+    if (kms.pitch === kms.width * 4) {
+      fb.fill(wallpaper, 0, kms.width * kms.height);
+    } else {
+      for (let y = 0; y < kms.height; y++) {
+        fb.fill(wallpaper, y * pitchPx, y * pitchPx + kms.width);
+      }
+    }
+
+    let painted = 0;
+    try {
+      this.shell?.beginSsdFrame?.();
+      // Bottom → top stack order so raised windows paint last.
+      for (const entry of this.stack) {
+        const client = entry.session;
+        client.layout();
+        for (const surf of client.paintTree(entry.surfaceId)) {
+          if (!surf.mapped || !surf.pixels) continue;
+          // Minimized windows still need frame callbacks + buffer releases,
+          // otherwise arrays grow without bound and clients stall.
+          const hidden = client.isHidden(surf);
+
+          // Skip only if fully off-screen (CSD shadows often use negative x/y).
+          if (
+            !hidden &&
+            !(
+              surf.x >= kms.width ||
+              surf.y >= kms.height ||
+              surf.x + surf.width <= 0 ||
+              surf.y + surf.height <= 0
+            )
+          ) {
+            try {
+              // Paint from the committed pixel buffer directly — do not
+              // Buffer.from() every frame (see docs/known-issues.md).
+              const ssdY =
+                surf.role === "toplevel" && this.usesSsd(surf)
+                  ? SSD_TITLEBAR_H
+                  : 0;
+              const useGeom =
+                surf.role === "toplevel" &&
+                surf.geomW > 0 &&
+                surf.geomH > 0 &&
+                !this.usesSsd(surf);
+              this.blitArgb(
+                fb,
+                pitchPx,
+                kms.width,
+                kms.height,
+                surf.x,
+                surf.y + ssdY,
+                surf.pixels,
+                surf.width,
+                surf.height,
+                surf.stride,
+                useGeom
+                  ? {
+                      x: surf.geomX,
+                      y: surf.geomY,
+                      w: surf.geomW,
+                      h: surf.geomH,
+                    }
+                  : undefined,
+              );
+              painted++;
+            } catch (err) {
+              console.error(
+                `[composite] blit failed role=${surf.role} ${surf.width}x${surf.height}:`,
+                err,
+              );
+            }
+          }
+
+          for (const cbId of surf.frameCallbacks) {
+            client.sendCallbackDone(cbId, monotonicMs());
+            client.deleteId(cbId);
+          }
+          surf.frameCallbacks = [];
+          for (const bufId of surf.releaseBuffers) {
+            client.sendBufferRelease(bufId);
+          }
+          surf.releaseBuffers = [];
+        }
+
+        // SSD chrome in the same stack slot as the window (not a global overlay).
+        const top = client.surfaceById(entry.surfaceId);
+        if (
+          top &&
+          top.mapped &&
+          !client.isHidden(top) &&
+          this.usesSsd(top) &&
+          this.shell?.paintSsdWindow
+        ) {
+          const size = this.contentSize(top);
+          if (size.w > 0 && size.h > 0) {
+            const focused =
+              this.focusedToplevel?.session === entry.session &&
+              this.focusedToplevel.surfaceId === top.id;
+            this.shell.paintSsdWindow(fb, pitchPx, kms.width, kms.height, {
+              surfaceId: top.id,
+              x: top.x,
+              y: top.y,
+              contentW: size.w,
+              contentH: size.h,
+              title: top.title || "Window",
+              focused,
+            });
+          }
+        }
+      }
+    } finally {
+      try {
+        this.ssdWindows = this.collectSsdWindows();
+        // Fallback if shell only implements the bulk paintSsd API.
+        if (!this.shell?.paintSsdWindow && this.shell?.paintSsd) {
+          this.shell.paintSsd(
+            fb,
+            pitchPx,
+            kms.width,
+            kms.height,
+            this.ssdWindows,
+          );
+        }
+        this.shell?.paint(fb, pitchPx, kms.width, kms.height);
+      } catch (err) {
+        console.error("[shell] paint:", err);
+      }
+      this.drawCursor(fb, pitchPx, kms.width, kms.height);
+      // Always flush — a mid-frame blit throw used to skip present entirely.
+      flushMmap(kms.map, stage, kms.size);
+      // Parallels VIRTUAL DRM does not pick up dumb-buffer dirties until SetCrtc
+      // is re-applied (or a page flip). Without this, CPU readback looks correct
+      // while prlctl capture / the display stay on the last modeset image.
+      try {
+        presentKms(kms);
+      } catch (err) {
+        console.error("[composite] presentKms:", err);
+      }
+    }
+
+    if (painted > 0 && painted !== this.lastPainted) {
+      console.log(`[composite] painted ${painted} surfaces`);
+      this.lastPainted = painted;
+    }
+  }
+}
+
+function monotonicMs(): number {
+  const [s, ns] = process.hrtime();
+  return s * 1000 + Math.floor(ns / 1e6);
+}
+
+class ClientSession {
+  private objects = new Map<number, WlObject>();
+  private buf = Buffer.alloc(0);
+  private pendingFds: number[] = [];
+  private serial = 1;
+  /** Server-allocated object ids (Wayland server range). */
+  private nextServerId = 0xff000000;
+  private keyboardId: number | null = null;
+  private pointerId: number | null = null;
+  private focusedSurfaceId: number | null = null;
+  private pointerSurfaceId: number | null = null;
+  private pressedKeys = new Set<number>();
+  /** Bound wl_data_device object ids for this client. */
+  private dataDeviceIds = new Set<number>();
+
+  constructor(
+    private readonly server: CompositorServer,
+    private readonly conn: WaylandClientConn,
+  ) {
+    this.objects.set(WL_DISPLAY_ID, {
+      id: WL_DISPLAY_ID,
+      iface: "wl_display",
+      version: 1,
+    });
+    console.log("[client] connected");
+    conn.on("message", (chunk: WaylandChunk) => this.onChunk(chunk));
+  }
+
+  surfaces(): SurfaceState[] {
+    const out: SurfaceState[] = [];
+    for (const obj of this.objects.values()) {
+      if (obj.iface === "wl_surface" && obj.data?.surface) {
+        out.push(obj.data.surface as SurfaceState);
+      }
+    }
+    return out;
+  }
+
+  surfaceById(id: number): SurfaceState | null {
+    const obj = this.objects.get(id);
+    return (obj?.data?.surface as SurfaceState) ?? null;
+  }
+
+  /** Walk up to the toplevel for a surface (itself if already toplevel). */
+  toplevelFor(surfaceId: number): SurfaceState | null {
+    let s = this.surfaceById(surfaceId);
+    while (s && s.role === "subsurface" && s.parentId != null) {
+      s = this.surfaceById(s.parentId);
+    }
+    return s && s.role === "toplevel" ? s : null;
+  }
+
+  isHidden(surf: SurfaceState): boolean {
+    const top = this.toplevelFor(surf.id) ?? (surf.role === "toplevel" ? surf : null);
+    return !!top?.minimized;
+  }
+
+  configureToplevel(
+    surface: SurfaceState,
+    width: number,
+    height: number,
+    states: number[],
+  ): void {
+    if (surface.xdgToplevelId == null || surface.xdgSurfaceId == null) return;
+    const buf = Buffer.alloc(states.length * 4);
+    for (let i = 0; i < states.length; i++) {
+      buf.writeUInt32LE(states[i]!, i * 4);
+    }
+    this.send(surface.xdgToplevelId, EV.xdg_toplevel_configure, (b) => {
+      b.int(width).int(height).array(buf);
+    });
+    const serial = this.serial++;
+    this.send(surface.xdgSurfaceId, EV.xdg_surface_configure, (b) =>
+      b.uint(serial),
+    );
+  }
+
+  requestClose(surface: SurfaceState): void {
+    if (surface.x11Wid != null) {
+      this.server.getXwm()?.closeWindow(surface.x11Wid);
+      return;
+    }
+    if (surface.xdgToplevelId == null) return;
+    this.send(surface.xdgToplevelId, EV.xdg_toplevel_close, () => {});
+  }
+
+  private handleXwaylandShell(opcode: number, r: MessageReader): void {
+    if (opcode === OP.xwayland_shell_destroy) {
+      // ok
+    } else if (opcode === OP.xwayland_shell_get_xwayland_surface) {
+      const id = r.newId();
+      const surfaceId = r.object();
+      this.objects.set(id, {
+        id,
+        iface: "xwayland_surface_v1",
+        version: 1,
+        data: { wlSurfaceId: surfaceId, pendingSerial: null as bigint | null },
+      });
+      const surf = this.surfaceById(surfaceId);
+      if (surf) surf.xwaylandPending = true;
+      console.log(
+        `[xwayland_shell] get_xwayland_surface id=${id} wl_surface=${surfaceId}`,
+      );
+      // Serial may already be waiting on the XWM side.
+      this.server.tryPairOrphanXwaylandSurface(this, surfaceId);
+    }
+  }
+
+  private handleXwaylandSurface(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    if (opcode === OP.xwayland_surface_destroy) {
+      this.destroyObject(obj.id);
+    } else if (opcode === OP.xwayland_surface_set_serial) {
+      const lo = r.uint();
+      const hi = r.uint();
+      const serial = (BigInt(hi) << 32n) | BigInt(lo);
+      obj.data!.pendingSerial = serial;
+      console.log(
+        `[xwayland_shell] set_serial id=${obj.id} surface=${obj.data?.wlSurfaceId} serial=${serial}`,
+      );
+      // Apply immediately as well as on commit. Xwayland issues set_serial+commit
+      // back-to-back; applying here closes the race with the X11 ClientMessage
+      // and avoids missing buffer-less association commits.
+      if (serial !== 0n && obj.data?.wlSurfaceId != null) {
+        this.server.noteXwaylandSerial(
+          this,
+          obj.data.wlSurfaceId as number,
+          serial,
+        );
+        obj.data.pendingSerial = null;
+      }
+    } else {
+      console.warn(
+        `[xwayland_shell] unhandled xwayland_surface opcode=${opcode} id=${obj.id}`,
+      );
+    }
+  }
+
+  /**
+   * Fixed-size windows (Xwayland rootful) set min==max>0.
+   * Do not resize on min alone — foot and others send a tiny minimum.
+   */
+  private maybeConfigureFixedSize(surface: SurfaceState): void {
+    const { minW, minH, maxW, maxH } = surface;
+    if (minW <= 0 || minH <= 0 || maxW <= 0 || maxH <= 0) return;
+    if (minW !== maxW || minH !== maxH) return;
+    this.configureToplevel(surface, minW, minH, [XDG_TOPLEVEL_STATE_ACTIVATED]);
+  }
+
+  /** Parent-then-children paint order for one toplevel tree. */
+  paintTree(toplevelId: number): SurfaceState[] {
+    const byId = new Map<number, SurfaceState>();
+    for (const s of this.surfaces()) byId.set(s.id, s);
+    const out: SurfaceState[] = [];
+    const visit = (id: number) => {
+      const s = byId.get(id);
+      if (!s || s.role === "cursor") return;
+      out.push(s);
+      for (const childId of s.children) visit(childId);
+    };
+    visit(toplevelId);
+    return out;
+  }
+
+  /** Parent-then-children paint order across all toplevels (insertion order). */
+  paintOrder(): SurfaceState[] {
+    const out: SurfaceState[] = [];
+    for (const s of this.surfaces()) {
+      if (s.role === "toplevel") out.push(...this.paintTree(s.id));
+    }
+    return out;
+  }
+
+  layout(): void {
+    const byId = new Map<number, SurfaceState>();
+    for (const s of this.surfaces()) byId.set(s.id, s);
+
+    const abs = (s: SurfaceState): { x: number; y: number } => {
+      if (s.role !== "subsurface" || s.parentId == null) {
+        return { x: s.x, y: s.y };
+      }
+      const parent = byId.get(s.parentId);
+      if (!parent) return { x: s.subX, y: s.subY };
+      const p = abs(parent);
+      return { x: p.x + s.subX, y: p.y + s.subY };
+    };
+
+    for (const s of this.surfaces()) {
+      if (s.role === "subsurface") {
+        const p = abs(s);
+        s.x = p.x;
+        s.y = p.y;
+      }
+    }
+  }
+
+  primaryToplevelSurfaceId(): number | null {
+    for (const s of this.surfaces()) {
+      if (s.role === "toplevel" && s.mapped) return s.id;
+    }
+    return null;
+  }
+
+  /** Fire frame callbacks + buffer releases for a surface (e.g. cursor). */
+  finishSurfaceFrame(surf: SurfaceState): void {
+    for (const cbId of surf.frameCallbacks) {
+      this.sendCallbackDone(cbId, monotonicMs());
+      this.deleteId(cbId);
+    }
+    surf.frameCallbacks = [];
+    for (const bufId of surf.releaseBuffers) {
+      this.sendBufferRelease(bufId);
+    }
+    surf.releaseBuffers = [];
+  }
+
+  getBuffer(id: number): BufferState | null {
+    const obj = this.objects.get(id);
+    return (obj?.data?.buffer as BufferState) ?? null;
+  }
+
+  getPool(id: number): PoolState | null {
+    const obj = this.objects.get(id);
+    return (obj?.data?.pool as PoolState) ?? null;
+  }
+
+  private releasePool(pool: PoolState, force: boolean): void {
+    if (!force) {
+      pool.refCount = Math.max(0, pool.refCount - 1);
+      if (pool.refCount > 0 || !pool.destroyed) return;
+    }
+    if (!pool.map) return;
+    try {
+      munmapShm(pool.map, pool.size);
+    } catch {
+      // ok
+    }
+    try {
+      fs.closeSync(pool.fd);
+    } catch {
+      // ok
+    }
+    pool.map = null;
+    pool.destroyed = true;
+    pool.refCount = 0;
+  }
+
+  destroy(): void {
+    for (const obj of this.objects.values()) {
+      if (obj.iface === "wl_shm_pool" && obj.data?.pool) {
+        const pool = obj.data.pool as PoolState;
+        this.releasePool(pool, true);
+      } else if (obj.iface === "wl_buffer") {
+        const buf = obj.data?.buffer as BufferState | undefined;
+        if (buf?.kind === "shm") this.releasePool(buf.pool, false);
+        if (buf?.kind === "dmabuf") closeDmabufPlanes(buf.planes);
+      } else if (obj.iface === "zwp_linux_buffer_params_v1") {
+        const params = obj.data?.params as DmabufParamsState | undefined;
+        if (params && !params.created) closeDmabufPlanes(params.planes);
+      }
+    }
+    for (const fd of this.pendingFds) {
+      try {
+        closeFd(fd);
+      } catch {
+        // ok
+      }
+    }
+    this.pendingFds = [];
+    this.objects.clear();
+    this.conn.close();
+  }
+
+  keyboardEnter(surfaceId: number): void {
+    if (this.keyboardId == null) return;
+    if (this.focusedSurfaceId === surfaceId) return;
+    if (this.focusedSurfaceId != null) {
+      const serial = this.serial++;
+      this.send(this.keyboardId, EV.keyboard_leave, (b) => {
+        b.uint(serial).object(this.focusedSurfaceId!);
+      });
+    }
+    this.focusedSurfaceId = surfaceId;
+    const keys = Buffer.alloc(this.pressedKeys.size * 4);
+    let i = 0;
+    for (const k of this.pressedKeys) {
+      keys.writeUInt32LE(k, i);
+      i += 4;
+    }
+    const serial = this.serial++;
+    this.send(this.keyboardId, EV.keyboard_enter, (b) => {
+      b.uint(serial).object(surfaceId).array(keys);
+    });
+    this.send(this.keyboardId, EV.keyboard_modifiers, (b) => {
+      b.uint(serial).uint(0).uint(0).uint(0).uint(0);
+    });
+    console.log(`[seat] keyboard enter surface=${surfaceId}`);
+  }
+
+  keyboardLeave(): void {
+    if (this.keyboardId == null || this.focusedSurfaceId == null) return;
+    const serial = this.serial++;
+    this.send(this.keyboardId, EV.keyboard_leave, (b) => {
+      b.uint(serial).object(this.focusedSurfaceId!);
+    });
+    this.focusedSurfaceId = null;
+  }
+
+  keyboardKey(ev: EvdevKeyEvent): void {
+    if (this.keyboardId == null || this.focusedSurfaceId == null) return;
+    if (ev.value === 1) this.pressedKeys.add(ev.code);
+    else if (ev.value === 0) this.pressedKeys.delete(ev.code);
+    // value 2 = repeat — still send as pressed
+    const state =
+      ev.value === 0
+        ? WL_KEYBOARD_KEY_STATE_RELEASED
+        : WL_KEYBOARD_KEY_STATE_PRESSED;
+    const serial = this.serial++;
+    this.send(this.keyboardId, EV.keyboard_key, (b) => {
+      b.uint(serial).uint(ev.timeMs >>> 0).uint(ev.code).uint(state);
+    });
+  }
+
+  pointerEnter(surfaceId: number, sx: number, sy: number): void {
+    if (this.pointerId == null) return;
+    if (this.pointerSurfaceId === surfaceId) {
+      // Already entered (e.g. ghost-fed Xwayland) — refresh position.
+      this.send(this.pointerId, EV.pointer_motion, (b) => {
+        b.uint(monotonicMs()).fixed(sx).fixed(sy);
+      });
+      this.send(this.pointerId, EV.pointer_frame, () => {});
+      return;
+    }
+    if (this.pointerSurfaceId != null) {
+      const serial = this.serial++;
+      this.send(this.pointerId, EV.pointer_leave, (b) => {
+        b.uint(serial).object(this.pointerSurfaceId!);
+      });
+    }
+    this.pointerSurfaceId = surfaceId;
+    const serial = this.serial++;
+    this.send(this.pointerId, EV.pointer_enter, (b) => {
+      b.uint(serial).object(surfaceId).fixed(sx).fixed(sy);
+    });
+    this.send(this.pointerId, EV.pointer_frame, () => {});
+  }
+
+  pointerLeave(): void {
+    if (this.pointerId == null || this.pointerSurfaceId == null) return;
+    const serial = this.serial++;
+    this.send(this.pointerId, EV.pointer_leave, (b) => {
+      b.uint(serial).object(this.pointerSurfaceId!);
+    });
+    this.send(this.pointerId, EV.pointer_frame, () => {});
+    this.pointerSurfaceId = null;
+  }
+
+  pointerMotion(timeMs: number, sx: number, sy: number): void {
+    if (this.pointerId == null || this.pointerSurfaceId == null) return;
+    this.send(this.pointerId, EV.pointer_motion, (b) => {
+      b.uint(timeMs >>> 0).fixed(sx).fixed(sy);
+    });
+    this.send(this.pointerId, EV.pointer_frame, () => {});
+  }
+
+  pointerButton(ev: EvdevPointerButton): void {
+    if (this.pointerId == null || this.pointerSurfaceId == null) return;
+    const state =
+      ev.value === 0
+        ? WL_POINTER_BUTTON_STATE_RELEASED
+        : WL_POINTER_BUTTON_STATE_PRESSED;
+    const serial = this.serial++;
+    this.send(this.pointerId, EV.pointer_button, (b) => {
+      b.uint(serial).uint(ev.timeMs >>> 0).uint(ev.code).uint(state);
+    });
+    this.send(this.pointerId, EV.pointer_frame, () => {});
+  }
+
+  pointerAxis(ev: EvdevPointerAxis): void {
+    if (this.pointerId == null || this.pointerSurfaceId == null) return;
+    // Linux wheel up (+) → Wayland axis negative (scroll up)
+    this.send(this.pointerId, EV.pointer_axis, (b) => {
+      b.uint(ev.timeMs >>> 0)
+        .uint(WL_POINTER_AXIS_VERTICAL_SCROLL)
+        .fixed(-ev.value * 10);
+    });
+    this.send(this.pointerId, EV.pointer_frame, () => {});
+  }
+
+  private onChunk(chunk: WaylandChunk): void {
+    this.buf = Buffer.concat([this.buf, chunk.data]);
+    this.pendingFds.push(...chunk.fds);
+
+    while (this.buf.length >= WL_HEADER_SIZE) {
+      const header = decodeHeader(this.buf);
+      if (header.size < WL_HEADER_SIZE || this.buf.length < header.size) break;
+      const msg = this.buf.subarray(0, header.size);
+      this.buf = this.buf.subarray(header.size);
+
+      // Pull ancillary fds for messages that carry them.
+      const fdsForMsg: number[] = [];
+      const obj = this.objects.get(header.objectId);
+      if (
+        obj?.iface === "wl_shm" &&
+        header.opcode === OP.shm_create_pool &&
+        this.pendingFds.length > 0
+      ) {
+        fdsForMsg.push(this.pendingFds.shift()!);
+      } else if (
+        obj?.iface === "zwp_linux_buffer_params_v1" &&
+        header.opcode === OP.linux_buffer_params_add &&
+        this.pendingFds.length > 0
+      ) {
+        fdsForMsg.push(this.pendingFds.shift()!);
+      } else if (
+        obj?.iface === "wl_data_offer" &&
+        header.opcode === OP.data_offer_receive &&
+        this.pendingFds.length > 0
+      ) {
+        fdsForMsg.push(this.pendingFds.shift()!);
+      } else if (
+        obj?.iface === "wl_drm" &&
+        header.opcode === OP.drm_create_prime_buffer &&
+        this.pendingFds.length > 0
+      ) {
+        fdsForMsg.push(this.pendingFds.shift()!);
+      }
+
+      try {
+        this.dispatch(header.objectId, header.opcode, msg, fdsForMsg);
+      } catch (err) {
+        console.error("dispatch error", err);
+      }
+    }
+  }
+
+  private dispatch(
+    objectId: number,
+    opcode: number,
+    msg: Buffer,
+    fds: number[],
+  ): void {
+    const obj = this.objects.get(objectId);
+    if (!obj) {
+      console.warn(
+        `[wl] unknown object id=${objectId} opcode=${opcode} size=${msg.length}`,
+      );
+      return;
+    }
+    const r = new MessageReader(msg, fds);
+
+    switch (obj.iface) {
+      case "wl_display":
+        this.handleDisplay(opcode, r);
+        break;
+      case "wl_registry":
+        this.handleRegistry(opcode, r);
+        break;
+      case "wl_compositor":
+        this.handleCompositor(opcode, r);
+        break;
+      case "wl_shm":
+        this.handleShm(opcode, r);
+        break;
+      case "wl_shm_pool":
+        this.handleShmPool(obj, opcode, r);
+        break;
+      case "wl_surface":
+        this.handleSurface(obj, opcode, r);
+        break;
+      case "wl_buffer":
+        if (opcode === OP.buffer_destroy) this.destroyObject(objectId);
+        break;
+      case "wl_region":
+        // ignore add/destroy geometry for MVP
+        if (opcode === OP.region_destroy) this.destroyObject(objectId);
+        break;
+      case "wl_subcompositor":
+        this.handleSubcompositor(opcode, r);
+        break;
+      case "wl_subsurface":
+        this.handleSubsurface(obj, opcode, r);
+        break;
+      case "wl_seat":
+        this.handleSeat(obj, opcode, r);
+        break;
+      case "wl_pointer":
+        this.handlePointer(opcode, r);
+        break;
+      case "wl_keyboard":
+      case "wl_touch":
+      case "wl_output":
+        break;
+      case "wl_data_device_manager":
+        this.handleDataDeviceManager(opcode, r);
+        break;
+      case "wl_data_device":
+        this.handleDataDevice(obj, opcode, r);
+        break;
+      case "wl_data_source":
+        this.handleDataSource(obj, opcode, r);
+        break;
+      case "wl_data_offer":
+        this.handleDataOffer(obj, opcode, r);
+        break;
+      case "zxdg_decoration_manager_v1":
+        this.handleXdgDecorationManager(opcode, r);
+        break;
+      case "zxdg_toplevel_decoration_v1":
+        this.handleXdgToplevelDecoration(obj, opcode, r);
+        break;
+      case "xdg_wm_base":
+        this.handleXdgWmBase(opcode, r);
+        break;
+      case "xdg_surface":
+        this.handleXdgSurface(obj, opcode, r);
+        break;
+      case "xdg_toplevel":
+        this.handleXdgToplevel(obj, opcode, r);
+        break;
+      case "xdg_positioner":
+        break;
+      case "zwp_linux_dmabuf_v1":
+        this.handleLinuxDmabuf(opcode, r);
+        break;
+      case "zwp_linux_buffer_params_v1":
+        this.handleLinuxBufferParams(obj, opcode, r);
+        break;
+      case "zwp_linux_dmabuf_feedback_v1":
+        if (opcode === OP.linux_dmabuf_feedback_destroy) {
+          this.destroyObject(objectId);
+        }
+        break;
+      case "wl_drm":
+        this.handleDrm(obj, opcode, r);
+        break;
+      case "xwayland_shell_v1":
+        this.handleXwaylandShell(opcode, r);
+        break;
+      case "xwayland_surface_v1":
+        this.handleXwaylandSurface(obj, opcode, r);
+        break;
+      default:
+        console.warn(
+          `[wl] unhandled ${obj.iface} id=${objectId} opcode=${opcode}`,
+        );
+        break;
+    }
+  }
+
+  private handleDisplay(opcode: number, r: MessageReader): void {
+    if (opcode === OP.display_sync) {
+      const cbId = r.newId();
+      this.objects.set(cbId, { id: cbId, iface: "wl_callback", version: 1 });
+      this.sendCallbackDone(cbId, this.serial++);
+      this.deleteId(cbId);
+    } else if (opcode === OP.display_get_registry) {
+      const id = r.newId();
+      this.objects.set(id, { id, iface: "wl_registry", version: 1 });
+      for (const g of this.server.getGlobals()) {
+        this.send(id, EV.registry_global, (b) => {
+          b.uint(g.name).string(g.iface).uint(g.version);
+        });
+      }
+    }
+  }
+
+  private handleRegistry(opcode: number, r: MessageReader): void {
+    if (opcode !== OP.registry_bind) return;
+    const name = r.uint();
+    // wl_registry.bind in v1: name, id — but since v2 also interface string + version
+    // Clients send: name, interface (string), version, id (new_id)
+    const iface = r.string()!;
+    const version = r.uint();
+    const id = r.newId();
+    void name;
+    this.objects.set(id, { id, iface, version });
+
+    if (iface === "wl_shm") {
+      this.send(id, EV.shm_format, (b) => b.uint(WL_SHM_FORMAT_ARGB8888));
+      this.send(id, EV.shm_format, (b) => b.uint(WL_SHM_FORMAT_XRGB8888));
+    } else if (iface === "zwp_linux_dmabuf_v1") {
+      this.sendDmabufFormats(id);
+    } else if (iface === "wl_seat") {
+      // Do not send seat_name — some clients (weston-simple-shm) lack that listener.
+      const caps = this.server.getKeymap()
+        ? WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD
+        : WL_SEAT_CAPABILITY_POINTER;
+      this.send(id, EV.seat_capabilities, (b) => b.uint(caps));
+    } else if (iface === "wl_output") {
+      this.sendOutputEvents(id);
+    } else if (iface === "wl_data_device_manager") {
+      // no immediate events
+    } else if (iface === "wl_drm") {
+      this.sendDrmBind(id);
+    } else if (iface === "xwayland_shell_v1") {
+      console.log(`[xwayland_shell] bound id=${id}`);
+    }
+  }
+
+  /** wl_drm.bind — tell Mesa/Xwayland which render node to open. */
+  private sendDrmBind(id: number): void {
+    const path =
+      this.server.getDmabufFeedback()?.device.path ?? "/dev/dri/renderD128";
+    this.send(id, EV.drm_device, (b) => b.string(path));
+    this.send(id, EV.drm_format, (b) => b.uint(DRM_FORMAT_ARGB8888));
+    this.send(id, EV.drm_format, (b) => b.uint(DRM_FORMAT_XRGB8888));
+    this.send(id, EV.drm_capabilities, (b) => b.uint(WL_DRM_CAPABILITY_PRIME));
+    console.log(`[drm] bound wl_drm id=${id} device=${path}`);
+  }
+
+  private handleDrm(obj: WlObject, opcode: number, r: MessageReader): void {
+    if (opcode === OP.drm_authenticate) {
+      r.uint(); // magic — render nodes need no auth
+      this.send(obj.id, EV.drm_authenticated, () => {});
+    } else if (opcode === OP.drm_create_buffer) {
+      // Legacy GEM-name buffers — unused when PRIME/dmabuf works.
+      const bufferId = r.newId();
+      r.uint();
+      r.int();
+      r.int();
+      r.uint();
+      r.uint();
+      this.objects.set(bufferId, {
+        id: bufferId,
+        iface: "wl_buffer",
+        version: 1,
+        data: {
+          buffer: {
+            kind: "shm",
+            poolId: 0,
+            pool: {
+              fd: -1,
+              size: 0,
+              map: null,
+              refCount: 0,
+              destroyed: true,
+            },
+            offset: 0,
+            width: 0,
+            height: 0,
+            stride: 0,
+            format: 0,
+          } satisfies ShmBufferState,
+        },
+      });
+      console.warn(`[drm] create_buffer unsupported id=${bufferId}`);
+    } else if (opcode === OP.drm_create_planar_buffer) {
+      const bufferId = r.newId();
+      r.uint();
+      r.int();
+      r.int();
+      r.uint();
+      for (let i = 0; i < 6; i++) r.int();
+      this.objects.set(bufferId, {
+        id: bufferId,
+        iface: "wl_buffer",
+        version: 1,
+      });
+      console.warn(`[drm] create_planar_buffer unsupported id=${bufferId}`);
+    } else if (opcode === OP.drm_create_prime_buffer) {
+      // Same shape as a single-plane dmabuf — reuse import path.
+      const bufferId = r.newId();
+      const fd = r.fd();
+      const width = r.int();
+      const height = r.int();
+      const format = r.uint();
+      const offset0 = r.int();
+      const stride0 = r.int();
+      r.int();
+      r.int();
+      r.int();
+      r.int(); // plane 1/2 offsets/strides unused for RGB
+      const buffer: DmabufBuffer = {
+        kind: "dmabuf",
+        width,
+        height,
+        format,
+        flags: 0,
+        planes: [
+          {
+            fd,
+            offset: offset0,
+            stride: stride0,
+            modifierHi: 0,
+            modifierLo: 0,
+          },
+        ],
+      };
+      this.objects.set(bufferId, {
+        id: bufferId,
+        iface: "wl_buffer",
+        version: 1,
+        data: { buffer },
+      });
+      console.log(
+        `[drm] create_prime_buffer id=${bufferId} ${width}x${height} fmt=0x${format.toString(16)}`,
+      );
+    }
+  }
+
+  private sendDmabufFormats(dmabufId: number): void {
+    for (const format of [DRM_FORMAT_ARGB8888, DRM_FORMAT_XRGB8888]) {
+      this.send(dmabufId, EV.linux_dmabuf_format, (b) => b.uint(format));
+      // Explicit linear + implicit/invalid — Mesa/Xwayland expect linear.
+      this.send(dmabufId, EV.linux_dmabuf_modifier, (b) => {
+        b.uint(format).uint(0).uint(0);
+      });
+      this.send(dmabufId, EV.linux_dmabuf_modifier, (b) => {
+        b.uint(format)
+          .uint(DRM_FORMAT_MOD_INVALID_HI)
+          .uint(DRM_FORMAT_MOD_INVALID_LO);
+      });
+    }
+  }
+
+  private sendOutputEvents(id: number): void {
+    const kms = this.server.getKms();
+    this.send(id, EV.output_geometry, (b) => {
+      b.int(0)
+        .int(0)
+        .int(0)
+        .int(0)
+        .int(0) // unknown subpixel
+        .string("Moire")
+        .string("Virtual")
+        .int(0); // transform normal
+    });
+    this.send(id, EV.output_mode, (b) => {
+      b.uint(WL_OUTPUT_MODE_CURRENT)
+        .int(kms.width)
+        .int(kms.height)
+        .int(60_000); // mHz
+    });
+    this.send(id, EV.output_scale, (b) => b.int(1));
+    this.send(id, EV.output_done, () => {});
+  }
+
+  private handleSubcompositor(opcode: number, r: MessageReader): void {
+    if (opcode === OP.subcompositor_destroy) return;
+    if (opcode !== OP.subcompositor_get_subsurface) return;
+    const id = r.newId();
+    const surfaceId = r.object();
+    const parentId = r.object();
+    const surfObj = this.objects.get(surfaceId);
+    const parentObj = this.objects.get(parentId);
+    const surface = surfObj?.data?.surface as SurfaceState | undefined;
+    const parent = parentObj?.data?.surface as SurfaceState | undefined;
+    if (surface && parent) {
+      surface.role = "subsurface";
+      surface.parentId = parentId;
+      surface.subX = 0;
+      surface.subY = 0;
+      if (!parent.children.includes(surfaceId)) parent.children.push(surfaceId);
+    }
+    this.objects.set(id, {
+      id,
+      iface: "wl_subsurface",
+      version: 1,
+      data: { surfaceId },
+    });
+  }
+
+  private handleSubsurface(obj: WlObject, opcode: number, r: MessageReader): void {
+    const surfaceId = obj.data?.surfaceId as number | undefined;
+    const surface = surfaceId
+      ? (this.objects.get(surfaceId)?.data?.surface as SurfaceState | undefined)
+      : undefined;
+    if (opcode === OP_SUBSURFACE.set_position) {
+      const x = r.int();
+      const y = r.int();
+      if (surface) {
+        surface.subX = x;
+        surface.subY = y;
+      }
+    } else if (
+      opcode === OP_SUBSURFACE.place_above ||
+      opcode === OP_SUBSURFACE.place_below
+    ) {
+      const siblingId = r.object();
+      if (surface && surface.parentId != null && surfaceId != null) {
+        this.reorderSubsurface(
+          surface.parentId,
+          surfaceId,
+          siblingId,
+          opcode === OP_SUBSURFACE.place_above,
+        );
+      }
+    } else if (opcode === OP_SUBSURFACE.destroy) {
+      this.destroyObject(obj.id);
+    }
+    // set_sync / set_desync ignored — treat as desync (independent commits)
+  }
+
+  /** Reorder a subsurface in its parent's children list (z-order). */
+  private reorderSubsurface(
+    parentId: number,
+    childId: number,
+    siblingId: number,
+    above: boolean,
+  ): void {
+    const parent = this.objects.get(parentId)?.data?.surface as
+      | SurfaceState
+      | undefined;
+    if (!parent) return;
+    const kids = parent.children.filter((id) => id !== childId);
+    if (siblingId === parentId) {
+      // Relative to parent surface: above → top of stack, below → bottom
+      if (above) kids.push(childId);
+      else kids.unshift(childId);
+    } else {
+      const idx = kids.indexOf(siblingId);
+      if (idx < 0) {
+        kids.push(childId);
+      } else if (above) {
+        kids.splice(idx + 1, 0, childId);
+      } else {
+        kids.splice(idx, 0, childId);
+      }
+    }
+    parent.children = kids;
+  }
+
+  private handleSeat(obj: WlObject, opcode: number, r: MessageReader): void {
+    // Child objects inherit the version the client bound on wl_seat.
+    const ver = obj.version;
+    if (opcode === OP.seat_get_pointer) {
+      const id = r.newId();
+      this.objects.set(id, { id, iface: "wl_pointer", version: ver });
+      this.pointerId = id;
+    } else if (opcode === OP.seat_get_keyboard) {
+      const id = r.newId();
+      this.objects.set(id, { id, iface: "wl_keyboard", version: ver });
+      this.keyboardId = id;
+      const keymap = this.server.getKeymap();
+      if (keymap) {
+        // format, fd, size — fd is ancillary only
+        this.send(id, EV.keyboard_keymap, (b) => {
+          b.uint(WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)
+            .fd(keymap.fd)
+            .uint(keymap.size);
+        });
+      }
+      // repeat_info is since v4 — only send if the client bound that version.
+      if (ver >= 4) {
+        this.send(id, EV.keyboard_repeat_info, (b) => b.int(40).int(400));
+      }
+    } else if (opcode === OP.seat_get_touch) {
+      const id = r.newId();
+      this.objects.set(id, { id, iface: "wl_touch", version: ver });
+    } else if (opcode === OP.seat_release) {
+      // ok
+    }
+  }
+
+  private handlePointer(opcode: number, r: MessageReader): void {
+    if (opcode === OP.pointer_set_cursor) {
+      r.uint(); // serial
+      const surfaceId = r.object();
+      const hotspotX = r.int();
+      const hotspotY = r.int();
+      this.server.setClientCursor(this, surfaceId, hotspotX, hotspotY);
+    } else if (opcode === OP.pointer_release) {
+      if (this.pointerId != null) this.destroyObject(this.pointerId);
+      this.pointerId = null;
+      this.pointerSurfaceId = null;
+    }
+  }
+
+  private handleDataDeviceManager(opcode: number, r: MessageReader): void {
+    if (opcode === OP.data_device_manager_create_data_source) {
+      const id = r.newId();
+      this.objects.set(id, {
+        id,
+        iface: "wl_data_source",
+        version: 3,
+        data: { source: { mimeTypes: [] } satisfies DataSourceState },
+      });
+    } else if (opcode === OP.data_device_manager_get_data_device) {
+      const id = r.newId();
+      r.object(); // seat
+      this.objects.set(id, { id, iface: "wl_data_device", version: 3 });
+      this.dataDeviceIds.add(id);
+      // Announce current seat selection to the new device.
+      this.sendSelection(this.server.getSelection(), id);
+    }
+  }
+
+  private handleDataSource(obj: WlObject, opcode: number, r: MessageReader): void {
+    const source = obj.data?.source as DataSourceState | undefined;
+    if (opcode === OP.data_source_offer) {
+      const mime = r.string();
+      if (mime && source && !source.mimeTypes.includes(mime)) {
+        source.mimeTypes.push(mime);
+      }
+    } else if (opcode === OP.data_source_set_actions) {
+      r.uint(); // dnd actions — clipboard path ignores
+    } else if (opcode === OP.data_source_destroy) {
+      if (
+        this.server.getSelection()?.sourceSession === this &&
+        this.server.getSelection()?.sourceId === obj.id
+      ) {
+        this.server.clearSelection("cancelled");
+      }
+      this.destroyObject(obj.id);
+    }
+  }
+
+  private handleDataDevice(obj: WlObject, opcode: number, r: MessageReader): void {
+    if (opcode === OP.data_device_start_drag) {
+      // DnD not implemented yet — cancel any offered source.
+      const sourceId = r.object();
+      r.object(); // origin
+      r.object(); // icon
+      r.uint(); // serial
+      if (sourceId) this.sendDataSourceCancelled(sourceId);
+      console.log("[clipboard] start_drag ignored (DnD not implemented)");
+    } else if (opcode === OP.data_device_set_selection) {
+      const sourceId = r.object();
+      const serial = r.uint();
+      this.server.setSelection(this, sourceId || null, serial);
+    } else if (opcode === OP.data_device_release) {
+      this.dataDeviceIds.delete(obj.id);
+      this.destroyObject(obj.id);
+    }
+  }
+
+  private handleDataOffer(obj: WlObject, opcode: number, r: MessageReader): void {
+    const offer = obj.data?.offer as DataOfferState | undefined;
+    if (opcode === OP.data_offer_accept) {
+      r.uint(); // serial
+      r.string(); // mime (nullable)
+    } else if (opcode === OP.data_offer_receive) {
+      const mime = r.string() ?? "";
+      const fd = r.fd();
+      if (!offer) {
+        try {
+          closeFd(fd);
+        } catch {
+          // ok
+        }
+        return;
+      }
+      // Only the seat selection is supported; ignore dangling drag offers.
+      const sel = this.server.getSelection();
+      if (
+        !sel ||
+        sel.sourceSession !== offer.sourceSession ||
+        sel.sourceId !== offer.sourceId
+      ) {
+        try {
+          closeFd(fd);
+        } catch {
+          // ok
+        }
+        return;
+      }
+      this.server.forwardSelectionReceive(mime, fd);
+    } else if (opcode === OP.data_offer_destroy) {
+      this.destroyObject(obj.id);
+    } else if (opcode === OP.data_offer_finish) {
+      // DnD only
+    } else if (opcode === OP.data_offer_set_actions) {
+      r.uint();
+      r.uint();
+    }
+  }
+
+  dataSourceMimes(sourceId: number): string[] | null {
+    const obj = this.objects.get(sourceId);
+    if (obj?.iface !== "wl_data_source") return null;
+    const source = obj.data?.source as DataSourceState | undefined;
+    return source ? [...source.mimeTypes] : null;
+  }
+
+  sendDataSourceCancelled(sourceId: number): void {
+    if (!this.objects.has(sourceId)) return;
+    this.send(sourceId, EV.data_source_cancelled, () => {});
+  }
+
+  sendDataSourceSend(sourceId: number, mime: string, fd: number): void {
+    if (!this.objects.has(sourceId)) {
+      try {
+        closeFd(fd);
+      } catch {
+        // ok
+      }
+      return;
+    }
+    this.send(sourceId, EV.data_source_send, (b) => {
+      b.string(mime).fd(fd);
+    });
+    // Ownership transferred via SCM_RIGHTS; close our copy.
+    try {
+      closeFd(fd);
+    } catch {
+      // ok
+    }
+  }
+
+  /**
+   * Announce seat selection on one device (or all). Pass null to clear.
+   */
+  sendSelection(
+    sel: ClipboardSelection | null,
+    onlyDeviceId?: number,
+  ): void {
+    const devices = onlyDeviceId
+      ? [onlyDeviceId]
+      : [...this.dataDeviceIds];
+    for (const deviceId of devices) {
+      if (!this.objects.has(deviceId)) continue;
+      if (!sel) {
+        this.send(deviceId, EV.data_device_selection, (b) => b.object(0));
+        continue;
+      }
+      // Source client still needs an offer object to paste from itself.
+      const offerId = this.allocServerId();
+      const offer: DataOfferState = {
+        sourceSession: sel.sourceSession,
+        sourceId: sel.sourceId,
+        mimeTypes: [...sel.mimeTypes],
+        deviceId,
+      };
+      this.objects.set(offerId, {
+        id: offerId,
+        iface: "wl_data_offer",
+        version: 3,
+        data: { offer },
+      });
+      this.send(deviceId, EV.data_device_data_offer, (b) => b.newId(offerId));
+      for (const mime of sel.mimeTypes) {
+        this.send(offerId, EV.data_offer_offer, (b) => b.string(mime));
+      }
+      this.send(deviceId, EV.data_device_selection, (b) => b.object(offerId));
+    }
+  }
+
+  private handleXdgDecorationManager(opcode: number, r: MessageReader): void {
+    if (opcode === OP.xdg_decoration_manager_destroy) {
+      // ok
+    } else if (opcode === OP.xdg_decoration_manager_get_toplevel_decoration) {
+      const id = r.newId();
+      const toplevelId = r.object();
+      this.objects.set(id, {
+        id,
+        iface: "zxdg_toplevel_decoration_v1",
+        version: 1,
+        data: { toplevelId },
+      });
+      const topObj = this.objects.get(toplevelId);
+      const surface = topObj ? this.surfaceFromToplevel(topObj) : null;
+      // Prefer CLIENT for toolkits with their own chrome (GTK/Nautilus).
+      // Clients that want SSD call set_mode(SERVER).
+      if (surface) surface.decoration = "client";
+      this.send(id, EV.xdg_toplevel_decoration_configure, (b) =>
+        b.uint(XDG_DECORATION_MODE_CLIENT),
+      );
+      console.log(
+        `[deco] get_toplevel_decoration toplevel=${toplevelId} surface=${surface?.id ?? "?"} → CLIENT`,
+      );
+    }
+  }
+
+  private handleXdgToplevelDecoration(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    if (opcode === OP.xdg_toplevel_decoration_destroy) {
+      this.destroyObject(obj.id);
+    } else if (opcode === OP.xdg_toplevel_decoration_set_mode) {
+      const mode = r.uint();
+      const toplevelId = obj.data?.toplevelId as number | undefined;
+      const topObj = toplevelId ? this.objects.get(toplevelId) : undefined;
+      const surface = topObj ? this.surfaceFromToplevel(topObj) : null;
+      if (mode === XDG_DECORATION_MODE_SERVER) {
+        if (surface) surface.decoration = "server";
+        this.send(obj.id, EV.xdg_toplevel_decoration_configure, (b) =>
+          b.uint(XDG_DECORATION_MODE_SERVER),
+        );
+      } else {
+        if (surface) surface.decoration = "client";
+        this.send(obj.id, EV.xdg_toplevel_decoration_configure, (b) =>
+          b.uint(XDG_DECORATION_MODE_CLIENT),
+        );
+      }
+    } else if (opcode === OP.xdg_toplevel_decoration_unset_mode) {
+      const toplevelId = obj.data?.toplevelId as number | undefined;
+      const topObj = toplevelId ? this.objects.get(toplevelId) : undefined;
+      const surface = topObj ? this.surfaceFromToplevel(topObj) : null;
+      // Unset → compositor choice: keep CLIENT for toolkit apps.
+      if (surface) surface.decoration = "client";
+      this.send(obj.id, EV.xdg_toplevel_decoration_configure, (b) =>
+        b.uint(XDG_DECORATION_MODE_CLIENT),
+      );
+    }
+  }
+
+  private handleCompositor(opcode: number, r: MessageReader): void {
+    if (opcode === OP.compositor_create_surface) {
+      const id = r.newId();
+      const surface: SurfaceState = {
+        id,
+        bufferId: null,
+        frameCallbacks: [],
+        mapped: false,
+        x: 0,
+        y: 0,
+        subX: 0,
+        subY: 0,
+        width: 0,
+        height: 0,
+        stride: 0,
+        title: "",
+        pixels: null,
+        releaseBuffers: [],
+        role: "none",
+        parentId: null,
+        children: [],
+        xdgToplevelId: null,
+        xdgSurfaceId: null,
+        geomX: 0,
+        geomY: 0,
+        geomW: 0,
+        geomH: 0,
+        maximized: false,
+        fullscreen: false,
+        minimized: false,
+        savedX: 0,
+        savedY: 0,
+        savedW: 800,
+        savedH: 600,
+        minW: 0,
+        minH: 0,
+        maxW: 0,
+        maxH: 0,
+        decoration: "none",
+        xwaylandSerial: null,
+        x11Wid: null,
+        xwaylandPending: false,
+      };
+      this.objects.set(id, {
+        id,
+        iface: "wl_surface",
+        version: 4,
+        data: { surface },
+      });
+    } else if (opcode === OP.compositor_create_region) {
+      const id = r.newId();
+      this.objects.set(id, { id, iface: "wl_region", version: 1 });
+    }
+  }
+
+  private handleShm(opcode: number, r: MessageReader): void {
+    if (opcode !== OP.shm_create_pool) return;
+    const id = r.newId();
+    const fd = r.fd();
+    const size = r.int();
+    console.log(`[shm] create_pool id=${id} fd=${fd} size=${size}`);
+    const map = mmapShm(fd, size);
+    this.objects.set(id, {
+      id,
+      iface: "wl_shm_pool",
+      version: 1,
+      data: {
+        pool: { fd, size, map, refCount: 0, destroyed: false } satisfies PoolState,
+      },
+    });
+  }
+
+  private handleShmPool(obj: WlObject, opcode: number, r: MessageReader): void {
+    if (opcode === OP.shm_pool_create_buffer) {
+      const id = r.newId();
+      const offset = r.int();
+      const width = r.int();
+      const height = r.int();
+      const stride = r.int();
+      const format = r.uint();
+      const pool = obj.data!.pool as PoolState;
+      pool.refCount++;
+      this.objects.set(id, {
+        id,
+        iface: "wl_buffer",
+        version: 1,
+        data: {
+          buffer: {
+            kind: "shm",
+            poolId: obj.id,
+            pool,
+            offset,
+            width,
+            height,
+            stride,
+            format,
+          } satisfies ShmBufferState,
+        },
+      });
+    } else if (opcode === OP.shm_pool_destroy) {
+      const pool = obj.data?.pool as PoolState | undefined;
+      if (pool) {
+        pool.destroyed = true;
+        // Unmap only when no buffers still reference the pool.
+        if (pool.refCount <= 0) this.releasePool(pool, true);
+      }
+      this.objects.delete(obj.id);
+      this.send(WL_DISPLAY_ID, EV.display_delete_id, (b) => b.uint(obj.id));
+    } else if (opcode === OP.shm_pool_resize) {
+      const newSize = r.int();
+      const pool = obj.data?.pool as PoolState | undefined;
+      if (!pool || newSize <= 0 || !pool.map) return;
+      // Client has already ftruncate'd the fd; remap to the new size.
+      try {
+        munmapShm(pool.map, pool.size);
+      } catch {
+        // ok
+      }
+      pool.map = mmapShm(pool.fd, newSize);
+      pool.size = newSize;
+    }
+  }
+
+  private handleXdgToplevel(obj: WlObject, opcode: number, r: MessageReader): void {
+    const surface = this.surfaceFromToplevel(obj);
+    if (opcode === OP.xdg_toplevel_set_title) {
+      const title = r.string() ?? "";
+      if (surface) {
+        surface.title = title;
+        // Rootful Xwayland has no CSD — give it Moire SSD.
+        if (
+          surface.decoration === "none" &&
+          /^Xwayland\b/i.test(title)
+        ) {
+          surface.decoration = "server";
+        }
+      }
+    } else if (opcode === OP.xdg_toplevel_set_app_id) {
+      r.string();
+    } else if (opcode === OP.xdg_toplevel_set_parent) {
+      r.object();
+    } else if (opcode === OP.xdg_toplevel_show_window_menu) {
+      r.object(); // seat
+      r.uint(); // serial
+      r.int(); // x
+      r.int(); // y
+    } else if (opcode === OP.xdg_toplevel_move) {
+      r.object(); // seat
+      r.uint(); // serial
+      if (surface) this.server.beginMove(this, surface.id);
+    } else if (opcode === OP.xdg_toplevel_resize) {
+      r.object(); // seat
+      r.uint(); // serial
+      const edges = r.uint();
+      if (surface) this.server.beginResize(this, surface.id, edges);
+    } else if (opcode === OP.xdg_toplevel_set_max_size) {
+      const w = r.int();
+      const h = r.int();
+      if (surface) {
+        surface.maxW = Math.max(0, w);
+        surface.maxH = Math.max(0, h);
+        this.maybeConfigureFixedSize(surface);
+      }
+    } else if (opcode === OP.xdg_toplevel_set_min_size) {
+      const w = r.int();
+      const h = r.int();
+      if (surface) {
+        surface.minW = Math.max(0, w);
+        surface.minH = Math.max(0, h);
+        this.maybeConfigureFixedSize(surface);
+      }
+    } else if (opcode === OP.xdg_toplevel_set_maximized) {
+      if (surface) this.server.toggleMaximized(this, surface.id, true);
+    } else if (opcode === OP.xdg_toplevel_unset_maximized) {
+      if (surface) this.server.toggleMaximized(this, surface.id, false);
+    } else if (opcode === OP.xdg_toplevel_set_fullscreen) {
+      r.object(); // output (nullable — 0)
+      if (surface) this.server.toggleFullscreen(this, surface.id, true);
+    } else if (opcode === OP.xdg_toplevel_unset_fullscreen) {
+      if (surface) this.server.toggleFullscreen(this, surface.id, false);
+    } else if (opcode === OP.xdg_toplevel_set_minimized) {
+      if (surface) this.server.setMinimized(this, surface.id);
+    } else if (opcode === OP.xdg_toplevel_destroy) {
+      this.destroyObject(obj.id);
+    }
+  }
+
+  private surfaceFromToplevel(obj: WlObject): SurfaceState | null {
+    const wlSurfaceId = obj.data?.wlSurfaceId as number | undefined;
+    if (!wlSurfaceId) return null;
+    const surfObj = this.objects.get(wlSurfaceId);
+    return (surfObj?.data?.surface as SurfaceState) ?? null;
+  }
+
+  private handleSurface(obj: WlObject, opcode: number, r: MessageReader): void {
+    const surface = obj.data!.surface as SurfaceState;
+    if (opcode === OP.surface_attach) {
+      const bufId = r.object();
+      r.int(); // attach x — unused for layout
+      r.int(); // attach y
+      surface.bufferId = bufId === 0 ? null : bufId;
+      if (bufId) {
+        const buf = this.getBuffer(bufId);
+        if (buf) {
+          surface.width = buf.width;
+          surface.height = buf.height;
+        }
+      }
+    } else if (opcode === OP.surface_damage || opcode === OP.surface_damage_buffer) {
+      r.int();
+      r.int();
+      r.int();
+      r.int();
+    } else if (
+      opcode === OP.surface_set_opaque_region ||
+      opcode === OP.surface_set_input_region
+    ) {
+      r.object();
+    } else if (opcode === OP.surface_set_buffer_transform) {
+      r.int();
+    } else if (opcode === OP.surface_set_buffer_scale) {
+      r.int();
+    } else if (opcode === OP.surface_frame) {
+      const cbId = r.newId();
+      this.objects.set(cbId, { id: cbId, iface: "wl_callback", version: 1 });
+      surface.frameCallbacks.push(cbId);
+    } else if (opcode === OP.surface_commit) {
+      // xwayland_shell serial is double-buffered — apply on every commit,
+      // including the buffer-less association commit from Xwayland.
+      for (const o of this.objects.values()) {
+        if (
+          o.iface === "xwayland_surface_v1" &&
+          o.data?.wlSurfaceId === surface.id &&
+          o.data.pendingSerial != null
+        ) {
+          const serial = o.data.pendingSerial as bigint;
+          o.data.pendingSerial = null;
+          this.server.noteXwaylandSerial(this, surface.id, serial);
+        }
+      }
+
+      if (surface.bufferId) {
+        const buf = this.getBuffer(surface.bufferId);
+        if (!buf) {
+          console.error(
+            `[surface] commit missing buffer id=${surface.bufferId}`,
+          );
+        } else {
+          try {
+            if (buf.kind === "shm") {
+              const pool = buf.pool;
+              if (!pool.map) {
+                throw new Error(
+                  `shm pool gone poolId=${buf.poolId} buf=${surface.bufferId}`,
+                );
+              }
+              const byteLen = buf.stride * buf.height;
+              surface.pixels = copyFromPool(
+                pool,
+                buf.offset,
+                byteLen,
+                surface.pixels,
+              );
+              surface.stride = buf.stride;
+              // wl_shm XRGB8888 leaves A=0 — blit skips those pixels.
+              if (buf.format === WL_SHM_FORMAT_XRGB8888) {
+                forceOpaqueAlpha(surface.pixels);
+              }
+            } else {
+              const snapped = copyFromDmabuf(
+                buf,
+                this.server.getGbm(),
+                surface.pixels,
+              );
+              surface.pixels = snapped.pixels;
+              surface.stride = snapped.stride;
+              // DRM XRGB8888 (Xwayland Glamor) same issue — A unused/zero.
+              if (buf.format === DRM_FORMAT_XRGB8888) {
+                forceOpaqueAlpha(surface.pixels);
+              }
+            }
+            surface.width = buf.width;
+            surface.height = buf.height;
+            surface.mapped = true;
+            if (!surface.releaseBuffers.includes(surface.bufferId)) {
+              surface.releaseBuffers.push(surface.bufferId);
+            }
+            // Fallback: if set_serial was missed on the wire but this surface
+            // was claimed via xwayland_shell and the XWM has an unpaired serial.
+            if (surface.xwaylandPending && surface.xwaylandSerial == null) {
+              this.server.tryPairOrphanXwaylandSurface(this, surface.id);
+            }
+            if (surface.role === "toplevel") {
+              // Do not auto-enable SSD. GTK draws CSD without always finishing
+              // decoration negotiation first; promoting none→server causes
+              // double titlebars and broken move/resize geometry.
+              // SSD only when decoration === "server" (explicit set_mode).
+              const firstMap = !this.server.isStacked(this, surface.id);
+              this.server.registerToplevel(this, surface.id);
+              // Focus / raise only on first map — not every commit.
+              if (firstMap) this.server.focusClient(this, surface.id);
+            }
+            if (
+              surface.role !== "cursor" &&
+              process.env.MOIRE_DEBUG_SURFACE === "1"
+            ) {
+              console.log(
+                `[surface] commit mapped id=${surface.id} ${surface.width}x${surface.height} @ ${surface.x},${surface.y} role=${surface.role} kind=${buf.kind} deco=${surface.decoration} x11=${surface.x11Wid} title=${JSON.stringify(surface.title)}`,
+              );
+            }
+          } catch (err) {
+            console.error(`[surface] snapshot failed`, err);
+          }
+        }
+      }
+    } else if (opcode === OP.surface_destroy) {
+      if (surface.role === "toplevel") {
+        this.server.unregisterToplevel(this, surface.id);
+      }
+      this.finishSurfaceFrame(surface);
+      surface.pixels = null;
+      this.destroyObject(obj.id);
+    }
+  }
+
+  private handleXdgWmBase(opcode: number, r: MessageReader): void {
+    if (opcode === OP.xdg_wm_base_create_positioner) {
+      const id = r.newId();
+      this.objects.set(id, { id, iface: "xdg_positioner", version: 3 });
+    } else if (opcode === OP.xdg_wm_base_get_xdg_surface) {
+      const id = r.newId();
+      const surfaceId = r.object();
+      this.objects.set(id, {
+        id,
+        iface: "xdg_surface",
+        version: 3,
+        data: { wlSurfaceId: surfaceId, configured: false },
+      });
+    } else if (opcode === OP.xdg_wm_base_pong) {
+      r.uint();
+    } else if (opcode === OP.xdg_wm_base_destroy) {
+      // ok
+    }
+  }
+
+  private handleXdgSurface(obj: WlObject, opcode: number, r: MessageReader): void {
+    if (opcode === OP.xdg_surface_get_toplevel) {
+      const id = r.newId();
+      const wlSurfaceId = obj.data!.wlSurfaceId as number;
+      this.objects.set(id, {
+        id,
+        iface: "xdg_toplevel",
+        version: 3,
+        data: { wlSurfaceId, xdgSurfaceId: obj.id },
+      });
+      const surface = this.objects.get(wlSurfaceId)?.data?.surface as
+        | SurfaceState
+        | undefined;
+      if (surface) {
+        surface.role = "toplevel";
+        surface.xdgToplevelId = id;
+        surface.xdgSurfaceId = obj.id;
+        // Leave decoration "none" until zxdg_decoration negotiates.
+        // Clients that never bind get SSD on first map (see surface commit).
+        const slot = this.server.allocToplevelSlot();
+        surface.x = slot.x;
+        surface.y = slot.y;
+        this.configureToplevel(surface, 800, 600, [
+          XDG_TOPLEVEL_STATE_ACTIVATED,
+        ]);
+      }
+    } else if (opcode === OP.xdg_surface_set_window_geometry) {
+      const gx = r.int();
+      const gy = r.int();
+      const gw = r.int();
+      const gh = r.int();
+      const wlSurfaceId = obj.data?.wlSurfaceId as number | undefined;
+      const surface = wlSurfaceId
+        ? (this.objects.get(wlSurfaceId)?.data?.surface as SurfaceState | undefined)
+        : undefined;
+      if (surface) {
+        surface.geomX = gx;
+        surface.geomY = gy;
+        surface.geomW = gw;
+        surface.geomH = gh;
+        // Keep maximized/fullscreen geometry glued to the output.
+        if (surface.maximized || surface.fullscreen) {
+          this.server.placeMaximized(surface);
+        }
+      }
+    } else if (opcode === OP.xdg_surface_ack_configure) {
+      r.uint();
+      obj.data!.configured = true;
+    }
+  }
+
+  sendCallbackDone(id: number, time: number): void {
+    this.send(id, EV.callback_done, (b) => b.uint(time));
+  }
+
+  sendBufferRelease(id: number): void {
+    this.send(id, EV.buffer_release, () => {});
+  }
+
+  deleteId(id: number): void {
+    this.objects.delete(id);
+    this.send(WL_DISPLAY_ID, EV.display_delete_id, (b) => b.uint(id));
+  }
+
+  private allocServerId(): number {
+    return this.nextServerId++;
+  }
+
+  private handleLinuxDmabuf(opcode: number, r: MessageReader): void {
+    if (opcode === OP.linux_dmabuf_destroy) {
+      // ok
+    } else if (opcode === OP.linux_dmabuf_create_params) {
+      const id = r.newId();
+      this.objects.set(id, {
+        id,
+        iface: "zwp_linux_buffer_params_v1",
+        version: 4,
+        data: {
+          params: { planes: [], created: false } satisfies DmabufParamsState,
+        },
+      });
+    } else if (opcode === OP.linux_dmabuf_get_default_feedback) {
+      const id = r.newId();
+      this.objects.set(id, {
+        id,
+        iface: "zwp_linux_dmabuf_feedback_v1",
+        version: 4,
+      });
+      this.sendDmabufFeedback(id);
+    } else if (opcode === OP.linux_dmabuf_get_surface_feedback) {
+      const id = r.newId();
+      r.object(); // surface — same tranche for all surfaces for now
+      this.objects.set(id, {
+        id,
+        iface: "zwp_linux_dmabuf_feedback_v1",
+        version: 4,
+      });
+      this.sendDmabufFeedback(id);
+    }
+  }
+
+  /**
+   * Advertise the render-node device + linear AR24/XR24 so Mesa/GTK can
+   * open /dev/dri/renderD* for Wayland EGL (without this they get fd=-1).
+   */
+  private sendDmabufFeedback(feedbackId: number): void {
+    const fb = this.server.getDmabufFeedback();
+    if (!fb) {
+      console.warn("[dmabuf] feedback requested but not configured");
+      // Still emit done so the client doesn't hang waiting.
+      this.send(feedbackId, EV.linux_dmabuf_feedback_done, () => {});
+      return;
+    }
+    const { device, formatTable } = fb;
+
+    this.send(feedbackId, EV.linux_dmabuf_feedback_format_table, (b) => {
+      b.fd(formatTable.fd).uint(formatTable.size);
+    });
+    this.send(feedbackId, EV.linux_dmabuf_feedback_main_device, (b) => {
+      b.array(device.deviceBytes);
+    });
+
+    // Single tranche targeting the same device, both table indices.
+    this.send(feedbackId, EV.linux_dmabuf_feedback_tranche_target_device, (b) => {
+      b.array(device.deviceBytes);
+    });
+    const indices = Buffer.alloc(DMABUF_FEEDBACK_FORMAT_COUNT * 2);
+    for (let i = 0; i < DMABUF_FEEDBACK_FORMAT_COUNT; i++) {
+      indices.writeUInt16LE(i, i * 2);
+    }
+    this.send(feedbackId, EV.linux_dmabuf_feedback_tranche_formats, (b) => {
+      b.array(indices);
+    });
+    this.send(feedbackId, EV.linux_dmabuf_feedback_tranche_flags, (b) => {
+      b.uint(0);
+    });
+    this.send(feedbackId, EV.linux_dmabuf_feedback_tranche_done, () => {});
+    this.send(feedbackId, EV.linux_dmabuf_feedback_done, () => {});
+    console.log(`[dmabuf] feedback sent id=${feedbackId} device=${device.path}`);
+  }
+
+  private handleLinuxBufferParams(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    const params = obj.data?.params as DmabufParamsState | undefined;
+    if (!params) return;
+
+    if (opcode === OP.linux_buffer_params_destroy) {
+      if (!params.created) closeDmabufPlanes(params.planes);
+      params.planes = [];
+      this.destroyObject(obj.id);
+      return;
+    }
+
+    if (opcode === OP.linux_buffer_params_add) {
+      const fd = r.fd();
+      const planeIdx = r.uint();
+      const offset = r.uint();
+      const stride = r.uint();
+      const modifierHi = r.uint();
+      const modifierLo = r.uint();
+      if (params.created) {
+        try {
+          closeFd(fd);
+        } catch {
+          // ok
+        }
+        return;
+      }
+      // Ensure plane slot exists
+      while (params.planes.length <= planeIdx) {
+        params.planes.push({
+          fd: -1,
+          offset: 0,
+          stride: 0,
+          modifierHi: 0,
+          modifierLo: 0,
+        });
+      }
+      const prev = params.planes[planeIdx]!;
+      if (prev.fd >= 0) {
+        try {
+          closeFd(prev.fd);
+        } catch {
+          // ok
+        }
+      }
+      params.planes[planeIdx] = {
+        fd,
+        offset,
+        stride,
+        modifierHi,
+        modifierLo,
+      };
+      return;
+    }
+
+    if (
+      opcode === OP.linux_buffer_params_create ||
+      opcode === OP.linux_buffer_params_create_immed
+    ) {
+      let bufferId = 0;
+      if (opcode === OP.linux_buffer_params_create_immed) {
+        bufferId = r.newId();
+      }
+      const width = r.int();
+      const height = r.int();
+      const format = r.uint();
+      const flags = r.uint();
+
+      const planes = params.planes.filter((p) => p.fd >= 0);
+      const ok =
+        !params.created &&
+        width > 0 &&
+        height > 0 &&
+        planes.length > 0 &&
+        (format === DRM_FORMAT_ARGB8888 || format === DRM_FORMAT_XRGB8888);
+
+      if (!ok) {
+        console.warn(
+          `[dmabuf] create failed w=${width} h=${height} fmt=0x${format.toString(16)} planes=${planes.length}`,
+        );
+        if (opcode === OP.linux_buffer_params_create) {
+          this.send(obj.id, EV.linux_buffer_params_failed, () => {});
+        }
+        // create_immed: still register a dead buffer so the client id exists
+        if (opcode === OP.linux_buffer_params_create_immed && bufferId) {
+          this.objects.set(bufferId, {
+            id: bufferId,
+            iface: "wl_buffer",
+            version: 1,
+            data: {
+              buffer: {
+                kind: "dmabuf",
+                width: 0,
+                height: 0,
+                format,
+                flags,
+                planes: [],
+              } satisfies DmabufBuffer,
+            },
+          });
+        }
+        closeDmabufPlanes(planes);
+        params.planes = [];
+        params.created = true;
+        return;
+      }
+
+      params.created = true;
+      params.planes = []; // ownership moves to buffer
+
+      const buffer: DmabufBuffer = {
+        kind: "dmabuf",
+        width,
+        height,
+        format,
+        flags,
+        planes,
+      };
+
+      if (opcode === OP.linux_buffer_params_create) {
+        bufferId = this.allocServerId();
+        this.objects.set(bufferId, {
+          id: bufferId,
+          iface: "wl_buffer",
+          version: 1,
+          data: { buffer },
+        });
+        this.send(obj.id, EV.linux_buffer_params_created, (b) =>
+          b.uint(bufferId),
+        );
+        console.log(
+          `[dmabuf] created buffer=${bufferId} ${width}x${height} fmt=0x${format.toString(16)} planes=${planes.length}`,
+        );
+      } else {
+        this.objects.set(bufferId, {
+          id: bufferId,
+          iface: "wl_buffer",
+          version: 1,
+          data: { buffer },
+        });
+        console.log(
+          `[dmabuf] create_immed buffer=${bufferId} ${width}x${height} fmt=0x${format.toString(16)} planes=${planes.length}`,
+        );
+      }
+    }
+  }
+
+  private destroyObject(id: number): void {
+    const obj = this.objects.get(id);
+    if (obj?.iface === "wl_buffer") {
+      const buf = obj.data?.buffer as BufferState | undefined;
+      if (buf?.kind === "shm") {
+        this.releasePool(buf.pool, false);
+      } else if (buf?.kind === "dmabuf") {
+        closeDmabufPlanes(buf.planes);
+        buf.planes = [];
+      }
+    } else if (obj?.iface === "zwp_linux_buffer_params_v1") {
+      const params = obj.data?.params as DmabufParamsState | undefined;
+      if (params && !params.created) {
+        closeDmabufPlanes(params.planes);
+        params.planes = [];
+      }
+    }
+    this.objects.delete(id);
+  }
+
+  private send(
+    objectId: number,
+    opcode: number,
+    build: (b: MessageBuilder) => void,
+  ): void {
+    const b = new MessageBuilder();
+    build(b);
+    const { data, fds } = b.build(objectId, opcode);
+    this.conn.send(data, fds);
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@moire/compositor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "moire": "./src/main.ts"
+  },
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@moire/app-discovery": "workspace:*",
+    "@moire/core": "workspace:*",
+    "@moire/protocol": "workspace:*",
+    "@moire/shell": "workspace:*",
+    "@moire/sys": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

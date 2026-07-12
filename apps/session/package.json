@@ -1,0 +1,8 @@
+{
+  "name": "@moire/session",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "bash ./moire-session"
+  }
+}
