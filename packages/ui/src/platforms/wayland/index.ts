@@ -26,6 +26,17 @@ import {
   PROT_WRITE,
   type WaylandChunk,
 } from "@moire/sys";
+import { createElement } from "react";
+import {
+  createShellRoot,
+  rasterize,
+  renderShell,
+  Group,
+  Rect,
+  Text,
+  measureText,
+} from "@moire/react-host";
+import { themePalette } from "../../theme.js";
 import type {
   PlatformBackend,
   PlatformWindow,
@@ -205,6 +216,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   /** Active drag: data source and payload resolver. */
   private activeDrag: {
     sourceId: number;
+    iconSurfaceId: number;
     getPayload: (mime: string) => string | Buffer | null;
   } | null = null;
   /** Incoming DnD offer while this client is a drop target. */
@@ -324,19 +336,29 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
     // Wire the DnD bridge so Draggable widgets call startDrag.
     setDndBridge({
-      startDrag: (payload, mimeTypes) => {
+      startDrag: (payload, mimeTypes, opts) => {
         const mime0 = mimeTypes[0];
         if (!mime0 || !this.conn) return;
-        this.startDrag(mimeTypes, (mime) => {
-          if (typeof payload === "string" || Buffer.isBuffer(payload)) {
-            return payload;
-          }
-          if (Array.isArray(payload)) {
-            if (mime === "text/uri-list") return payload.join("\r\n");
-            if (mime === "text/plain") return payload.join("\n");
-          }
-          try { return JSON.stringify(payload); } catch { return null; }
-        }, this.lastPointerSerial);
+        const label = opts?.label;
+        this.startDrag(
+          mimeTypes,
+          (mime) => {
+            if (typeof payload === "string" || Buffer.isBuffer(payload)) {
+              return payload;
+            }
+            if (Array.isArray(payload)) {
+              if (mime === "text/uri-list") return payload.join("\r\n");
+              if (mime === "text/plain") return payload.join("\n");
+            }
+            try {
+              return JSON.stringify(payload);
+            } catch {
+              return null;
+            }
+          },
+          this.lastPointerSerial,
+          label,
+        );
       },
     });
   }
@@ -345,13 +367,16 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     mimeTypes: string[],
     getPayload: (mime: string) => string | Buffer | null,
     serial: number,
+    label?: string,
   ): void {
     if (!this.conn || !this.dataDeviceManagerId || !this.dataDeviceId) return;
     if (this.activeDrag) {
-      // Cancel previous drag source if still alive.
       try {
         this.send(this.activeDrag.sourceId, OP.data_source_destroy, () => {});
-      } catch { /* ok */ }
+      } catch {
+        /* ok */
+      }
+      this.destroyDragIcon(this.activeDrag.iconSurfaceId);
       this.activeDrag = null;
     }
 
@@ -364,11 +389,13 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     for (const mime of mimeTypes) {
       this.send(sourceId, OP.data_source_offer, (b) => b.string(mime));
     }
-    // Prefer move so file managers move items instead of copying.
     const actions = WL_DND_ACTION_COPY | WL_DND_ACTION_MOVE;
     this.send(sourceId, OP.data_source_set_actions, (b) => b.uint(actions));
 
-    this.activeDrag = { sourceId, getPayload };
+    const chipLabel = (label && label.trim()) || "Item";
+    const iconSurfaceId = this.createDragIconSurface(chipLabel);
+
+    this.activeDrag = { sourceId, iconSurfaceId, getPayload };
 
     this.handlers.set(sourceId, (op, rr) =>
       this.handleDataSource(op, rr, sourceId),
@@ -376,11 +403,138 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
     // start_drag(source, origin, icon, serial)
     this.send(this.dataDeviceId, OP.data_device_start_drag, (b) =>
-      b.object(sourceId).object(this.pointerSurfaceId).object(0).uint(serial),
+      b
+        .object(sourceId)
+        .object(this.pointerSurfaceId)
+        .object(iconSurfaceId)
+        .uint(serial),
     );
     console.log(
-      `[ui/dnd] startDrag source=${sourceId} mimes=${mimeTypes.join(",")} serial=${serial}`,
+      `[ui/dnd] startDrag source=${sourceId} icon=${iconSurfaceId} label=${chipLabel} serial=${serial}`,
     );
+  }
+
+  /** Build a small labeled chip surface for the drag icon. */
+  private createDragIconSurface(label: string): number {
+    const text = label.length > 26 ? label.slice(0, 25) + "…" : label;
+    const padX = 12;
+    const tw = measureText(text, 13 / 14);
+    const chipW = Math.max(80, Math.round(tw + padX * 2 + 8));
+    const chipH = 36;
+    const pal = themePalette();
+    const root = createShellRoot();
+    renderShell(
+      root,
+      createElement(
+        Group,
+        { x: 0, y: 0, width: chipW, height: chipH },
+        createElement(Rect, {
+          x: 0,
+          y: 0,
+          width: chipW,
+          height: chipH,
+          fill: (pal.surface & 0x00ffffff) | 0xf2000000,
+        }),
+        createElement(Rect, {
+          x: 0,
+          y: 0,
+          width: chipW,
+          height: 1,
+          fill: pal.rimLight,
+        }),
+        createElement(Rect, {
+          x: 0,
+          y: 0,
+          width: 3,
+          height: chipH,
+          fill: pal.accentLine,
+        }),
+        createElement(Text, {
+          x: padX,
+          y: 11,
+          text,
+          color: pal.text,
+          fontSize: 13,
+        }),
+      ),
+    );
+    const { pixels } = rasterize(root.container, chipW, chipH);
+    const stride = chipW * 4;
+    const size = stride * chipH;
+
+    const surfaceId = this.allocId();
+    this.send(this.compositorId, OP.compositor_create_surface, (b) =>
+      b.newId(surfaceId),
+    );
+
+    const fd = memfdCreate(size);
+    const map = mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    flushMmap(map, pixels, size);
+
+    const poolId = this.allocId();
+    this.send(this.shmId, OP.shm_create_pool, (b) =>
+      b.newId(poolId).fd(fd).int(size),
+    );
+    const bufferId = this.allocId();
+    this.send(poolId, OP.shm_pool_create_buffer, (b) =>
+      b
+        .newId(bufferId)
+        .int(0)
+        .int(chipW)
+        .int(chipH)
+        .int(stride)
+        .uint(WL_SHM_FORMAT_ARGB8888),
+    );
+    this.send(surfaceId, OP.surface_attach, (b) =>
+      b.object(bufferId).int(0).int(0),
+    );
+    this.send(surfaceId, OP.surface_damage, (b) =>
+      b.int(0).int(0).int(chipW).int(chipH),
+    );
+    this.send(surfaceId, OP.surface_commit, () => {});
+
+    // Keep map alive for the duration of the drag (compositor may read async).
+    (this as unknown as { _dragIconMaps?: unknown[] })._dragIconMaps ??= [];
+    (this as unknown as { _dragIconMaps: unknown[] })._dragIconMaps.push({
+      map,
+      fd,
+      poolId,
+      bufferId,
+      surfaceId,
+      size,
+    });
+    return surfaceId;
+  }
+
+  private destroyDragIcon(surfaceId: number): void {
+    if (!surfaceId) return;
+    try {
+      this.send(surfaceId, OP.surface_destroy, () => {});
+    } catch {
+      /* ok */
+    }
+    const bag = (this as unknown as {
+      _dragIconMaps?: {
+        surfaceId: number;
+        map: ReturnType<typeof mmap>;
+        fd: number;
+        size: number;
+      }[];
+    })._dragIconMaps;
+    if (!bag) return;
+    const idx = bag.findIndex((x) => x.surfaceId === surfaceId);
+    if (idx < 0) return;
+    const slot = bag.splice(idx, 1)[0]!;
+    try {
+      munmap(slot.map, slot.size);
+    } catch {
+      /* ok */
+    }
+    try {
+      closeFd(slot.fd);
+    } catch {
+      /* ok */
+    }
   }
 
   private handleDataSource(
@@ -417,6 +571,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         console.log(
           `[ui/dnd] source ${opcode === EV.data_source_cancelled ? "cancelled" : "finished"} source=${sourceId}`,
         );
+        this.destroyDragIcon(this.activeDrag.iconSurfaceId);
         this.activeDrag = null;
         this.handlers.delete(sourceId);
         this.send(sourceId, OP.data_source_destroy, () => {});

@@ -20,14 +20,20 @@ import { fileURLToPath } from "node:url";
 import { Panel } from "./Panel.js";
 import { Launcher } from "./Launcher.js";
 import { TitleBar } from "./TitleBar.js";
+import { Label } from "./widgets.js";
 import {
   DesktopIcons,
   listDesktopEntries,
   loadDesktopLayout,
+  saveDesktopLayout,
   desktopDir,
+  hitTestDesktopIcon,
+  DESKTOP_ITEM_W,
+  DESKTOP_ITEM_H,
   type DesktopLayout,
 } from "./DesktopIcons.js";
 import type { SsdAction, SsdWindowInfo } from "./ssd.js";
+import { Group, Rect, measureText } from "@moire/react-host";
 
 export type ShellSpawn = (opts: { exec: string }) => { unref?: () => void };
 
@@ -101,8 +107,20 @@ export type ShellBridge = {
   ): void;
   /** Parse file:// URIs, copy files to ~/Desktop, refresh icon list. */
   acceptDesktopDrop(uris: string[]): void;
-  /** True if (x,y) is over a desktop icon hit region. */
+  /** True if (x,y) is over a desktop drop zone (above the panel). */
   hitDesktop(x: number, y: number): boolean;
+  /** Floating DnD chip under the cursor. */
+  paintDragPreview(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+    cursorX: number,
+    cursorY: number,
+    label: string,
+  ): void;
+  /** Label for an in-progress desktop icon drag, if any. */
+  desktopDragLabel?(): string | null;
 };
 
 const KEY_ESC = 1;
@@ -276,9 +294,25 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   let desktopH = 0;
   let desktopDirty = true;
   let desktopHover: HitRegion | null = null;
-  let desktopDown: { x: number; y: number; hit: HitRegion } | null = null;
+  let desktopDown: { x: number; y: number; hit: HitRegion; name?: string } | null =
+    null;
+  let desktopDrag: {
+    name: string;
+    grabX: number;
+    grabY: number;
+    originX: number;
+    originY: number;
+  } | null = null;
   let desktopMotionTick = Date.now();
   const PANEL_BTN_LEFT = 0x110; // BTN_LEFT
+  const dragChipRoot: ShellRoot = createShellRoot();
+  let dragChipCache: {
+    label: string;
+    pixels: Uint8Array;
+    w: number;
+    h: number;
+  } | null = null;
+  const DESKTOP_DRAG_THRESHOLD = 8;
 
   const refreshApps = () => {
     apps = mergeApps();
@@ -701,9 +735,9 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     onDesktopPointerButton(ev) {
       const settings = loadSettings();
       if (!settings.showDesktopIcons) return false;
-      // BTN_LEFT is 0x110 (272)
       if (ev.button !== PANEL_BTN_LEFT && ev.button !== 272) return false;
       ensureDesktopHits();
+      const pal = themePalette();
 
       const findHit = (pred: (h: HitRegion) => boolean): HitRegion | null => {
         for (let i = desktopHits.length - 1; i >= 0; i--) {
@@ -736,15 +770,52 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
             desktopDirty = true;
           }
           desktopDown = null;
+          desktopDrag = null;
           return false;
         }
-        desktopDown = { x: ev.x, y: ev.y, hit };
+        const name = hitTestDesktopIcon(
+          ev.x,
+          ev.y,
+          desktopEntries,
+          desktopLayout,
+          desktopW || 1,
+          desktopH || 1,
+          pal.panelHeight,
+        );
+        desktopDown = { x: ev.x, y: ev.y, hit, name: name ?? undefined };
+        desktopDrag = null;
         hit.onPointerDown?.(args(hit));
         desktopDirty = true;
         return true;
       }
 
       if (ev.value === 0) {
+        if (desktopDrag) {
+          const pal2 = themePalette();
+          const availH = (desktopH || 1) - pal2.panelHeight;
+          const nx = Math.max(
+            0,
+            Math.min(
+              ev.x - desktopDrag.grabX,
+              (desktopW || 1) - DESKTOP_ITEM_W,
+            ),
+          );
+          const ny = Math.max(
+            0,
+            Math.min(ev.y - desktopDrag.grabY, availH - DESKTOP_ITEM_H),
+          );
+          desktopLayout = {
+            ...desktopLayout,
+            [desktopDrag.name]: { x: nx, y: ny },
+          };
+          saveDesktopLayout(desktopLayout);
+          desktopSelectedName = desktopDrag.name;
+          desktopDrag = null;
+          desktopDown = null;
+          desktopDirty = true;
+          return true;
+        }
+
         const hit =
           findHit((h) => !!(h.onPointerUp || h.onPress)) ??
           desktopDown?.hit ??
@@ -753,7 +824,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         if (desktopDown) {
           const dx = ev.x - desktopDown.x;
           const dy = ev.y - desktopDown.y;
-          if (dx * dx + dy * dy < 100) {
+          if (dx * dx + dy * dy < DESKTOP_DRAG_THRESHOLD * DESKTOP_DRAG_THRESHOLD) {
             const pressHit = findHit((h) => !!h.onPress) ?? desktopDown.hit;
             pressHit.onPress?.(args(pressHit));
           }
@@ -770,6 +841,45 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       const settings = loadSettings();
       if (!settings.showDesktopIcons) return;
       ensureDesktopHits();
+
+      if (desktopDown?.name && !desktopDrag) {
+        const dx = ev.x - desktopDown.x;
+        const dy = ev.y - desktopDown.y;
+        if (dx * dx + dy * dy >= DESKTOP_DRAG_THRESHOLD * DESKTOP_DRAG_THRESHOLD) {
+          const name = desktopDown.name;
+          const saved = desktopLayout[name];
+          const ix = saved?.x ?? desktopDown.hit.x;
+          const iy = saved?.y ?? desktopDown.hit.y;
+          desktopDrag = {
+            name,
+            grabX: desktopDown.x - ix,
+            grabY: desktopDown.y - iy,
+            originX: ix,
+            originY: iy,
+          };
+          desktopSelectedName = name;
+          desktopDirty = true;
+        }
+      }
+
+      if (desktopDrag) {
+        const pal = themePalette();
+        const availH = (desktopH || 1) - pal.panelHeight;
+        const nx = Math.max(
+          0,
+          Math.min(ev.x - desktopDrag.grabX, (desktopW || 1) - DESKTOP_ITEM_W),
+        );
+        const ny = Math.max(
+          0,
+          Math.min(ev.y - desktopDrag.grabY, availH - DESKTOP_ITEM_H),
+        );
+        desktopLayout = {
+          ...desktopLayout,
+          [desktopDrag.name]: { x: nx, y: ny },
+        };
+        desktopDirty = true;
+        return;
+      }
 
       let next: HitRegion | null = null;
       for (let i = desktopHits.length - 1; i >= 0; i--) {
@@ -824,7 +934,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         dirty = true;
         desktopDirty = true;
       }
-      return dirty || desktopDirty;
+      return dirty || desktopDirty || desktopDrag != null;
     },
     invalidateChrome: () => {
       dirty = true;
@@ -836,6 +946,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       desktopDirty = true;
       desktopW = 0;
       desktopH = 0;
+      dragChipCache = null;
       const settings = loadSettings();
       setUiScaleFactor(settings.uiScale);
       console.log("[shell] chrome invalidated (prefs/theme)");
@@ -854,6 +965,12 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       }
       if (!desktopOverlay) return;
       blendOverlay(fb, pitchPx, width, height, desktopOverlay);
+      // While dragging a desktop icon, paint a floating chip under the cursor.
+      if (desktopDrag) {
+        // Cursor position is not passed here — paintDragPreview is used from
+        // compositor during Wayland DnD. For desktop-local drag, re-render the
+        // icon at the live layout position by temporarily updating layout.
+      }
     },
 
     acceptDesktopDrop(uris) {
@@ -878,13 +995,73 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     },
 
     hitDesktop(_x, y) {
-      // Entire desktop above the panel is a drop sink (not just icon cells).
       const pal = themePalette();
       if (desktopH > 0) {
         return y < desktopH - pal.panelHeight;
       }
       return y >= 0;
     },
+
+    paintDragPreview(fb, pitchPx, _width, _height, cursorX, cursorY, label) {
+      const text = label.length > 28 ? label.slice(0, 27) + "…" : label;
+      const padX = 12;
+      const padY = 8;
+      const tw = measureText(text, 13 / 14);
+      const chipW = Math.max(72, Math.round(tw + padX * 2 + 28));
+      const chipH = 36;
+      if (!dragChipCache || dragChipCache.label !== text) {
+        const pal = themePalette();
+        renderShell(
+          dragChipRoot,
+          createElement(
+            Group,
+            { x: 0, y: 0, width: chipW, height: chipH },
+            createElement(Rect, {
+              x: 0,
+              y: 0,
+              width: chipW,
+              height: chipH,
+              fill: (pal.surface & 0x00ffffff) | 0xf0000000,
+            }),
+            createElement(Rect, {
+              x: 0,
+              y: 0,
+              width: chipW,
+              height: 1,
+              fill: pal.rimLight,
+            }),
+            createElement(Rect, {
+              x: 0,
+              y: 0,
+              width: 3,
+              height: chipH,
+              fill: pal.accentLine,
+            }),
+            createElement(Label, {
+              x: padX + 4,
+              y: padY,
+              text,
+              color: pal.text,
+              fontSize: 13,
+              fontWeight: "medium",
+            }),
+          ),
+        );
+        const painted = rasterize(dragChipRoot.container, chipW, chipH);
+        dragChipCache = {
+          label: text,
+          pixels: painted.pixels,
+          w: chipW,
+          h: chipH,
+        };
+      }
+      const chip = dragChipCache;
+      const dx = (cursorX | 0) + 14;
+      const dy = (cursorY | 0) + 12;
+      blitStrip(fb, pitchPx, _width, _height, dx, dy, chip.pixels, chip.w, chip.h);
+    },
+
+    desktopDragLabel: () => (desktopDrag ? desktopDrag.name : null),
   };
 }
 

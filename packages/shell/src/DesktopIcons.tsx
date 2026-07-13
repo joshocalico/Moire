@@ -59,8 +59,8 @@ function isDirectory(filePath: string): boolean {
 }
 
 const ICON_SIZE = 52;
-const ITEM_W = 112;
-const ITEM_H = 100;
+export const DESKTOP_ITEM_W = 112;
+export const DESKTOP_ITEM_H = 100;
 const GRID_MARGIN_X = 28;
 const GRID_MARGIN_Y = 28;
 const GRID_GAP = 16;
@@ -73,14 +73,49 @@ function defaultIconPos(
 ): { x: number; y: number } {
   const rows = Math.max(
     1,
-    Math.floor((availH - GRID_MARGIN_Y) / (ITEM_H + GRID_GAP)),
+    Math.floor((availH - GRID_MARGIN_Y) / (DESKTOP_ITEM_H + GRID_GAP)),
   );
   const col = Math.floor(index / rows);
   const row = index % rows;
   return {
     x: GRID_MARGIN_X + col * COL_WIDTH,
-    y: GRID_MARGIN_Y + row * (ITEM_H + GRID_GAP),
+    y: GRID_MARGIN_Y + row * (DESKTOP_ITEM_H + GRID_GAP),
   };
+}
+
+/** Resolve which desktop entry is under (x,y), or null. */
+export function hitTestDesktopIcon(
+  x: number,
+  y: number,
+  entries: string[],
+  layout: DesktopLayout,
+  screenW: number,
+  screenH: number,
+  panelH: number,
+): string | null {
+  const availH = screenH - panelH;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const name = entries[i]!;
+    const saved = layout[name];
+    const fallback = defaultIconPos(i, screenW, availH);
+    const ix = Math.max(
+      0,
+      Math.min(saved?.x ?? fallback.x, screenW - DESKTOP_ITEM_W),
+    );
+    const iy = Math.max(
+      0,
+      Math.min(saved?.y ?? fallback.y, availH - DESKTOP_ITEM_H),
+    );
+    if (
+      x >= ix &&
+      y >= iy &&
+      x < ix + DESKTOP_ITEM_W &&
+      y < iy + DESKTOP_ITEM_H
+    ) {
+      return name;
+    }
+  }
+  return null;
 }
 
 export type DesktopIconsProps = {
@@ -110,8 +145,8 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
     const fallback = defaultIconPos(i, screenW, availH);
     const rawX = saved?.x ?? fallback.x;
     const rawY = saved?.y ?? fallback.y;
-    const ix = Math.max(0, Math.min(rawX, screenW - ITEM_W));
-    const iy = Math.max(0, Math.min(rawY, availH - ITEM_H));
+    const ix = Math.max(0, Math.min(rawX, screenW - DESKTOP_ITEM_W));
+    const iy = Math.max(0, Math.min(rawY, availH - DESKTOP_ITEM_H));
 
     const filePath = path.join(dir, name);
     const dirEntry = isDirectory(filePath);
@@ -121,8 +156,8 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
       key: name,
       x: ix,
       y: iy,
-      width: ITEM_W,
-      height: ITEM_H,
+      width: DESKTOP_ITEM_W,
+      height: DESKTOP_ITEM_H,
       label: name,
       iconSize: ICON_SIZE,
       labelScrim: true,

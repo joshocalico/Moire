@@ -648,6 +648,21 @@ export type CompositorShell = {
   ): void;
   /** Return true when (x,y) is a valid desktop drop zone (defaults true). */
   hitDesktop?(x: number, y: number): boolean;
+  /**
+   * Paint a drag preview chip at the cursor (label + chrome).
+   * Called during an active DnD session when no client icon surface is available,
+   * or in addition as a fallback.
+   */
+  paintDragPreview?(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+    cursorX: number,
+    cursorY: number,
+    label: string,
+  ): void;
+  desktopDragLabel?(): string | null;
 };
 
 /** Seat clipboard selection (wl_data_device.set_selection). */
@@ -682,6 +697,8 @@ type DragSession = {
   /** DnD action bitmask from source. */
   actions: number;
   iconId: number | null;
+  /** Short label for the compositor/shell drag chip. */
+  label: string;
   /** Current drag target surface, or null if over desktop / no surface. */
   currentTarget: {
     session: ClientSession;
@@ -1290,11 +1307,16 @@ export class CompositorServer {
       mimeTypes: [...mimes],
       actions,
       iconId,
+      label: mimes.includes("text/uri-list")
+        ? "File"
+        : mimes.includes("text/plain")
+          ? "Text"
+          : "Item",
       currentTarget: null,
       enterSerial: 0,
     };
     console.log(
-      `[dnd] start source=${sourceId} mimes=${mimes.join(",")} actions=${actions}`,
+      `[dnd] start source=${sourceId} icon=${iconId ?? 0} mimes=${mimes.join(",")} actions=${actions}`,
     );
     this.markDirty();
   }
@@ -2635,6 +2657,61 @@ export class CompositorServer {
     }
   }
 
+  private paintDragPreview(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+  ): void {
+    const drag = this.drag;
+
+    // Prefer client-provided drag icon surface when it has pixels.
+    if (drag?.iconId != null) {
+      const surf = drag.sourceSession.surfaceById(drag.iconId);
+      if (surf?.pixels && surf.width > 0 && surf.height > 0) {
+        const dx = (this.cursorX | 0) + 12;
+        const dy = (this.cursorY | 0) + 10;
+        try {
+          this.blitArgb(
+            fb,
+            pitchPx,
+            width,
+            height,
+            dx,
+            dy,
+            surf.pixels,
+            surf.width,
+            surf.height,
+            surf.stride,
+          );
+          return;
+        } catch (err) {
+          console.warn("[dnd] icon blit failed:", err);
+        }
+      }
+    }
+
+    const label =
+      drag?.label ||
+      this.shell?.desktopDragLabel?.() ||
+      null;
+    if (!label) return;
+
+    try {
+      this.shell?.paintDragPreview?.(
+        fb,
+        pitchPx,
+        width,
+        height,
+        this.cursorX,
+        this.cursorY,
+        label,
+      );
+    } catch (err) {
+      console.warn("[dnd] chip paint failed:", err);
+    }
+  }
+
   private drawShapeCursor(
     fb: Uint32Array,
     pitchPx: number,
@@ -3065,6 +3142,7 @@ export class CompositorServer {
       } catch (err) {
         console.error("[shell] paint:", err);
       }
+      this.paintDragPreview(fb, pitchPx, kms.width, kms.height);
       this.drawCursor(fb, pitchPx, kms.width, kms.height);
       // Always flush — a mid-frame blit throw used to skip present entirely.
       flushMmap(kms.map, stage, kms.size);

@@ -17,7 +17,11 @@ import { themePalette } from "../theme.js";
 /* ---------- Bridge (plugged in by platform, optional) ---------- */
 
 type DndBridge = {
-  startDrag?: (payload: unknown, mimeTypes: string[]) => void;
+  startDrag?: (
+    payload: unknown,
+    mimeTypes: string[],
+    opts?: { label?: string },
+  ) => void;
 };
 
 let dndBridge: DndBridge | null = null;
@@ -87,11 +91,35 @@ export type DraggableProps = {
   height: number;
   mimeTypes?: string[];
   getPayload?: () => unknown;
+  /** Optional chip label; defaults to basename of file:// payload. */
+  label?: string;
   /** Fired on click (no drag). */
   onPress?: () => void;
   onDoublePress?: () => void;
   children?: ReactNode;
 };
+
+function labelFromPayload(payload: unknown, explicit?: string): string {
+  if (explicit && explicit.trim()) return explicit.trim();
+  if (typeof payload === "string") {
+    const line = payload
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.startsWith("file:"));
+    if (line) {
+      try {
+        const p = decodeURIComponent(line.replace(/^file:\/\//, ""));
+        const base = p.split("/").filter(Boolean).pop();
+        if (base) return base;
+      } catch {
+        /* fall through */
+      }
+    }
+    const t = payload.trim();
+    if (t) return t.length > 28 ? t.slice(0, 27) + "…" : t;
+  }
+  return "Item";
+}
 
 export function Draggable(props: DraggableProps): ReactNode {
   const [dragging, setDragging] = useState(false);
@@ -105,9 +133,10 @@ export function Draggable(props: DraggableProps): ReactNode {
     started.current = true;
     const payload = props.getPayload?.() ?? null;
     const types = props.mimeTypes ?? [];
+    const label = labelFromPayload(payload, props.label);
     activeDrag = { payload, mimeTypes: types };
     setDragging(true);
-    dndBridge?.startDrag?.(payload, types);
+    dndBridge?.startDrag?.(payload, types, { label });
   };
 
   const handleClick = () => {
