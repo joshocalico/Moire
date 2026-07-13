@@ -1,0 +1,89 @@
+# Moire documentation
+
+TypeScript compositing Wayland desktop: DRM/KMS compositor, React shell, and a portable UI toolkit (`@moire/ui`).
+
+This directory is meant to be browsed as a tree or fed to a Markdown site renderer. Start here, or use [SUMMARY.md](./SUMMARY.md) as a sidebar.
+
+## Guides
+
+| Doc | Description |
+| --- | --- |
+| [Getting started (dev VM)](./dev-vm.md) | Parallels Ubuntu VM, packages, day-0 smoke |
+| [Roadmap](./roadmap.md) | Shipped vs planned |
+| [Files & desktop (overview)](./files-and-desktop.md) | Day-0 Files, icons, DnD summary |
+
+## Architecture
+
+| Doc | Description |
+| --- | --- |
+| [Overview](./architecture/overview.md) | Packages, data flow, responsibilities |
+| [Paint order & input](./architecture/paint-and-input.md) | Composite stack, pointer routing |
+| [react-host](./architecture/react-host.md) | CPU scene graph + raster |
+
+## UI toolkit (`@moire/ui`)
+
+| Doc | Description |
+| --- | --- |
+| [UI overview](./ui/README.md) | App model, fonts, scale, theme access |
+| [Application & Window](./ui/application.md) | Lifecycle, event loop, content API |
+| [Widgets](./ui/widgets.md) | Full catalog, props, usage examples |
+| [Motion](./ui/motion.md) | `createMotionValue`, `easeTo`, ticking |
+| [Images & icons](./ui/images-and-icons.md) | PNG load, bundled icons |
+| [Platforms](./ui/platforms.md) | Wayland vs headless backends |
+
+## Theme & prefs
+
+| Doc | Description |
+| --- | --- |
+| [Theme & tokens](./theme/README.md) | Tokens, type roles, spacing |
+| [Wallpaper](./theme/wallpaper.md) | Atmosphere, gradient, image modes |
+| [Preferences](./reference/prefs.md) | `settings.json`, apply pipeline |
+
+## Shell & apps
+
+| Doc | Description |
+| --- | --- |
+| [Shell](./shell/README.md) | Panel, launcher, SSD, ShellBridge |
+| [Desktop icons](./shell/desktop.md) | Layout, hits, reposition drag |
+| [Files](./apps/files.md) | Places, grid/list, DnD |
+| [Settings](./apps/settings.md) | Appearance, live apply |
+| [Session](./apps/session.md) | `moire-session` day-0 boot |
+
+## Compositor
+
+| Doc | Description |
+| --- | --- |
+| [Compositor index](./compositor/README.md) | Core package map |
+| [Wayland DnD](./compositor/dnd.md) | `wl_data_device`, desktop drop, preview |
+| [Parallels DRM present](./parallels-drm-present.md) | Why `presentKms` is required |
+
+## Reference
+
+| Doc | Description |
+| --- | --- |
+| [Guest scripts](./reference/scripts.md) | `scripts/guest-*.sh` cheat sheet |
+| [Known issues](./known-issues.md) | Memory, Xwayland, CSD notes |
+
+## Repository layout
+
+```
+apps/
+  compositor/     Wayland compositor + WM
+  session/        moire-session (dbus + day-0 clients)
+  files/          Moire Files
+  settings/       Settings
+  portal/         xdg-desktop-portal stub
+packages/
+  protocol/       Wayland wire codec
+  core/           Surfaces, xdg-shell, DnD, composite
+  sys/            DRM/GBM/EGL/libinput FFI
+  theme/          Tokens + wallpaper
+  prefs/          User settings + apply
+  react-host/     React → CPU scene graph
+  ui/             App SDK + widgets
+  shell/          Panel, launcher, SSD, desktop
+  app-discovery/  .desktop discovery
+themes/
+  default/ light/ Bundled theme.json
+  Moire/          GTK theme for CSD clients
+```

@@ -4,25 +4,32 @@ A TypeScript **compositing Wayland desktop environment** — DRM/KMS-first, alwa
 
 > Day-0 bar: session D-Bus, Moire Files, foot, LibreOffice, overlapping composited windows with React decorations.
 
+## Documentation
+
+Full docs tree (roadmap, architecture, widget catalog, shell/apps, DnD, prefs): **[docs/README.md](docs/README.md)**.  
+Sidebar / SUMMARY for MD renderers: [docs/SUMMARY.md](docs/SUMMARY.md).
+
 ## Monorepo
 
 ```
 apps/
   compositor/     # Wayland compositor + WM binary
-  session/        # moire-session (dbus-run-session wrapper)
-  settings/       # stub
+  session/        # moire-session (dbus + day-0 clients)
+  files/          # Moire Files
+  settings/       # Appearance / prefs UI
   portal/         # stub xdg-desktop-portal-moire
 packages/
   protocol/       # Wayland wire codec
-  core/           # surfaces, xdg-shell, scene, spawn
+  core/           # surfaces, xdg-shell, DnD, composite
   sys/            # koffi FFI → libdrm, gbm, EGL, libinput, libc
-  theme/          # design tokens + wallpaper (theme.json loader)
-  react-host/     # react-reconciler → CPU scene graph + bitmap UI font
+  theme/          # design tokens + wallpaper
+  prefs/          # settings.json + apply
+  react-host/     # react-reconciler → CPU scene graph + TTF
+  ui/             # @moire/ui app SDK + widgets
+  shell/          # SSD, launcher, panel, desktop icons
   app-discovery/  # Freedesktop .desktop + icons
-  shell/          # SSD, launcher, panel, widget primitives
-themes/default/   # theme.json + wallpaper config
-themes/Moire/     # GTK3/GTK4 theme for CSD apps (LibreOffice, etc.)
-docs/dev-vm.md    # Parallels Ubuntu VM + DRM/VT runbook
+themes/           # bundled theme.json + GTK Moire theme
+docs/             # full documentation tree (start at docs/README.md)
 ```
 
 ## Requirements

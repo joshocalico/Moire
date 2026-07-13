@@ -106,7 +106,7 @@ From the Moire session (launcher / later tooling):
 | App | Notes |
 | --- | --- |
 | **foot** | Native Wayland terminal |
-| **Moire Files** | Day-0 file manager (`@moire/files`); desktop icons via shell |
+| **Moire Files** | Day-0 file manager (`@moire/files`); desktop icons via shell — see [files-and-desktop.md](./files-and-desktop.md) |
 | **LibreOffice** | May use XWayland; install `xwayland` |
 
 ## 6. Troubleshooting
