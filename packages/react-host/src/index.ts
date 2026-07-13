@@ -59,6 +59,15 @@ export type SceneNode = {
   onPointerMove?: HitHandler;
   onPointerUp?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
+  /** Opaque payload for position-aware lookups (e.g. DnD drop-target resolution). */
+  data?: unknown;
+  /**
+   * Fired when this specific region gains/loses "a compatible drag is
+   * hovering here" — geometric, per-instance, so two regions carrying the
+   * same `data` (e.g. a breadcrumb and a sidebar row for the same path)
+   * never cross-highlight each other.
+   */
+  onDropHoverChange?: (hovering: boolean) => void;
   children: SceneNode[];
   parent: SceneNode | null;
 };
@@ -75,6 +84,10 @@ export type HitRegion = {
   onPointerMove?: HitHandler;
   onPointerUp?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
+  /** Opaque payload for position-aware lookups (e.g. DnD drop-target resolution). */
+  data?: unknown;
+  /** See `SceneNode.onDropHoverChange`. */
+  onDropHoverChange?: (hovering: boolean) => void;
 };
 
 let nextId = 1;
@@ -181,6 +194,12 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   }
   if ("onWheel" in props) {
     node.onWheel = props.onWheel as ((ev: HitPointerEvent) => void) | undefined;
+  }
+  if ("data" in props) node.data = props.data;
+  if ("onDropHoverChange" in props) {
+    node.onDropHoverChange = props.onDropHoverChange as
+      | ((hovering: boolean) => void)
+      | undefined;
   }
   if (node.kind === "text" && node.text) {
     const m = measureNodeText(node.text, textStyleOf(node));
@@ -423,7 +442,10 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       node.onPointerDown ||
       node.onPointerMove ||
       node.onPointerUp ||
-      node.onWheel) &&
+      node.onWheel ||
+      // A pure position lookup tag (e.g. DropZone) with no pointer handlers
+      // still needs to be findable by hitTestDropData.
+      node.data !== undefined) &&
     node.width > 0 &&
     node.height > 0
   ) {
@@ -439,6 +461,8 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       onPointerMove: node.onPointerMove,
       onPointerUp: node.onPointerUp,
       onWheel: node.onWheel,
+      data: node.data,
+      onDropHoverChange: node.onDropHoverChange,
     });
   }
   for (const c of node.children) collectHits(c, out);

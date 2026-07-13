@@ -86,7 +86,8 @@ Implementation: `packages/shell/src/DesktopIcons.tsx`, wired from `packages/shel
 - Prefs: `showDesktopIcons` (default `true`).
 - **Pointer:** compositor calls `onDesktopPointerButton` / `onDesktopPointerMotion` only when no client surface is under the cursor (after panel and SSD).
 - Click selects; double-click opens with `xdg-open`.
-- Drag past a small threshold repositions the icon (live layout + preview chip); release persists layout.
+- Drag past a small threshold repositions the icon (live layout + preview chip); release on the desktop persists layout.
+- Drag onto a client window (e.g. Files) instead escalates to a real Wayland DnD source — the target gets a normal `text/uri-list` drop and the file moves there; see [Wayland DnD](./compositor/dnd.md).
 - Empty desktop is a drop sink for `text/uri-list` (`acceptDesktopDrop`).
 
 ## Drag and drop
@@ -108,9 +109,9 @@ Implementation: `packages/shell/src/DesktopIcons.tsx`, wired from `packages/shel
 
 ### Limits
 
-- Desktop icon drag is primarily **reposition** on the desktop; Files→desktop and Files↔Files use Wayland DnD.
 - No X11 XDND (Xwayland clients participate only via Wayland DnD).
 - No trash / gvfs network places / file thumbnails in this pass.
+- No explicit move-vs-copy chooser UI; move is preferred everywhere (matches Files↔Files, desktop↔Files).
 
 ## Pointer routing (compositor)
 

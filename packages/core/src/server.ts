@@ -404,6 +404,9 @@ function placePopupRelative(
 const XDG_DECORATION_MODE_CLIENT = 1;
 const XDG_DECORATION_MODE_SERVER = 2;
 
+/** Auto-cancel a drag with no motion/button activity for this long. */
+const DRAG_WATCHDOG_TIMEOUT_MS = 15_000;
+
 /** SSD titlebar height — keep in sync with @moire/shell TitleBar. */
 const SSD_TITLEBAR_H = 34;
 const SSD_TITLEBAR_BTN = 28;
@@ -637,8 +640,12 @@ export type CompositorShell = {
   needsRepaint?(): boolean;
   /** Drop SSD/panel caches after theme or prefs change. */
   invalidateChrome?(): void;
-  /** Called when a drag-and-drop lands on the desktop with no client target. */
-  acceptDesktopDrop?(uris: string[]): void;
+  /**
+   * Called when a drag-and-drop lands on the desktop with no client target.
+   * `x`/`y` are the drop position, so the shell can tell whether it landed
+   * on a folder icon (move in) vs. empty desktop (default placement).
+   */
+  acceptDesktopDrop?(uris: string[], x: number, y: number): void;
   /** Paint desktop icons / drop highlight after wallpaper, before windows. */
   paintDesktop?(
     fb: Uint32Array,
@@ -663,6 +670,36 @@ export type CompositorShell = {
     label: string,
   ): void;
   desktopDragLabel?(): string | null;
+  /**
+   * URI payload + label for the desktop icon currently mid local-reposition
+   * drag, if any. Used to escalate into a real compositor DnD session when
+   * the pointer crosses onto a client surface.
+   */
+  desktopDragUri?(): { uri: string; label: string } | null;
+  /**
+   * Called when an escalated (real-DnD) desktop-origin drag ends.
+   * `commit=true`: drop landed back on the desktop (or was cancelled) —
+   * finalize the reposition at (x, y). `commit=false`: drop was handed to a
+   * client target — clear local drag state without touching layout.
+   */
+  finishDesktopDrag?(commit: boolean, x: number, y: number): void;
+  /**
+   * Called on every drag motion while the pointer is over the desktop (no
+   * client surface) during an active DnD session — lets the shell
+   * live-highlight a folder icon under the cursor as a valid drop target,
+   * the same "dragenter/dragleave" affordance `@moire/ui`'s Draggable gets.
+   */
+  onDesktopDragHover?(x: number, y: number, mimeTypes: string[]): void;
+  /** Called when the drag leaves the desktop (entered a client) or ended. */
+  clearDesktopDragHover?(): void;
+  /**
+   * Force-clear an in-flight local desktop-icon drag. This state never
+   * touches the compositor's own `this.drag`, so neither Escape nor the
+   * drag watchdog would otherwise reach it. Called on Escape.
+   */
+  cancelDesktopDrag?(): void;
+  /** Polled unconditionally by the drag watchdog — see `cancelDesktopDrag`. */
+  checkDesktopDragWatchdog?(): void;
 };
 
 /** Seat clipboard selection (wl_data_device.set_selection). */
@@ -678,9 +715,74 @@ type DataSourceState = {
   dndActions: number;
 };
 
+/**
+ * Minimal surface a DnD source must expose. Real clients (`ClientSession`)
+ * satisfy this structurally; `ShellDragSource` is a synthetic in-process
+ * source for shell-originated drags (desktop icons) that have no wl_client
+ * backing them.
+ */
+type DragSourceLike = {
+  dataSourceMimes(sourceId: number): string[] | null;
+  dataSourceActions(sourceId: number): number;
+  sendDataSourceCancelled(sourceId: number): void;
+  sendDataSourceDndDropPerformed(sourceId: number): void;
+  sendDataSourceDndFinished(sourceId: number): void;
+  sendDataSourceSend(sourceId: number, mime: string, fd: number): void;
+  surfaceById(id: number): SurfaceState | null;
+};
+
+/**
+ * In-process DnD source for drags that start on the desktop icon layer
+ * (shell, not a real Wayland client). Answers `sendDataSourceSend` by
+ * writing the payload straight into the fd, the same way a real client's
+ * `data_source.send` handler would.
+ */
+class ShellDragSource implements DragSourceLike {
+  constructor(private readonly payloads: Map<string, string>) {}
+  dataSourceMimes(): string[] {
+    return [...this.payloads.keys()];
+  }
+  dataSourceActions(): number {
+    return 1 /* copy */ | 2 /* move */;
+  }
+  sendDataSourceCancelled(): void {
+    // No remote client to notify.
+  }
+  sendDataSourceDndDropPerformed(): void {
+    // No remote client to notify.
+  }
+  sendDataSourceDndFinished(): void {
+    // No remote client to notify.
+  }
+  sendDataSourceSend(_sourceId: number, mime: string, fd: number): void {
+    const text = this.payloads.get(mime);
+    if (text == null) {
+      try {
+        closeFd(fd);
+      } catch {
+        // ok
+      }
+      return;
+    }
+    try {
+      fs.writeSync(fd, Buffer.from(text, "utf8"));
+    } catch (err) {
+      console.warn("[dnd] ShellDragSource send failed:", err);
+    }
+    try {
+      closeFd(fd);
+    } catch {
+      // ok
+    }
+  }
+  surfaceById(): null {
+    return null;
+  }
+}
+
 type DataOfferState = {
-  /** Source that backs this offer (may be in another client). */
-  sourceSession: ClientSession;
+  /** Source that backs this offer (may be in another client, or synthetic). */
+  sourceSession: DragSourceLike;
   sourceId: number;
   mimeTypes: string[];
   /** wl_data_device that received this offer. */
@@ -691,7 +793,7 @@ type DataOfferState = {
 
 /** Active compositor-managed drag-and-drop session. */
 type DragSession = {
-  sourceSession: ClientSession;
+  sourceSession: DragSourceLike;
   sourceId: number;
   mimeTypes: string[];
   /** DnD action bitmask from source. */
@@ -761,6 +863,9 @@ export class CompositorServer {
   private selection: ClipboardSelection | null = null;
   /** Active DnD session (one at a time). */
   private drag: DragSession | null = null;
+  /** Timestamp of the last motion/button activity while `drag` is active. */
+  private dragActivityMs = 0;
+  private dragWatchdog: NodeJS.Timeout | null = null;
   private shell: CompositorShell | null = null;
   private drmFeedback: DrmFeedbackDevice | null = null;
   /** Shared format table memfd for feedback events. */
@@ -912,12 +1017,35 @@ export class CompositorServer {
       `Export: WAYLAND_DISPLAY=${this.displayName} XDG_RUNTIME_DIR=${this.runtimeDir}`,
     );
 
+    // Auto-cancel a drag that's gone quiet for too long — a lost
+    // terminating button-up (e.g. release happened outside the guest's
+    // input surface entirely, such as a VM window boundary) would otherwise
+    // leave `this.drag` stuck forever, wedging all pointer routing behind
+    // updateDragFocus and freezing the drag preview on screen.
+    this.dragWatchdog = setInterval(() => {
+      // Desktop-only reposition drags live in the shell rather than
+      // `this.drag`, so they need to be polled even when there is no active
+      // Wayland DnD session.
+      this.shell?.checkDesktopDragWatchdog?.();
+      if (!this.drag) return;
+      const idleMs = Date.now() - this.dragActivityMs;
+      if (idleMs > DRAG_WATCHDOG_TIMEOUT_MS) {
+        console.warn(`[dnd] watchdog: cancelling drag idle for ${idleMs}ms`);
+        this.cancelDrag();
+      }
+    }, 2000);
+    this.dragWatchdog.unref?.();
+
     this.running = true;
     this.loop();
   }
 
   stop(): void {
     this.running = false;
+    if (this.dragWatchdog) {
+      clearInterval(this.dragWatchdog);
+      this.dragWatchdog = null;
+    }
     this.xwm?.stop();
     this.xwm = null;
     this.evdev?.stop();
@@ -1318,7 +1446,50 @@ export class CompositorServer {
     console.log(
       `[dnd] start source=${sourceId} icon=${iconId ?? 0} mimes=${mimes.join(",")} actions=${actions}`,
     );
+    this.dragActivityMs = Date.now();
     this.markDirty();
+  }
+
+  /**
+   * Begin a compositor DnD session for a desktop icon drag, backed by a
+   * synthetic in-process source (no real wl_client owns it). Called when a
+   * local desktop-icon reposition drag crosses onto a client surface, so
+   * the target sees a normal text/uri-list drop like any other DnD source.
+   */
+  startDesktopDrag(uri: string, label: string): void {
+    if (this.drag) this.cancelDrag();
+    const source = new ShellDragSource(new Map([["text/uri-list", uri]]));
+    this.drag = {
+      sourceSession: source,
+      sourceId: 0,
+      mimeTypes: ["text/uri-list"],
+      actions: source.dataSourceActions(),
+      iconId: null,
+      label,
+      currentTarget: null,
+      enterSerial: 0,
+    };
+    console.log(`[dnd] start desktop-source label=${label}`);
+    this.dragActivityMs = Date.now();
+    this.markDirty();
+    this.updateDragFocus(monotonicMs());
+  }
+
+  /**
+   * When the pointer moves onto a client surface while a local desktop-icon
+   * drag is in progress (shell-tracked, not yet a compositor DnD session),
+   * promote it into a real drag so the client sees a normal DnD offer/drop
+   * instead of a plain hover. Checked (and hit-tested independently) before
+   * the normal pointer-focus path so the target never sees a stray hover
+   * enter/motion ahead of the DnD enter. Returns true if escalated.
+   */
+  private maybeEscalateDesktopDrag(): boolean {
+    if (this.drag) return false;
+    const desktopDrag = this.shell?.desktopDragUri?.();
+    if (!desktopDrag) return false;
+    if (!this.hitTest(this.cursorX, this.cursorY)) return false;
+    this.startDesktopDrag(desktopDrag.uri, desktopDrag.label);
+    return true;
   }
 
   cancelDrag(): void {
@@ -1328,6 +1499,10 @@ export class CompositorServer {
       drag.currentTarget.session.sendDndLeave(drag.currentTarget.deviceId);
     }
     drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
+    if (drag.sourceSession instanceof ShellDragSource) {
+      this.shell?.finishDesktopDrag?.(false, this.cursorX, this.cursorY);
+    }
+    this.shell?.clearDesktopDragHover?.();
     this.drag = null;
     console.log("[dnd] cancel");
     this.markDirty();
@@ -1336,6 +1511,7 @@ export class CompositorServer {
   private updateDragFocus(timeMs: number): void {
     const drag = this.drag;
     if (!drag) return;
+    this.dragActivityMs = Date.now();
 
     const hit = this.hitTest(this.cursorX, this.cursorY);
     const prev = drag.currentTarget;
@@ -1362,44 +1538,54 @@ export class CompositorServer {
       drag.currentTarget = null;
     }
 
-    if (hit) {
-      const deviceId = hit.session.firstDataDeviceId();
-      if (deviceId != null) {
-        const offerId = hit.session.createDndOffer(
+    if (!hit) {
+      // Over the desktop (no client surface) — let the shell live-highlight
+      // a folder icon under the cursor, mirroring dragenter/dragleave.
+      this.shell?.onDesktopDragHover?.(
+        this.cursorX,
+        this.cursorY,
+        drag.mimeTypes,
+      );
+      return;
+    }
+    this.shell?.clearDesktopDragHover?.();
+
+    const deviceId = hit.session.firstDataDeviceId();
+    if (deviceId != null) {
+      const offerId = hit.session.createDndOffer(
+        deviceId,
+        drag.sourceSession,
+        drag.sourceId,
+        drag.mimeTypes,
+        drag.actions,
+      );
+      if (offerId != null) {
+        const ssdY =
+          hit.surface.role === "toplevel" && this.usesSsd(hit.surface)
+            ? SSD_TITLEBAR_H
+            : 0;
+        const localX = this.cursorX - hit.surface.x;
+        const localY = this.cursorY - hit.surface.y - ssdY;
+        const serial = hit.session.nextSerial();
+        drag.enterSerial = serial;
+        hit.session.sendDndEnter(
           deviceId,
-          drag.sourceSession,
-          drag.sourceId,
-          drag.mimeTypes,
+          serial,
+          hit.surface.id,
+          localX,
+          localY,
+          offerId,
           drag.actions,
         );
-        if (offerId != null) {
-          const ssdY =
-            hit.surface.role === "toplevel" && this.usesSsd(hit.surface)
-              ? SSD_TITLEBAR_H
-              : 0;
-          const localX = this.cursorX - hit.surface.x;
-          const localY = this.cursorY - hit.surface.y - ssdY;
-          const serial = hit.session.nextSerial();
-          drag.enterSerial = serial;
-          hit.session.sendDndEnter(
-            deviceId,
-            serial,
-            hit.surface.id,
-            localX,
-            localY,
-            offerId,
-            drag.actions,
-          );
-          drag.currentTarget = {
-            session: hit.session,
-            surfaceId: hit.surface.id,
-            offerId,
-            deviceId,
-          };
-          console.log(
-            `[dnd] enter surface=${hit.surface.id} client=${hit.session.clientId}`,
-          );
-        }
+        drag.currentTarget = {
+          session: hit.session,
+          surfaceId: hit.surface.id,
+          offerId,
+          deviceId,
+        };
+        console.log(
+          `[dnd] enter surface=${hit.surface.id} client=${hit.session.clientId}`,
+        );
       }
     }
   }
@@ -1408,6 +1594,8 @@ export class CompositorServer {
     const drag = this.drag;
     if (!drag) return;
     this.drag = null;
+    this.shell?.clearDesktopDragHover?.();
+    const isDesktopSource = drag.sourceSession instanceof ShellDragSource;
 
     if (drag.currentTarget) {
       const target = drag.currentTarget;
@@ -1416,19 +1604,34 @@ export class CompositorServer {
       console.log(
         `[dnd] drop surface=${target.surfaceId} client=${target.session.clientId}`,
       );
+      if (isDesktopSource) {
+        // Handed off to a real client target — clear local desktop drag
+        // state without touching the icon's saved layout position.
+        this.shell?.finishDesktopDrag?.(false, this.cursorX, this.cursorY);
+      }
       // offer.finish from target will trigger dnd_finished; source destroyed
       // by the client when done.
+    } else if (isDesktopSource) {
+      // Dropped back on the desktop (or nowhere) — finalize as a reposition,
+      // not a self-copy through the acceptDesktopDrop path below.
+      this.shell?.finishDesktopDrag?.(true, this.cursorX, this.cursorY);
+      drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
     } else {
-      // Drop on desktop — request URI list and forward to shell.
+      // Drop on desktop — request URI list and forward to shell. Capture
+      // the drop position now; readDndData resolves asynchronously and the
+      // cursor could otherwise have moved by the time the callback runs.
       const shell = this.shell;
+      const dropX = this.cursorX;
+      const dropY = this.cursorY;
       if (
         shell?.acceptDesktopDrop &&
         drag.mimeTypes.includes("text/uri-list") &&
-        (shell.hitDesktop?.(this.cursorX, this.cursorY) ?? true)
+        (shell.hitDesktop?.(dropX, dropY) ?? true)
       ) {
         console.log("[dnd] desktop-drop requesting text/uri-list");
         this.readDndData(drag, "text/uri-list", (data) => {
           if (!data) {
+            console.warn("[dnd] desktop-drop readDndData returned null — nothing was read from the source");
             drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
             return;
           }
@@ -1438,7 +1641,7 @@ export class CompositorServer {
             .map((u) => u.trim())
             .filter((u) => u.length > 0 && !u.startsWith("#"));
           console.log(`[dnd] desktop-drop uris=${uris.join(",")}`);
-          if (uris.length > 0) shell.acceptDesktopDrop!(uris);
+          if (uris.length > 0) shell.acceptDesktopDrop!(uris, dropX, dropY);
           drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
         });
       } else {
@@ -1463,25 +1666,52 @@ export class CompositorServer {
       const pfds = Buffer.alloc(8);
       const rc = pipe2(pfds, O_CLOEXEC_FLAG);
       if (rc !== 0) {
+        console.warn(`[dnd] readDndData pipe2 failed rc=${rc}`);
         cb(null);
         return;
       }
       const readFd = pfds.readInt32LE(0);
       const writeFd = pfds.readInt32LE(4);
+      console.log(
+        `[dnd] readDndData pipe readFd=${readFd} writeFd=${writeFd} sourceId=${drag.sourceId} synthetic=${drag.sourceSession instanceof ShellDragSource}`,
+      );
       // Source client will write into writeFd (transferred via SCM_RIGHTS).
       drag.sourceSession.sendDataSourceSend(drag.sourceId, mime, writeFd);
+      console.log(`[dnd] readDndData sendDataSourceSend returned, awaiting stream`);
       // sendDataSourceSend closes writeFd on our side after sending.
-      const readable = fs.createReadStream("", {
-        fd: readFd,
-        autoClose: true,
-        start: 0,
-      });
       const chunks: Buffer[] = [];
-      readable.on("data", (chunk: Buffer | string) => {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      });
-      readable.on("end", () => cb(Buffer.concat(chunks)));
-      readable.on("error", () => cb(null));
+      const readBuf = Buffer.allocUnsafe(64 * 1024);
+      let finished = false;
+      const finish = (data: Buffer | null): void => {
+        if (finished) return;
+        finished = true;
+        try {
+          closeFd(readFd);
+        } catch {
+          // ok
+        }
+        cb(data);
+      };
+      const readNext = (): void => {
+        // Pipes are not seekable. Passing a null position is essential here;
+        // createReadStream with `start: 0` issues positioned reads and fails
+        // with ESPIPE even though the source wrote the payload successfully.
+        fs.read(readFd, readBuf, 0, readBuf.length, null, (err, bytesRead) => {
+          if (err) {
+            console.warn("[dnd] readDndData pipe read error:", err);
+            finish(null);
+            return;
+          }
+          if (bytesRead === 0) {
+            console.log(`[dnd] readDndData pipe end, ${chunks.length} chunks`);
+            finish(Buffer.concat(chunks));
+            return;
+          }
+          chunks.push(Buffer.from(readBuf.subarray(0, bytesRead)));
+          readNext();
+        });
+      };
+      readNext();
     } catch (err) {
       console.warn("[dnd] readDndData failed:", err);
       cb(null);
@@ -1490,7 +1720,7 @@ export class CompositorServer {
 
   /** Forward a DnD data_offer.receive to the drag source (like clipboard). */
   forwardDndReceive(
-    sourceSession: ClientSession,
+    sourceSession: DragSourceLike,
     sourceId: number,
     mime: string,
     fd: number,
@@ -1835,6 +2065,22 @@ export class CompositorServer {
       return;
     }
 
+    // Escape cancels an in-flight drag — an escape hatch for a drag that
+    // never receives its terminating button-up (e.g. release happened
+    // outside the guest input surface entirely) and would otherwise be
+    // stuck forever, since nothing else clears `this.drag`.
+    if (
+      ev.code === KEY_ESC &&
+      ev.value === 1 &&
+      (this.drag || this.shell?.desktopDragLabel?.())
+    ) {
+      if (this.drag) this.cancelDrag();
+      // A local desktop reposition has no compositor DragSession. This is
+      // also harmless after cancelDrag() cleared an escalated desktop drag.
+      this.shell?.cancelDesktopDrag?.();
+      return;
+    }
+
     // Escape dismisses grabbing popups (context menus).
     if (ev.code === KEY_ESC && ev.value === 1 && this.hasGrabbedPopup()) {
       this.dismissGrabbedPopups();
@@ -1871,6 +2117,10 @@ export class CompositorServer {
       this.markDirty();
       return;
     }
+    // Check before updatePointerFocus so a client the pointer just entered
+    // never sees a stray hover enter/motion ahead of the DnD enter.
+    // (startDesktopDrag already runs updateDragFocus once for this position.)
+    if (this.maybeEscalateDesktopDrag()) return;
     this.updatePointerFocus(ev.timeMs, true);
     this.updateHoverEdges();
     this.syncXwaylandPointer();
@@ -1904,6 +2154,10 @@ export class CompositorServer {
       this.markDirty();
       return;
     }
+    // Check before updatePointerFocus so a client the pointer just entered
+    // never sees a stray hover enter/motion ahead of the DnD enter.
+    // (startDesktopDrag already runs updateDragFocus once for this position.)
+    if (this.maybeEscalateDesktopDrag()) return;
     this.updatePointerFocus(ev.timeMs, true);
     this.updateHoverEdges();
     this.syncXwaylandPointer();
@@ -1961,6 +2215,11 @@ export class CompositorServer {
 
   private onPointerButton(ev: EvdevPointerButton): void {
     this.markDirty();
+    if (this.drag) {
+      console.log(
+        `[dnd] button code=${ev.code} value=${ev.value} at ${this.cursorX},${this.cursorY}`,
+      );
+    }
     if (ev.value === 0 && this.drag) {
       this.endDrag(ev.timeMs);
       return;
@@ -4228,7 +4487,7 @@ class ClientSession {
    */
   createDndOffer(
     deviceId: number,
-    sourceSession: ClientSession,
+    sourceSession: DragSourceLike,
     sourceId: number,
     mimeTypes: string[],
     actions: number,

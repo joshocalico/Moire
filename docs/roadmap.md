@@ -17,13 +17,13 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Desktop icons | Shipped — paint under windows, select/open, layout persist, reposition drag |
 | Wayland DnD | Shipped — compositor session, desktop drop sink, drag preview chip |
 | Panel / launcher chrome | Shipped — brand-forward panel, list launcher |
+| Desktop → Files DnD | Shipped — desktop-icon drag escalates to a real Wayland source when it crosses onto a client window |
 
 ## Near term
 
 | Item | Notes |
 | --- | --- |
-| DnD polish | Stronger drop highlights; Files↔desktop move vs copy; verify GTK `text/uri-list` peers |
-| Desktop → Files DnD | Today desktop drag is mostly reposition; full Wayland source from shell is open |
+| DnD polish | Stronger drop highlights; explicit move vs copy chooser; verify GTK `text/uri-list` peers |
 | Icon set | Richer bundled PNGs or Adwaita fallback; optional SVG later |
 | Files UX | Breadcrumb path control, keyboard nav in grid/list, multi-select |
 | Launcher | Icons from `.desktop`, categories, pinned apps |

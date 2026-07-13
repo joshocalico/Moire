@@ -46,7 +46,19 @@ import type {
   PointerButton,
   DndCapable,
 } from "../../platform.js";
-import { setDndBridge, notifyDrop, notifyDropHover, preferredDropMimes } from "../../widgets/dnd.js";
+import {
+  setDndBridge,
+  notifyDrop,
+  notifyDropHover,
+  preferredDropMimes,
+  notifyDragEnded,
+  type DragIconSpec,
+} from "../../widgets/dnd.js";
+import {
+  updateActiveWindowDropHover,
+  clearActiveWindowDropHover,
+} from "../../window.js";
+import { Icon } from "../../widgets/icon.js";
 
 const WL_DISPLAY_ID = 1;
 const WL_SHM_FORMAT_ARGB8888 = 0;
@@ -224,6 +236,9 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     offerId: number;
     mimes: string[];
     serial: number;
+    /** Latest window-local drop position from enter/motion. */
+    x: number;
+    y: number;
   } | null = null;
   /** Last pointer-button event serial from compositor. */
   private lastPointerSerial = 0;
@@ -358,6 +373,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           },
           this.lastPointerSerial,
           label,
+          opts?.icon,
         );
       },
     });
@@ -368,6 +384,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     getPayload: (mime: string) => string | Buffer | null,
     serial: number,
     label?: string,
+    icon?: DragIconSpec,
   ): void {
     if (!this.conn || !this.dataDeviceManagerId || !this.dataDeviceId) return;
     if (this.activeDrag) {
@@ -378,6 +395,10 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       }
       this.destroyDragIcon(this.activeDrag.iconSurfaceId);
       this.activeDrag = null;
+      // Preempted before the compositor ever sent cancelled/finished for it —
+      // the old Draggable would otherwise never learn its drag ended and
+      // stay stuck showing the dragging outline.
+      notifyDragEnded();
     }
 
     const sourceId = this.allocId();
@@ -393,7 +414,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     this.send(sourceId, OP.data_source_set_actions, (b) => b.uint(actions));
 
     const chipLabel = (label && label.trim()) || "Item";
-    const iconSurfaceId = this.createDragIconSurface(chipLabel);
+    const iconSurfaceId = this.createDragIconSurface(chipLabel, icon);
 
     this.activeDrag = { sourceId, iconSurfaceId, getPayload };
 
@@ -414,50 +435,105 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     );
   }
 
-  /** Build a small labeled chip surface for the drag icon. */
-  private createDragIconSurface(label: string): number {
-    const text = label.length > 26 ? label.slice(0, 25) + "…" : label;
-    const padX = 12;
-    const tw = measureText(text, 13 / 14);
-    const chipW = Math.max(80, Math.round(tw + padX * 2 + 8));
-    const chipH = 36;
+  /**
+   * Build the drag icon surface. With `icon`, renders the item's own
+   * icon graphic + label (like a compact grid tile); otherwise falls back
+   * to a plain text chip.
+   */
+  private createDragIconSurface(label: string, icon?: DragIconSpec): number {
     const pal = themePalette();
     const root = createShellRoot();
-    renderShell(
-      root,
-      createElement(
-        Group,
-        { x: 0, y: 0, width: chipW, height: chipH },
-        createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: chipW,
-          height: chipH,
-          fill: (pal.surface & 0x00ffffff) | 0xf2000000,
-        }),
-        createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: chipW,
-          height: 1,
-          fill: pal.rimLight,
-        }),
-        createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: 3,
-          height: chipH,
-          fill: pal.accentLine,
-        }),
-        createElement(Text, {
-          x: padX,
-          y: 11,
-          text,
-          color: pal.text,
-          fontSize: 13,
-        }),
-      ),
-    );
+    let chipW: number;
+    let chipH: number;
+
+    if (icon) {
+      const text = label.length > 20 ? label.slice(0, 19) + "…" : label;
+      const iconSize = 40;
+      const padX = 10;
+      const labelH = 16;
+      const tw = measureText(text, 12 / 14);
+      chipW = Math.max(iconSize + padX * 2, Math.round(tw) + padX * 2);
+      chipH = iconSize + labelH + 14;
+      renderShell(
+        root,
+        createElement(
+          Group,
+          { x: 0, y: 0, width: chipW, height: chipH },
+          createElement(Rect, {
+            x: 0,
+            y: 0,
+            width: chipW,
+            height: chipH,
+            fill: (pal.surface & 0x00ffffff) | 0xd8000000,
+          }),
+          createElement(Rect, {
+            x: 0,
+            y: 0,
+            width: chipW,
+            height: 1,
+            fill: pal.rimLight,
+          }),
+          createElement(
+            Group,
+            {
+              x: Math.floor((chipW - iconSize) / 2),
+              y: 8,
+              width: iconSize,
+              height: iconSize,
+            },
+            createElement(Icon, { name: icon.name, size: iconSize, color: icon.color }),
+          ),
+          createElement(Text, {
+            x: Math.max(2, Math.floor((chipW - tw) / 2)),
+            y: iconSize + 12,
+            text,
+            color: pal.text,
+            fontSize: 12,
+          }),
+        ),
+      );
+    } else {
+      const text = label.length > 26 ? label.slice(0, 25) + "…" : label;
+      const padX = 12;
+      const tw = measureText(text, 13 / 14);
+      chipW = Math.max(80, Math.round(tw + padX * 2 + 8));
+      chipH = 36;
+      renderShell(
+        root,
+        createElement(
+          Group,
+          { x: 0, y: 0, width: chipW, height: chipH },
+          createElement(Rect, {
+            x: 0,
+            y: 0,
+            width: chipW,
+            height: chipH,
+            fill: (pal.surface & 0x00ffffff) | 0xf2000000,
+          }),
+          createElement(Rect, {
+            x: 0,
+            y: 0,
+            width: chipW,
+            height: 1,
+            fill: pal.rimLight,
+          }),
+          createElement(Rect, {
+            x: 0,
+            y: 0,
+            width: 3,
+            height: chipH,
+            fill: pal.accentLine,
+          }),
+          createElement(Text, {
+            x: padX,
+            y: 11,
+            text,
+            color: pal.text,
+            fontSize: 13,
+          }),
+        ),
+      );
+    }
     const { pixels } = rasterize(root.container, chipW, chipH);
     const stride = chipW * 4;
     const size = stride * chipH;
@@ -547,11 +623,15 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       const fd = r.fd();
       const drag = this.activeDrag;
       if (drag?.sourceId !== sourceId) {
+        console.warn(
+          `[ui/dnd] data_source_send for source=${sourceId} but activeDrag.sourceId=${drag?.sourceId ?? "(none)"} — dropping fd`,
+        );
         try { closeFd(fd); } catch { /* ok */ }
         return;
       }
       const data = drag.getPayload(mime);
       if (data == null) {
+        console.warn(`[ui/dnd] data_source_send mime=${mime} getPayload returned null`);
         try { closeFd(fd); } catch { /* ok */ }
         return;
       }
@@ -561,7 +641,10 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         const written = Buffer.alloc(buf.length);
         buf.copy(written);
         fs.writeSync(fd, written);
-      } catch { /* target closed early — ignore */ }
+        console.log(`[ui/dnd] data_source_send wrote ${written.length} bytes for mime=${mime}`);
+      } catch (err) {
+        console.warn("[ui/dnd] data_source_send write failed:", err);
+      }
       try { closeFd(fd); } catch { /* ok */ }
     } else if (
       opcode === EV.data_source_cancelled ||
@@ -575,30 +658,36 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         this.activeDrag = null;
         this.handlers.delete(sourceId);
         this.send(sourceId, OP.data_source_destroy, () => {});
+        notifyDragEnded();
       }
     } else if (opcode === EV.data_source_dnd_drop_performed) {
-      // Drop occurred — we'll wait for finished/cancelled.
+      // The pointer gesture is over now. Keep the Wayland source and icon
+      // resources alive until finished/cancelled, but clear widget visuals
+      // immediately so transfer latency cannot leave or restore a preview.
       console.log(`[ui/dnd] drop performed source=${sourceId}`);
+      if (this.activeDrag?.sourceId === sourceId) notifyDragEnded();
     }
   }
 
   private handleDataDevice(opcode: number, r: MessageReader): void {
     if (opcode === EV.data_device_data_offer) {
       const offerId = r.uint();
-      this.incomingOffer = { offerId, mimes: [], serial: 0 };
+      this.incomingOffer = { offerId, mimes: [], serial: 0, x: 0, y: 0 };
       this.handlers.set(offerId, (op, rr) =>
         this.handleIncomingOffer(op, rr, offerId),
       );
     } else if (opcode === EV.data_device_enter) {
       const serial = r.uint();
       r.object(); // surface
-      readFixed(r); // x
-      readFixed(r); // y
+      const x = readFixed(r);
+      const y = readFixed(r);
       const offerId = r.object();
       if (this.incomingOffer && this.incomingOffer.offerId === offerId) {
         this.incomingOffer.serial = serial;
+        this.incomingOffer.x = x;
+        this.incomingOffer.y = y;
       } else if (offerId) {
-        this.incomingOffer = { offerId, mimes: [], serial };
+        this.incomingOffer = { offerId, mimes: [], serial, x, y };
       }
       const offer = this.incomingOffer;
       if (offer) {
@@ -613,10 +702,12 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         this.send(offer.offerId, OP.data_offer_set_actions, (b) =>
           b.uint(actions).uint(WL_DND_ACTION_MOVE),
         );
+        updateActiveWindowDropHover(x, y);
       }
       notifyDropHover(true);
     } else if (opcode === EV.data_device_leave) {
       notifyDropHover(false);
+      clearActiveWindowDropHover();
       if (this.incomingOffer) {
         try {
           this.send(this.incomingOffer.offerId, OP.data_offer_destroy, () => {});
@@ -628,12 +719,21 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       }
     } else if (opcode === EV.data_device_motion) {
       r.uint(); // time
-      readFixed(r); // x
-      readFixed(r); // y
+      const x = readFixed(r);
+      const y = readFixed(r);
+      if (this.incomingOffer) {
+        this.incomingOffer.x = x;
+        this.incomingOffer.y = y;
+        updateActiveWindowDropHover(x, y);
+      }
     } else if (opcode === EV.data_device_drop) {
       const offer = this.incomingOffer;
+      // Drop ends the hover gesture immediately. Payload transfer and the
+      // filesystem operation may finish later and must not keep the target
+      // preview visible in the meantime.
+      notifyDropHover(false);
+      clearActiveWindowDropHover();
       if (!offer) {
-        notifyDropHover(false);
         return;
       }
       const mime =
@@ -643,7 +743,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       this.receiveOfferData(offer.offerId, mime)
         .then((buf) => {
           const text = buf.toString("utf8");
-          notifyDrop(text, offer.mimes.length ? offer.mimes : [mime]);
+          notifyDrop(text, offer.mimes.length ? offer.mimes : [mime], offer.x, offer.y);
           try {
             this.send(offer.offerId, OP.data_offer_finish, () => {});
           } catch {
@@ -657,10 +757,23 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           this.handlers.delete(offer.offerId);
           this.incomingOffer = null;
           notifyDropHover(false);
+          clearActiveWindowDropHover();
         })
         .catch((err) => {
           console.warn("[ui/dnd] receive failed:", err);
-          notifyDropHover(false);
+          // This is still a terminal DnD path. Finish/destroy the offer so
+          // the source receives dnd_finished and can release its drag icon.
+          try {
+            this.send(offer.offerId, OP.data_offer_finish, () => {});
+          } catch {
+            /* ok */
+          }
+          try {
+            this.send(offer.offerId, OP.data_offer_destroy, () => {});
+          } catch {
+            /* ok */
+          }
+          this.handlers.delete(offer.offerId);
           this.incomingOffer = null;
         });
     } else if (opcode === EV.data_device_selection) {

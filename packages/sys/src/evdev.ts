@@ -45,6 +45,7 @@ function listKeyboardDevices(): string[] {
 export class EvdevKeyboard extends EventEmitter {
   private fds: number[] = [];
   private buffers = new Map<number, Buffer>();
+  private paths = new Map<number, string>();
   private timer: NodeJS.Timeout | null = null;
   private recent = new Map<string, number>();
 
@@ -57,6 +58,7 @@ export class EvdevKeyboard extends EventEmitter {
         const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
         this.fds.push(fd);
         this.buffers.set(fd, Buffer.alloc(0));
+        this.paths.set(fd, p);
         console.log(`[evdev] opened ${p} fd=${fd}`);
       } catch {
         // no permission or not a keyboard — skip
@@ -83,6 +85,7 @@ export class EvdevKeyboard extends EventEmitter {
     }
     this.fds = [];
     this.buffers.clear();
+    this.paths.clear();
     this.recent.clear();
   }
 
@@ -96,6 +99,7 @@ export class EvdevKeyboard extends EventEmitter {
   }
 
   private poll(): void {
+    const toReopen: { fd: number; path: string }[] = [];
     for (const fd of this.fds) {
       try {
         const chunk = Buffer.alloc(INPUT_EVENT_SIZE * 8);
@@ -119,8 +123,34 @@ export class EvdevKeyboard extends EventEmitter {
       } catch (err) {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "EAGAIN" || e.code === "EWOULDBLOCK") continue;
-        // device unplugged etc.
+        // Previously silent — a stale fd (device unplugged/replugged) would
+        // just stop being polled forever with no error and no recovery,
+        // e.g. Escape-to-cancel silently stops working too. Log and reopen.
+        const path = this.paths.get(fd) ?? "(unknown)";
+        console.warn(`[evdev] poll error on ${path} (fd=${fd}): ${e.code ?? e.message ?? e}`);
+        toReopen.push({ fd, path });
       }
+    }
+    for (const { fd, path } of toReopen) this.reopenDevice(fd, path);
+  }
+
+  private reopenDevice(oldFd: number, path: string): void {
+    this.fds = this.fds.filter((f) => f !== oldFd);
+    this.buffers.delete(oldFd);
+    this.paths.delete(oldFd);
+    try {
+      fs.closeSync(oldFd);
+    } catch {
+      // already gone
+    }
+    try {
+      const newFd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+      this.fds.push(newFd);
+      this.buffers.set(newFd, Buffer.alloc(0));
+      this.paths.set(newFd, path);
+      console.log(`[evdev] reopened ${path} as fd=${newFd}`);
+    } catch (err) {
+      console.warn(`[evdev] failed to reopen ${path}:`, err);
     }
   }
 }

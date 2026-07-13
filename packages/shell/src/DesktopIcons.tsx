@@ -2,7 +2,7 @@
  * Desktop icon layer — ~/Desktop entries as GridItem cells over wallpaper.
  */
 import { createElement, type ReactNode } from "react";
-import { Group } from "@moire/react-host";
+import { Group, Rect } from "@moire/react-host";
 import { GridItem, Icon, themePalette } from "@moire/ui";
 import fs from "node:fs";
 import path from "node:path";
@@ -58,7 +58,7 @@ function isDirectory(filePath: string): boolean {
   }
 }
 
-const ICON_SIZE = 52;
+export const ICON_SIZE = 52;
 export const DESKTOP_ITEM_W = 112;
 export const DESKTOP_ITEM_H = 100;
 const GRID_MARGIN_X = 28;
@@ -126,6 +126,14 @@ export type DesktopIconsProps = {
   entries: string[];
   layout: DesktopLayout;
   selectedName?: string;
+  /** Icon currently hovered by an active drag that would move into it. */
+  dropHoverName?: string | null;
+  /**
+   * A compatible drag is over the desktop generally (no specific folder
+   * hovered) — show a whole-area acceptor highlight, so "drop anywhere on
+   * the desktop" has the same dragenter feedback as a specific folder.
+   */
+  dragActive?: boolean;
   onSelect?: (name: string) => void;
   onOpen?: (name: string) => void;
 };
@@ -135,8 +143,9 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
   const pal = themePalette();
   const { entries, layout, screenW, screenH, panelH } = props;
   const availH = screenH - panelH;
+  const showAreaHighlight = props.dragActive && !props.dropHoverName;
 
-  if (entries.length === 0) return null;
+  if (entries.length === 0 && !showAreaHighlight) return null;
 
   const dir = desktopDir();
 
@@ -162,6 +171,7 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
       iconSize: ICON_SIZE,
       labelScrim: true,
       selected: props.selectedName === name,
+      dropHover: dirEntry && props.dropHoverName === name,
       icon: createElement(Icon, {
         name: iconName,
         size: ICON_SIZE,
@@ -175,6 +185,42 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
   return createElement(
     Group,
     { x: 0, y: 0, width: screenW, height: availH },
+    showAreaHighlight
+      ? createElement(Rect, {
+          x: 0,
+          y: 0,
+          width: screenW,
+          height: 3,
+          fill: pal.accent,
+        })
+      : null,
+    showAreaHighlight
+      ? createElement(Rect, {
+          x: 0,
+          y: availH - 3,
+          width: screenW,
+          height: 3,
+          fill: pal.accent,
+        })
+      : null,
+    showAreaHighlight
+      ? createElement(Rect, {
+          x: 0,
+          y: 0,
+          width: 3,
+          height: availH,
+          fill: pal.accent,
+        })
+      : null,
+    showAreaHighlight
+      ? createElement(Rect, {
+          x: screenW - 3,
+          y: 0,
+          width: 3,
+          height: availH,
+          fill: pal.accent,
+        })
+      : null,
     ...icons,
   );
 }

@@ -18,6 +18,44 @@ import { tickAllMotions } from "./motion.js";
 
 export type WindowSize = { width: number; height: number };
 
+/**
+ * Most recently mounted window, used by `hitTestDropData` to resolve DnD
+ * drop positions against the live scene tree. Apps in this toolkit are
+ * single-window, so a module-level "active window" is sufficient.
+ */
+let activeWindowForHitTest: Window | null = null;
+
+/**
+ * Look up the `data` payload (see `Draggable`'s `dropData` prop) of the
+ * topmost hit region at window-local (x, y), or null. Used to resolve a
+ * more specific DnD drop target than "somewhere in this window" — e.g.
+ * whether a drop landed on a particular folder row/cell.
+ */
+export function hitTestDropData(x: number, y: number): unknown {
+  return activeWindowForHitTest?.hitTestData(x, y) ?? null;
+}
+
+/** Geometric drop-hover update on the active window — see `Window.updateDropHover`. */
+export function updateActiveWindowDropHover(x: number, y: number): void {
+  activeWindowForHitTest?.updateDropHover(x, y);
+}
+
+/** Clear any drop-hover highlight on the active window. */
+export function clearActiveWindowDropHover(): void {
+  activeWindowForHitTest?.clearDropHover();
+}
+
+/**
+ * Mark the active window dirty so it repaints on the next tick. Needed by
+ * code that mutates React state outside `Window`'s own pointer handling
+ * (e.g. the DnD drop-zone hover system and drag-end reset, both driven by
+ * the Wayland event loop) — a `useState` setter alone doesn't tell
+ * `Window.tick()` a redraw is due.
+ */
+export function requestActiveWindowRedraw(): void {
+  activeWindowForHitTest?.requestRedraw();
+}
+
 export type WindowContent = ReactNode | ((size: WindowSize) => ReactNode);
 
 export type WindowOpts = {
@@ -53,6 +91,20 @@ export class Window {
   // Pointer state
   private hoverHit: HitRegion | null = null;
   private downPos: { x: number; y: number } | null = null;
+  /**
+   * The hit region that received the last `down`, held until `up`. Move/up
+   * events route here instead of being re-hit-tested at the live cursor
+   * position — implicit pointer capture, needed for drag gestures (which by
+   * definition move the cursor away from the pressed element's bounds).
+   */
+  private capturedHit: HitRegion | null = null;
+  /**
+   * The specific `data`-tagged region currently hovered by an external DnD
+   * drag (see `updateDropHover`). Geometric, not id-based — two regions
+   * carrying the same `data` (e.g. a breadcrumb and a sidebar row for the
+   * same path) never cross-highlight each other.
+   */
+  private hoveredDropRegion: HitRegion | null = null;
 
   // Motion timing
   private lastTickMs: number = Date.now();
@@ -114,6 +166,53 @@ export class Window {
     });
     pw.onPointer((ev) => this.handlePointer(ev));
     pw.onKey((ev) => this.handleKey(ev));
+    activeWindowForHitTest = this;
+  }
+
+  /** Topmost hit region's `data` at window-local (x, y), or null. */
+  hitTestData(x: number, y: number): unknown {
+    return this.findDropRegion(x, y)?.data ?? null;
+  }
+
+  private findDropRegion(x: number, y: number): HitRegion | null {
+    for (let i = this.hits.length - 1; i >= 0; i--) {
+      const h = this.hits[i]!;
+      if (
+        x >= h.x &&
+        x < h.x + h.width &&
+        y >= h.y &&
+        y < h.y + h.height &&
+        h.data !== undefined
+      ) {
+        return h;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Geometric drop-hover update: fires `onDropHoverChange` on exactly the
+   * region under (x, y) — not "any region whose `data` happens to match",
+   * which would cross-highlight unrelated regions sharing the same value
+   * (e.g. a breadcrumb and a sidebar row both tagged with the same path).
+   */
+  updateDropHover(x: number, y: number): void {
+    const next = this.findDropRegion(x, y);
+    if (next === this.hoveredDropRegion) return;
+    this.hoveredDropRegion?.onDropHoverChange?.(false);
+    next?.onDropHoverChange?.(true);
+    this.hoveredDropRegion = next;
+    // onDropHoverChange is a plain useState setter; nothing else tells
+    // tick() a redraw is due since this fires from the Wayland event loop.
+    this.requestRedraw();
+  }
+
+  /** Called on drag leave / drop / cancel. */
+  clearDropHover(): void {
+    if (!this.hoveredDropRegion) return;
+    this.hoveredDropRegion.onDropHoverChange?.(false);
+    this.hoveredDropRegion = null;
+    this.requestRedraw();
   }
 
   /** Rebuild + present if dirty. */
@@ -150,6 +249,7 @@ export class Window {
     this.closed = true;
     this.platformWin?.destroy();
     this.platformWin = null;
+    if (activeWindowForHitTest === this) activeWindowForHitTest = null;
   }
 
   /**
@@ -194,6 +294,16 @@ export class Window {
     if (this.closed) return;
 
     if (ev.type === "move") {
+      if (this.capturedHit) {
+        // Captured by an earlier `down` — keep delivering to that element
+        // even though the cursor has left its bounds (drag gesture), rather
+        // than re-hit-testing at the live position.
+        if (this.capturedHit.onPointerMove) {
+          this.capturedHit.onPointerMove(this.makeEvArgs(this.capturedHit, ev));
+        }
+        this.dirty = true;
+        return;
+      }
       const newHover = this.findTopHit(
         ev.x,
         ev.y,
@@ -230,6 +340,11 @@ export class Window {
         (h) => !!(h.onPointerDown || h.onPress),
       );
       this.downPos = { x: ev.x, y: ev.y };
+      // Capture for the duration of this press so move/up keep reaching this
+      // element regardless of where the cursor travels — required for drag
+      // gestures. Reset stale hover so the first post-release move re-derives it.
+      this.capturedHit = hit;
+      this.hoverHit = null;
       if (hit?.onPointerDown) {
         hit.onPointerDown(this.makeEvArgs(hit, ev));
         this.flushAndDirty();
@@ -240,11 +355,9 @@ export class Window {
     }
 
     if (ev.type === "up" && ev.button === "left") {
-      const hit = this.findTopHit(
-        ev.x,
-        ev.y,
-        (h) => !!(h.onPointerUp || h.onPress),
-      );
+      const hit =
+        this.capturedHit ??
+        this.findTopHit(ev.x, ev.y, (h) => !!(h.onPointerUp || h.onPress));
       if (hit?.onPointerUp) {
         hit.onPointerUp(this.makeEvArgs(hit, ev));
       }
@@ -253,13 +366,15 @@ export class Window {
         const dx = ev.x - this.downPos.x;
         const dy = ev.y - this.downPos.y;
         if (dx * dx + dy * dy < 100) {
-          const pressHit = this.findTopHit(ev.x, ev.y, (h) => !!h.onPress);
-          if (pressHit) {
-            pressHit.onPress!(this.makeEvArgs(pressHit, ev));
+          const pressHit =
+            this.capturedHit ?? this.findTopHit(ev.x, ev.y, (h) => !!h.onPress);
+          if (pressHit?.onPress) {
+            pressHit.onPress(this.makeEvArgs(pressHit, ev));
           }
         }
       }
       this.downPos = null;
+      this.capturedHit = null;
       this.flushAndDirty();
       return;
     }

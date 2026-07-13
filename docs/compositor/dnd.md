@@ -27,18 +27,23 @@ Moire implements full `wl_data_device` DnD between shell, Files, and (eventually
 
 ## Desktop specifics
 
-- Icon moves may use shell-local drag with a chip blit if not going through a client source.
+- A desktop icon press+move starts as a **local** reposition drag (shell-tracked position, chip preview, no compositor DnD session) — unchanged for drags that stay on the desktop.
+- If the pointer crosses onto a client surface (e.g. a Files window) while that local drag is active, the compositor **escalates**: `CompositorServer.startDesktopDrag(uri, label)` opens a real DnD session backed by a synthetic `ShellDragSource` (implements the same `sendDataSourceSend`/mimes/actions surface a real client source would, just writes the `file://` URI straight into the fd instead of proxying to a wl_client). From that point the target sees a normal `text/uri-list` offer/drop — no special-casing on the Files side.
+- Escalation is checked (via an independent hit-test) **before** the normal pointer-focus update on that motion event, so the target never gets a stray hover enter ahead of the DnD enter.
+- Ending an escalated drag: dropped on a client → handed off normally, shell clears its local drag state without touching the icon's saved position (the file may have moved). Dropped back on the desktop (or cancelled) → treated as a plain reposition, not a self-copy through `acceptDesktopDrop`.
 - Clicks are suppressed after a drag so select does not fire on release.
 - Nested `GridItem` / `ListItem` use `interactive={false}` so the `Draggable` hit layer owns press.
 
 ## Testing
 
 - Drag a file from Files onto the desktop and into another folder.
+- Drag a desktop icon onto an open Files window showing a different folder — confirm the file moves (rename, falling back to copy) into that folder and disappears from the desktop within the 2s poll.
+- Drag a desktop icon and release it back on the desktop (or over foot, which has no DnD target) — confirm it still just repositions, no copy/duplicate.
 - Confirm drag icon / chip follows the cursor (not only the default cursor).
 - Confirm window-under-cursor still receives clicks when not over icons.
 
 ## Gaps
 
 - Cross-app rich previews beyond label chip
-- Internal move vs copy chooser UI
+- Internal move vs copy chooser UI (currently prefers move, same as Files↔Files)
 - Headless platform has no DnD bridge

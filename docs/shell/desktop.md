@@ -9,7 +9,8 @@ Desktop = wallpaper + shell icon layer + Files as the day-0 file manager. Icons 
 | Click empty desktop | Clears selection (when no window under cursor) |
 | Click icon | Select |
 | Double-click | Open (Files / default handler) |
-| Drag icon | Reposition; persist layout |
+| Drag icon within desktop | Reposition; persist layout |
+| Drag icon onto a client window | Escalates to a real Wayland DnD source — target receives a normal `text/uri-list` drop |
 | Drop files on desktop | Place / copy semantics via DnD |
 | Click through | If a window is under the pointer, shell does not steal the click |
 
@@ -26,6 +27,10 @@ Stores icon positions keyed by path/id. Missing entries get auto-placed on a gri
 - PNG icons from `@moire/ui` (`Icon`)
 - Labels with optional scrim (`GridItem` `labelScrim`) for contrast on atmosphere wallpaper
 - Drag: Wayland drag icon when a client drag is active; shell chip via `paintDragPreview` / `desktopDragLabel` for icon moves
+
+## Dragging onto a client (Files)
+
+A desktop-icon drag starts purely local (no compositor DnD session). If the pointer moves onto a client surface while dragging, the compositor promotes it into a real `wl_data_device` session via `CompositorServer.startDesktopDrag`, backed by a synthetic in-process source (`ShellDragSource` in `packages/core/src/server.ts`) rather than a real `wl_client`. The target (e.g. Files' `DropTarget`) sees a normal `text/uri-list` offer and drop — no awareness that the source is shell-local. See [Wayland DnD](../compositor/dnd.md) for the full flow.
 
 ## Implementation map
 

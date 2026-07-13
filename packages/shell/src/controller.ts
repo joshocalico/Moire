@@ -10,7 +10,7 @@ import {
   type HitRegion,
   type ShellRoot,
 } from "@moire/react-host";
-import { installUiFonts, setUiScaleFactor, tickAllMotions } from "@moire/ui";
+import { installUiFonts, setUiScaleFactor, tickAllMotions, Icon, GridItem } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
 import { themePalette } from "@moire/theme";
 import { createElement, useEffect, useMemo } from "react";
@@ -30,6 +30,7 @@ import {
   hitTestDesktopIcon,
   DESKTOP_ITEM_W,
   DESKTOP_ITEM_H,
+  ICON_SIZE,
   type DesktopLayout,
 } from "./DesktopIcons.js";
 import type { SsdAction, SsdWindowInfo } from "./ssd.js";
@@ -105,8 +106,11 @@ export type ShellBridge = {
     width: number,
     height: number,
   ): void;
-  /** Parse file:// URIs, copy files to ~/Desktop, refresh icon list. */
-  acceptDesktopDrop(uris: string[]): void;
+  /**
+   * Parse file:// URIs and place them on the desktop. If (x, y) lands on a
+   * folder icon, moves into that folder instead of ~/Desktop's root.
+   */
+  acceptDesktopDrop(uris: string[], x: number, y: number): void;
   /** True if (x,y) is over a desktop drop zone (above the panel). */
   hitDesktop(x: number, y: number): boolean;
   /** Floating DnD chip under the cursor. */
@@ -121,6 +125,37 @@ export type ShellBridge = {
   ): void;
   /** Label for an in-progress desktop icon drag, if any. */
   desktopDragLabel?(): string | null;
+  /**
+   * URI payload + label for the desktop icon currently mid local-reposition
+   * drag, if any. The compositor escalates into a real DnD session with
+   * this payload when the pointer crosses onto a client surface.
+   */
+  desktopDragUri?(): { uri: string; label: string } | null;
+  /**
+   * Called when an escalated (real-DnD) desktop-origin drag ends.
+   * `commit=true`: finalize the reposition at (x, y). `commit=false`: the
+   * item was handed to a client target — clear local state, keep layout.
+   */
+  finishDesktopDrag?(commit: boolean, x: number, y: number): void;
+  /** Live-highlight a folder icon under (x, y) as a valid drop target. */
+  onDesktopDragHover?(x: number, y: number, mimeTypes: string[]): void;
+  /** Clear any desktop drop-hover highlight. */
+  clearDesktopDragHover?(): void;
+  /**
+   * Force-clear an in-flight local desktop-icon drag (reposition, not yet
+   * escalated to a real DnD session — that case is covered by the
+   * compositor's own drag watchdog/Escape handling instead). The icon stays
+   * at its last saved position; nothing is committed. Called on Escape.
+   */
+  cancelDesktopDrag?(): void;
+  /**
+   * Polled unconditionally by the compositor (regardless of whether a real
+   * DnD session is active) so a local desktop-icon drag that never receives
+   * its terminating release event doesn't stay stuck forever — this state
+   * never touches `this.drag`, so the compositor's own drag watchdog can't
+   * see it.
+   */
+  checkDesktopDragWatchdog?(): void;
 };
 
 const KEY_ESC = 1;
@@ -288,6 +323,10 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   let desktopEntries: string[] = listDesktopEntries();
   let desktopLayout: DesktopLayout = loadDesktopLayout();
   let desktopSelectedName: string | undefined;
+  /** Folder icon currently hovered by an active external/escalated drag. */
+  let desktopDropHoverName: string | null = null;
+  /** A compatible drag is over the desktop, regardless of a specific folder hit. */
+  let desktopDragActive = false;
   let desktopHits: HitRegion[] = [];
   let desktopOverlay: Uint8Array | null = null;
   let desktopW = 0;
@@ -303,11 +342,19 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     originX: number;
     originY: number;
   } | null = null;
+  /**
+   * When `desktopDrag` started. Purely local (never touches the compositor
+   * DnD session), so the compositor's own drag watchdog can't see it — if
+   * this gesture's release is ever lost, nothing else clears it. Checked by
+   * `checkDesktopDragWatchdog`, polled by the compositor unconditionally.
+   */
+  let desktopDragStartMs = 0;
+  const DESKTOP_DRAG_WATCHDOG_TIMEOUT_MS = 15_000;
   let desktopMotionTick = Date.now();
   const PANEL_BTN_LEFT = 0x110; // BTN_LEFT
   const dragChipRoot: ShellRoot = createShellRoot();
   let dragChipCache: {
-    label: string;
+    key: string;
     pixels: Uint8Array;
     w: number;
     h: number;
@@ -495,6 +542,8 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         entries: desktopEntries,
         layout: desktopLayout,
         selectedName: desktopSelectedName,
+        dropHoverName: desktopDropHoverName,
+        dragActive: desktopDragActive,
         onSelect: (name) => {
           desktopSelectedName = name;
           desktopDirty = true;
@@ -601,6 +650,97 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         onPress: h.onPress,
       });
     }
+  };
+
+  const desktopFolderAt = (
+    x: number,
+    y: number,
+    sourceName: string,
+  ): string | null => {
+    const pal = themePalette();
+    const targetName = hitTestDesktopIcon(
+      x,
+      y,
+      desktopEntries,
+      desktopLayout,
+      desktopW || 1,
+      desktopH || 1,
+      pal.panelHeight,
+    );
+    if (!targetName || targetName === sourceName) return null;
+    try {
+      return fs.statSync(path.join(desktopDir(), targetName)).isDirectory()
+        ? targetName
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * Finish a local desktop drag. Dropping over another folder moves the
+   * entry into it; every other desktop drop persists a new icon position.
+   */
+  const finalizeDesktopDrop = (x: number, y: number): void => {
+    if (!desktopDrag) return;
+    const drag = desktopDrag;
+    const pal = themePalette();
+    const availH = (desktopH || 1) - pal.panelHeight;
+
+    const targetName = desktopFolderAt(x, y, drag.name);
+    if (targetName) {
+      const src = path.join(desktopDir(), drag.name);
+      const dest = path.join(desktopDir(), targetName, drag.name);
+      try {
+        if (fs.existsSync(dest)) {
+          throw new Error(`destination already exists: ${dest}`);
+        }
+        fs.renameSync(src, dest);
+        const nextLayout = { ...desktopLayout };
+        delete nextLayout[drag.name];
+        desktopLayout = nextLayout;
+        saveDesktopLayout(desktopLayout);
+        desktopSelectedName = undefined;
+        desktopDrag = null;
+        desktopDown = null;
+        desktopDropHoverName = null;
+        desktopDragActive = false;
+        refreshDesktop();
+        console.log(`[shell] desktop local drop: ${src} → ${dest}`);
+        return;
+      } catch (err) {
+        console.error(
+          `[shell] desktop local drop failed for ${drag.name} onto ${targetName}:`,
+          err,
+        );
+        desktopDrag = null;
+        desktopDown = null;
+        desktopDropHoverName = null;
+        desktopDragActive = false;
+        desktopDirty = true;
+        return;
+      }
+    }
+
+    const nx = Math.max(
+      0,
+      Math.min(x - drag.grabX, (desktopW || 1) - DESKTOP_ITEM_W),
+    );
+    const ny = Math.max(
+      0,
+      Math.min(y - drag.grabY, availH - DESKTOP_ITEM_H),
+    );
+    desktopLayout = {
+      ...desktopLayout,
+      [drag.name]: { x: nx, y: ny },
+    };
+    saveDesktopLayout(desktopLayout);
+    desktopSelectedName = drag.name;
+    desktopDrag = null;
+    desktopDown = null;
+    desktopDropHoverName = null;
+    desktopDragActive = false;
+    desktopDirty = true;
   };
 
   return {
@@ -791,28 +931,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
       if (ev.value === 0) {
         if (desktopDrag) {
-          const pal2 = themePalette();
-          const availH = (desktopH || 1) - pal2.panelHeight;
-          const nx = Math.max(
-            0,
-            Math.min(
-              ev.x - desktopDrag.grabX,
-              (desktopW || 1) - DESKTOP_ITEM_W,
-            ),
-          );
-          const ny = Math.max(
-            0,
-            Math.min(ev.y - desktopDrag.grabY, availH - DESKTOP_ITEM_H),
-          );
-          desktopLayout = {
-            ...desktopLayout,
-            [desktopDrag.name]: { x: nx, y: ny },
-          };
-          saveDesktopLayout(desktopLayout);
-          desktopSelectedName = desktopDrag.name;
-          desktopDrag = null;
-          desktopDown = null;
-          desktopDirty = true;
+          finalizeDesktopDrop(ev.x, ev.y);
           return true;
         }
 
@@ -857,27 +976,26 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
             originX: ix,
             originY: iy,
           };
+          desktopDragStartMs = Date.now();
           desktopSelectedName = name;
           desktopDirty = true;
         }
       }
 
       if (desktopDrag) {
-        const pal = themePalette();
-        const availH = (desktopH || 1) - pal.panelHeight;
-        const nx = Math.max(
-          0,
-          Math.min(ev.x - desktopDrag.grabX, (desktopW || 1) - DESKTOP_ITEM_W),
-        );
-        const ny = Math.max(
-          0,
-          Math.min(ev.y - desktopDrag.grabY, availH - DESKTOP_ITEM_H),
-        );
-        desktopLayout = {
-          ...desktopLayout,
-          [desktopDrag.name]: { x: nx, y: ny },
-        };
-        desktopDirty = true;
+        // Traditional drag semantics: the icon stays put (desktopLayout is
+        // untouched) while a translucent ghost tracks the cursor via
+        // paintDragPreview; the real position only commits on drop, in
+        // finalizeDesktopDrop. No desktop-layer rebuild needed here.
+        const nextDropHover = desktopFolderAt(ev.x, ev.y, desktopDrag.name);
+        if (
+          nextDropHover !== desktopDropHoverName ||
+          !desktopDragActive
+        ) {
+          desktopDropHoverName = nextDropHover;
+          desktopDragActive = true;
+          desktopDirty = true;
+        }
         return;
       }
 
@@ -965,28 +1083,55 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       }
       if (!desktopOverlay) return;
       blendOverlay(fb, pitchPx, width, height, desktopOverlay);
-      // While dragging a desktop icon, paint a floating chip under the cursor.
-      if (desktopDrag) {
-        // Cursor position is not passed here — paintDragPreview is used from
-        // compositor during Wayland DnD. For desktop-local drag, re-render the
-        // icon at the live layout position by temporarily updating layout.
-      }
     },
 
-    acceptDesktopDrop(uris) {
-      const dest = desktopDir();
+    acceptDesktopDrop(uris, x, y) {
+      const root = desktopDir();
       try {
-        fs.mkdirSync(dest, { recursive: true });
+        fs.mkdirSync(root, { recursive: true });
       } catch {
         // ignore
       }
+
+      // If the drop landed on a folder icon, move into that folder instead
+      // of the desktop root.
+      const pal = themePalette();
+      const hitName = hitTestDesktopIcon(
+        x,
+        y,
+        desktopEntries,
+        desktopLayout,
+        desktopW || 1,
+        desktopH || 1,
+        pal.panelHeight,
+      );
+      let dest = root;
+      if (hitName) {
+        const hitPath = path.join(root, hitName);
+        try {
+          if (fs.statSync(hitPath).isDirectory()) dest = hitPath;
+        } catch {
+          // ignore
+        }
+      }
+      const intoFolder = dest !== root;
+
       for (const uri of uris) {
         if (!uri.startsWith("file://")) continue;
         const src = decodeURIComponent(uri.slice("file://".length));
+        const destPath = path.join(dest, path.basename(src));
+        if (src === destPath) continue;
         try {
-          const base = path.basename(src);
-          fs.copyFileSync(src, path.join(dest, base));
-          console.log(`[shell] desktop drop: ${src} → ${dest}/${base}`);
+          if (intoFolder) {
+            try {
+              fs.renameSync(src, destPath);
+            } catch {
+              fs.copyFileSync(src, destPath);
+            }
+          } else {
+            fs.copyFileSync(src, destPath);
+          }
+          console.log(`[shell] desktop drop: ${src} → ${destPath}`);
         } catch (err) {
           console.error(`[shell] desktop drop failed for ${src}:`, err);
         }
@@ -1003,65 +1148,195 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     },
 
     paintDragPreview(fb, pitchPx, _width, _height, cursorX, cursorY, label) {
-      const text = label.length > 28 ? label.slice(0, 27) + "…" : label;
+      const text = label.length > 24 ? label.slice(0, 23) + "…" : label;
+      // Desktop-origin drags (the only ones without a real Wayland icon
+      // surface, so the only ones that ever reach this chip fallback) get a
+      // translucent copy of the actual tile (same GridItem, same shape) that
+      // tracks the original grab point — a traditional OS-style ghost, not
+      // a live-moving icon. Other sources (rare: a real client drag with no
+      // icon surface of its own) fall back to a plain text chip.
+      const isDesktopDrag = desktopDrag?.name === label;
+      let dirEntry = false;
+      if (isDesktopDrag) {
+        try {
+          dirEntry = fs.statSync(path.join(desktopDir(), label)).isDirectory();
+        } catch {
+          // ignore
+        }
+      }
+      const chipW = isDesktopDrag ? DESKTOP_ITEM_W : 0;
+      const chipH = isDesktopDrag ? DESKTOP_ITEM_H : 0;
       const padX = 12;
       const padY = 8;
       const tw = measureText(text, 13 / 14);
-      const chipW = Math.max(72, Math.round(tw + padX * 2 + 28));
-      const chipH = 36;
-      if (!dragChipCache || dragChipCache.label !== text) {
+      const plainW = Math.max(72, Math.round(tw + padX * 2 + 28));
+      const plainH = 36;
+      const w = isDesktopDrag ? chipW : plainW;
+      const h = isDesktopDrag ? chipH : plainH;
+      const cacheKey = `${text}|${isDesktopDrag}|${dirEntry}`;
+      if (!dragChipCache || dragChipCache.key !== cacheKey) {
         const pal = themePalette();
         renderShell(
           dragChipRoot,
-          createElement(
-            Group,
-            { x: 0, y: 0, width: chipW, height: chipH },
-            createElement(Rect, {
-              x: 0,
-              y: 0,
-              width: chipW,
-              height: chipH,
-              fill: (pal.surface & 0x00ffffff) | 0xf0000000,
-            }),
-            createElement(Rect, {
-              x: 0,
-              y: 0,
-              width: chipW,
-              height: 1,
-              fill: pal.rimLight,
-            }),
-            createElement(Rect, {
-              x: 0,
-              y: 0,
-              width: 3,
-              height: chipH,
-              fill: pal.accentLine,
-            }),
-            createElement(Label, {
-              x: padX + 4,
-              y: padY,
-              text,
-              color: pal.text,
-              fontSize: 13,
-              fontWeight: "medium",
-            }),
-          ),
+          isDesktopDrag
+            ? createElement(
+                Group,
+                { x: 0, y: 0, width: w, height: h, opacity: 0.6 },
+                createElement(GridItem, {
+                  width: w,
+                  height: h,
+                  label: text,
+                  iconSize: ICON_SIZE,
+                  labelScrim: true,
+                  interactive: false,
+                  icon: createElement(Icon, {
+                    name: dirEntry ? "folder" : "file",
+                    size: ICON_SIZE,
+                    color: dirEntry ? pal.accent : pal.text,
+                  }),
+                }),
+              )
+            : createElement(
+                Group,
+                { x: 0, y: 0, width: w, height: h },
+                createElement(Rect, {
+                  x: 0,
+                  y: 0,
+                  width: w,
+                  height: h,
+                  fill: (pal.surface & 0x00ffffff) | 0xf0000000,
+                }),
+                createElement(Rect, {
+                  x: 0,
+                  y: 0,
+                  width: w,
+                  height: 1,
+                  fill: pal.rimLight,
+                }),
+                createElement(Rect, {
+                  x: 0,
+                  y: 0,
+                  width: 3,
+                  height: h,
+                  fill: pal.accentLine,
+                }),
+                createElement(Label, {
+                  x: padX + 4,
+                  y: padY,
+                  text,
+                  color: pal.text,
+                  fontSize: 13,
+                  fontWeight: "medium",
+                }),
+              ),
         );
-        const painted = rasterize(dragChipRoot.container, chipW, chipH);
+        const painted = rasterize(dragChipRoot.container, w, h);
         dragChipCache = {
-          label: text,
+          key: cacheKey,
           pixels: painted.pixels,
-          w: chipW,
-          h: chipH,
+          w,
+          h,
         };
       }
       const chip = dragChipCache;
-      const dx = (cursorX | 0) + 14;
-      const dy = (cursorY | 0) + 12;
+      // Desktop drags track the original grab point (where the icon would
+      // land if dropped now); other chips float near the cursor.
+      const dx = isDesktopDrag
+        ? (cursorX | 0) - (desktopDrag?.grabX ?? 0)
+        : (cursorX | 0) + 14;
+      const dy = isDesktopDrag
+        ? (cursorY | 0) - (desktopDrag?.grabY ?? 0)
+        : (cursorY | 0) + 12;
       blitStrip(fb, pitchPx, _width, _height, dx, dy, chip.pixels, chip.w, chip.h);
     },
 
     desktopDragLabel: () => (desktopDrag ? desktopDrag.name : null),
+
+    desktopDragUri: () => {
+      if (!desktopDrag) return null;
+      const filePath = path.join(desktopDir(), desktopDrag.name);
+      return { uri: `file://${encodeURI(filePath)}\n`, label: desktopDrag.name };
+    },
+
+    finishDesktopDrag: (commit, x, y) => {
+      if (!desktopDrag) return;
+      if (commit) {
+        finalizeDesktopDrop(x, y);
+      } else {
+        desktopDrag = null;
+        desktopDown = null;
+        desktopDirty = true;
+      }
+    },
+
+    onDesktopDragHover: (x, y, mimeTypes) => {
+      const active = mimeTypes.includes("text/uri-list");
+      let next: string | null = null;
+      if (active) {
+        const pal = themePalette();
+        const hitName = hitTestDesktopIcon(
+          x,
+          y,
+          desktopEntries,
+          desktopLayout,
+          desktopW || 1,
+          desktopH || 1,
+          pal.panelHeight,
+        );
+        if (hitName !== desktopDropHoverName) {
+          const bounds = desktopEntries.map((n) => {
+            const saved = desktopLayout[n];
+            return `${n}@${saved ? `${saved.x},${saved.y}` : "(default)"}`;
+          });
+          console.log(
+            `[shell] desktop-hover hit-test x=${x} y=${y} desktopW=${desktopW} desktopH=${desktopH} panelH=${pal.panelHeight} -> ${hitName ?? "(none)"} | entries: ${bounds.join(" ")}`,
+          );
+        }
+        if (hitName) {
+          try {
+            if (fs.statSync(path.join(desktopDir(), hitName)).isDirectory()) {
+              next = hitName;
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+      if (next !== desktopDropHoverName || active !== desktopDragActive) {
+        desktopDropHoverName = next;
+        desktopDragActive = active;
+        desktopDirty = true;
+      }
+    },
+
+    clearDesktopDragHover: () => {
+      if (desktopDropHoverName !== null || desktopDragActive) {
+        desktopDropHoverName = null;
+        desktopDragActive = false;
+        desktopDirty = true;
+      }
+    },
+
+    cancelDesktopDrag: () => {
+      if (!desktopDrag) return;
+      console.warn(`[shell] desktop-drag cancelled (was dragging "${desktopDrag.name}")`);
+      desktopDrag = null;
+      desktopDown = null;
+      desktopDirty = true;
+    },
+
+    checkDesktopDragWatchdog: () => {
+      if (!desktopDrag) return;
+      const idleMs = Date.now() - desktopDragStartMs;
+      if (idleMs > DESKTOP_DRAG_WATCHDOG_TIMEOUT_MS) {
+        console.warn(
+          `[shell] desktop-drag watchdog: clearing stuck drag "${desktopDrag.name}" idle for ${idleMs}ms`,
+        );
+        desktopDrag = null;
+        desktopDown = null;
+        desktopDirty = true;
+      }
+    },
   };
 }
 

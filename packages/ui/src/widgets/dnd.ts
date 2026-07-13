@@ -13,14 +13,18 @@ import {
 } from "react";
 import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
 import { themePalette } from "../theme.js";
+import { requestActiveWindowRedraw } from "../window.js";
 
 /* ---------- Bridge (plugged in by platform, optional) ---------- */
+
+/** Icon graphic for the drag preview — same shape as `Icon`'s name/color. */
+export type DragIconSpec = { name: string; color?: number };
 
 type DndBridge = {
   startDrag?: (
     payload: unknown,
     mimeTypes: string[],
-    opts?: { label?: string },
+    opts?: { label?: string; icon?: DragIconSpec },
   ) => void;
 };
 
@@ -34,7 +38,7 @@ export function setDndBridge(b: DndBridge | null): void {
 
 export type DropSink = {
   mimeTypes: string[];
-  onDrop: (payload: unknown, mimeTypes: string[]) => void;
+  onDrop: (payload: unknown, mimeTypes: string[], x: number, y: number) => void;
   onHover?: (hovering: boolean) => void;
 };
 
@@ -52,14 +56,23 @@ export function notifyDropHover(hovering: boolean): void {
   for (const s of dropSinks) s.onHover?.(hovering);
 }
 
-/** Called by the Wayland platform after receiving drop payload bytes. */
-export function notifyDrop(payload: unknown, mimeTypes: string[]): void {
+/**
+ * Called by the Wayland platform after receiving drop payload bytes.
+ * `x`/`y` are window-local pixel coordinates of the drop, for callers that
+ * want to resolve a more specific target (e.g. `hitTestDropData`).
+ */
+export function notifyDrop(
+  payload: unknown,
+  mimeTypes: string[],
+  x: number,
+  y: number,
+): void {
   for (const s of dropSinks) {
     if (
       s.mimeTypes.length === 0 ||
       mimeTypes.some((m) => s.mimeTypes.includes(m))
     ) {
-      s.onDrop(payload, mimeTypes);
+      s.onDrop(payload, mimeTypes, x, y);
     }
   }
 }
@@ -80,7 +93,78 @@ export function preferredDropMimes(): string[] {
 
 let activeDrag: { payload: unknown; mimeTypes: string[] } | null = null;
 
+/**
+ * Reset callback for the `Draggable` currently mid-drag, if any. A real
+ * Wayland drag never delivers a local `onPointerUp` back to the source once
+ * `data_device.start_drag` is sent — the compositor intercepts button-up
+ * for DnD globally, even for a drop within the same window — so the source
+ * can't clear its own "dragging" visual on release. The platform calls
+ * `notifyDragEnded` when it gets `data_source_cancelled`/`dnd_finished`.
+ */
+let activeDragEndCb: (() => void) | null = null;
+
+export function notifyDragEnded(): void {
+  activeDrag = null;
+  const cb = activeDragEndCb;
+  activeDragEndCb = null;
+  cb?.();
+  requestActiveWindowRedraw();
+}
+
 const DRAG_THRESHOLD_PX = 6;
+
+/**
+ * Wash + 2px accent border, the shared "a compatible drag is hovering this
+ * element" visual for `Draggable`'s drop-zone mode and `DropZone`.
+ */
+function dropHoverRects(
+  width: number,
+  height: number,
+  pal: ReturnType<typeof themePalette>,
+): ReactNode[] {
+  return [
+    createElement(Rect, {
+      key: "wash",
+      x: 1,
+      y: 1,
+      width: width - 2,
+      height: height - 2,
+      fill: pal.selection,
+    }),
+    createElement(Rect, {
+      key: "top",
+      x: 0,
+      y: 0,
+      width,
+      height: 2,
+      fill: pal.accent,
+    }),
+    createElement(Rect, {
+      key: "bottom",
+      x: 0,
+      y: height - 2,
+      width,
+      height: 2,
+      fill: pal.accent,
+    }),
+    createElement(Rect, {
+      key: "left",
+      x: 0,
+      y: 0,
+      width: 2,
+      height,
+      fill: pal.accent,
+    }),
+    createElement(Rect, {
+      key: "right",
+      x: width - 2,
+      y: 0,
+      width: 2,
+      height,
+      fill: pal.accent,
+    }),
+  ];
+}
 
 /* ---------- Draggable ---------- */
 
@@ -93,6 +177,19 @@ export type DraggableProps = {
   getPayload?: () => unknown;
   /** Optional chip label; defaults to basename of file:// payload. */
   label?: string;
+  /** Icon shown in the drag preview (the item's own graphic instead of a plain chip). */
+  previewIcon?: DragIconSpec;
+  /**
+   * Opaque payload exposed via `hitTestDropData(x, y)` when a drop lands on
+   * this element's bounds — lets a widget also act as a drop target (e.g. a
+   * folder row that other items can be dropped onto to move into it).
+   *
+   * When set, this element also gets a live hover highlight (dragenter /
+   * dragleave style) while a drag is geometrically over it — resolved
+   * per-instance by position, so another element that happens to carry the
+   * same `dropData` value never lights up instead.
+   */
+  dropData?: unknown;
   /** Fired on click (no drag). */
   onPress?: () => void;
   onDoublePress?: () => void;
@@ -123,6 +220,7 @@ function labelFromPayload(payload: unknown, explicit?: string): string {
 
 export function Draggable(props: DraggableProps): ReactNode {
   const [dragging, setDragging] = useState(false);
+  const [dropHover, setDropHover] = useState(false);
   const pal = themePalette();
   const down = useRef<{ x: number; y: number } | null>(null);
   const started = useRef(false);
@@ -136,7 +234,12 @@ export function Draggable(props: DraggableProps): ReactNode {
     const label = labelFromPayload(payload, props.label);
     activeDrag = { payload, mimeTypes: types };
     setDragging(true);
-    dndBridge?.startDrag?.(payload, types, { label });
+    activeDragEndCb = () => {
+      setDragging(false);
+      down.current = null;
+      started.current = false;
+    };
+    dndBridge?.startDrag?.(payload, types, { label, icon: props.previewIcon });
   };
 
   const handleClick = () => {
@@ -166,6 +269,8 @@ export function Draggable(props: DraggableProps): ReactNode {
       width: props.width,
       height: props.height,
       fill: 0x00000000,
+      data: props.dropData,
+      onDropHoverChange: props.dropData !== undefined ? setDropHover : undefined,
       onPointerDown: (ev: HitPointerEvent) => {
         down.current = { x: ev.localX, y: ev.localY };
         started.current = false;
@@ -227,6 +332,54 @@ export function Draggable(props: DraggableProps): ReactNode {
           fill: pal.accent,
         })
       : null,
+    // Drop-zone acceptor highlight — a compatible drag is hovering this
+    // element specifically (web dragenter/dragleave equivalent).
+    ...(dropHover ? dropHoverRects(props.width, props.height, pal) : []),
+  );
+}
+
+/* ---------- DropZone ---------- */
+
+export type DropZoneProps = {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  /** Payload exposed via `hitTestDropData(x, y)` when a drop lands here. */
+  id: unknown;
+  children?: ReactNode;
+};
+
+/**
+ * Drop-target-only counterpart to `Draggable`'s `dropData` mode — for
+ * elements that should accept drops but aren't themselves draggable (e.g. a
+ * Places sidebar row or breadcrumb segment). Same acceptor semantics: live
+ * hover highlight while a drag is geometrically over it, resolved by
+ * `hitTestDropData` at drop time.
+ */
+export function DropZone(props: DropZoneProps): ReactNode {
+  const [hover, setHover] = useState(false);
+  const pal = themePalette();
+
+  return createElement(
+    Group,
+    {
+      x: props.x ?? 0,
+      y: props.y ?? 0,
+      width: props.width,
+      height: props.height,
+    },
+    props.children,
+    createElement(Rect, {
+      x: 0,
+      y: 0,
+      width: props.width,
+      height: props.height,
+      fill: 0x00000000,
+      data: props.id,
+      onDropHoverChange: setHover,
+    }),
+    ...(hover ? dropHoverRects(props.width, props.height, pal) : []),
   );
 }
 
@@ -238,7 +391,7 @@ export type DropTargetProps = {
   width: number;
   height: number;
   mimeTypes?: string[];
-  onDrop?: (payload: unknown, mimeTypes: string[]) => void;
+  onDrop?: (payload: unknown, mimeTypes: string[], x: number, y: number) => void;
   children?: ReactNode;
 };
 
@@ -247,10 +400,18 @@ export function DropTarget(props: DropTargetProps): ReactNode {
   const pal = themePalette();
   const mimeTypes = props.mimeTypes ?? [];
 
+  // Registration below is intentionally a one-time effect (stable sink
+  // identity for the widget's lifetime), but `onDrop` closes over per-render
+  // state in callers (e.g. Files' current `cwd`). Route through a ref that's
+  // updated every render so the sink always dispatches to the latest
+  // callback instead of the one captured at mount.
+  const onDropRef = useRef(props.onDrop);
+  onDropRef.current = props.onDrop;
+
   useEffect(() => {
     return registerDropSink({
       mimeTypes,
-      onDrop: (payload, mimes) => props.onDrop?.(payload, mimes),
+      onDrop: (payload, mimes, x, y) => onDropRef.current?.(payload, mimes, x, y),
       onHover: setHovered,
     });
     // Intentionally stable for the widget lifetime.

@@ -27,11 +27,13 @@ import {
   GridItem,
   Icon,
   DropTarget,
+  DropZone,
   Draggable,
   ScrollArea,
   themePalette,
   getUiScaleFactor,
   setUiScaleFactor,
+  hitTestDropData,
   SPACE,
   TYPE_ROLES,
   type WindowSize,
@@ -202,18 +204,26 @@ function FilesApp(
     }
   };
 
-  const onDropPayload = (payload: unknown) => {
+  const onDropPayload = (payload: unknown, x: number, y: number) => {
     const paths = payloadToPaths(payload);
+    const hitPath = hitTestDropData(x, y);
+    const targetDir = typeof hitPath === "string" ? hitPath : cwd;
+    console.log(`[files] onDropPayload cwd=${cwd} hitPath=${String(hitPath)} targetDir=${targetDir} paths=${JSON.stringify(paths)}`);
     for (const src of paths) {
-      const dest = path.join(cwd, path.basename(src));
+      const dest = path.join(targetDir, path.basename(src));
+      if (src === dest) {
+        console.log(`[files] drop skipped (src===dest) ${src}`);
+        continue;
+      }
       try {
-        if (src === dest) continue;
         fs.renameSync(src, dest);
-      } catch {
+        console.log(`[files] drop moved ${src} -> ${dest}`);
+      } catch (renameErr) {
         try {
           fs.copyFileSync(src, dest);
+          console.log(`[files] drop copied ${src} -> ${dest}`);
         } catch (err) {
-          console.warn("[files] drop failed", src, err);
+          console.warn("[files] drop failed", src, "rename err:", renameErr, "copy err:", err);
         }
       }
     }
@@ -257,13 +267,21 @@ function FilesApp(
           variant: "secondary",
           onPress: goUp,
         }),
-        createElement(Label, {
-          text: crumb,
-          width: Math.max(80, props.width - Math.round(220 * ui)),
-          height: Math.round(22 * ui),
-          fontSize: TYPE_ROLES.body.size,
-          fontWeight: "medium",
-        }),
+        createElement(
+          DropZone,
+          {
+            width: Math.max(80, props.width - Math.round(220 * ui)),
+            height: Math.round(22 * ui),
+            id: cwd,
+          },
+          createElement(Label, {
+            text: crumb,
+            width: Math.max(80, props.width - Math.round(220 * ui)),
+            height: Math.round(22 * ui),
+            fontSize: TYPE_ROLES.body.size,
+            fontWeight: "medium",
+          }),
+        ),
         createElement(Button, {
           width: Math.round(72 * ui),
           height: btn,
@@ -292,22 +310,30 @@ function FilesApp(
             height: Math.round(18 * ui),
           }),
           ...placeList.map((p) =>
-            createElement(ListItem, {
-              key: p.id,
-              width: sideW - Math.round(SPACE.lg * ui),
-              height: Math.round(36 * ui),
-              title: p.label,
-              leading: createElement(Icon, {
-                name: p.icon,
-                size: Math.round(20 * ui),
-              }),
-              selected: activePlace === p.id,
-              onPress: () => {
-                ensureDir(p.path);
-                setCwd(p.path);
-                setSelected(-1);
+            createElement(
+              DropZone,
+              {
+                key: p.id,
+                width: sideW - Math.round(SPACE.lg * ui),
+                height: Math.round(36 * ui),
+                id: p.path,
               },
-            }),
+              createElement(ListItem, {
+                width: sideW - Math.round(SPACE.lg * ui),
+                height: Math.round(36 * ui),
+                title: p.label,
+                leading: createElement(Icon, {
+                  name: p.icon,
+                  size: Math.round(20 * ui),
+                }),
+                selected: activePlace === p.id,
+                onPress: () => {
+                  ensureDir(p.path);
+                  setCwd(p.path);
+                  setSelected(-1);
+                },
+              }),
+            ),
           ),
         ),
         createElement(Separator, { width: 1, height: bodyH }),
@@ -317,7 +343,7 @@ function FilesApp(
             width: contentW,
             height: bodyH,
             mimeTypes: ["text/uri-list"],
-            onDrop: (payload) => onDropPayload(payload),
+            onDrop: (payload, _mimes, x, y) => onDropPayload(payload, x, y),
           },
           createElement(
             Surface,
@@ -347,6 +373,8 @@ function FilesApp(
                         height: cellH,
                         mimeTypes: ["text/uri-list"],
                         getPayload: () => pathToUri(e.path) + "\n",
+                        dropData: e.isDir ? e.path : undefined,
+                        previewIcon: { name: iconFor(e) },
                         onPress: () => setSelected(i),
                         onDoublePress: () => openEntry(e),
                       },
@@ -386,6 +414,8 @@ function FilesApp(
                         height: Math.round(40 * ui),
                         mimeTypes: ["text/uri-list"],
                         getPayload: () => pathToUri(e.path) + "\n",
+                        dropData: e.isDir ? e.path : undefined,
+                        previewIcon: { name: iconFor(e) },
                         onPress: () => setSelected(i),
                         onDoublePress: () => openEntry(e),
                       },

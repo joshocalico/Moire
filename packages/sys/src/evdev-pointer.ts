@@ -212,6 +212,9 @@ export class EvdevPointer extends EventEmitter {
   }
 
   private poll(): void {
+    // Collected outside the loop — reopening mutates `this.devices`, which
+    // we're iterating, so do it after rather than mid-iteration.
+    const toReopen: { fd: number; dev: DeviceState }[] = [];
     for (const [fd, dev] of this.devices) {
       try {
         const chunk = Buffer.alloc(INPUT_EVENT_SIZE * 16);
@@ -262,7 +265,43 @@ export class EvdevPointer extends EventEmitter {
       } catch (err) {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "EAGAIN" || e.code === "EWOULDBLOCK") continue;
+        // Anything else (e.g. EBADF from a stale fd after a device replug)
+        // previously went completely silent here — the device would just
+        // stop being polled forever, with no error, no recovery, and
+        // whatever gesture was in flight (e.g. a drag) would never see its
+        // terminating event. Log it and try to reopen the device path.
+        console.warn(
+          `[evdev] poll error on ${dev.path} (fd=${fd}): ${e.code ?? e.message ?? e}`,
+        );
+        toReopen.push({ fd, dev });
       }
+    }
+    for (const { fd, dev } of toReopen) this.reopenDevice(fd, dev);
+  }
+
+  private reopenDevice(oldFd: number, dev: DeviceState): void {
+    this.devices.delete(oldFd);
+    try {
+      fs.closeSync(oldFd);
+    } catch {
+      // already gone
+    }
+    try {
+      const newFd = fs.openSync(
+        dev.path,
+        fs.constants.O_RDONLY | fs.constants.O_NONBLOCK,
+      );
+      tryGrab(newFd, dev.path);
+      this.devices.set(newFd, {
+        ...dev,
+        buf: Buffer.alloc(0),
+        pendingDx: 0,
+        pendingDy: 0,
+        pendingWheel: 0,
+      });
+      console.log(`[evdev] reopened ${dev.path} as fd=${newFd}`);
+    } catch (err) {
+      console.warn(`[evdev] failed to reopen ${dev.path}:`, err);
     }
   }
 }

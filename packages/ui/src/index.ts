@@ -5,7 +5,7 @@
  * PlatformBackend (wayland | headless; cocoa/win32 later).
  */
 export { Application, type ApplicationOpts } from "./application.js";
-export { Window, type WindowOpts, type WindowSize, type WindowContent } from "./window.js";
+export { Window, hitTestDropData, type WindowOpts, type WindowSize, type WindowContent } from "./window.js";
 export {
   createPlatformBackend,
   resolvePlatformKind,
@@ -74,6 +74,7 @@ export {
   Icon,
   Draggable,
   DropTarget,
+  DropZone,
   setDndBridge,
   usePalette,
 } from "./widgets/index.js";
@@ -107,4 +108,6 @@ export type {
   IconName,
   DraggableProps,
   DropTargetProps,
+  DropZoneProps,
+  DragIconSpec,
 } from "./widgets/index.js";

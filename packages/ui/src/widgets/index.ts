@@ -50,8 +50,8 @@ export type { ImageWidgetProps, ImageFit } from "./image-widget.js";
 export { Icon } from "./icon.js";
 export type { IconProps, IconName } from "./icon.js";
 
-export { Draggable, DropTarget, setDndBridge } from "./dnd.js";
-export type { DraggableProps, DropTargetProps } from "./dnd.js";
+export { Draggable, DropTarget, DropZone, setDndBridge } from "./dnd.js";
+export type { DraggableProps, DropTargetProps, DropZoneProps, DragIconSpec } from "./dnd.js";
 
 export { Tabs } from "./tabs.js";
 export type { TabsProps } from "./tabs.js";

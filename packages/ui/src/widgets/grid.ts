@@ -36,6 +36,8 @@ export type GridItemProps = {
   iconSize?: number;
   label: string;
   selected?: boolean;
+  /** Live "a compatible drag is hovering this item" highlight (dragenter/dragleave style). */
+  dropHover?: boolean;
   onPress?: () => void;
   onDoublePress?: () => void;
   /** Soft scrim behind label (desktop over wallpaper). */
@@ -60,6 +62,7 @@ export function GridItem(props: GridItemProps): ReactNode {
   const tw = measureText(label, fontSize / 14);
   const tx = Math.max(labelPad, Math.floor((props.width - tw) / 2));
   const interactive = props.interactive !== false;
+  const highlighted = props.selected || props.dropHover;
 
   return createElement(
     Group,
@@ -69,7 +72,7 @@ export function GridItem(props: GridItemProps): ReactNode {
       width: props.width,
       height: props.height,
     },
-    props.selected
+    highlighted
       ? createElement(Rect, {
           x: 0,
           y: 0,
@@ -78,7 +81,7 @@ export function GridItem(props: GridItemProps): ReactNode {
           fill: pal.selection,
         })
       : null,
-    props.selected
+    highlighted
       ? createElement(Rect, {
           x: 0,
           y: 0,
@@ -87,7 +90,7 @@ export function GridItem(props: GridItemProps): ReactNode {
           fill: pal.accent,
         })
       : null,
-    props.selected
+    highlighted
       ? createElement(Rect, {
           x: 0,
           y: props.height - 1,
@@ -96,7 +99,7 @@ export function GridItem(props: GridItemProps): ReactNode {
           fill: pal.accent,
         })
       : null,
-    props.selected
+    highlighted
       ? createElement(Rect, {
           x: 0,
           y: 0,
@@ -105,7 +108,7 @@ export function GridItem(props: GridItemProps): ReactNode {
           fill: pal.accent,
         })
       : null,
-    props.selected
+    highlighted
       ? createElement(Rect, {
           x: props.width - 1,
           y: 0,
