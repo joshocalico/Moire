@@ -10,7 +10,8 @@ Package: `apps/files`.
 | --- | --- |
 | Browse directories | Grid and list views |
 | Places sidebar | Home, Desktop, Downloads, … — longest-prefix path match |
-| Open / navigate | Double-click; Up |
+| Open / navigate | Double-click; Up; accepts a path or `file://` URI at launch |
+| Default handler | `moire-files.desktop` for `inode/directory` |
 | DnD into cwd | `DropTarget` + `text/uri-list` |
 | DnD out | `Draggable` per item |
 | Icons | Bundled PNG set via `Icon` |
@@ -27,6 +28,25 @@ Files is a reference consumer of `@moire/ui`:
 ## Places matching
 
 Sidebar entries match the **longest** prefix of the current path so nested folders under Desktop still highlight Desktop correctly (not a shorter Home match).
+
+## Default directory handler
+
+`moire-session` installs:
+
+- `apps/files/moire-files` as `~/.local/bin/moire-files`
+- `apps/files/moire-files.desktop` under `~/.local/share/applications`
+- `moire-files.desktop` as the `inode/directory` default via `xdg-mime`
+
+`xdg-open` first determines the target MIME type, queries the default desktop entry, then runs its `Exec` command. For a directory, Moire's entry passes the path/URI to Files, so desktop folders and external callers open at the requested location rather than always starting at `~/Desktop`.
+
+Verify in the guest:
+
+```bash
+xdg-mime query default inode/directory
+# moire-files.desktop
+
+xdg-open ~/Downloads
+```
 
 ## Gaps / roadmap
 

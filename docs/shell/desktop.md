@@ -8,8 +8,9 @@ Desktop = wallpaper + shell icon layer + Files as the day-0 file manager. Icons 
 | --- | --- |
 | Click empty desktop | Clears selection (when no window under cursor) |
 | Click icon | Select |
-| Double-click | Open (Files / default handler) |
-| Drag icon within desktop | Reposition; persist layout |
+| Double-click folder | Open through `xdg-open` → default Files handler |
+| Drag icon onto empty desktop | Reposition; persist layout |
+| Drag icon onto desktop folder | Move the item into that folder |
 | Drag icon onto a client window | Escalates to a real Wayland DnD source — target receives a normal `text/uri-list` drop |
 | Drop files on desktop | Place / copy semantics via DnD |
 | Click through | If a window is under the pointer, shell does not steal the click |
@@ -21,6 +22,8 @@ Hit tests use compositor ordering: windows above icons. Shell only handles `onDe
 Path: `~/.config/moire/desktop-layout.json` (guest home under the Moire session user).
 
 Stores icon positions keyed by path/id. Missing entries get auto-placed on a grid.
+
+Folder opens are sent as encoded `file://` URIs so names containing spaces are safe. `moire-session` registers Files as the `inode/directory` handler; see [Files](../apps/files.md#default-directory-handler).
 
 ## Visuals
 

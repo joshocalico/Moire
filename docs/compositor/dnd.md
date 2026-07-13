@@ -9,7 +9,7 @@ Moire implements full `wl_data_device` DnD between shell, Files, and (eventually
 | Compositor (`packages/core`) | Session: sources, offers, focus, drop serialization |
 | UI Wayland backend | `startDrag`, drag icon SHM surface, receive into sinks |
 | Widgets | `Draggable` / `DropTarget` + `setDndBridge` |
-| Shell | Desktop reposition + `paintDragPreview` when needed |
+| Shell | Desktop reposition/folder drop + `paintDragPreview` when needed |
 
 ## Client → compositor flow (source)
 
@@ -27,7 +27,7 @@ Moire implements full `wl_data_device` DnD between shell, Files, and (eventually
 
 ## Desktop specifics
 
-- A desktop icon press+move starts as a **local** reposition drag (shell-tracked position, chip preview, no compositor DnD session) — unchanged for drags that stay on the desktop.
+- A desktop icon press+move starts as a **local** shell drag (shell-tracked position, chip preview, no compositor DnD session). Dropping on empty desktop repositions it; dropping over another desktop folder moves it into that folder.
 - If the pointer crosses onto a client surface (e.g. a Files window) while that local drag is active, the compositor **escalates**: `CompositorServer.startDesktopDrag(uri, label)` opens a real DnD session backed by a synthetic `ShellDragSource` (implements the same `sendDataSourceSend`/mimes/actions surface a real client source would, just writes the `file://` URI straight into the fd instead of proxying to a wl_client). From that point the target sees a normal `text/uri-list` offer/drop — no special-casing on the Files side.
 - Escalation is checked (via an independent hit-test) **before** the normal pointer-focus update on that motion event, so the target never gets a stray hover enter ahead of the DnD enter.
 - Ending an escalated drag: dropped on a client → handed off normally, shell clears its local drag state without touching the icon's saved position (the file may have moved). Dropped back on the desktop (or cancelled) → treated as a plain reposition, not a self-copy through `acceptDesktopDrop`.
@@ -37,6 +37,7 @@ Moire implements full `wl_data_device` DnD between shell, Files, and (eventually
 ## Testing
 
 - Drag a file from Files onto the desktop and into another folder.
+- Drag a desktop item directly onto a desktop folder — confirm the folder highlights and the item moves into it.
 - Drag a desktop icon onto an open Files window showing a different folder — confirm the file moves (rename, falling back to copy) into that folder and disappears from the desktop within the 2s poll.
 - Drag a desktop icon and release it back on the desktop (or over foot, which has no DnD target) — confirm it still just repositions, no copy/duplicate.
 - Confirm drag icon / chip follows the cursor (not only the default cursor).

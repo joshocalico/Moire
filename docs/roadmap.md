@@ -9,12 +9,12 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Area | Status |
 | --- | --- |
 | Wayland compositor + SSD | Shipped — stack compositing, server decorations |
-| Session (`moire-session`) | Shipped — D-Bus, foot, Files; no Nautilus |
+| Session (`moire-session`) | Shipped — D-Bus, foot, Files; Files registered for `inode/directory`; no Nautilus |
 | `@moire/ui` toolkit | Shipped — layout, controls, scroll/list/grid, icons, DnD widgets, motion |
 | Theme tokens + atmosphere wallpaper | Shipped — cached paint, ambient drift, prefs override |
 | Settings (Appearance / Sound) | Shipped — live `applySettings`, wallpaper presets |
-| Moire Files | Shipped — Places, grid/list, local FS, Wayland DnD |
-| Desktop icons | Shipped — paint under windows, select/open, layout persist, reposition drag |
+| Moire Files | Shipped — Places, grid/list, path/URI launch, default folder handler, Wayland DnD |
+| Desktop icons | Shipped — paint under windows, select/open, layout persist, reposition + folder drops |
 | Wayland DnD | Shipped — compositor session, desktop drop sink, drag preview chip |
 | Panel / launcher chrome | Shipped — brand-forward panel, list launcher |
 | Desktop → Files DnD | Shipped — desktop-icon drag escalates to a real Wayland source when it crosses onto a client window |

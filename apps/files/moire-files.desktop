@@ -1,9 +1,13 @@
 [Desktop Entry]
 Name=Files
 Comment=Browse files on Moire
-Exec=moire-files
+Exec=moire-files %U
+TryExec=moire-files
 Icon=system-file-manager
 Terminal=false
 Type=Application
 Categories=System;FileManager;
+MimeType=inode/directory;
+OnlyShowIn=Moire;
+StartupNotify=true
 StartupWMClass=org.moire.Files

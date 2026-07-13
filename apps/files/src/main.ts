@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import {
   createElement,
@@ -135,6 +136,26 @@ function ensureDir(p: string): void {
 
 function pathToUri(p: string): string {
   return `file://${encodeURI(p)}`;
+}
+
+function initialDirectory(argv: string[]): string {
+  const fallback = path.join(home(), "Desktop");
+  const raw = argv.find((arg) => arg.length > 0 && !arg.startsWith("-"));
+  if (!raw) return fallback;
+
+  let requested: string;
+  try {
+    requested = raw.startsWith("file:") ? fileURLToPath(raw) : path.resolve(raw);
+  } catch {
+    return fallback;
+  }
+
+  try {
+    const stat = fs.statSync(requested);
+    return stat.isDirectory() ? requested : path.dirname(requested);
+  } catch {
+    return fallback;
+  }
 }
 
 function payloadToPaths(payload: unknown): string[] {
@@ -444,7 +465,7 @@ function FilesApp(
 async function main() {
   const settings = loadSettings();
   setUiScaleFactor(settings.uiScale);
-  const desktop = path.join(home(), "Desktop");
+  const desktop = initialDirectory(process.argv.slice(2));
   ensureDir(desktop);
 
   const app = new Application();

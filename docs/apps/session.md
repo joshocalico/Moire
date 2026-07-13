@@ -11,10 +11,22 @@ How Moire runs inside the Parallels guest (MoireDev).
 
 Nautilus is intentionally out of the Moire session once Files is verified.
 
+## Default applications
+
+During startup, `moire-session` installs the Moire Files launcher and desktop entry into the user's `~/.local` directories, then sets:
+
+```text
+inode/directory=moire-files.desktop
+```
+
+This makes `xdg-open <folder>` launch Files with that folder. The association is stored in `~/.config/mimeapps.list`; regular files continue to use their own MIME defaults.
+
 ## Runtime dirs
 
 - Wayland socket under `$HOME/.moire-runtime` (session sets `XDG_RUNTIME_DIR` here).
 - Config under `~/.config/moire/`.
+- Default-app association under `~/.config/mimeapps.list`.
+- Files launcher/entry under `~/.local/bin` and `~/.local/share/applications`.
 
 ## Scripts
 

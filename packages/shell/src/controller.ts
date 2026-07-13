@@ -16,7 +16,7 @@ import { themePalette } from "@moire/theme";
 import { createElement, useEffect, useMemo } from "react";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Panel } from "./Panel.js";
 import { Launcher } from "./Launcher.js";
 import { TitleBar } from "./TitleBar.js";
@@ -378,7 +378,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   const openDesktopEntry = (name: string) => {
     const filePath = path.join(desktopDir(), name);
     try {
-      const child = spawn({ exec: `xdg-open ${filePath}` });
+      const child = spawn({ exec: `xdg-open ${pathToFileURL(filePath).href}` });
       child.unref?.();
       console.log(`[shell] desktop open: ${filePath}`);
     } catch (err) {

@@ -32,7 +32,7 @@ Simplified path in `onPointerButton`:
 
 - Normal: update cursor, focus, hover edges, optional Xwayland ghost motion.
 - During DnD: `updateDragFocus` only (enter/leave/motion to the target client).
-- No window under cursor: `shell.onDesktopPointerMotion` for icon hover and reposition drag.
+- No window under cursor: `shell.onDesktopPointerMotion` for icon hover and local reposition/folder drag.
 
 ## Keyboard
 

@@ -36,12 +36,12 @@ createShell(spawn: ShellSpawn): ShellBridge
 | `onKey` | Super → launcher; launcher keyboard; returns consumed |
 | `onPointerButton` | Panel / launcher hits |
 | `onDesktopPointerButton?` | Icon select/open when **no** window under cursor |
-| `onDesktopPointerMotion?` | Icon hover + reposition drag |
+| `onDesktopPointerMotion?` | Icon hover + local reposition/folder drag |
 | `isLauncherOpen()` | Launcher visibility |
 | `needsRepaint()` | Dirty chrome / motion still settling |
 | `invalidateChrome()` | Drop caches after theme/prefs change |
 | `paintDesktop(…)` | Blend icons after wallpaper, before windows |
-| `acceptDesktopDrop(uris)` | Copy `file://` URIs onto `~/Desktop`, refresh |
+| `acceptDesktopDrop(uris, x, y)` | Copy/move `file://` URIs onto the desktop or a folder at the drop point |
 | `hitDesktop(x, y)` | Drop zone above the panel |
 | `paintDragPreview(…)` | Floating DnD chip under cursor |
 | `desktopDragLabel?()` | Label while a desktop icon drag is active |

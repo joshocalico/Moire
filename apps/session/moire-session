@@ -12,6 +12,7 @@ export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
 export GDK_BACKEND="${GDK_BACKEND:-wayland}"
 # GTK/GSK: virgl path still SIGSEGVs on Parallels; Cairo is the day-0 renderer.
 export GSK_RENDERER="${GSK_RENDERER:-cairo}"
+export PATH="$HOME/.local/bin:$PATH"
 
 # Moire GTK theme helpers (LibreOffice GTK3 CSD + libadwaita dark chrome).
 # shellcheck source=apply-gtk-theme.sh
@@ -44,6 +45,25 @@ session_inner() {
   set -euo pipefail
   # Apply theme inside the D-Bus session so gsettings hits this bus.
   moire_apply_gtk_theme
+
+  # Register the native Files app as Moire's directory handler. xdg-open
+  # resolves a directory to the inode/directory default in mimeapps.list,
+  # then launches this desktop entry with the directory URI.
+  local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+  mkdir -p "$HOME/.local/bin" "$data_home/applications"
+  ln -sfn "$ROOT/apps/files/moire-files" "$HOME/.local/bin/moire-files"
+  cp "$ROOT/apps/files/moire-files.desktop" \
+    "$data_home/applications/moire-files.desktop"
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$data_home/applications" >/dev/null 2>&1 || true
+  fi
+  if command -v xdg-mime >/dev/null 2>&1; then
+    xdg-mime default moire-files.desktop inode/directory
+    echo "Moire session: default inode/directory=$(xdg-mime query default inode/directory)"
+  else
+    echo "moire-session: xdg-mime not found; Files default not registered" >&2
+  fi
+
   rm -f "$SOCKET" "$SOCKET.lock"
 
   # shellcheck disable=SC2086

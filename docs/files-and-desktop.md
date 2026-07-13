@@ -75,6 +75,8 @@ Package: `apps/files` (`@moire/files`).
 - Places: Home, Desktop, Downloads — **longest matching path** is selected (so Desktop does not also light up Home).
 - Content: grid (default) or list; `fs` under `$HOME`; `fs.watch` refresh.
 - Open: directories navigate; files via `xdg-open`.
+- Launch target: accepts a filesystem path or `file://` URI; otherwise starts at `~/Desktop`.
+- Default folder handler: session installs `moire-files.desktop` and associates it with `inode/directory`, so `xdg-open <folder>` opens Files there.
 - DnD: items are `Draggable` (`text/uri-list`); view is a `DropTarget` that moves/copies into the current directory.
 - Started by `apps/session/moire-session` and listed in the launcher.
 
@@ -86,7 +88,7 @@ Implementation: `packages/shell/src/DesktopIcons.tsx`, wired from `packages/shel
 - Prefs: `showDesktopIcons` (default `true`).
 - **Pointer:** compositor calls `onDesktopPointerButton` / `onDesktopPointerMotion` only when no client surface is under the cursor (after panel and SSD).
 - Click selects; double-click opens with `xdg-open`.
-- Drag past a small threshold repositions the icon (live layout + preview chip); release on the desktop persists layout.
+- Drag past a small threshold starts a local shell drag (ghost preview). Release on empty desktop persists a new position; release over another desktop folder moves the item into it.
 - Drag onto a client window (e.g. Files) instead escalates to a real Wayland DnD source — the target gets a normal `text/uri-list` drop and the file moves there; see [Wayland DnD](./compositor/dnd.md).
 - Empty desktop is a drop sink for `text/uri-list` (`acceptDesktopDrop`).
 
@@ -132,6 +134,9 @@ While a DnD session is active, motion updates drag focus instead of normal hover
 | `~/.config/moire/settings.json` | Prefs (`wallpaper`, `showDesktopIcons`, `uiScale`, …) |
 | `~/.config/moire/active-theme.json` | Hot-reloaded theme (may include wallpaper override) |
 | `~/.config/moire/desktop-layout.json` | Desktop icon positions |
+| `~/.config/mimeapps.list` | Default MIME handlers (`inode/directory` → Files) |
+| `~/.local/share/applications/moire-files.desktop` | Installed Files desktop entry |
+| `~/.local/bin/moire-files` | Installed Files launcher symlink |
 
 ## Running and verifying
 
@@ -140,6 +145,7 @@ From the Mac (Parallels **MoireDev**):
 ```bash
 prlctl exec MoireDev bash /media/psf/moire/scripts/guest-clean-restart.sh
 prlctl capture MoireDev --file ~/Projects/moire/vm/screen.png
+prlctl exec MoireDev runuser -u moire -- env HOME=/home/moire XDG_CURRENT_DESKTOP=Moire xdg-mime query default inode/directory
 ```
 
 Useful guest scripts (prefer these over ad-hoc `prlctl exec … bash -c` quoting):
@@ -167,6 +173,8 @@ pnpm --filter @moire/ui smoke
 - Atmosphere wallpaper; panel brand **Moire** readable.
 - Desktop icons with folder/file artwork; select and open work when no window covers them.
 - Files Places selection correct; grid/list; drag shows a labeled chip under the cursor.
+- `xdg-open` on a folder launches Files at that requested folder.
+- Desktop item dropped over a desktop folder moves into it; empty-desktop drop still repositions.
 - Session runs compositor + Files + foot without Nautilus.
 
 ## Source map
@@ -193,6 +201,8 @@ themes/light/theme.json
 | Icons visible but ignore clicks | Window above them; or desktop handler not reached (focus / hit-test) |
 | No drag preview | Drag not starting (move while held past threshold); guest logs `[ui/dnd] startDrag` / `[dnd] start`; icon surface commit |
 | Home and Desktop both selected | Stale build — Places must use longest-prefix match |
+| Folder opens in another file manager | Restart the session; verify `xdg-mime query default inode/directory` returns `moire-files.desktop` |
+| Files opens Desktop instead of requested folder | Stale launcher/desktop entry; run `guest-clean-restart.sh` and confirm `moire-files %U` is installed |
 | Flat / solid wallpaper | Theme or prefs not on `atmosphere`; re-apply Appearance or `guest-seed-desktop.sh` |
 | White block “icons” | PNG load failed; confirm `packages/ui/icons` is on the guest worktree after rsync |
 | Nautilus still appears | Guest session out of date — `guest-clean-restart.sh` |

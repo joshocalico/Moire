@@ -44,8 +44,8 @@ This directory is meant to be browsed as a tree or fed to a Markdown site render
 | Doc | Description |
 | --- | --- |
 | [Shell](./shell/README.md) | Panel, launcher, SSD, ShellBridge |
-| [Desktop icons](./shell/desktop.md) | Layout, hits, reposition drag |
-| [Files](./apps/files.md) | Places, grid/list, DnD |
+| [Desktop icons](./shell/desktop.md) | Layout, hits, reposition and folder drops |
+| [Files](./apps/files.md) | Places, grid/list, default folder handler, DnD |
 | [Settings](./apps/settings.md) | Appearance, live apply |
 | [Session](./apps/session.md) | `moire-session` day-0 boot |
 
