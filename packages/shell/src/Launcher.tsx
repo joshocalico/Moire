@@ -2,7 +2,7 @@ import type { DesktopEntry } from "@moire/app-discovery";
 import { createElement, type ReactNode } from "react";
 import { Group, Rect, Text } from "@moire/react-host";
 import { themePalette } from "@moire/theme";
-import { Label, ListItem, Surface } from "./widgets.js";
+import { Icon, Label, ListItem, Surface } from "./widgets.js";
 
 export type LauncherProps = {
   open: boolean;
@@ -46,6 +46,10 @@ export function Launcher(props: LauncherProps): ReactNode {
         width: BOX_W - PAD * 2,
         height: ROW_H - 2,
         title: truncate(app.name, 48),
+        leading: createElement(Icon, {
+          name: "app",
+          size: 18,
+        }),
         selected,
         onPress: () => props.onLaunch(app),
       }),

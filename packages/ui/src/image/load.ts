@@ -1,5 +1,5 @@
 /**
- * Async PNG loader with module-level cache.
+ * PNG loader with module-level cache.
  * Uses pngjs.  Safe to import anywhere in @moire/ui; no Wayland/platform deps.
  */
 import { PNG } from "pngjs";
@@ -19,6 +19,20 @@ export function getCachedImage(path: string): ImageData | null {
   return cache.get(path) ?? null;
 }
 
+/** Sync read + cache. Prefer for bundled icons that must paint on first frame. */
+export function loadImageSync(filePath: string): ImageData {
+  const hit = cache.get(filePath);
+  if (hit) return hit;
+  const parsed = PNG.sync.read(fs.readFileSync(filePath));
+  const img: ImageData = {
+    rgba: new Uint8Array(parsed.data),
+    width: parsed.width,
+    height: parsed.height,
+  };
+  cache.set(filePath, img);
+  return img;
+}
+
 /**
  * Load a PNG file and return its RGBA pixel data.
  * Subsequent calls for the same path return the cached result immediately.
@@ -32,19 +46,13 @@ export async function loadImage(path: string): Promise<ImageData> {
   if (flying) return flying;
 
   const promise = new Promise<ImageData>((resolve, reject) => {
-    const png = new PNG();
-    png.on("parsed", () => {
-      const rgba = new Uint8Array(png.data);
-      const img: ImageData = { rgba, width: png.width, height: png.height };
-      cache.set(path, img);
+    try {
+      resolve(loadImageSync(path));
       inFlight.delete(path);
-      resolve(img);
-    });
-    png.on("error", (err: unknown) => {
+    } catch (err) {
       inFlight.delete(path);
       reject(err);
-    });
-    fs.createReadStream(path).pipe(png);
+    }
   });
 
   inFlight.set(path, promise);

@@ -1,6 +1,5 @@
 /**
- * Desktop icon layer — renders ~/Desktop entries as icon-grid cells.
- * Positioned absolutely; avoids the bottom panel area.
+ * Desktop icon layer — ~/Desktop entries as GridItem cells over wallpaper.
  */
 import { createElement, type ReactNode } from "react";
 import { Group } from "@moire/react-host";
@@ -59,32 +58,29 @@ function isDirectory(filePath: string): boolean {
   }
 }
 
-const ICON_SIZE = 48;
-const ITEM_W = 80;
-const ITEM_H = 84;
-const GRID_MARGIN_X = 24;
-const GRID_MARGIN_Y = 24;
-const GRID_GAP = 12;
-const COL_WIDTH = 96;
+const ICON_SIZE = 52;
+const ITEM_W = 112;
+const ITEM_H = 100;
+const GRID_MARGIN_X = 28;
+const GRID_MARGIN_Y = 28;
+const GRID_GAP = 16;
+const COL_WIDTH = 128;
 
 function defaultIconPos(
   index: number,
   _screenW: number,
   availH: number,
 ): { x: number; y: number } {
-  const rows = Math.max(1, Math.floor((availH - GRID_MARGIN_Y) / (ITEM_H + GRID_GAP)));
+  const rows = Math.max(
+    1,
+    Math.floor((availH - GRID_MARGIN_Y) / (ITEM_H + GRID_GAP)),
+  );
   const col = Math.floor(index / rows);
   const row = index % rows;
-  // Prefer left columns but keep clear of a typical window margin.
   return {
     x: GRID_MARGIN_X + col * COL_WIDTH,
     y: GRID_MARGIN_Y + row * (ITEM_H + GRID_GAP),
   };
-}
-
-function truncateLabel(name: string, max = 12): string {
-  if (name.length <= max) return name;
-  return name.slice(0, max - 1) + "…";
 }
 
 export type DesktopIconsProps = {
@@ -114,12 +110,12 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
     const fallback = defaultIconPos(i, screenW, availH);
     const rawX = saved?.x ?? fallback.x;
     const rawY = saved?.y ?? fallback.y;
-    // Clamp so icon stays within available screen area
     const ix = Math.max(0, Math.min(rawX, screenW - ITEM_W));
     const iy = Math.max(0, Math.min(rawY, availH - ITEM_H));
 
     const filePath = path.join(dir, name);
-    const iconName = isDirectory(filePath) ? "folder" : "file";
+    const dirEntry = isDirectory(filePath);
+    const iconName = dirEntry ? "folder" : "file";
 
     return createElement(GridItem, {
       key: name,
@@ -127,13 +123,14 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
       y: iy,
       width: ITEM_W,
       height: ITEM_H,
-      label: truncateLabel(name),
+      label: name,
+      iconSize: ICON_SIZE,
       labelScrim: true,
       selected: props.selectedName === name,
       icon: createElement(Icon, {
         name: iconName,
         size: ICON_SIZE,
-        color: pal.accent,
+        color: dirEntry ? pal.accent : pal.text,
       }),
       onPress: () => props.onSelect?.(name),
       onDoublePress: () => props.onOpen?.(name),

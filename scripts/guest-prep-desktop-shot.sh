@@ -17,9 +17,11 @@ console.log('prefs', s.wallpaper, s.showDesktopIcons);
 EOF
 "
 
-# Kill overlapping file managers for a clear desktop shot
+# Kill overlapping apps for a clear desktop shot
 pkill -u moire -x nautilus 2>/dev/null || true
+pkill -u moire -x foot 2>/dev/null || true
 pkill -u moire -f '@moire/settings' 2>/dev/null || true
 pkill -u moire -f '@moire/files' 2>/dev/null || true
+pkill -u moire -f 'filter @moire/files' 2>/dev/null || true
 sleep 1
 echo done

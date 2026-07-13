@@ -116,7 +116,7 @@ From the Moire session (launcher / later tooling):
 | No `/dev/dri/card*` | Enable 3D in Parallels; `ls -l /dev/dri` |
 | `Permission denied` on card | `video` group or run on a logind VT with seatd |
 | koffi can’t load `libdrm.so.2` | `sudo apt install libdrm2 libdrm-dev` |
-| Nautilus hollow / no trash | Missing `dbus-run-session` or `gvfs` |
+| GTK apps look unthemed | Missing `dbus-run-session` or Moire GTK theme helpers |
 | Shared folder slow | Prefer `git clone` on a native Linux disk + push from Mac, or SSHFS |
 | Capture stays solid clear-color while logs say surfaces painted | Re-`SetCrtc` after FB writes — see [parallels-drm-present.md](./parallels-drm-present.md) |
 | `drmModeSetCrtc` fails with `-13` | Another process holds DRM master (gdm, or a STOP’d compositor) |

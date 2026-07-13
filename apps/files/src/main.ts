@@ -1,5 +1,5 @@
 /**
- * Moire Files — @moire/ui file browser.
+ * Moire Files — Places + grid/list browser composed from @moire/ui only.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -66,6 +66,17 @@ function places(): Place[] {
   ];
 }
 
+/** Longest matching place wins (Home must not stay selected under Desktop). */
+function activePlaceId(cwd: string, list: Place[]): string | null {
+  let best: Place | null = null;
+  for (const p of list) {
+    if (cwd === p.path || cwd.startsWith(p.path + path.sep)) {
+      if (!best || p.path.length > best.path.length) best = p;
+    }
+  }
+  return best?.id ?? null;
+}
+
 function listDir(dir: string): Entry[] {
   try {
     const names = fs.readdirSync(dir);
@@ -100,6 +111,12 @@ function iconFor(e: Entry): IconName {
   const ext = path.extname(e.name).toLowerCase();
   if ([".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext)) return "image";
   return "file";
+}
+
+function formatSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function openPath(p: string): void {
@@ -140,12 +157,13 @@ function FilesApp(
   const pal = themePalette();
   const ui = getUiScaleFactor();
   const pad = Math.round(SPACE.lg * ui);
-  const sideW = Math.round(168 * ui);
+  const sideW = Math.round(188 * ui);
   const [cwd, setCwd] = useState(props.initialPath);
   const [selected, setSelected] = useState(-1);
   const [view, setView] = useState<"grid" | "list">("grid");
   const [tick, setTick] = useState(0);
   const placeList = useMemo(() => places(), []);
+  const activePlace = activePlaceId(cwd, placeList);
 
   useEffect(() => {
     ensureDir(path.join(home(), "Desktop"));
@@ -203,11 +221,13 @@ function FilesApp(
   };
 
   const crumb = cwd.replace(home(), "~");
-  const toolbarH = Math.round(48 * ui);
+  const toolbarH = Math.round(52 * ui);
   const bodyH = Math.max(1, props.height - toolbarH - 1);
   const contentW = Math.max(1, props.width - sideW - 1);
-  const cellW = Math.round(100 * ui);
-  const cellH = Math.round(104 * ui);
+  const cellW = Math.round(112 * ui);
+  const cellH = Math.round(118 * ui);
+  const iconSz = Math.round(48 * ui);
+  const btn = Math.round(32 * ui);
 
   return createElement(
     Surface,
@@ -231,21 +251,22 @@ function FilesApp(
           align: "center",
         },
         createElement(Button, {
-          width: Math.round(40 * ui),
-          height: Math.round(30 * ui),
+          width: Math.round(56 * ui),
+          height: btn,
           label: "Up",
           variant: "secondary",
           onPress: goUp,
         }),
         createElement(Label, {
           text: crumb,
-          width: Math.max(80, props.width - Math.round(200 * ui)),
+          width: Math.max(80, props.width - Math.round(220 * ui)),
           height: Math.round(22 * ui),
           fontSize: TYPE_ROLES.body.size,
+          fontWeight: "medium",
         }),
         createElement(Button, {
-          width: Math.round(56 * ui),
-          height: Math.round(30 * ui),
+          width: Math.round(72 * ui),
+          height: btn,
           label: view === "grid" ? "List" : "Grid",
           variant: "ghost",
           onPress: () => setView((v) => (v === "grid" ? "list" : "grid")),
@@ -274,13 +295,13 @@ function FilesApp(
             createElement(ListItem, {
               key: p.id,
               width: sideW - Math.round(SPACE.lg * ui),
-              height: Math.round(34 * ui),
+              height: Math.round(36 * ui),
               title: p.label,
               leading: createElement(Icon, {
                 name: p.icon,
-                size: Math.round(16 * ui),
+                size: Math.round(20 * ui),
               }),
-              selected: cwd === p.path || cwd.startsWith(p.path + path.sep),
+              selected: activePlace === p.id,
               onPress: () => {
                 ensureDir(p.path);
                 setCwd(p.path);
@@ -298,79 +319,90 @@ function FilesApp(
             mimeTypes: ["text/uri-list"],
             onDrop: (payload) => onDropPayload(payload),
           },
-          view === "grid"
-            ? createElement(Grid, {
-                width: contentW,
-                height: bodyH,
-                items: entries,
-                itemWidth: cellW,
-                itemHeight: cellH,
-                gap: Math.round(SPACE.md * ui),
-                renderItem: (eRaw, i) => {
-                  const e = eRaw as Entry;
-                  return createElement(
-                    Draggable,
-                    {
-                      key: e.path,
-                      width: cellW,
-                      height: cellH,
-                      mimeTypes: ["text/uri-list"],
-                      getPayload: () => pathToUri(e.path) + "\n",
-                    },
-                    createElement(GridItem, {
-                      width: cellW,
-                      height: cellH,
-                      label: e.name,
-                      selected: selected === i,
-                      icon: createElement(Icon, {
-                        name: iconFor(e),
-                        size: Math.round(40 * ui),
-                        color: e.isDir ? pal.accent : pal.text,
-                      }),
-                      onPress: () => setSelected(i),
-                      onDoublePress: () => openEntry(e),
-                    }),
-                  );
-                },
-              })
-            : createElement(
-                ScrollArea,
-                {
+          createElement(
+            Surface,
+            {
+              x: 0,
+              y: 0,
+              width: contentW,
+              height: bodyH,
+              fill: pal.bg,
+            },
+            view === "grid"
+              ? createElement(Grid, {
                   width: contentW,
                   height: bodyH,
-                  contentHeight: Math.max(
-                    bodyH,
-                    entries.length * Math.round(40 * ui),
-                  ),
-                },
-                ...entries.map((e, i) =>
-                  createElement(
-                    Draggable,
-                    {
-                      key: e.path,
-                      x: 0,
-                      y: i * Math.round(40 * ui),
-                      width: contentW - 8,
-                      height: Math.round(40 * ui),
-                      mimeTypes: ["text/uri-list"],
-                      getPayload: () => pathToUri(e.path) + "\n",
-                    },
-                    createElement(ListItem, {
-                      width: contentW - 8,
-                      height: Math.round(40 * ui),
-                      title: e.name,
-                      subtitle: e.isDir ? "Folder" : `${e.size} B`,
-                      selected: selected === i,
-                      leading: createElement(Icon, {
-                        name: iconFor(e),
-                        size: Math.round(18 * ui),
+                  items: entries,
+                  itemWidth: cellW,
+                  itemHeight: cellH,
+                  gap: Math.round(SPACE.md * ui),
+                  padding: Math.round(SPACE.lg * ui),
+                  renderItem: (eRaw, i) => {
+                    const e = eRaw as Entry;
+                    return createElement(
+                      Draggable,
+                      {
+                        key: e.path,
+                        width: cellW,
+                        height: cellH,
+                        mimeTypes: ["text/uri-list"],
+                        getPayload: () => pathToUri(e.path) + "\n",
+                      },
+                      createElement(GridItem, {
+                        width: cellW,
+                        height: cellH,
+                        label: e.name,
+                        iconSize: iconSz,
+                        selected: selected === i,
+                        icon: createElement(Icon, {
+                          name: iconFor(e),
+                          size: iconSz,
+                        }),
+                        onPress: () => setSelected(i),
+                        onDoublePress: () => openEntry(e),
                       }),
-                      onPress: () => setSelected(i),
-                      onDoublePress: () => openEntry(e),
-                    }),
+                    );
+                  },
+                })
+              : createElement(
+                  ScrollArea,
+                  {
+                    width: contentW,
+                    height: bodyH,
+                    contentHeight: Math.max(
+                      bodyH,
+                      entries.length * Math.round(44 * ui) + pad,
+                    ),
+                  },
+                  ...entries.map((e, i) =>
+                    createElement(
+                      Draggable,
+                      {
+                        key: e.path,
+                        x: Math.round(SPACE.sm * ui),
+                        y: Math.round(SPACE.sm * ui) + i * Math.round(44 * ui),
+                        width: contentW - Math.round(SPACE.lg * ui),
+                        height: Math.round(40 * ui),
+                        mimeTypes: ["text/uri-list"],
+                        getPayload: () => pathToUri(e.path) + "\n",
+                      },
+                      createElement(ListItem, {
+                        width: contentW - Math.round(SPACE.lg * ui),
+                        height: Math.round(40 * ui),
+                        title: e.name,
+                        subtitle: e.isDir ? "Folder" : formatSize(e.size),
+                        selected: selected === i,
+                        leading: createElement(Icon, {
+                          name: iconFor(e),
+                          size: Math.round(22 * ui),
+                        }),
+                        onPress: () => setSelected(i),
+                        onDoublePress: () => openEntry(e),
+                      }),
+                    ),
                   ),
                 ),
-              ),
+          ),
         ),
       ),
     ),
@@ -387,8 +419,8 @@ async function main() {
   const win = new Window({
     title: "Files",
     appId: "org.moire.Files",
-    width: Math.round(760 * settings.uiScale),
-    height: Math.round(500 * settings.uiScale),
+    width: Math.round(820 * settings.uiScale),
+    height: Math.round(540 * settings.uiScale),
     resizable: true,
   });
   win.setContent((size) =>

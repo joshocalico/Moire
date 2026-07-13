@@ -11,16 +11,18 @@ export type PanelProps = {
 };
 
 /** Default metric; live chrome reads themePalette().panelHeight. */
-export const PANEL_H = 42;
+export const PANEL_H = 48;
 
-/** Bottom panel — brand + Apps affordance + clock. */
+/** Bottom panel — brand hero + quiet Apps + clock. */
 export function Panel(props: PanelProps): ReactNode {
   const pal = themePalette();
-  const panelH = pal.panelHeight;
+  const panelH = Math.max(pal.panelHeight, 46);
   const y = props.screenH - panelH;
   const clock = props.clock ?? "";
-  const clockW = measureText(clock) + 16;
-  const brandSize = 24;
+  const clockW = measureText(clock) + 20;
+  const brandSize = 26;
+  // Translucent ink panel over wallpaper
+  const panelFill = (pal.panel & 0x00ffffff) | 0xdd000000;
   return createElement(
     Group,
     { x: 0, y, width: props.screenW, height: panelH },
@@ -29,7 +31,7 @@ export function Panel(props: PanelProps): ReactNode {
       y: 0,
       width: props.screenW,
       height: panelH,
-      fill: pal.panel,
+      fill: panelFill,
     }),
     createElement(Rect, {
       x: 0,
@@ -38,21 +40,28 @@ export function Panel(props: PanelProps): ReactNode {
       height: 1,
       fill: pal.rimLight,
     }),
+    createElement(Rect, {
+      x: 0,
+      y: panelH - 1,
+      width: props.screenW,
+      height: 1,
+      fill: pal.rimShade,
+    }),
     createElement(Label, {
-      x: 14,
-      y: Math.floor((panelH - brandSize) / 2),
+      x: 18,
+      y: Math.floor((panelH - brandSize) / 2) - 1,
       text: "Moire",
       color: pal.text,
       fontSize: brandSize,
       fontWeight: "medium",
     }),
     createElement(Button, {
-      x: 100,
-      y: Math.floor((panelH - 28) / 2),
-      width: 68,
-      height: 28,
+      x: 112,
+      y: Math.floor((panelH - 30) / 2),
+      width: 72,
+      height: 30,
       label: "Apps",
-      variant: "secondary",
+      variant: "ghost",
       fontSize: 13,
       onPress: props.onLauncherClick,
     }),

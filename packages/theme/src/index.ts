@@ -95,7 +95,7 @@ const DEFAULT_TOKENS: MoireTokens = {
   rimLight: "#ffffff18",
   rimShade: "#00000040",
   titlebarHeight: 34,
-  panelHeight: 42,
+  panelHeight: 48,
 };
 
 const DEFAULT_WALLPAPER: WallpaperAtmosphere = { mode: "atmosphere" };
