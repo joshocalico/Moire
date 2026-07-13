@@ -22,6 +22,8 @@ export type ListItemProps = {
   selected?: boolean;
   onPress?: () => void;
   onDoublePress?: () => void;
+  /** When false, no Pressable — parent owns hits. */
+  interactive?: boolean;
 };
 
 export function ListItem(props: ListItemProps): ReactNode {
@@ -29,6 +31,7 @@ export function ListItem(props: ListItemProps): ReactNode {
   const h = props.height ?? 40;
   const ACCENT_W = 3;
   const PAD_L = ACCENT_W + 8;
+  const interactive = props.interactive !== false;
 
   const titleY = props.subtitle
     ? Math.floor(h / 2) - FONT_H
@@ -64,14 +67,16 @@ export function ListItem(props: ListItemProps): ReactNode {
         })
       : null,
     // Pressable overlay for hover/press feedback + onPress
-    createElement(Pressable, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: h,
-      onPress: props.onPress,
-      onDoublePress: props.onDoublePress,
-    }),
+    interactive
+      ? createElement(Pressable, {
+          x: 0,
+          y: 0,
+          width: props.width,
+          height: h,
+          onPress: props.onPress,
+          onDoublePress: props.onDoublePress,
+        })
+      : null,
     // Leading slot
     props.leading
       ? createElement(Group, { x: PAD_L, y: Math.floor((h - 24) / 2), width: 24, height: 24 },

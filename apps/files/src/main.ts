@@ -347,6 +347,8 @@ function FilesApp(
                         height: cellH,
                         mimeTypes: ["text/uri-list"],
                         getPayload: () => pathToUri(e.path) + "\n",
+                        onPress: () => setSelected(i),
+                        onDoublePress: () => openEntry(e),
                       },
                       createElement(GridItem, {
                         width: cellW,
@@ -354,12 +356,11 @@ function FilesApp(
                         label: e.name,
                         iconSize: iconSz,
                         selected: selected === i,
+                        interactive: false,
                         icon: createElement(Icon, {
                           name: iconFor(e),
                           size: iconSz,
                         }),
-                        onPress: () => setSelected(i),
-                        onDoublePress: () => openEntry(e),
                       }),
                     );
                   },
@@ -385,6 +386,8 @@ function FilesApp(
                         height: Math.round(40 * ui),
                         mimeTypes: ["text/uri-list"],
                         getPayload: () => pathToUri(e.path) + "\n",
+                        onPress: () => setSelected(i),
+                        onDoublePress: () => openEntry(e),
                       },
                       createElement(ListItem, {
                         width: contentW - Math.round(SPACE.lg * ui),
@@ -392,12 +395,11 @@ function FilesApp(
                         title: e.name,
                         subtitle: e.isDir ? "Folder" : formatSize(e.size),
                         selected: selected === i,
+                        interactive: false,
                         leading: createElement(Icon, {
                           name: iconFor(e),
                           size: Math.round(22 * ui),
                         }),
-                        onPress: () => setSelected(i),
-                        onDoublePress: () => openEntry(e),
                       }),
                     ),
                   ),

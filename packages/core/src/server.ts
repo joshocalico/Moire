@@ -623,6 +623,15 @@ export type CompositorShell = {
     x: number;
     y: number;
   }): boolean;
+  /** Desktop icon clicks when no client surface is under the cursor. */
+  onDesktopPointerButton?(ev: {
+    timeMs: number;
+    button: number;
+    value: number;
+    x: number;
+    y: number;
+  }): boolean;
+  onDesktopPointerMotion?(ev: { x: number; y: number }): void;
   isLauncherOpen(): boolean;
   /** True when panel/launcher content changed (e.g. clock). */
   needsRepaint?(): boolean;
@@ -1843,6 +1852,12 @@ export class CompositorServer {
     this.updatePointerFocus(ev.timeMs, true);
     this.updateHoverEdges();
     this.syncXwaylandPointer();
+    if (!this.pointerFocus && !this.grab) {
+      this.shell?.onDesktopPointerMotion?.({
+        x: this.cursorX,
+        y: this.cursorY,
+      });
+    }
   }
 
   private onPointerAbsolute(ev: EvdevPointerAbsolute): void {
@@ -1870,6 +1885,12 @@ export class CompositorServer {
     this.updatePointerFocus(ev.timeMs, true);
     this.updateHoverEdges();
     this.syncXwaylandPointer();
+    if (!this.pointerFocus && !this.grab) {
+      this.shell?.onDesktopPointerMotion?.({
+        x: this.cursorX,
+        y: this.cursorY,
+      });
+    }
   }
 
   /**
@@ -1952,6 +1973,21 @@ export class CompositorServer {
     this.updatePointerFocus(ev.timeMs, false);
     this.updateHoverEdges();
     const hit = this.pointerFocus;
+
+    // Desktop icons — only when no client surface is under the cursor.
+    if (!hit && !this.grab && this.shell?.onDesktopPointerButton) {
+      if (
+        this.shell.onDesktopPointerButton({
+          timeMs: ev.timeMs,
+          button: ev.code,
+          value: ev.value,
+          x: this.cursorX,
+          y: this.cursorY,
+        })
+      ) {
+        return;
+      }
+    }
 
     // Grabbing popup: press outside the grab tree dismisses and consumes.
     if (ev.value === 1 && this.hasGrabbedPopup()) {

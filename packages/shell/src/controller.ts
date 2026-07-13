@@ -10,7 +10,7 @@ import {
   type HitRegion,
   type ShellRoot,
 } from "@moire/react-host";
-import { installUiFonts, setUiScaleFactor } from "@moire/ui";
+import { installUiFonts, setUiScaleFactor, tickAllMotions } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
 import { themePalette } from "@moire/theme";
 import { createElement, useEffect, useMemo } from "react";
@@ -70,8 +70,21 @@ export type ShellBridge = {
     x: number;
     y: number;
   }): boolean;
+  /**
+   * Pointer over empty desktop (no window under cursor).
+   * Handles icon select / open. Returns true if consumed.
+   */
+  onDesktopPointerButton?(ev: {
+    timeMs: number;
+    button: number;
+    value: number;
+    x: number;
+    y: number;
+  }): boolean;
+  /** Desktop icon hover tracking when no window under cursor. */
+  onDesktopPointerMotion?(ev: { x: number; y: number }): void;
   isLauncherOpen(): boolean;
-  /** True when panel/launcher content changed (e.g. clock). */
+  /** True when panel/launcher/desktop content changed. */
   needsRepaint(): boolean;
   /** Drop panel/SSD caches after theme or prefs change. */
   invalidateChrome(): void;
@@ -262,6 +275,10 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   let desktopW = 0;
   let desktopH = 0;
   let desktopDirty = true;
+  let desktopHover: HitRegion | null = null;
+  let desktopDown: { x: number; y: number; hit: HitRegion } | null = null;
+  let desktopMotionTick = Date.now();
+  const PANEL_BTN_LEFT = 0x110; // BTN_LEFT
 
   const refreshApps = () => {
     apps = mergeApps();
@@ -457,6 +474,13 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     desktopW = width;
     desktopH = height;
     desktopDirty = false;
+  };
+
+  /** Rebuild hit list if we already know the screen size. */
+  const ensureDesktopHits = () => {
+    if (desktopW > 0 && desktopH > 0 && desktopDirty) {
+      rebuildDesktop(desktopW, desktopH);
+    }
   };
 
   const paintSsdWindow = (
@@ -674,8 +698,134 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       return false;
     },
 
+    onDesktopPointerButton(ev) {
+      const settings = loadSettings();
+      if (!settings.showDesktopIcons) return false;
+      // BTN_LEFT is 0x110 (272)
+      if (ev.button !== PANEL_BTN_LEFT && ev.button !== 272) return false;
+      ensureDesktopHits();
+
+      const findHit = (pred: (h: HitRegion) => boolean): HitRegion | null => {
+        for (let i = desktopHits.length - 1; i >= 0; i--) {
+          const h = desktopHits[i]!;
+          if (
+            ev.x >= h.x &&
+            ev.y >= h.y &&
+            ev.x < h.x + h.width &&
+            ev.y < h.y + h.height &&
+            pred(h)
+          ) {
+            return h;
+          }
+        }
+        return null;
+      };
+
+      const args = (h: HitRegion) => ({
+        x: ev.x,
+        y: ev.y,
+        localX: ev.x - h.x,
+        localY: ev.y - h.y,
+      });
+
+      if (ev.value === 1) {
+        const hit = findHit((h) => !!(h.onPointerDown || h.onPress));
+        if (!hit) {
+          if (desktopSelectedName) {
+            desktopSelectedName = undefined;
+            desktopDirty = true;
+          }
+          desktopDown = null;
+          return false;
+        }
+        desktopDown = { x: ev.x, y: ev.y, hit };
+        hit.onPointerDown?.(args(hit));
+        desktopDirty = true;
+        return true;
+      }
+
+      if (ev.value === 0) {
+        const hit =
+          findHit((h) => !!(h.onPointerUp || h.onPress)) ??
+          desktopDown?.hit ??
+          null;
+        if (hit?.onPointerUp) hit.onPointerUp(args(hit));
+        if (desktopDown) {
+          const dx = ev.x - desktopDown.x;
+          const dy = ev.y - desktopDown.y;
+          if (dx * dx + dy * dy < 100) {
+            const pressHit = findHit((h) => !!h.onPress) ?? desktopDown.hit;
+            pressHit.onPress?.(args(pressHit));
+          }
+        }
+        desktopDown = null;
+        desktopDirty = true;
+        return hit != null;
+      }
+
+      return false;
+    },
+
+    onDesktopPointerMotion(ev) {
+      const settings = loadSettings();
+      if (!settings.showDesktopIcons) return;
+      ensureDesktopHits();
+
+      let next: HitRegion | null = null;
+      for (let i = desktopHits.length - 1; i >= 0; i--) {
+        const h = desktopHits[i]!;
+        if (
+          ev.x >= h.x &&
+          ev.y >= h.y &&
+          ev.x < h.x + h.width &&
+          ev.y < h.y + h.height &&
+          (h.onPointerEnter || h.onPointerLeave || h.onPointerMove)
+        ) {
+          next = h;
+          break;
+        }
+      }
+      if (next !== desktopHover) {
+        if (desktopHover?.onPointerLeave) {
+          desktopHover.onPointerLeave({
+            x: ev.x,
+            y: ev.y,
+            localX: ev.x - desktopHover.x,
+            localY: ev.y - desktopHover.y,
+          });
+        }
+        desktopHover = next;
+        if (next?.onPointerEnter) {
+          next.onPointerEnter({
+            x: ev.x,
+            y: ev.y,
+            localX: ev.x - next.x,
+            localY: ev.y - next.y,
+          });
+        }
+        desktopDirty = true;
+      } else if (next?.onPointerMove) {
+        next.onPointerMove({
+          x: ev.x,
+          y: ev.y,
+          localX: ev.x - next.x,
+          localY: ev.y - next.y,
+        });
+        desktopDirty = true;
+      }
+    },
+
     isLauncherOpen: () => open,
-    needsRepaint: () => dirty,
+    needsRepaint: () => {
+      const now = Date.now();
+      const dt = Math.min((now - desktopMotionTick) / 1000, 0.1);
+      desktopMotionTick = now;
+      if (tickAllMotions(dt)) {
+        dirty = true;
+        desktopDirty = true;
+      }
+      return dirty || desktopDirty;
+    },
     invalidateChrome: () => {
       dirty = true;
       overlay = null;
@@ -694,7 +844,12 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     paintDesktop(fb, pitchPx, width, height) {
       const settings = loadSettings();
       if (!settings.showDesktopIcons) return;
-      if (desktopDirty || !desktopOverlay || desktopW !== width || desktopH !== height) {
+      if (
+        desktopDirty ||
+        !desktopOverlay ||
+        desktopW !== width ||
+        desktopH !== height
+      ) {
         rebuildDesktop(width, height);
       }
       if (!desktopOverlay) return;
@@ -722,14 +877,13 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       refreshDesktop();
     },
 
-    hitDesktop(x, y) {
-      for (let i = desktopHits.length - 1; i >= 0; i--) {
-        const h = desktopHits[i]!;
-        if (x >= h.x && y >= h.y && x < h.x + h.width && y < h.y + h.height) {
-          return true;
-        }
+    hitDesktop(_x, y) {
+      // Entire desktop above the panel is a drop sink (not just icon cells).
+      const pal = themePalette();
+      if (desktopH > 0) {
+        return y < desktopH - pal.panelHeight;
       }
-      return false;
+      return y >= 0;
     },
   };
 }

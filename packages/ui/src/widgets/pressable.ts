@@ -1,9 +1,10 @@
 /**
- * Pressable — interactive container that fills with hover/pressed palette tokens.
+ * Pressable — interactive container with eased hover/press fill motion.
  */
-import { createElement, useRef, useState, type ReactNode } from "react";
+import { createElement, useRef, type ReactNode } from "react";
 import { Group, Rect } from "@moire/react-host";
 import { themePalette } from "../theme.js";
+import { createMotionValue, easeTo } from "../motion.js";
 
 export type PressableProps = {
   x?: number;
@@ -17,18 +18,46 @@ export type PressableProps = {
   disabled?: boolean;
 };
 
+function lerpChannel(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t);
+}
+
+/** Blend ARGB colors by t in 0..1 (a → b). */
+function lerpArgb(from: number, to: number, t: number): number {
+  const tt = Math.max(0, Math.min(1, t));
+  const fa = (from >>> 24) & 0xff;
+  const fr = (from >>> 16) & 0xff;
+  const fg = (from >>> 8) & 0xff;
+  const fb = from & 0xff;
+  const ta = (to >>> 24) & 0xff;
+  const tr = (to >>> 16) & 0xff;
+  const tg = (to >>> 8) & 0xff;
+  const tb = to & 0xff;
+  return (
+    ((lerpChannel(fa, ta, tt) << 24) |
+      (lerpChannel(fr, tr, tt) << 16) |
+      (lerpChannel(fg, tg, tt) << 8) |
+      lerpChannel(fb, tb, tt)) >>>
+    0
+  );
+}
+
 export function Pressable(props: PressableProps): ReactNode {
   const pal = themePalette();
-  const [hover, setHover] = useState(false);
-  const [pressed, setPressed] = useState(false);
+  const hoverMv = useRef(createMotionValue(0)).current;
+  const pressMv = useRef(createMotionValue(0)).current;
   const lastClick = useRef(0);
 
   const base = props.fill ?? 0x00000000;
-  let fill: number;
-  if (props.disabled) fill = base;
-  else if (pressed) fill = pal.pressed;
-  else if (hover) fill = pal.hover;
-  else fill = base;
+  let fill = base;
+  if (!props.disabled) {
+    const h = hoverMv.get();
+    const p = pressMv.get();
+    if (h > 0.01 || p > 0.01) {
+      const hovered = lerpArgb(base, pal.hover, h);
+      fill = lerpArgb(hovered, pal.pressed, p);
+    }
+  }
 
   const handlePress = () => {
     if (props.disabled) return;
@@ -56,15 +85,27 @@ export function Pressable(props: PressableProps): ReactNode {
       width: props.width,
       height: props.height,
       fill,
-      onPointerEnter: props.disabled ? undefined : () => setHover(true),
+      onPointerEnter: props.disabled
+        ? undefined
+        : () => {
+            easeTo(hoverMv, 1, 18);
+          },
       onPointerLeave: props.disabled
         ? undefined
         : () => {
-            setHover(false);
-            setPressed(false);
+            easeTo(hoverMv, 0, 14);
+            easeTo(pressMv, 0, 20);
           },
-      onPointerDown: props.disabled ? undefined : () => setPressed(true),
-      onPointerUp: props.disabled ? undefined : () => setPressed(false),
+      onPointerDown: props.disabled
+        ? undefined
+        : () => {
+            easeTo(pressMv, 1, 22);
+          },
+      onPointerUp: props.disabled
+        ? undefined
+        : () => {
+            easeTo(pressMv, 0, 18);
+          },
       onPress: props.disabled ? undefined : handlePress,
     }),
     props.children,

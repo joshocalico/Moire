@@ -35,7 +35,7 @@ import type {
   PointerButton,
   DndCapable,
 } from "../../platform.js";
-import { setDndBridge } from "../../widgets/dnd.js";
+import { setDndBridge, notifyDrop, notifyDropHover, preferredDropMimes } from "../../widgets/dnd.js";
 
 const WL_DISPLAY_ID = 1;
 const WL_SHM_FORMAT_ARGB8888 = 0;
@@ -206,6 +206,12 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private activeDrag: {
     sourceId: number;
     getPayload: (mime: string) => string | Buffer | null;
+  } | null = null;
+  /** Incoming DnD offer while this client is a drop target. */
+  private incomingOffer: {
+    offerId: number;
+    mimes: string[];
+    serial: number;
   } | null = null;
   /** Last pointer-button event serial from compositor. */
   private lastPointerSerial = 0;
@@ -424,24 +430,84 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private handleDataDevice(opcode: number, r: MessageReader): void {
     if (opcode === EV.data_device_data_offer) {
       const offerId = r.uint();
-      // Register a minimal handler for offers we receive as drop target.
+      this.incomingOffer = { offerId, mimes: [], serial: 0 };
       this.handlers.set(offerId, (op, rr) =>
         this.handleIncomingOffer(op, rr, offerId),
       );
     } else if (opcode === EV.data_device_enter) {
-      r.uint(); // serial
+      const serial = r.uint();
       r.object(); // surface
       readFixed(r); // x
       readFixed(r); // y
-      r.object(); // offer id (already registered above)
+      const offerId = r.object();
+      if (this.incomingOffer && this.incomingOffer.offerId === offerId) {
+        this.incomingOffer.serial = serial;
+      } else if (offerId) {
+        this.incomingOffer = { offerId, mimes: [], serial };
+      }
+      const offer = this.incomingOffer;
+      if (offer) {
+        const preferred =
+          preferredDropMimes().find((m) => offer.mimes.includes(m)) ??
+          offer.mimes[0] ??
+          "text/uri-list";
+        this.send(offer.offerId, OP.data_offer_accept, (b) =>
+          b.uint(serial).string(preferred),
+        );
+        const actions = WL_DND_ACTION_COPY | WL_DND_ACTION_MOVE;
+        this.send(offer.offerId, OP.data_offer_set_actions, (b) =>
+          b.uint(actions).uint(WL_DND_ACTION_MOVE),
+        );
+      }
+      notifyDropHover(true);
     } else if (opcode === EV.data_device_leave) {
-      // nothing
+      notifyDropHover(false);
+      if (this.incomingOffer) {
+        try {
+          this.send(this.incomingOffer.offerId, OP.data_offer_destroy, () => {});
+        } catch {
+          /* ok */
+        }
+        this.handlers.delete(this.incomingOffer.offerId);
+        this.incomingOffer = null;
+      }
     } else if (opcode === EV.data_device_motion) {
       r.uint(); // time
       readFixed(r); // x
       readFixed(r); // y
     } else if (opcode === EV.data_device_drop) {
-      // nothing (we are rarely the drop target in @moire/ui client windows)
+      const offer = this.incomingOffer;
+      if (!offer) {
+        notifyDropHover(false);
+        return;
+      }
+      const mime =
+        preferredDropMimes().find((m) => offer.mimes.includes(m)) ??
+        offer.mimes[0] ??
+        "text/uri-list";
+      this.receiveOfferData(offer.offerId, mime)
+        .then((buf) => {
+          const text = buf.toString("utf8");
+          notifyDrop(text, offer.mimes.length ? offer.mimes : [mime]);
+          try {
+            this.send(offer.offerId, OP.data_offer_finish, () => {});
+          } catch {
+            /* ok */
+          }
+          try {
+            this.send(offer.offerId, OP.data_offer_destroy, () => {});
+          } catch {
+            /* ok */
+          }
+          this.handlers.delete(offer.offerId);
+          this.incomingOffer = null;
+          notifyDropHover(false);
+        })
+        .catch((err) => {
+          console.warn("[ui/dnd] receive failed:", err);
+          notifyDropHover(false);
+          this.incomingOffer = null;
+        });
     } else if (opcode === EV.data_device_selection) {
       r.object(); // offer id (clipboard selection — not used by widgets yet)
     }
@@ -449,11 +515,60 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
   private handleIncomingOffer(
     opcode: number,
-    _r: MessageReader,
-    _offerId: number,
+    r: MessageReader,
+    offerId: number,
   ): void {
-    // We don't implement receiving drops into UI windows yet — just consume.
-    void opcode;
+    if (opcode === EV.data_offer_offer) {
+      const mime = r.string() ?? "";
+      if (this.incomingOffer?.offerId === offerId && mime) {
+        this.incomingOffer.mimes.push(mime);
+      }
+    } else if (
+      opcode === EV.data_offer_source_actions ||
+      opcode === EV.data_offer_action
+    ) {
+      r.uint();
+    }
+  }
+
+  private receiveOfferData(offerId: number, mime: string): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      try {
+        const libc = getLibc();
+        const pipe2 = libc.func("int pipe2(int *pipefd, int flags)") as (
+          pipefd: Buffer,
+          flags: number,
+        ) => number;
+        const O_CLOEXEC = 0o2000000;
+        const pfds = Buffer.alloc(8);
+        if (pipe2(pfds, O_CLOEXEC) !== 0) {
+          reject(new Error("pipe2 failed"));
+          return;
+        }
+        const readFd = pfds.readInt32LE(0);
+        const writeFd = pfds.readInt32LE(4);
+        this.send(offerId, OP.data_offer_receive, (b) =>
+          b.string(mime).fd(writeFd),
+        );
+        try {
+          closeFd(writeFd);
+        } catch {
+          /* ok */
+        }
+        const readable = fs.createReadStream("", {
+          fd: readFd,
+          autoClose: true,
+        });
+        const chunks: Buffer[] = [];
+        readable.on("data", (chunk: Buffer | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        readable.on("end", () => resolve(Buffer.concat(chunks)));
+        readable.on("error", (err) => reject(err));
+      } catch (err) {
+        reject(err);
+      }
+    });
   }
 
   createWindow(opts: PlatformWindowOpts): PlatformWindow {

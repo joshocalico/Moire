@@ -40,6 +40,8 @@ export type GridItemProps = {
   onDoublePress?: () => void;
   /** Soft scrim behind label (desktop over wallpaper). */
   labelScrim?: boolean;
+  /** When false, no Pressable — parent (e.g. Draggable) owns hits. */
+  interactive?: boolean;
 };
 
 export function GridItem(props: GridItemProps): ReactNode {
@@ -57,6 +59,7 @@ export function GridItem(props: GridItemProps): ReactNode {
   const label = ellipsize(props.label, labelMaxW, fontSize);
   const tw = measureText(label, fontSize / 14);
   const tx = Math.max(labelPad, Math.floor((props.width - tw) / 2));
+  const interactive = props.interactive !== false;
 
   return createElement(
     Group,
@@ -111,14 +114,16 @@ export function GridItem(props: GridItemProps): ReactNode {
           fill: pal.accent,
         })
       : null,
-    createElement(Pressable, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: props.height,
-      onPress: props.onPress,
-      onDoublePress: props.onDoublePress,
-    }),
+    interactive
+      ? createElement(Pressable, {
+          x: 0,
+          y: 0,
+          width: props.width,
+          height: props.height,
+          onPress: props.onPress,
+          onDoublePress: props.onDoublePress,
+        })
+      : null,
     props.icon
       ? createElement(
           Group,
