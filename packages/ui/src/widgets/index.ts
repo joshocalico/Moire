@@ -51,7 +51,13 @@ export { Icon } from "./icon.js";
 export type { IconProps, IconName } from "./icon.js";
 
 export { Draggable, DropTarget, DropZone, setDndBridge } from "./dnd.js";
-export type { DraggableProps, DropTargetProps, DropZoneProps, DragIconSpec } from "./dnd.js";
+export type {
+  DraggableProps,
+  DropTargetProps,
+  DropZoneProps,
+  DragIconSpec,
+  DragPreviewSpec,
+} from "./dnd.js";
 
 export { Tabs } from "./tabs.js";
 export type { TabsProps } from "./tabs.js";

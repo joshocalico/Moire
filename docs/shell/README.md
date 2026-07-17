@@ -41,10 +41,10 @@ createShell(spawn: ShellSpawn): ShellBridge
 | `needsRepaint()` | Dirty chrome / motion still settling |
 | `invalidateChrome()` | Drop caches after theme/prefs change |
 | `paintDesktop(…)` | Blend icons after wallpaper, before windows |
-| `acceptDesktopDrop(uris, x, y)` | Copy/move `file://` URIs onto the desktop or a folder at the drop point |
+| `acceptDesktopDrop(uris, x, y)` | Copy/move `file://` URIs; returns whether the drop succeeded |
 | `hitDesktop(x, y)` | Drop zone above the panel |
-| `paintDragPreview(…)` | Floating DnD chip under cursor |
-| `desktopDragLabel?()` | Label while a desktop icon drag is active |
+| `paintDragPreview(…)` | Same-size desktop ghost under cursor or easing back after failure |
+| `desktopDragLabel?()` | Label while a desktop icon drag/return animation is active |
 
 Do not reach past this bridge into shell internals from `packages/core`.
 

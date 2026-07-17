@@ -16,7 +16,7 @@ Bottom → top:
 2. Desktop icons (`shell.paintDesktop`)
 3. Client windows + SSD titlebars (stack order)
 4. Panel / launcher (`shell.paint`)
-5. Drag preview (client drag-icon surface, or shell chip)
+5. Drag preview (client drag-icon surface, or shell-owned desktop ghost)
 6. Cursor
 
 ## Architecture
@@ -97,7 +97,7 @@ Implementation: `packages/shell/src/DesktopIcons.tsx`, wired from `packages/shel
 ### Protocol path
 
 1. Client `Draggable` detects press + move threshold → `dndBridge.startDrag`.
-2. Wayland UI creates a `wl_data_source`, offers mimes, builds a **labeled SHM drag-icon surface**, calls `wl_data_device.start_drag`.
+2. Wayland UI creates a `wl_data_source`, offers mimes, builds a **source-sized SHM drag-icon surface** anchored at the pointer-down hotspot, then calls `wl_data_device.start_drag`.
 3. Compositor runs enter / motion / leave / drop against the surface under the cursor.
 4. Drop on a Moire UI window: client `data_offer.receive` → `notifyDrop` → `DropTarget.onDrop`.
 5. Drop with no client target and `text/uri-list`: compositor reads the source and calls `shell.acceptDesktopDrop`.
@@ -106,8 +106,9 @@ Implementation: `packages/shell/src/DesktopIcons.tsx`, wired from `packages/shel
 
 ### Preview
 
-- Preferred: blit the client drag-icon surface at the cursor during composite.
-- Fallback / desktop reposition: `shell.paintDragPreview` chip (and `desktopDragLabel()` while moving icons).
+- Preferred: blit the client drag-icon surface at the cursor using its attach offset as the stable grab hotspot.
+- Fallback / desktop reposition: `shell.paintDragPreview` renders the same-size desktop tile and preserves its grab point.
+- Rejected/cancelled drops retain a pixel snapshot and ease it back to its drag-start position; successful desktop drops report `dnd_finished` instead of looking like cancellations.
 
 ### Limits
 
@@ -172,7 +173,7 @@ pnpm --filter @moire/ui smoke
 
 - Atmosphere wallpaper; panel brand **Moire** readable.
 - Desktop icons with folder/file artwork; select and open work when no window covers them.
-- Files Places selection correct; grid/list; drag shows a labeled chip under the cursor.
+- Files Places selection correct; grid/list; drag shows a source-sized preview anchored at the original grab point.
 - `xdg-open` on a folder launches Files at that requested folder.
 - Desktop item dropped over a desktop folder moves into it; empty-desktop drop still repositions.
 - Session runs compositor + Files + foot without Nautilus.

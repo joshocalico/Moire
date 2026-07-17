@@ -457,6 +457,9 @@ type WlObject = {
 
 type SurfaceState = {
   bufferId: number | null;
+  /** Offset supplied with the most recent wl_surface.attach. */
+  bufferOffsetX: number;
+  bufferOffsetY: number;
   frameCallbacks: number[];
   mapped: boolean;
   /** Absolute desktop position (computed for subsurfaces). */
@@ -645,7 +648,7 @@ export type CompositorShell = {
    * `x`/`y` are the drop position, so the shell can tell whether it landed
    * on a folder icon (move in) vs. empty desktop (default placement).
    */
-  acceptDesktopDrop?(uris: string[], x: number, y: number): void;
+  acceptDesktopDrop?(uris: string[], x: number, y: number): boolean;
   /** Paint desktop icons / drop highlight after wallpaper, before windows. */
   paintDesktop?(
     fb: Uint32Array,
@@ -655,11 +658,7 @@ export type CompositorShell = {
   ): void;
   /** Return true when (x,y) is a valid desktop drop zone (defaults true). */
   hitDesktop?(x: number, y: number): boolean;
-  /**
-   * Paint a drag preview chip at the cursor (label + chrome).
-   * Called during an active DnD session when no client icon surface is available,
-   * or in addition as a fallback.
-   */
+  /** Paint a shell-owned drag preview when no client icon surface is available. */
   paintDragPreview?(
     fb: Uint32Array,
     pitchPx: number,
@@ -678,7 +677,7 @@ export type CompositorShell = {
   desktopDragUri?(): { uri: string; label: string } | null;
   /**
    * Called when an escalated (real-DnD) desktop-origin drag ends.
-   * `commit=true`: drop landed back on the desktop (or was cancelled) —
+   * `commit=true`: drop landed back on the desktop —
    * finalize the reposition at (x, y). `commit=false`: drop was handed to a
    * client target — clear local drag state without touching layout.
    */
@@ -697,7 +696,7 @@ export type CompositorShell = {
    * touches the compositor's own `this.drag`, so neither Escape nor the
    * drag watchdog would otherwise reach it. Called on Escape.
    */
-  cancelDesktopDrag?(): void;
+  cancelDesktopDrag?(x?: number, y?: number): void;
   /** Polled unconditionally by the drag watchdog — see `cancelDesktopDrag`. */
   checkDesktopDragWatchdog?(): void;
 };
@@ -799,6 +798,9 @@ type DragSession = {
   /** DnD action bitmask from source. */
   actions: number;
   iconId: number | null;
+  /** Initial top-left of the preview, used as the failed-drop return target. */
+  previewOriginX: number;
+  previewOriginY: number;
   /** Short label for the compositor/shell drag chip. */
   label: string;
   /** Current drag target surface, or null if over desktop / no surface. */
@@ -810,6 +812,19 @@ type DragSession = {
   } | null;
   /** Wayland serial sent with data_device.enter. */
   enterSerial: number;
+};
+
+type DragReturnAnimation = {
+  pixels: Uint8Array;
+  width: number;
+  height: number;
+  stride: number;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  startedMs: number;
+  durationMs: number;
 };
 
 export class CompositorServer {
@@ -825,6 +840,13 @@ export class CompositorServer {
   private focused: ClientSession | null = null;
   private pointerFocus: { session: ClientSession; surfaceId: number } | null =
     null;
+  /** Last forwarded button press, used to recover the exact drag start point. */
+  private lastPointerPress: {
+    session: ClientSession;
+    serial: number;
+    x: number;
+    y: number;
+  } | null = null;
   private cursorX = 100;
   private cursorY = 100;
   /** Client cursor from wl_pointer.set_cursor (not part of the scene). */
@@ -863,6 +885,8 @@ export class CompositorServer {
   private selection: ClipboardSelection | null = null;
   /** Active DnD session (one at a time). */
   private drag: DragSession | null = null;
+  /** Pixel snapshot retained while a rejected/cancelled drag snaps home. */
+  private dragReturn: DragReturnAnimation | null = null;
   /** Timestamp of the last motion/button activity while `drag` is active. */
   private dragActivityMs = 0;
   private dragWatchdog: NodeJS.Timeout | null = null;
@@ -1420,21 +1444,36 @@ export class CompositorServer {
     sourceId: number,
     _originId: number,
     iconId: number | null,
-    _serial: number,
+    serial: number,
   ): void {
     if (this.drag) this.cancelDrag();
+    this.dragReturn = null;
     const mimes = sourceSession.dataSourceMimes(sourceId);
     if (!mimes || mimes.length === 0) {
       sourceSession.sendDataSourceCancelled(sourceId);
       return;
     }
     const actions = sourceSession.dataSourceActions(sourceId);
+    const icon = iconId != null ? sourceSession.surfaceById(iconId) : null;
+    const press = this.lastPointerPress;
+    const startX =
+      press?.session === sourceSession && press.serial === serial
+        ? press.x
+        : this.cursorX;
+    const startY =
+      press?.session === sourceSession && press.serial === serial
+        ? press.y
+        : this.cursorY;
+    const previewOriginX = startX + (icon?.bufferOffsetX ?? 12);
+    const previewOriginY = startY + (icon?.bufferOffsetY ?? 10);
     this.drag = {
       sourceSession,
       sourceId,
       mimeTypes: [...mimes],
       actions,
       iconId,
+      previewOriginX,
+      previewOriginY,
       label: mimes.includes("text/uri-list")
         ? "File"
         : mimes.includes("text/plain")
@@ -1458,6 +1497,7 @@ export class CompositorServer {
    */
   startDesktopDrag(uri: string, label: string): void {
     if (this.drag) this.cancelDrag();
+    this.dragReturn = null;
     const source = new ShellDragSource(new Map([["text/uri-list", uri]]));
     this.drag = {
       sourceSession: source,
@@ -1465,6 +1505,8 @@ export class CompositorServer {
       mimeTypes: ["text/uri-list"],
       actions: source.dataSourceActions(),
       iconId: null,
+      previewOriginX: this.cursorX,
+      previewOriginY: this.cursorY,
       label,
       currentTarget: null,
       enterSerial: 0,
@@ -1498,14 +1540,34 @@ export class CompositorServer {
     if (drag.currentTarget) {
       drag.currentTarget.session.sendDndLeave(drag.currentTarget.deviceId);
     }
+    this.beginDragReturn(drag, this.cursorX, this.cursorY);
     drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
     if (drag.sourceSession instanceof ShellDragSource) {
-      this.shell?.finishDesktopDrag?.(false, this.cursorX, this.cursorY);
+      this.shell?.cancelDesktopDrag?.(this.cursorX, this.cursorY);
     }
     this.shell?.clearDesktopDragHover?.();
     this.drag = null;
     console.log("[dnd] cancel");
     this.markDirty();
+  }
+
+  /** Retain the icon pixels before the source destroys them, then ease home. */
+  private beginDragReturn(drag: DragSession, cursorX: number, cursorY: number): void {
+    if (drag.iconId == null) return;
+    const surf = drag.sourceSession.surfaceById(drag.iconId);
+    if (!surf?.pixels || surf.width <= 0 || surf.height <= 0) return;
+    this.dragReturn = {
+      pixels: new Uint8Array(surf.pixels),
+      width: surf.width,
+      height: surf.height,
+      stride: surf.stride,
+      fromX: cursorX + surf.bufferOffsetX,
+      fromY: cursorY + surf.bufferOffsetY,
+      toX: drag.previewOriginX,
+      toY: drag.previewOriginY,
+      startedMs: monotonicMs(),
+      durationMs: 220,
+    };
   }
 
   private updateDragFocus(timeMs: number): void {
@@ -1632,7 +1694,9 @@ export class CompositorServer {
         this.readDndData(drag, "text/uri-list", (data) => {
           if (!data) {
             console.warn("[dnd] desktop-drop readDndData returned null — nothing was read from the source");
+            this.beginDragReturn(drag, dropX, dropY);
             drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
+            this.markDirty();
             return;
           }
           const uris = data
@@ -1641,10 +1705,19 @@ export class CompositorServer {
             .map((u) => u.trim())
             .filter((u) => u.length > 0 && !u.startsWith("#"));
           console.log(`[dnd] desktop-drop uris=${uris.join(",")}`);
-          if (uris.length > 0) shell.acceptDesktopDrop!(uris, dropX, dropY);
-          drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
+          const accepted =
+            uris.length > 0 && shell.acceptDesktopDrop!(uris, dropX, dropY);
+          if (accepted) {
+            drag.sourceSession.sendDataSourceDndDropPerformed(drag.sourceId);
+            drag.sourceSession.sendDataSourceDndFinished(drag.sourceId);
+          } else {
+            this.beginDragReturn(drag, dropX, dropY);
+            drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
+          }
+          this.markDirty();
         });
       } else {
+        this.beginDragReturn(drag, this.cursorX, this.cursorY);
         drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
       }
     }
@@ -2316,7 +2389,15 @@ export class CompositorServer {
         }
       }
     }
-    hit?.session.pointerButton(ev);
+    const serial = hit?.session.pointerButton(ev) ?? null;
+    if (ev.value === 1 && hit && serial != null) {
+      this.lastPointerPress = {
+        session: hit.session,
+        serial,
+        x: this.cursorX,
+        y: this.cursorY,
+      };
+    }
   }
 
   private handleSsdAction(action: SsdAction): void {
@@ -2928,8 +3009,8 @@ export class CompositorServer {
     if (drag?.iconId != null) {
       const surf = drag.sourceSession.surfaceById(drag.iconId);
       if (surf?.pixels && surf.width > 0 && surf.height > 0) {
-        const dx = (this.cursorX | 0) + 12;
-        const dy = (this.cursorY | 0) + 10;
+        const dx = (this.cursorX | 0) + surf.bufferOffsetX;
+        const dy = (this.cursorY | 0) + surf.bufferOffsetY;
         try {
           this.blitArgb(
             fb,
@@ -2948,6 +3029,35 @@ export class CompositorServer {
           console.warn("[dnd] icon blit failed:", err);
         }
       }
+    }
+
+    if (!drag && this.dragReturn) {
+      const anim = this.dragReturn;
+      const progress = Math.min(
+        1,
+        Math.max(0, (monotonicMs() - anim.startedMs) / anim.durationMs),
+      );
+      if (progress >= 1) {
+        this.dragReturn = null;
+        return;
+      }
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const dx = Math.round(anim.fromX + (anim.toX - anim.fromX) * eased);
+      const dy = Math.round(anim.fromY + (anim.toY - anim.fromY) * eased);
+      this.blitArgb(
+        fb,
+        pitchPx,
+        width,
+        height,
+        dx,
+        dy,
+        anim.pixels,
+        anim.width,
+        anim.height,
+        anim.stride,
+      );
+      this.markDirty();
+      return;
     }
 
     const label =
@@ -3830,8 +3940,8 @@ class ClientSession {
     this.send(this.pointerId, EV.pointer_frame, () => {});
   }
 
-  pointerButton(ev: EvdevPointerButton): void {
-    if (this.pointerId == null || this.pointerSurfaceId == null) return;
+  pointerButton(ev: EvdevPointerButton): number | null {
+    if (this.pointerId == null || this.pointerSurfaceId == null) return null;
     const state =
       ev.value === 0
         ? WL_POINTER_BUTTON_STATE_RELEASED
@@ -3842,6 +3952,7 @@ class ClientSession {
       b.uint(serial).uint(ev.timeMs >>> 0).uint(ev.code).uint(state);
     });
     this.send(this.pointerId, EV.pointer_frame, () => {});
+    return serial;
   }
 
   pointerAxis(ev: EvdevPointerAxis): void {
@@ -4701,6 +4812,8 @@ class ClientSession {
       const surface: SurfaceState = {
         id,
         bufferId: null,
+        bufferOffsetX: 0,
+        bufferOffsetY: 0,
         frameCallbacks: [],
         mapped: false,
         x: 0,
@@ -4897,8 +5010,8 @@ class ClientSession {
     const surface = obj.data!.surface as SurfaceState;
     if (opcode === OP.surface_attach) {
       const bufId = r.object();
-      r.int(); // attach x — unused for layout
-      r.int(); // attach y
+      surface.bufferOffsetX = r.int();
+      surface.bufferOffsetY = r.int();
       surface.bufferId = bufId === 0 ? null : bufId;
       // New attach starts a release cycle; empty re-commits must not
       // wl_buffer.release again (GDK SHM asserts / aborts on double release).

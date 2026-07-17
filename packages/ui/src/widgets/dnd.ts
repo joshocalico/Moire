@@ -20,11 +20,22 @@ import { requestActiveWindowRedraw } from "../window.js";
 /** Icon graphic for the drag preview — same shape as `Icon`'s name/color. */
 export type DragIconSpec = { name: string; color?: number };
 
+export type DragPreviewSpec = {
+  label?: string;
+  icon?: DragIconSpec;
+  /** Source widget bounds, used to keep the preview the same size. */
+  width: number;
+  height: number;
+  /** Pointer-down position within those bounds. */
+  hotspotX: number;
+  hotspotY: number;
+};
+
 type DndBridge = {
   startDrag?: (
     payload: unknown,
     mimeTypes: string[],
-    opts?: { label?: string; icon?: DragIconSpec },
+    opts: DragPreviewSpec,
   ) => void;
 };
 
@@ -229,6 +240,10 @@ export function Draggable(props: DraggableProps): ReactNode {
   const beginDrag = () => {
     if (started.current) return;
     started.current = true;
+    const hotspot = down.current ?? {
+      x: props.width / 2,
+      y: props.height / 2,
+    };
     const payload = props.getPayload?.() ?? null;
     const types = props.mimeTypes ?? [];
     const label = labelFromPayload(payload, props.label);
@@ -239,7 +254,14 @@ export function Draggable(props: DraggableProps): ReactNode {
       down.current = null;
       started.current = false;
     };
-    dndBridge?.startDrag?.(payload, types, { label, icon: props.previewIcon });
+    dndBridge?.startDrag?.(payload, types, {
+      label,
+      icon: props.previewIcon,
+      width: props.width,
+      height: props.height,
+      hotspotX: hotspot.x,
+      hotspotY: hotspot.y,
+    });
   };
 
   const handleClick = () => {

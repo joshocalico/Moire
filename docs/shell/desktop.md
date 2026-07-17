@@ -29,7 +29,7 @@ Folder opens are sent as encoded `file://` URIs so names containing spaces are s
 
 - PNG icons from `@moire/ui` (`Icon`)
 - Labels with optional scrim (`GridItem` `labelScrim`) for contrast on atmosphere wallpaper
-- Drag: Wayland drag icon when a client drag is active; shell chip via `paintDragPreview` / `desktopDragLabel` for icon moves
+- Drag: hotspot-anchored Wayland drag icon for client drags; a same-size shell ghost via `paintDragPreview` / `desktopDragLabel` for icon moves; cancelled/failed moves ease back to origin
 
 ## Dragging onto a client (Files)
 

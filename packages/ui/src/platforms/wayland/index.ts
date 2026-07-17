@@ -34,7 +34,6 @@ import {
   Group,
   Rect,
   Text,
-  measureText,
 } from "@moire/react-host";
 import { themePalette } from "../../theme.js";
 import type {
@@ -52,13 +51,15 @@ import {
   notifyDropHover,
   preferredDropMimes,
   notifyDragEnded,
-  type DragIconSpec,
+  type DragPreviewSpec,
 } from "../../widgets/dnd.js";
 import {
   updateActiveWindowDropHover,
   clearActiveWindowDropHover,
 } from "../../window.js";
 import { Icon } from "../../widgets/icon.js";
+import { GridItem } from "../../widgets/grid.js";
+import { ListItem } from "../../widgets/list.js";
 
 const WL_DISPLAY_ID = 1;
 const WL_SHM_FORMAT_ARGB8888 = 0;
@@ -354,7 +355,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       startDrag: (payload, mimeTypes, opts) => {
         const mime0 = mimeTypes[0];
         if (!mime0 || !this.conn) return;
-        const label = opts?.label;
+        const label = opts.label;
         this.startDrag(
           mimeTypes,
           (mime) => {
@@ -373,7 +374,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           },
           this.lastPointerSerial,
           label,
-          opts?.icon,
+          opts,
         );
       },
     });
@@ -384,7 +385,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     getPayload: (mime: string) => string | Buffer | null,
     serial: number,
     label?: string,
-    icon?: DragIconSpec,
+    preview?: DragPreviewSpec,
   ): void {
     if (!this.conn || !this.dataDeviceManagerId || !this.dataDeviceId) return;
     if (this.activeDrag) {
@@ -414,7 +415,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     this.send(sourceId, OP.data_source_set_actions, (b) => b.uint(actions));
 
     const chipLabel = (label && label.trim()) || "Item";
-    const iconSurfaceId = this.createDragIconSurface(chipLabel, icon);
+    const iconSurfaceId = this.createDragIconSurface(chipLabel, preview);
 
     this.activeDrag = { sourceId, iconSurfaceId, getPayload };
 
@@ -436,68 +437,60 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   }
 
   /**
-   * Build the drag icon surface. With `icon`, renders the item's own
-   * icon graphic + label (like a compact grid tile); otherwise falls back
-   * to a plain text chip.
+   * Build a source-sized drag icon and anchor it at the original grab point.
+   * The attach offset is the standard Wayland drag-icon hotspot mechanism;
+   * Moire's compositor applies it only while painting this role-less surface.
    */
-  private createDragIconSurface(label: string, icon?: DragIconSpec): number {
+  private createDragIconSurface(label: string, preview?: DragPreviewSpec): number {
     const pal = themePalette();
     const root = createShellRoot();
-    let chipW: number;
-    let chipH: number;
+    const icon = preview?.icon;
+    const chipW = Math.max(24, Math.round(preview?.width ?? 96));
+    const chipH = Math.max(24, Math.round(preview?.height ?? 40));
+    const hotspotX = Math.max(0, Math.min(chipW, Math.round(preview?.hotspotX ?? 0)));
+    const hotspotY = Math.max(0, Math.min(chipH, Math.round(preview?.hotspotY ?? 0)));
 
     if (icon) {
-      const text = label.length > 20 ? label.slice(0, 19) + "…" : label;
-      const iconSize = 40;
-      const padX = 10;
-      const labelH = 16;
-      const tw = measureText(text, 12 / 14);
-      chipW = Math.max(iconSize + padX * 2, Math.round(tw) + padX * 2);
-      chipH = iconSize + labelH + 14;
+      const listLike = chipW > chipH * 2;
+      const iconSize = listLike
+        ? Math.max(16, Math.min(24, chipH - 12))
+        : Math.max(24, Math.min(56, chipH - 38));
       renderShell(
         root,
         createElement(
           Group,
-          { x: 0, y: 0, width: chipW, height: chipH },
-          createElement(Rect, {
-            x: 0,
-            y: 0,
-            width: chipW,
-            height: chipH,
-            fill: (pal.surface & 0x00ffffff) | 0xd8000000,
-          }),
-          createElement(Rect, {
-            x: 0,
-            y: 0,
-            width: chipW,
-            height: 1,
-            fill: pal.rimLight,
-          }),
-          createElement(
-            Group,
-            {
-              x: Math.floor((chipW - iconSize) / 2),
-              y: 8,
-              width: iconSize,
-              height: iconSize,
-            },
-            createElement(Icon, { name: icon.name, size: iconSize, color: icon.color }),
-          ),
-          createElement(Text, {
-            x: Math.max(2, Math.floor((chipW - tw) / 2)),
-            y: iconSize + 12,
-            text,
-            color: pal.text,
-            fontSize: 12,
-          }),
+          { x: 0, y: 0, width: chipW, height: chipH, opacity: 0.68 },
+          listLike
+            ? createElement(ListItem, {
+                width: chipW,
+                height: chipH,
+                title: label,
+                selected: true,
+                interactive: false,
+                leading: createElement(Icon, {
+                  name: icon.name,
+                  size: iconSize,
+                  color: icon.color,
+                }),
+              })
+            : createElement(GridItem, {
+                width: chipW,
+                height: chipH,
+                label,
+                iconSize,
+                selected: true,
+                interactive: false,
+                icon: createElement(Icon, {
+                  name: icon.name,
+                  size: iconSize,
+                  color: icon.color,
+                }),
+              }),
         ),
       );
     } else {
       const text = label.length > 26 ? label.slice(0, 25) + "…" : label;
       const padX = 12;
-      const tw = measureText(text, 13 / 14);
-      chipW = Math.max(80, Math.round(tw + padX * 2 + 8));
-      chipH = 36;
       renderShell(
         root,
         createElement(
@@ -562,7 +555,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         .uint(WL_SHM_FORMAT_ARGB8888),
     );
     this.send(surfaceId, OP.surface_attach, (b) =>
-      b.object(bufferId).int(0).int(0),
+      b.object(bufferId).int(-hotspotX).int(-hotspotY),
     );
     this.send(surfaceId, OP.surface_damage, (b) =>
       b.int(0).int(0).int(chipW).int(chipH),

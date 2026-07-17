@@ -110,10 +110,10 @@ export type ShellBridge = {
    * Parse file:// URIs and place them on the desktop. If (x, y) lands on a
    * folder icon, moves into that folder instead of ~/Desktop's root.
    */
-  acceptDesktopDrop(uris: string[], x: number, y: number): void;
+  acceptDesktopDrop(uris: string[], x: number, y: number): boolean;
   /** True if (x,y) is over a desktop drop zone (above the panel). */
   hitDesktop(x: number, y: number): boolean;
-  /** Floating DnD chip under the cursor. */
+  /** Shell-owned drag preview, including desktop icon return animation. */
   paintDragPreview(
     fb: Uint32Array,
     pitchPx: number,
@@ -147,7 +147,7 @@ export type ShellBridge = {
    * compositor's own drag watchdog/Escape handling instead). The icon stays
    * at its last saved position; nothing is committed. Called on Escape.
    */
-  cancelDesktopDrag?(): void;
+  cancelDesktopDrag?(x?: number, y?: number): void;
   /**
    * Polled unconditionally by the compositor (regardless of whether a real
    * DnD session is active) so a local desktop-icon drag that never receives
@@ -341,6 +341,17 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     grabY: number;
     originX: number;
     originY: number;
+    lastX: number;
+    lastY: number;
+  } | null = null;
+  let desktopDragReturn: {
+    name: string;
+    originX: number;
+    originY: number;
+    fromX: number;
+    fromY: number;
+    startedMs: number;
+    durationMs: number;
   } | null = null;
   /**
    * When `desktopDrag` started. Purely local (never touches the compositor
@@ -677,6 +688,27 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     }
   };
 
+  const beginDesktopDragReturn = (
+    drag: NonNullable<typeof desktopDrag>,
+    cursorX = drag.lastX,
+    cursorY = drag.lastY,
+  ): void => {
+    desktopDragReturn = {
+      name: drag.name,
+      originX: drag.originX,
+      originY: drag.originY,
+      fromX: cursorX - drag.grabX,
+      fromY: cursorY - drag.grabY,
+      startedMs: Date.now(),
+      durationMs: 220,
+    };
+    desktopDrag = null;
+    desktopDown = null;
+    desktopDropHoverName = null;
+    desktopDragActive = false;
+    desktopDirty = true;
+  };
+
   /**
    * Finish a local desktop drag. Dropping over another folder moves the
    * entry into it; every other desktop drop persists a new icon position.
@@ -713,11 +745,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           `[shell] desktop local drop failed for ${drag.name} onto ${targetName}:`,
           err,
         );
-        desktopDrag = null;
-        desktopDown = null;
-        desktopDropHoverName = null;
-        desktopDragActive = false;
-        desktopDirty = true;
+        beginDesktopDragReturn(drag, x, y);
         return;
       }
     }
@@ -903,6 +931,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       });
 
       if (ev.value === 1) {
+        desktopDragReturn = null;
         const hit = findHit((h) => !!(h.onPointerDown || h.onPress));
         if (!hit) {
           if (desktopSelectedName) {
@@ -975,6 +1004,8 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
             grabY: desktopDown.y - iy,
             originX: ix,
             originY: iy,
+            lastX: ev.x,
+            lastY: ev.y,
           };
           desktopDragStartMs = Date.now();
           desktopSelectedName = name;
@@ -983,6 +1014,8 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       }
 
       if (desktopDrag) {
+        desktopDrag.lastX = ev.x;
+        desktopDrag.lastY = ev.y;
         // Traditional drag semantics: the icon stays put (desktopLayout is
         // untouched) while a translucent ghost tracks the cursor via
         // paintDragPreview; the real position only commits on drop, in
@@ -1052,7 +1085,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         dirty = true;
         desktopDirty = true;
       }
-      return dirty || desktopDirty || desktopDrag != null;
+      return dirty || desktopDirty || desktopDrag != null || desktopDragReturn != null;
     },
     invalidateChrome: () => {
       dirty = true;
@@ -1115,6 +1148,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         }
       }
       const intoFolder = dest !== root;
+      let accepted = false;
 
       for (const uri of uris) {
         if (!uri.startsWith("file://")) continue;
@@ -1131,12 +1165,14 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           } else {
             fs.copyFileSync(src, destPath);
           }
+          accepted = true;
           console.log(`[shell] desktop drop: ${src} → ${destPath}`);
         } catch (err) {
           console.error(`[shell] desktop drop failed for ${src}:`, err);
         }
       }
       refreshDesktop();
+      return accepted;
     },
 
     hitDesktop(_x, y) {
@@ -1155,7 +1191,8 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       // tracks the original grab point — a traditional OS-style ghost, not
       // a live-moving icon. Other sources (rare: a real client drag with no
       // icon surface of its own) fall back to a plain text chip.
-      const isDesktopDrag = desktopDrag?.name === label;
+      const desktopPreview = desktopDrag ?? desktopDragReturn;
+      const isDesktopDrag = desktopPreview?.name === label;
       let dirEntry = false;
       if (isDesktopDrag) {
         try {
@@ -1241,16 +1278,30 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       const chip = dragChipCache;
       // Desktop drags track the original grab point (where the icon would
       // land if dropped now); other chips float near the cursor.
-      const dx = isDesktopDrag
-        ? (cursorX | 0) - (desktopDrag?.grabX ?? 0)
-        : (cursorX | 0) + 14;
-      const dy = isDesktopDrag
-        ? (cursorY | 0) - (desktopDrag?.grabY ?? 0)
-        : (cursorY | 0) + 12;
+      let dx = (cursorX | 0) + 14;
+      let dy = (cursorY | 0) + 12;
+      if (desktopDrag) {
+        dx = (cursorX | 0) - desktopDrag.grabX;
+        dy = (cursorY | 0) - desktopDrag.grabY;
+      } else if (desktopDragReturn) {
+        const anim = desktopDragReturn;
+        const progress = Math.min(
+          1,
+          Math.max(0, (Date.now() - anim.startedMs) / anim.durationMs),
+        );
+        if (progress >= 1) {
+          desktopDragReturn = null;
+          desktopDirty = true;
+          return;
+        }
+        const eased = 1 - Math.pow(1 - progress, 3);
+        dx = Math.round(anim.fromX + (anim.originX - anim.fromX) * eased);
+        dy = Math.round(anim.fromY + (anim.originY - anim.fromY) * eased);
+      }
       blitStrip(fb, pitchPx, _width, _height, dx, dy, chip.pixels, chip.w, chip.h);
     },
 
-    desktopDragLabel: () => (desktopDrag ? desktopDrag.name : null),
+    desktopDragLabel: () => desktopDrag?.name ?? desktopDragReturn?.name ?? null,
 
     desktopDragUri: () => {
       if (!desktopDrag) return null;
@@ -1265,6 +1316,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       } else {
         desktopDrag = null;
         desktopDown = null;
+        desktopDragReturn = null;
         desktopDirty = true;
       }
     },
@@ -1317,12 +1369,10 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       }
     },
 
-    cancelDesktopDrag: () => {
+    cancelDesktopDrag: (x, y) => {
       if (!desktopDrag) return;
       console.warn(`[shell] desktop-drag cancelled (was dragging "${desktopDrag.name}")`);
-      desktopDrag = null;
-      desktopDown = null;
-      desktopDirty = true;
+      beginDesktopDragReturn(desktopDrag, x, y);
     },
 
     checkDesktopDragWatchdog: () => {
@@ -1332,9 +1382,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         console.warn(
           `[shell] desktop-drag watchdog: clearing stuck drag "${desktopDrag.name}" idle for ${idleMs}ms`,
         );
-        desktopDrag = null;
-        desktopDown = null;
-        desktopDirty = true;
+        beginDesktopDragReturn(desktopDrag);
       }
     },
   };

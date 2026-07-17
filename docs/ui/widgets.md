@@ -246,7 +246,8 @@ Bundled files: `packages/ui/icons/<name>.png`.
 | --- | --- | --- |
 | `mimeTypes` | `string[]` | e.g. `["text/uri-list"]` |
 | `getPayload` | `() => unknown` | string / buffer / list |
-| `label` | `string` | chip label; else basename of `file://` |
+| `label` | `string` | preview label; else basename of `file://` |
+| `previewIcon` | `DragIconSpec` | graphic for a source-sized preview; the pointer-down point remains its hotspot |
 | `onPress` / `onDoublePress` | | when not dragging |
 | `children` | | visuals underneath hit layer |
 

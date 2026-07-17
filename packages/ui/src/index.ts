@@ -110,4 +110,5 @@ export type {
   DropTargetProps,
   DropZoneProps,
   DragIconSpec,
+  DragPreviewSpec,
 } from "./widgets/index.js";

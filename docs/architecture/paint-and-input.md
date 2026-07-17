@@ -11,7 +11,7 @@ Each frame in `packages/core` `CompositorServer.composite()`:
 | 3 | Toplevel surfaces + SSD | Stack bottom→top; `shell.paintSsdWindow` after each SSD window |
 | 4 | Popups | Above toplevels |
 | 5 | Panel / launcher | `shell.paint` |
-| 6 | Drag preview | Client drag-icon surface, else `shell.paintDragPreview` |
+| 6 | Drag preview | Hotspot-anchored client surface or return-animation snapshot, else `shell.paintDragPreview` |
 | 7 | Cursor | Client cursor or fallback shape |
 | 8 | Present | `flushMmap` + `presentKms` (required on Parallels VIRTUAL DRM) |
 
