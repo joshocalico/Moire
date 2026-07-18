@@ -12,8 +12,13 @@ import {
   fillKmsColor,
   presentKms,
   openKmsOutput,
+  refreshKmsOutputModes,
   setKmsMode,
+  switchKmsConnector,
   closeKmsOutput,
+  listDrmConnectors,
+  watchDrmHotplug,
+  type DrmHotplugMonitor,
   type KmsMode,
   type KmsOutput,
   WaylandSocketServer,
@@ -994,6 +999,12 @@ export class CompositorServer {
     deadlineMs: number;
     timer: NodeJS.Timeout;
   } | null = null;
+  /** Kernel DRM events plus a slow reconciliation poll for virtual GPUs. */
+  private drmHotplugMonitor: DrmHotplugMonitor | null = null;
+  private displayProbeTimer: NodeJS.Timeout | null = null;
+  private displayRefreshTimer: NodeJS.Timeout | null = null;
+  private lastMissingOutputLogMs = 0;
+  private readonly displayChangeListeners = new Set<() => void>();
 
   constructor(
     private readonly runtimeDir: string,
@@ -1026,6 +1037,26 @@ export class CompositorServer {
     console.log(
       `[theme] ${this.theme.name} wallpaper=${this.theme.wallpaper.mode}`,
     );
+    console.log(
+      `[output] ${this.kms.connectorName} ${this.kms.currentModeId}` +
+        (this.kms.physicalWidthMm > 0 && this.kms.physicalHeightMm > 0
+          ? ` ${this.kms.physicalWidthMm}x${this.kms.physicalHeightMm}mm`
+          : ""),
+    );
+    try {
+      this.drmHotplugMonitor = watchDrmHotplug((event) => {
+        if (this.scheduleDisplayRefresh(150)) {
+          console.log(
+            `[output] DRM ${event.action}${event.sysname ? ` ${event.sysname}` : ""}`,
+          );
+        }
+      });
+      console.log("[output] DRM hotplug monitor ready");
+    } catch (error) {
+      console.warn("[output] DRM hotplug monitor unavailable:", error);
+    }
+    this.displayProbeTimer = setInterval(() => this.scheduleDisplayRefresh(0), 2_000);
+    this.displayProbeTimer.unref?.();
     this.prefsWatcher = createPrefsWatcher((theme) => {
       this.theme = theme;
       if (theme.wallpaper.mode === "image") {
@@ -1160,6 +1191,16 @@ export class CompositorServer {
 
   stop(): void {
     this.running = false;
+    this.drmHotplugMonitor?.stop();
+    this.drmHotplugMonitor = null;
+    if (this.displayProbeTimer) {
+      clearInterval(this.displayProbeTimer);
+      this.displayProbeTimer = null;
+    }
+    if (this.displayRefreshTimer) {
+      clearTimeout(this.displayRefreshTimer);
+      this.displayRefreshTimer = null;
+    }
     if (this.pendingDisplayMode) {
       clearTimeout(this.pendingDisplayMode.timer);
       this.pendingDisplayMode = null;
@@ -1468,6 +1509,113 @@ export class CompositorServer {
     return this.kms?.currentModeId ?? "";
   }
 
+  displayOutputInfo(): {
+    name: string;
+    widthMm: number;
+    heightMm: number;
+  } {
+    return {
+      name: this.kms?.connectorName ?? "",
+      widthMm: this.kms?.physicalWidthMm ?? 0,
+      heightMm: this.kms?.physicalHeightMm ?? 0,
+    };
+  }
+
+  onDisplayChanged(listener: () => void): () => void {
+    this.displayChangeListeners.add(listener);
+    return () => this.displayChangeListeners.delete(listener);
+  }
+
+  /** Reconcile the active connector's live EDID/mode list after hotplug. */
+  refreshDisplayOutput(): boolean {
+    const kms = this.kms;
+    if (!kms) return false;
+    const refresh = refreshKmsOutputModes(kms);
+    if (!refresh.connected) {
+      const replacement = listDrmConnectors().find(
+        (connector) =>
+          connector.cardPath === kms.cardPath &&
+          connector.connection === "connected" &&
+          connector.connectorId !== kms.connectorId,
+      );
+      if (!replacement) {
+        const now = Date.now();
+        if (now - this.lastMissingOutputLogMs >= 10_000) {
+          this.lastMissingOutputLogMs = now;
+          console.warn(
+            `[output] ${kms.connectorName} disconnected; waiting for a connected output on ${kms.cardPath}`,
+          );
+        }
+        return false;
+      }
+      if (this.pendingDisplayMode) {
+        clearTimeout(this.pendingDisplayMode.timer);
+        this.pendingDisplayMode = null;
+      }
+      const previousName = kms.connectorName;
+      switchKmsConnector(
+        kms,
+        replacement.connectorId,
+        loadSettings().displayMode ?? undefined,
+      );
+      this.publishDisplayGeometry(
+        `connector ${previousName} → ${kms.connectorName}`,
+      );
+      return true;
+    }
+    this.lastMissingOutputLogMs = 0;
+
+    if (!refresh.currentModeAvailable) {
+      if (this.pendingDisplayMode) {
+        clearTimeout(this.pendingDisplayMode.timer);
+        this.pendingDisplayMode = null;
+      }
+      const configured = loadSettings().displayMode;
+      const nextMode =
+        (configured && kms.modes.some((mode) => mode.id === configured)
+          ? configured
+          : null) ?? refresh.preferredModeId;
+      if (!nextMode) return false;
+      console.log(
+        `[output] ${kms.currentModeId} is no longer advertised; selecting ${nextMode}`,
+      );
+      return this.setDisplayMode(nextMode);
+    }
+
+    if (!refresh.modesChanged) return false;
+    console.log(
+      `[output] refreshed ${kms.connectorName}: ${kms.modes.length} modes, preferred=${refresh.preferredModeId ?? "none"}`,
+    );
+    for (const client of this.clients) client.outputChanged();
+    this.notifyDisplayChanged();
+    this.markDirty();
+    return true;
+  }
+
+  private scheduleDisplayRefresh(delayMs: number): boolean {
+    if (!this.running || this.displayRefreshTimer) return false;
+    this.displayRefreshTimer = setTimeout(() => {
+      this.displayRefreshTimer = null;
+      try {
+        this.refreshDisplayOutput();
+      } catch (error) {
+        console.error("[output] connector refresh failed:", error);
+      }
+    }, delayMs);
+    this.displayRefreshTimer.unref?.();
+    return true;
+  }
+
+  private notifyDisplayChanged(): void {
+    for (const listener of this.displayChangeListeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[output] display-change listener failed:", error);
+      }
+    }
+  }
+
   /** Switch the physical output and publish the new logical desktop size. */
   setDisplayMode(modeId: string): boolean {
     const kms = this.kms;
@@ -1475,6 +1623,12 @@ export class CompositorServer {
     const changed = setKmsMode(kms, modeId);
     if (!changed) return false;
 
+    this.publishDisplayGeometry(`mode ${modeId}`);
+    return true;
+  }
+
+  private publishDisplayGeometry(description: string): void {
+    const kms = this.getKms();
     this.stage = null;
     this.cursorX = Math.max(0, Math.min(kms.width - 1, this.cursorX));
     this.cursorY = Math.max(0, Math.min(kms.height - 1, this.cursorY));
@@ -1536,9 +1690,9 @@ export class CompositorServer {
       }
     }
     this.shell?.invalidateChrome?.();
-    console.log(`[output] mode ${modeId} → ${kms.width}x${kms.height}`);
+    console.log(`[output] ${description} → ${kms.width}x${kms.height}`);
+    this.notifyDisplayChanged();
     this.markDirty();
-    return true;
   }
 
   beginDisplayModeChange(
@@ -4887,11 +5041,11 @@ class ClientSession {
     this.send(id, EV.output_geometry, (b) => {
       b.int(0)
         .int(0)
-        .int(0)
-        .int(0)
+        .int(kms.physicalWidthMm)
+        .int(kms.physicalHeightMm)
         .int(0) // unknown subpixel
-        .string("Moire")
-        .string("Virtual")
+        .string("Linux DRM")
+        .string(kms.connectorName)
         .int(0); // transform normal
     });
     for (const mode of kms.modes) {

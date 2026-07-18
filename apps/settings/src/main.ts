@@ -32,13 +32,20 @@ import {
 } from "@moire/prefs";
 import { SessionBus } from "@moire/dbus";
 
-type DisplayController = {
-  modes: string[];
-  current: string;
-  preferred: string;
+type DisplayController = DisplayState & {
+  getState: () => Promise<DisplayState>;
   setMode: (modeId: string) => Promise<boolean>;
   confirmMode: () => Promise<boolean>;
   revertMode: () => Promise<boolean>;
+};
+
+type DisplayState = {
+  modes: string[];
+  current: string;
+  preferred: string;
+  name: string;
+  widthMm: number;
+  heightMm: number;
 };
 
 type ParsedDisplayMode = {
@@ -78,6 +85,11 @@ function SettingsApp(
   const [wallpaper, setWallpaper] = useState<WallpaperSettings | null>(props.initial.wallpaper);
   const [status, setStatus] = useState("");
   const [displayMode, setDisplayMode] = useState(props.display?.current ?? "");
+  const [displayModes, setDisplayModes] = useState(props.display?.modes ?? []);
+  const [displayPreferred, setDisplayPreferred] = useState(
+    props.display?.preferred ?? "",
+  );
+  const [displayName, setDisplayName] = useState(props.display?.name ?? "Display");
   const [selectedResolution, setSelectedResolution] = useState(
     resolutionForMode(props.display?.current ?? ""),
   );
@@ -175,7 +187,34 @@ function SettingsApp(
     return () => clearInterval(timer);
   }, [pendingDisplayMode]);
 
-  const parsedModes = (props.display?.modes ?? [])
+  useEffect(() => {
+    const display = props.display;
+    if (!display) return;
+    let disposed = false;
+    const refresh = () => {
+      if (pendingDisplayMode) return;
+      void display.getState().then((next) => {
+        if (disposed) return;
+        setDisplayModes(next.modes);
+        setDisplayPreferred(next.preferred);
+        setDisplayName(next.name || "Display");
+        if (next.current && next.current !== displayMode) {
+          setDisplayMode(next.current);
+          setSelectedResolution(resolutionForMode(next.current));
+          setStatus(`Display updated · ${displayModeLabel(next.current)}`);
+        }
+      }).catch((error) => {
+        if (!disposed) console.warn("[settings] display refresh failed:", error);
+      });
+    };
+    const timer = setInterval(refresh, 2_000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [props.display, pendingDisplayMode, displayMode]);
+
+  const parsedModes = displayModes
     .map(parseDisplayMode)
     .filter((mode): mode is ParsedDisplayMode => mode != null);
   const resolutions = [...new Set(parsedModes.map((mode) => mode.resolution))]
@@ -374,6 +413,13 @@ function SettingsApp(
               gap: Math.round(10 * ui),
             },
             createElement(Label, {
+              text: displayName,
+              color: pal.accent,
+              fontWeight: "medium",
+              width: innerW,
+              height: labelH,
+            }),
+            createElement(Label, {
               text: "Resolution",
               fontWeight: "medium",
               width: innerW,
@@ -416,7 +462,7 @@ function SettingsApp(
                             resolution === resolutionForMode(displayMode);
                           const isPreferred =
                             resolution ===
-                            resolutionForMode(props.display?.preferred ?? "");
+                            resolutionForMode(displayPreferred);
                           return createElement(Button, {
                             key: resolution,
                             width: Math.round(178 * ui),
@@ -657,17 +703,33 @@ async function connectDisplayController(): Promise<{
 } | null> {
   try {
     const bus = await SessionBus.connect();
-    const reply = await bus.call({
-      destination: "org.moire.Display1",
-      path: "/org/moire/Display1",
-      interface: "org.moire.Display1",
-      member: "GetModes",
-    });
-    const modes = Array.isArray(reply.body?.[0])
-      ? reply.body[0].map(String)
-      : [];
-    const current = String(reply.body?.[1] ?? "");
-    const preferred = String(reply.body?.[2] ?? "");
+    const getState = async (): Promise<DisplayState> => {
+      const [reply, outputReply] = await Promise.all([
+        bus.call({
+          destination: "org.moire.Display1",
+          path: "/org/moire/Display1",
+          interface: "org.moire.Display1",
+          member: "GetModes",
+        }),
+        bus.call({
+          destination: "org.moire.Display1",
+          path: "/org/moire/Display1",
+          interface: "org.moire.Display1",
+          member: "GetOutputInfo",
+        }),
+      ]);
+      return {
+        modes: Array.isArray(reply.body?.[0])
+          ? reply.body[0].map(String)
+          : [],
+        current: String(reply.body?.[1] ?? ""),
+        preferred: String(reply.body?.[2] ?? ""),
+        name: String(outputReply.body?.[0] ?? "Display"),
+        widthMm: Number(outputReply.body?.[1] ?? 0),
+        heightMm: Number(outputReply.body?.[2] ?? 0),
+      };
+    };
+    const initial = await getState();
     const callBoolean = async (member: string, body?: unknown[]) => {
       const result = await bus.call({
         destination: "org.moire.Display1",
@@ -681,9 +743,8 @@ async function connectDisplayController(): Promise<{
     return {
       bus,
       controller: {
-        modes,
-        current,
-        preferred,
+        ...initial,
+        getState,
         setMode: (modeId) => callBoolean("SetMode", [modeId]),
         confirmMode: () => callBoolean("ConfirmMode"),
         revertMode: () => callBoolean("RevertMode"),

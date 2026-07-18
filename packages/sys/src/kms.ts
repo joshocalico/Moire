@@ -128,6 +128,9 @@ export type KmsOutput = {
   fd: number;
   cardPath: string;
   connectorId: number;
+  connectorName: string;
+  physicalWidthMm: number;
+  physicalHeightMm: number;
   crtcId: number;
   width: number;
   height: number;
@@ -165,8 +168,49 @@ export type KmsOutput = {
     fbId: unknown,
   ) => number;
   rmFb: (fd: number, fbId: number) => number;
+  getConnector: (fd: number, connectorId: number) => unknown;
+  freeConnector: (ptr: unknown) => void;
+  getEncoder: (fd: number, encoderId: number) => unknown;
+  freeEncoder: (ptr: unknown) => void;
+  getResources: (fd: number) => unknown;
+  freeResources: (ptr: unknown) => void;
   modeData: Map<string, KmsModeData>;
 };
+
+export type KmsOutputRefresh = {
+  connected: boolean;
+  modesChanged: boolean;
+  currentModeAvailable: boolean;
+  preferredModeId: string | null;
+};
+
+const CONNECTOR_NAMES: Record<number, string> = {
+  0: "Unknown",
+  1: "VGA",
+  2: "DVI-I",
+  3: "DVI-D",
+  4: "DVI-A",
+  5: "Composite",
+  6: "SVIDEO",
+  7: "LVDS",
+  8: "Component",
+  9: "DIN",
+  10: "DP",
+  11: "HDMI-A",
+  12: "HDMI-B",
+  13: "TV",
+  14: "eDP",
+  15: "Virtual",
+  16: "DSI",
+  17: "DPI",
+  18: "Writeback",
+  19: "SPI",
+  20: "USB",
+};
+
+function connectorName(type: number, typeId: number): string {
+  return `${CONNECTOR_NAMES[type] ?? `Connector-${type}`}-${typeId}`;
+}
 
 function refreshMilliHz(mode: Record<string, unknown>): number {
   const advertised = Number(mode.vrefresh ?? 0);
@@ -275,7 +319,11 @@ export function openKmsOutput(
         const conn = koffi.decode(connPtr, DrmModeConnector) as {
           connector_id: number;
           encoder_id: number;
+          connector_type: number;
+          connector_type_id: number;
           connection: number;
+          mmWidth: number;
+          mmHeight: number;
           count_modes: number;
           modes: unknown;
           count_encoders: number;
@@ -423,6 +471,12 @@ export function openKmsOutput(
           fd,
           cardPath,
           connectorId,
+          connectorName: connectorName(
+            conn.connector_type,
+            conn.connector_type_id,
+          ),
+          physicalWidthMm: conn.mmWidth,
+          physicalHeightMm: conn.mmHeight,
           crtcId,
           width,
           height,
@@ -439,6 +493,12 @@ export function openKmsOutput(
           drmIoctl: drmIoctl as KmsOutput["drmIoctl"],
           addFb: drmModeAddFB as KmsOutput["addFb"],
           rmFb: drmModeRmFB as KmsOutput["rmFb"],
+          getConnector: drmModeGetConnector as KmsOutput["getConnector"],
+          freeConnector: drmModeFreeConnector as KmsOutput["freeConnector"],
+          getEncoder: drmModeGetEncoder as KmsOutput["getEncoder"],
+          freeEncoder: drmModeFreeEncoder as KmsOutput["freeEncoder"],
+          getResources: drmModeGetResources as KmsOutput["getResources"],
+          freeResources: drmModeFreeResources as KmsOutput["freeResources"],
           modeData: new Map(modes.map((candidate) => [candidate.id, candidate])),
         };
       } finally {
@@ -449,6 +509,221 @@ export function openKmsOutput(
     throw new Error("No connected DRM connector with modes found");
   } finally {
     drmModeFreeResources(resPtr);
+  }
+}
+
+/**
+ * Re-read the active connector after a DRM change event. This updates mode
+ * metadata in place but does not choose a replacement mode; core owns that
+ * policy because it also has to reflow the logical desktop.
+ */
+export function refreshKmsOutputModes(out: KmsOutput): KmsOutputRefresh {
+  const connPtr = out.getConnector(out.fd, out.connectorId);
+  if (!connPtr) {
+    return {
+      connected: false,
+      modesChanged: false,
+      currentModeAvailable: false,
+      preferredModeId: null,
+    };
+  }
+
+  try {
+    const conn = koffi.decode(connPtr, DrmModeConnector) as {
+      connector_type: number;
+      connector_type_id: number;
+      connection: number;
+      mmWidth: number;
+      mmHeight: number;
+      count_modes: number;
+      modes: unknown;
+    };
+    if (conn.connection !== DRM_MODE_CONNECTED || conn.count_modes < 1) {
+      return {
+        connected: false,
+        modesChanged: false,
+        currentModeAvailable: false,
+        preferredModeId: null,
+      };
+    }
+
+    const rawModes = koffi.decode(
+      conn.modes,
+      koffi.array(DrmModeModeInfo, conn.count_modes),
+    ) as Record<string, unknown>[];
+    const nextModeData = describeModes(rawModes);
+    const previousDescription = out.modes
+      .map((mode) => `${mode.id}:${mode.preferred ? 1 : 0}`)
+      .join(",");
+    const nextDescription = nextModeData
+      .map((mode) => `${mode.id}:${mode.preferred ? 1 : 0}`)
+      .join(",");
+    const metadataChanged =
+      out.connectorName !==
+        connectorName(conn.connector_type, conn.connector_type_id) ||
+      out.physicalWidthMm !== conn.mmWidth ||
+      out.physicalHeightMm !== conn.mmHeight;
+
+    out.connectorName = connectorName(
+      conn.connector_type,
+      conn.connector_type_id,
+    );
+    out.physicalWidthMm = conn.mmWidth;
+    out.physicalHeightMm = conn.mmHeight;
+    out.modes = nextModeData.map(({ raw: _raw, ...mode }) => mode);
+    out.modeData = new Map(nextModeData.map((mode) => [mode.id, mode]));
+
+    return {
+      connected: true,
+      modesChanged: previousDescription !== nextDescription || metadataChanged,
+      currentModeAvailable: out.modeData.has(out.currentModeId),
+      preferredModeId:
+        nextModeData.find((mode) => mode.preferred)?.id ??
+        nextModeData[0]?.id ??
+        null,
+    };
+  } finally {
+    out.freeConnector(connPtr);
+  }
+}
+
+/**
+ * Move the single logical output to another connected connector on the same
+ * DRM card. KMS acceptance happens before any old framebuffer/connector state
+ * is released, so a failed handoff restores the original output object.
+ */
+export function switchKmsConnector(
+  out: KmsOutput,
+  nextConnectorId: number,
+  requestedModeId?: string,
+): boolean {
+  if (nextConnectorId === out.connectorId) return false;
+  const connPtr = out.getConnector(out.fd, nextConnectorId);
+  if (!connPtr) throw new Error(`DRM connector ${nextConnectorId} not found`);
+
+  try {
+    const conn = koffi.decode(connPtr, DrmModeConnector) as {
+      encoder_id: number;
+      connector_type: number;
+      connector_type_id: number;
+      connection: number;
+      mmWidth: number;
+      mmHeight: number;
+      count_modes: number;
+      modes: unknown;
+      count_encoders: number;
+      encoders: unknown;
+    };
+    if (conn.connection !== DRM_MODE_CONNECTED || conn.count_modes < 1) {
+      throw new Error(`DRM connector ${nextConnectorId} is not connected`);
+    }
+    const rawModes = koffi.decode(
+      conn.modes,
+      koffi.array(DrmModeModeInfo, conn.count_modes),
+    ) as Record<string, unknown>[];
+    const modes = describeModes(rawModes);
+    const selected =
+      modes.find((mode) => mode.id === requestedModeId) ??
+      modes.find((mode) => mode.preferred) ??
+      modes[0];
+    if (!selected) throw new Error(`DRM connector ${nextConnectorId} has no modes`);
+
+    let encoderId = conn.encoder_id;
+    if (!encoderId && conn.count_encoders > 0) {
+      const encoderIds = koffi.decode(
+        conn.encoders,
+        koffi.array("uint32_t", conn.count_encoders),
+      ) as number[];
+      encoderId = encoderIds[0] ?? 0;
+    }
+    let crtcId = out.crtcId;
+    if (encoderId) {
+      const encoderPtr = out.getEncoder(out.fd, encoderId);
+      if (encoderPtr) {
+        try {
+          const encoder = koffi.decode(encoderPtr, DrmModeEncoder) as {
+            crtc_id: number;
+            possible_crtcs: number;
+          };
+          if (encoder.crtc_id) {
+            crtcId = encoder.crtc_id;
+          } else {
+            const resourcesPtr = out.getResources(out.fd);
+            if (resourcesPtr) {
+              try {
+                const resources = koffi.decode(resourcesPtr, DrmModeRes) as {
+                  count_crtcs: number;
+                  crtcs: unknown;
+                };
+                const crtcIds = koffi.decode(
+                  resources.crtcs,
+                  koffi.array("uint32_t", resources.count_crtcs),
+                ) as number[];
+                for (let index = 0; index < crtcIds.length; index++) {
+                  if (encoder.possible_crtcs & (1 << index)) {
+                    crtcId = crtcIds[index]!;
+                    break;
+                  }
+                }
+              } finally {
+                out.freeResources(resourcesPtr);
+              }
+            }
+          }
+        } finally {
+          out.freeEncoder(encoderPtr);
+        }
+      }
+    }
+
+    const nextConnectorsPtr = koffi.alloc("uint32_t", 1);
+    koffi.encode(nextConnectorsPtr, "uint32_t", nextConnectorId);
+    const previous = {
+      connectorId: out.connectorId,
+      connectorName: out.connectorName,
+      physicalWidthMm: out.physicalWidthMm,
+      physicalHeightMm: out.physicalHeightMm,
+      crtcId: out.crtcId,
+      connectorsPtr: out.connectorsPtr,
+      modes: out.modes,
+      modeData: out.modeData,
+      currentModeId: out.currentModeId,
+    };
+
+    out.connectorId = nextConnectorId;
+    out.connectorName = connectorName(
+      conn.connector_type,
+      conn.connector_type_id,
+    );
+    out.physicalWidthMm = conn.mmWidth;
+    out.physicalHeightMm = conn.mmHeight;
+    out.crtcId = crtcId;
+    out.connectorsPtr = nextConnectorsPtr;
+    out.modes = modes.map(({ raw: _raw, ...mode }) => mode);
+    out.modeData = new Map(modes.map((mode) => [mode.id, mode]));
+    // Ensure setKmsMode performs a real modeset even when both connectors use
+    // the same nominal mode id.
+    out.currentModeId = "__connector_handoff__";
+
+    try {
+      setKmsMode(out, selected.id);
+      koffi.free(previous.connectorsPtr);
+      return true;
+    } catch (error) {
+      out.connectorId = previous.connectorId;
+      out.connectorName = previous.connectorName;
+      out.physicalWidthMm = previous.physicalWidthMm;
+      out.physicalHeightMm = previous.physicalHeightMm;
+      out.crtcId = previous.crtcId;
+      out.connectorsPtr = previous.connectorsPtr;
+      out.modes = previous.modes;
+      out.modeData = previous.modeData;
+      out.currentModeId = previous.currentModeId;
+      koffi.free(nextConnectorsPtr);
+      throw error;
+    }
+  } finally {
+    out.freeConnector(connPtr);
   }
 }
 

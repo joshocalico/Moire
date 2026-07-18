@@ -38,6 +38,7 @@ async function main() {
   let xwayland: XwaylandHandle | null = null;
   let xwm: X11Wm | null = null;
   let displayBus: SessionBus | null = null;
+  let removeDisplayListener: (() => void) | null = null;
 
   const clientEnv = (): NodeJS.ProcessEnv => ({
     WAYLAND_DISPLAY: display,
@@ -61,6 +62,8 @@ async function main() {
     console.log("\nShutting down…");
     xwm?.stop();
     xwayland?.stop();
+    removeDisplayListener?.();
+    removeDisplayListener = null;
     displayBus?.close();
     server.stop();
     process.exit(0);
@@ -86,6 +89,14 @@ async function main() {
                 "",
             ],
           }),
+        },
+        GetOutputInfo: {
+          inSignature: "",
+          outSignature: "sii",
+          handler: () => {
+            const output = server.displayOutputInfo();
+            return { body: [output.name, output.widthMm, output.heightMm] };
+          },
         },
         SetMode: {
           inSignature: "s",
@@ -123,7 +134,28 @@ async function main() {
       throw new Error(`name ownership result ${ownership}`);
     }
     console.log("[display] D-Bus org.moire.Display1 ready");
+    removeDisplayListener = server.onDisplayChanged(() => {
+      if (!displayBus) return;
+      const modes = server.listDisplayModes();
+      const output = server.displayOutputInfo();
+      displayBus.emitSignal({
+        path: "/org/moire/Display1",
+        interface: "org.moire.Display1",
+        member: "Changed",
+        signature: "assssii",
+        body: [
+          modes.map((mode) => mode.id),
+          server.currentDisplayMode(),
+          modes.find((mode) => mode.preferred)?.id ?? "",
+          output.name,
+          output.widthMm,
+          output.heightMm,
+        ],
+      });
+    });
   } catch (error) {
+    removeDisplayListener?.();
+    removeDisplayListener = null;
     displayBus?.close();
     displayBus = null;
     console.warn("[display] D-Bus control unavailable:", error);

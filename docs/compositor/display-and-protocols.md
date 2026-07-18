@@ -26,6 +26,22 @@ not depend on Settings remaining visible or alive. Confirmed modes are saved as
 `displayMode` and restored at boot. `MOIRE_MODE=WIDTHxHEIGHT@MILLIHZ` overrides
 the saved value for recovery and development.
 
+## Connector detection and hotplug
+
+At startup Moire reads the connected DRM connector's complete mode table and
+uses the saved mode only when that display advertises it; otherwise it chooses
+the connector's preferred/native mode. Connector identity, physical size and
+preferred mode come from DRM rather than Parallels-specific configuration.
+
+`@moire/sys` also owns an internal libudev monitor implemented through Koffi.
+DRM change events schedule a debounced connector re-probe, backed by a
+two-second reconciliation poll for virtual GPUs which coalesce notifications.
+If the active connector changes its EDID/mode list, Moire updates `wl_output`,
+Settings, and the shell. If the active mode disappears it selects the saved
+mode when still valid, then the new preferred mode. If the connector is
+unplugged, the single logical desktop is transactionally handed to another
+connected connector on the same DRM card.
+
 ## D-Bus display service
 
 The compositor owns `org.moire.Display1` at `/org/moire/Display1`:
@@ -33,9 +49,14 @@ The compositor owns `org.moire.Display1` at `/org/moire/Display1`:
 | Method | Signature | Role |
 | --- | --- | --- |
 | `GetModes` | `→ (as modes, s current, s preferred)` | Enumerate stable mode IDs |
+| `GetOutputInfo` | `→ (s name, i widthMm, i heightMm)` | Read live connector identity and physical size |
 | `SetMode` | `(s mode) → b changed` | Begin a 15-second live mode trial |
 | `ConfirmMode` | `→ b confirmed` | Keep and persist the pending mode |
 | `RevertMode` | `→ b reverted` | Immediately restore the previous mode |
+
+The service emits `Changed(as modes, s current, s preferred, s name,
+i widthMm, i heightMm)` after a mode or connector update. Settings also polls
+the small state endpoint so it remains correct across service restarts.
 
 Settings consumes this service. It does not link Koffi or import `@moire/sys`.
 For guest diagnostics, use `guest-display-mode.sh list`, `set` for a confirmed
@@ -59,7 +80,9 @@ IME expectations.
 
 ## Current boundary
 
-This is single-output display management. Hotplug, output placement,
-per-output scaling and multi-monitor atomic commits remain future work. The
-renderer remains independent: both the software backend and a future EGL
-backend consume the output dimensions owned by core.
+This is still one logical output, but it now detects live mode-table changes
+and can fail over between connectors on one DRM card. Simultaneously active
+multi-monitor layout, cross-GPU handoff, output placement, rotation and
+per-output scaling remain future work. The renderer remains independent: both
+the software backend and a future EGL backend consume output dimensions owned
+by core.

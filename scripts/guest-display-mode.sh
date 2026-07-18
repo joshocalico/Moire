@@ -24,9 +24,16 @@ case "$ACTION" in
       --object-path /org/moire/Display1 \
       --method org.moire.Display1.GetModes
     ;;
+  output)
+    runuser -u moire -- env DBUS_SESSION_BUS_ADDRESS="$BUS" \
+      gdbus call --session \
+      --dest org.moire.Display1 \
+      --object-path /org/moire/Display1 \
+      --method org.moire.Display1.GetOutputInfo
+    ;;
   set|try)
     if [[ -z "$MODE" ]]; then
-      echo "usage: $0 set WIDTHxHEIGHT@MILLIHZ" >&2
+      echo "usage: $0 $ACTION WIDTHxHEIGHT@MILLIHZ" >&2
       exit 2
     fi
     runuser -u moire -- env DBUS_SESSION_BUS_ADDRESS="$BUS" \
@@ -45,7 +52,7 @@ case "$ACTION" in
     fi
     ;;
   *)
-    echo "usage: $0 [list | set WIDTHxHEIGHT@MILLIHZ | try WIDTHxHEIGHT@MILLIHZ]" >&2
+    echo "usage: $0 [list | output | set WIDTHxHEIGHT@MILLIHZ | try WIDTHxHEIGHT@MILLIHZ]" >&2
     exit 2
     ;;
 esac
