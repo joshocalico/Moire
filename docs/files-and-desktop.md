@@ -19,6 +19,9 @@ Bottom → top:
 5. Drag preview (client drag-icon surface, or shell-owned desktop ghost)
 6. Cursor
 
+Desktop context menus and pickers are promoted to the shell overlay pass after
+windows; only icons and drop feedback remain in the below-window desktop pass.
+
 ## Architecture
 
 ```

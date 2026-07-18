@@ -67,6 +67,7 @@ function rendererSmoke(): void {
         stroke={0xff88aacc}
         strokeWidth={1}
       />
+      <Rect x={7} y={0} width={1} height={1} fill={0x804080c0} />
     </Group>,
   );
 
@@ -80,6 +81,11 @@ function rendererSmoke(): void {
   assert.equal(words[4 * 8 + 1], 0x00000000);
   assert.equal(words[4 * 8 + 4], 0xff88aacc);
   assert.equal(words[6 * 8 + 4], 0xff224466);
+  assert.equal(
+    words[7],
+    0x80204060,
+    "translucent rect on a clear frame must preserve premultiplied alpha",
+  );
   assert.equal(collectHits(root.container).length, 1);
 }
 

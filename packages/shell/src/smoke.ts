@@ -48,21 +48,42 @@ try {
     y: 300,
   });
   assert.equal(opened, true, "empty desktop right-click was not consumed");
+  const simulatedWindow = 0xff5a6b7c;
+  framebuffer.fill(simulatedWindow);
   shell.paintDesktop(framebuffer, width, width, height);
-  shell.onDesktopPointerButton?.({
+  assert.equal(
+    framebuffer[352 * width + 730],
+    simulatedWindow,
+    "desktop menu leaked into the below-window desktop pass",
+  );
+  shell.paint(framebuffer, width, width, height);
+  assert.notEqual(
+    framebuffer[352 * width + 730],
+    simulatedWindow,
+    "desktop menu was not painted in the top shell pass",
+  );
+  const outside = framebuffer[100 * width + 100]!;
+  assert.ok(
+    ((outside >>> 16) & 0xff) > 40 &&
+      ((outside >>> 8) & 0xff) > 40 &&
+      (outside & 0xff) > 40,
+    "transparent dismiss layer blacked out the underlying desktop",
+  );
+  shell.onPointerButton({
     timeMs: 2,
     button: 272,
     value: 1,
     x: 730,
     y: 352,
   });
-  shell.onDesktopPointerButton?.({
+  const releaseConsumed = shell.onPointerButton({
     timeMs: 3,
     button: 272,
     value: 0,
     x: 730,
     y: 352,
   });
+  assert.equal(releaseConsumed, true, "menu release clicked through its overlay");
   assert.ok(
     fs.existsSync(path.join(smokeHome, "Desktop", "New Folder")),
     "desktop background New Folder action did not run",

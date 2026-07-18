@@ -967,20 +967,16 @@ function fillRect(
     }
     return;
   }
-  // Premul blend for translucent panels.
-  const inv = 255 - a;
+  // Scene colors are straight ARGB. Preserve destination alpha and store the
+  // resulting framebuffer pixel premultiplied so later compositor blending is
+  // correct even when this rect is the first thing painted into a clear frame.
   const sr = (c >>> 16) & 0xff;
   const sg = (c >>> 8) & 0xff;
   const sb = c & 0xff;
   for (let py = y0; py < y1; py++) {
     const row = py * pitchPx;
     for (let px = x0; px < x1; px++) {
-      const di = row + px;
-      const dst = fb[di]!;
-      const r = (sr + ((((dst >>> 16) & 0xff) * inv) / 255)) | 0;
-      const g = (sg + ((((dst >>> 8) & 0xff) * inv) / 255)) | 0;
-      const b = (sb + (((dst & 0xff) * inv) / 255)) | 0;
-      fb[di] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
+      blendRgba(fb, row + px, sr, sg, sb, a, 1);
     }
   }
 }
@@ -1016,12 +1012,15 @@ function blendFillColor(fb: Uint32Array, index: number, color: number): void {
     fb[index] = c;
     return;
   }
-  const inv = 255 - a;
-  const dst = fb[index]!;
-  const r = (((c >>> 16) & 0xff) + ((((dst >>> 16) & 0xff) * inv) / 255)) | 0;
-  const g = (((c >>> 8) & 0xff) + ((((dst >>> 8) & 0xff) * inv) / 255)) | 0;
-  const b = ((c & 0xff) + (((dst & 0xff) * inv) / 255)) | 0;
-  fb[index] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
+  blendRgba(
+    fb,
+    index,
+    (c >>> 16) & 0xff,
+    (c >>> 8) & 0xff,
+    c & 0xff,
+    a,
+    1,
+  );
 }
 
 function fillRoundedRect(

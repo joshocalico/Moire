@@ -324,6 +324,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   let ow = 0;
   let oh = 0;
   let metaHeld = false;
+  let overlayPointerGrab = false;
 
   let ssdHits: HitRegion[] = [];
   let ssdPending: { current: SsdAction | null } = { current: null };
@@ -433,7 +434,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     desktopMenu = null;
     desktopPickerName = name;
     desktopPickerSelection = choices[0]?.id ?? null;
-    desktopDirty = true;
+    dirty = true;
   };
 
   const launchDesktopWith = (
@@ -458,7 +459,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     }
     desktopPickerName = null;
     desktopPickerSelection = null;
-    desktopDirty = true;
+    dirty = true;
   };
 
   const desktopActionRegistry = new ContextActionRegistry();
@@ -657,41 +658,101 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   };
 
   const rebuild = (width: number, height: number) => {
+    const pal = themePalette();
+    const pickerName = desktopPickerName;
+    const pickerPath = pickerName
+      ? path.join(desktopDir(), pickerName)
+      : null;
+    const pickerMime = pickerPath
+      ? mimeDb.mimeTypeForPath(pickerPath)
+      : "application/octet-stream";
+    const pickerApps = pickerPath
+      ? mimeDb.applicationsForMime(pickerMime)
+      : [];
     renderShell(
       root,
-      createElement(ShellApp, {
-        width,
-        height,
-        open,
-        query,
-        selected,
-        apps,
-        clock,
-        onToggle: () => {
-          open = !open;
-          if (!open) {
+      createElement(
+        Group,
+        { x: 0, y: 0, width, height },
+        createElement(ShellApp, {
+          width,
+          height,
+          open,
+          query,
+          selected,
+          apps,
+          clock,
+          onToggle: () => {
+            open = !open;
+            if (!open) {
+              query = "";
+              selected = 0;
+            }
+            dirty = true;
+          },
+          onQuery: (q: string) => {
+            query = q;
+            selected = 0;
+            dirty = true;
+          },
+          onSelect: (i: number) => {
+            selected = i;
+            dirty = true;
+          },
+          onLaunch: launch,
+          onDismiss: () => {
+            open = false;
             query = "";
             selected = 0;
-          }
-          dirty = true;
-        },
-        onQuery: (q: string) => {
-          query = q;
-          selected = 0;
-          dirty = true;
-        },
-        onSelect: (i: number) => {
-          selected = i;
-          dirty = true;
-        },
-        onLaunch: launch,
-        onDismiss: () => {
-          open = false;
-          query = "";
-          selected = 0;
-          dirty = true;
-        },
-      }),
+            dirty = true;
+          },
+        }),
+        desktopMenu
+          ? createElement(ContextMenu, {
+              viewportWidth: width,
+              viewportHeight: height - pal.panelHeight,
+              x: desktopMenu.x,
+              y: desktopMenu.y,
+              title:
+                desktopMenu.kind === "item" ? desktopMenu.name : "Desktop",
+              actions:
+                desktopMenu.kind === "item"
+                  ? desktopContextActions(desktopMenu.name)
+                  : desktopBackgroundActions(),
+              onDismiss: () => {
+                desktopMenu = null;
+                dirty = true;
+              },
+            })
+          : null,
+        pickerName
+          ? createElement(OpenWithPicker, {
+              viewportWidth: width,
+              viewportHeight: height - pal.panelHeight,
+              fileName: pickerName,
+              mimeType: pickerMime,
+              choices: pickerApps.map((app, index) => ({
+                id: app.id,
+                name: app.name,
+                description: app.comment ?? app.genericName ?? app.exec,
+                isDefault: index === 0,
+              })),
+              selectedId: desktopPickerSelection,
+              onSelect: (id) => {
+                desktopPickerSelection = id;
+                dirty = true;
+              },
+              onOpen: (id) => launchDesktopWith(pickerName, id, false),
+              onMakeDefault: (id) =>
+                launchDesktopWith(pickerName, id, true),
+              onDismiss: () => {
+                desktopPickerName = null;
+                desktopPickerSelection = null;
+                dirty = true;
+              },
+            })
+          : null,
+      ),
     );
     const painted = rasterize(root.container, width, height);
     overlay = painted.pixels;
@@ -782,16 +843,6 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   const rebuildDesktop = (width: number, height: number) => {
     const pal = themePalette();
     const settings = loadSettings();
-    const pickerName = desktopPickerName;
-    const pickerPath = pickerName
-      ? path.join(desktopDir(), pickerName)
-      : null;
-    const pickerMime = pickerPath
-      ? mimeDb.mimeTypeForPath(pickerPath)
-      : "application/octet-stream";
-    const pickerApps = pickerPath
-      ? mimeDb.applicationsForMime(pickerMime)
-      : [];
     renderShell(
       desktopRoot,
       createElement(
@@ -808,6 +859,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
               desktopPickerName = null;
               desktopPickerSelection = null;
               desktopDirty = true;
+              dirty = true;
             },
             onContextMenu: (event) => {
               desktopSelectedName = undefined;
@@ -815,6 +867,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
               desktopPickerSelection = null;
               desktopMenu = { kind: "background", x: event.x, y: event.y };
               desktopDirty = true;
+              dirty = true;
             },
           },
           createElement(DesktopIcons, {
@@ -830,6 +883,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
               desktopSelectedName = name;
               desktopMenu = null;
               desktopDirty = true;
+              dirty = true;
             },
             onOpen: openDesktopEntry,
             onContextMenu: (name, event) => {
@@ -842,54 +896,10 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
                 y: event.y,
               };
               desktopDirty = true;
+              dirty = true;
             },
           }),
         ),
-        desktopMenu
-          ? createElement(ContextMenu, {
-              viewportWidth: width,
-              viewportHeight: height - pal.panelHeight,
-              x: desktopMenu.x,
-              y: desktopMenu.y,
-              title:
-                desktopMenu.kind === "item" ? desktopMenu.name : "Desktop",
-              actions:
-                desktopMenu.kind === "item"
-                  ? desktopContextActions(desktopMenu.name)
-                  : desktopBackgroundActions(),
-              onDismiss: () => {
-                desktopMenu = null;
-                desktopDirty = true;
-              },
-            })
-          : null,
-        pickerName
-          ? createElement(OpenWithPicker, {
-              viewportWidth: width,
-              viewportHeight: height - pal.panelHeight,
-              fileName: pickerName,
-              mimeType: pickerMime,
-              choices: pickerApps.map((app, index) => ({
-                id: app.id,
-                name: app.name,
-                description: app.comment ?? app.genericName ?? app.exec,
-                isDefault: index === 0,
-              })),
-              selectedId: desktopPickerSelection,
-              onSelect: (id) => {
-                desktopPickerSelection = id;
-                desktopDirty = true;
-              },
-              onOpen: (id) => launchDesktopWith(pickerName, id, false),
-              onMakeDefault: (id) =>
-                launchDesktopWith(pickerName, id, true),
-              onDismiss: () => {
-                desktopPickerName = null;
-                desktopPickerSelection = null;
-                desktopDirty = true;
-              },
-            })
-          : null,
       ),
     );
     const painted = rasterize(desktopRoot.container, width, height);
@@ -1146,6 +1156,16 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     },
 
     onKey(ev) {
+      if (desktopMenu || desktopPickerName) {
+        if (ev.value !== 1 && ev.value !== 2) return true;
+        if (ev.code === KEY_ESC) {
+          desktopMenu = null;
+          desktopPickerName = null;
+          desktopPickerSelection = null;
+          dirty = true;
+        }
+        return true;
+      }
       if (ev.code === KEY_LEFTMETA || ev.code === KEY_RIGHTMETA) {
         metaHeld = ev.value !== 0;
         if (ev.value === 1) {
@@ -1201,7 +1221,13 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     },
 
     onPointerButton(ev) {
-      if (ev.value !== 1) return open;
+      if (ev.value === 0 && overlayPointerGrab) {
+        overlayPointerGrab = false;
+        return true;
+      }
+      if (ev.value !== 1) {
+        return open || desktopMenu != null || desktopPickerName != null;
+      }
       for (let i = hits.length - 1; i >= 0; i--) {
         const h = hits[i]!;
         if (
@@ -1216,6 +1242,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
             localX: ev.x - h.x,
             localY: ev.y - h.y,
           });
+          overlayPointerGrab = true;
           dirty = true;
           return true;
         }
@@ -1224,6 +1251,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         open = false;
         query = "";
         selected = 0;
+        overlayPointerGrab = true;
         dirty = true;
         return true;
       }
@@ -1274,6 +1302,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           desktopPickerName = null;
           desktopPickerSelection = null;
           desktopDirty = true;
+          dirty = true;
           return true;
         }
         return false;
@@ -1339,13 +1368,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
     onDesktopPointerMotion(ev) {
       const settings = loadSettings();
-      if (
-        !settings.showDesktopIcons &&
-        desktopMenu == null &&
-        desktopPickerName == null
-      ) {
-        return;
-      }
+      if (!settings.showDesktopIcons) return;
       ensureDesktopHits();
 
       if (desktopDown?.name && !desktopDrag) {
@@ -1471,13 +1494,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       ) {
         rebuildDesktop(width, height);
       }
-      if (
-        !settings.showDesktopIcons &&
-        desktopMenu == null &&
-        desktopPickerName == null
-      ) {
-        return;
-      }
+      if (!settings.showDesktopIcons) return;
       if (!desktopOverlay) return;
       blendOverlay(fb, pitchPx, width, height, desktopOverlay);
     },
