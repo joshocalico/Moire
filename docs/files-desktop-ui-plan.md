@@ -24,10 +24,15 @@ Its largest gaps are structural:
 - File operations are synchronous calls embedded in the main view.
 - `CollectionItem` now owns focus, activation, and context-menu semantics while
   `useDragSource` owns drag mechanics; broader selection models are still due.
-- The renderer cannot yet express rounded geometry, strokes, shadows, or
-  general transforms.
+- The renderer now expresses rounded geometry, strokes, clips, and opacity
+  layers; declarative shadows and general transforms remain.
 - Presentation code uses deeply nested `createElement` calls even though the
-  repository is configured for JSX.
+  repository is configured for JSX. Context menus and the Open With picker
+  have now moved to JSX; the remaining presentation modules should follow.
+- Shell overlays now own pointer hover and press/release while visible, so
+  menus remain above clients without leaking interaction into them. Context
+  menus use renderer-neutral opacity/clip animation with eased row feedback;
+  a general overlay stack and anchored lifecycle are still due.
 
 The goal is not another visual pass over these limitations. The goal is to
 complete the interaction and rendering foundations, then prove them through

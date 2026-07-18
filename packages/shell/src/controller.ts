@@ -92,6 +92,8 @@ export type ShellBridge = {
     x: number;
     y: number;
   }): boolean;
+  /** Pointer motion for top shell overlays and panel hover feedback. */
+  onPointerMotion?(ev: { x: number; y: number }): boolean;
   /**
    * Pointer over empty desktop (no window under cursor).
    * Handles icon select / open. Returns true if consumed.
@@ -325,6 +327,8 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   let oh = 0;
   let metaHeld = false;
   let overlayPointerGrab = false;
+  let overlayDownHit: HitRegion | null = null;
+  let shellHover: HitRegion | null = null;
 
   let ssdHits: HitRegion[] = [];
   let ssdPending: { current: SsdAction | null } = { current: null };
@@ -1222,7 +1226,30 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
     onPointerButton(ev) {
       if (ev.value === 0 && overlayPointerGrab) {
+        const hit = overlayDownHit;
+        if (hit) {
+          const args = {
+            x: ev.x,
+            y: ev.y,
+            localX: ev.x - hit.x,
+            localY: ev.y - hit.y,
+            button: ev.button === PANEL_BTN_RIGHT || ev.button === 273
+              ? ("right" as const)
+              : ("left" as const),
+          };
+          hit.onPointerUp?.(args);
+          if (
+            ev.x >= hit.x &&
+            ev.y >= hit.y &&
+            ev.x < hit.x + hit.width &&
+            ev.y < hit.y + hit.height
+          ) {
+            hit.onPress?.(args);
+          }
+        }
+        overlayDownHit = null;
         overlayPointerGrab = false;
+        dirty = true;
         return true;
       }
       if (ev.value !== 1) {
@@ -1236,11 +1263,15 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           ev.x < h.x + h.width &&
           ev.y < h.y + h.height
         ) {
-          h.onPress?.({
+          overlayDownHit = h;
+          h.onPointerDown?.({
             x: ev.x,
             y: ev.y,
             localX: ev.x - h.x,
             localY: ev.y - h.y,
+            button: ev.button === PANEL_BTN_RIGHT || ev.button === 273
+              ? ("right" as const)
+              : ("left" as const),
           });
           overlayPointerGrab = true;
           dirty = true;
@@ -1256,6 +1287,55 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         return true;
       }
       return false;
+    },
+
+    onPointerMotion(ev) {
+      let next: HitRegion | null = null;
+      for (let i = hits.length - 1; i >= 0; i--) {
+        const hit = hits[i]!;
+        if (
+          ev.x >= hit.x &&
+          ev.y >= hit.y &&
+          ev.x < hit.x + hit.width &&
+          ev.y < hit.y + hit.height &&
+          (hit.onPointerEnter || hit.onPointerLeave || hit.onPointerMove)
+        ) {
+          next = hit;
+          break;
+        }
+      }
+
+      if (next !== shellHover) {
+        shellHover?.onPointerLeave?.({
+          x: ev.x,
+          y: ev.y,
+          localX: ev.x - shellHover.x,
+          localY: ev.y - shellHover.y,
+        });
+        shellHover = next;
+        next?.onPointerEnter?.({
+          x: ev.x,
+          y: ev.y,
+          localX: ev.x - next.x,
+          localY: ev.y - next.y,
+        });
+        dirty = true;
+      } else if (next?.onPointerMove) {
+        next.onPointerMove({
+          x: ev.x,
+          y: ev.y,
+          localX: ev.x - next.x,
+          localY: ev.y - next.y,
+        });
+        dirty = true;
+      }
+
+      return (
+        open ||
+        desktopMenu != null ||
+        desktopPickerName != null ||
+        next != null
+      );
     },
 
     onDesktopPointerButton(ev) {

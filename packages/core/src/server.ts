@@ -629,6 +629,7 @@ export type CompositorShell = {
     x: number;
     y: number;
   }): boolean;
+  onPointerMotion?(ev: { x: number; y: number }): boolean;
   /** Desktop icon clicks when no client surface is under the cursor. */
   onDesktopPointerButton?(ev: {
     timeMs: number;
@@ -2194,6 +2195,12 @@ export class CompositorServer {
     // never sees a stray hover enter/motion ahead of the DnD enter.
     // (startDesktopDrag already runs updateDragFocus once for this position.)
     if (this.maybeEscalateDesktopDrag()) return;
+    if (
+      this.shell?.onPointerMotion?.({ x: this.cursorX, y: this.cursorY })
+    ) {
+      this.clearPointerFocusForShellOverlay();
+      return;
+    }
     this.updatePointerFocus(ev.timeMs, true);
     this.updateHoverEdges();
     this.syncXwaylandPointer();
@@ -2231,6 +2238,12 @@ export class CompositorServer {
     // never sees a stray hover enter/motion ahead of the DnD enter.
     // (startDesktopDrag already runs updateDragFocus once for this position.)
     if (this.maybeEscalateDesktopDrag()) return;
+    if (
+      this.shell?.onPointerMotion?.({ x: this.cursorX, y: this.cursorY })
+    ) {
+      this.clearPointerFocusForShellOverlay();
+      return;
+    }
     this.updatePointerFocus(ev.timeMs, true);
     this.updateHoverEdges();
     this.syncXwaylandPointer();
@@ -2891,6 +2904,17 @@ export class CompositorServer {
       }
     } else {
       // Over the desktop — no client owns the cursor.
+      this.clearClientCursor();
+    }
+  }
+
+  private clearPointerFocusForShellOverlay(): void {
+    const prev = this.pointerFocus;
+    if (prev) {
+      prev.session.pointerLeave();
+      this.clearClientCursor(prev.session);
+      this.pointerFocus = null;
+    } else {
       this.clearClientCursor();
     }
   }

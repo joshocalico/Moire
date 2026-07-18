@@ -69,6 +69,11 @@ try {
       (outside & 0xff) > 40,
     "transparent dismiss layer blacked out the underlying desktop",
   );
+  assert.equal(
+    shell.onPointerMotion?.({ x: 730, y: 352 }),
+    true,
+    "open menu did not capture pointer motion for row feedback",
+  );
   shell.onPointerButton({
     timeMs: 2,
     button: 272,
@@ -84,6 +89,12 @@ try {
     y: 352,
   });
   assert.equal(releaseConsumed, true, "menu release clicked through its overlay");
+  for (let frame = 0; frame < 16; frame++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    shell.needsRepaint();
+    framebuffer.fill(simulatedWindow);
+    shell.paint(framebuffer, width, width, height);
+  }
   assert.ok(
     fs.existsSync(path.join(smokeHome, "Desktop", "New Folder")),
     "desktop background New Folder action did not run",

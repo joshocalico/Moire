@@ -15,6 +15,8 @@ export type PressableProps = {
   radius?: number;
   stroke?: number;
   strokeWidth?: number;
+  /** Optional leading feedback mark that follows hover and press motion. */
+  indicatorColor?: number;
   children?: ReactNode;
   onPress?: () => void;
   onDoublePress?: () => void;
@@ -55,8 +57,10 @@ export function Pressable(props: PressableProps): ReactNode {
   const base = props.fill ?? 0x00000000;
   let fill = base;
   if (!props.disabled) {
-    const h = hoverMv.get();
-    const p = pressMv.get();
+    // Motion values use layout-sized units so the shared 0.5 settle threshold
+    // still yields a complete, multi-frame transition for normalized colors.
+    const h = hoverMv.get() / 100;
+    const p = pressMv.get() / 100;
     if (h > 0.01 || p > 0.01) {
       const hovered = lerpArgb(base, pal.hover, h);
       fill = lerpArgb(hovered, pal.pressed, p);
@@ -95,7 +99,7 @@ export function Pressable(props: PressableProps): ReactNode {
           props.disabled
             ? undefined
             : () => {
-                easeTo(hoverMv, 1, 18);
+                easeTo(hoverMv, 100, 18);
               }
         }
         onPointerLeave={
@@ -110,7 +114,7 @@ export function Pressable(props: PressableProps): ReactNode {
           props.disabled
             ? undefined
             : () => {
-                easeTo(pressMv, 1, 22);
+                easeTo(pressMv, 100, 22);
               }
         }
         onPointerUp={
@@ -123,6 +127,20 @@ export function Pressable(props: PressableProps): ReactNode {
         onPress={props.disabled ? undefined : handlePress}
         onContextMenu={props.disabled ? undefined : props.onContextMenu}
       />
+      {props.indicatorColor != null && !props.disabled ? (
+        <Rect
+          x={0}
+          y={8}
+          width={2}
+          height={Math.max(0, props.height - 16)}
+          radius={1}
+          fill={lerpArgb(
+            props.indicatorColor & 0x00ffffff,
+            props.indicatorColor,
+            Math.max(hoverMv.get(), pressMv.get()) / 100,
+          )}
+        />
+      ) : null}
       {props.children}
     </Group>
   );
