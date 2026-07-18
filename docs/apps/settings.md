@@ -9,7 +9,7 @@ Writes `~/.config/moire/settings.json` via `@moire/prefs` (not `prefs.json`).
 | Section | Controls |
 | --- | --- |
 | Appearance | Dark, UI scale, wallpaper mode / atmosphere / image |
-| Displays | Draggable monitor map, primary selection, stable EDID identity, resolution/refresh and transactional Keep/Revert |
+| Displays | Draggable monitor map, primary selection, 100–200% per-output scale, EDID identity, resolution/refresh and transactional Keep/Revert |
 | Sound | Volume-related prefs applied through prefs pipeline |
 | (others) | Expand as schema grows |
 

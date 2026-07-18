@@ -28,6 +28,15 @@ fi
 
 # A one-output layout at the canonical origin is intentionally a no-op. It
 # still exercises array/struct/bool decoding across Moire's native D-Bus stack.
-RESULT="$(call SetLayout "[('$ID', 0, 0, true)]")"
+RESULT="$(call SetLayout "[('$ID', 0, 0, uint32 120, true)]")"
 [[ "$RESULT" == "(false,)" ]]
+
+TRIAL="$(call SetLayout "[('$ID', 0, 0, uint32 150, true)]")"
+[[ "$TRIAL" == "(true,)" ]]
+trap 'call RevertLayout >/dev/null 2>&1 || true' EXIT
+SCALED="$(call ListOutputs)"
+grep -q ', 150, true)' <<<"$SCALED"
+REVERTED="$(call RevertLayout)"
+[[ "$REVERTED" == "(true,)" ]]
+trap - EXIT
 echo "[display-layout-dbus] ok id=$ID"

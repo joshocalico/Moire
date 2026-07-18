@@ -180,6 +180,8 @@ export const CORE_GLOBALS = {
   xdg_activation_v1: 1,
   /** Per-surface scale in 120ths; 120 is native 1×. */
   wp_fractional_scale_manager_v1: 1,
+  /** Logical output coordinates, names and descriptions. */
+  zxdg_output_manager_v1: 3,
   /** Source/destination viewport companion required by fractional scaling. */
   wp_viewporter: 1,
   /** Theme-independent semantic cursor requests. */

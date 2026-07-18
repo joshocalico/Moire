@@ -59,6 +59,7 @@ import { Group, Rect, measureText } from "@moire/react-host";
 export type ShellSpawn = (opts: { exec: string }) => { unref?: () => void };
 
 export type ShellBridge = {
+  setPrimaryOutput(output: { x: number; y: number; width: number; height: number }): void;
   paint(
     fb: Uint32Array,
     pitchPx: number,
@@ -234,6 +235,7 @@ const US_MAP: Record<number, string> = {
 type ShellAppProps = {
   width: number;
   height: number;
+  primaryOutput: { x: number; y: number; width: number; height: number };
   open: boolean;
   query: string;
   selected: number;
@@ -263,26 +265,35 @@ function ShellApp(props: ShellAppProps) {
   return createElement(
     "group",
     { x: 0, y: 0, width: props.width, height: props.height },
-    createElement(Panel, {
-      screenW: props.width,
-      screenH: props.height,
-      clock: props.clock,
-      tasks: props.tasks,
-      onLauncherClick: props.onToggle,
-      onTaskPress: props.onTaskPress,
-    }),
-    createElement(Launcher, {
-      open: props.open,
-      screenW: props.width,
-      screenH: props.height,
-      apps: filtered,
-      query: props.query,
-      selected: props.selected,
-      onQueryChange: props.onQuery,
-      onLaunch: props.onLaunch,
-      onDismiss: props.onDismiss,
-      onSelect: props.onSelect,
-    }),
+    createElement(
+      "group",
+      {
+        x: props.primaryOutput.x,
+        y: props.primaryOutput.y,
+        width: props.primaryOutput.width,
+        height: props.primaryOutput.height,
+      },
+      createElement(Panel, {
+        screenW: props.primaryOutput.width,
+        screenH: props.primaryOutput.height,
+        clock: props.clock,
+        tasks: props.tasks,
+        onLauncherClick: props.onToggle,
+        onTaskPress: props.onTaskPress,
+      }),
+      createElement(Launcher, {
+        open: props.open,
+        screenW: props.primaryOutput.width,
+        screenH: props.primaryOutput.height,
+        apps: filtered,
+        query: props.query,
+        selected: props.selected,
+        onQueryChange: props.onQuery,
+        onLaunch: props.onLaunch,
+        onDismiss: props.onDismiss,
+        onSelect: props.onSelect,
+      }),
+    ),
   );
 }
 
@@ -294,6 +305,7 @@ export function createShell(
   onTaskAction: (action: TaskWindowAction) => void = () => {},
 ): ShellBridge {
   const root: ShellRoot = createShellRoot();
+  let primaryOutput = { x: 0, y: 0, width: 1, height: 1 };
   const moireRoot =
     process.env.MOIRE_ROOT ??
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -688,6 +700,7 @@ export function createShell(
         createElement(ShellApp, {
           width,
           height,
+          primaryOutput,
           open,
           query,
           selected,
@@ -1098,6 +1111,16 @@ export function createShell(
   };
 
   return {
+    setPrimaryOutput(next) {
+      if (
+        primaryOutput.x === next.x &&
+        primaryOutput.y === next.y &&
+        primaryOutput.width === next.width &&
+        primaryOutput.height === next.height
+      ) return;
+      primaryOutput = { ...next };
+      dirty = true;
+    },
     setTasks(nextTasks) {
       const changed =
         nextTasks.length !== tasks.length ||
@@ -1147,7 +1170,7 @@ export function createShell(
           y >= h.y &&
           x < h.x + h.width &&
           y < h.y + h.height
-        ) {
+) {
           h.onPress?.({
             x,
             y,

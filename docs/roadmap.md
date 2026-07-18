@@ -19,7 +19,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Wayland DnD | Shipped — compositor session, desktop drop sink, hotspot previews + rejected-drop return animation |
 | Panel / launcher chrome | Shipped — brand-forward panel, list launcher |
 | Display modes | Shipped — shared-device multi-output KMS, EDID-backed persisted arrangement/primary state, transactional Settings monitor map, per-output presentation, surface membership, hotplug and dynamic `wl_output` globals |
-| Desktop protocols | Shipped tranche — primary selection, activation, fractional scale/viewporter, cursor shape |
+| Desktop protocols | Shipped tranche — primary selection, activation, dynamic fractional scale/viewporter, xdg-output, cursor shape |
 | Desktop → Files DnD | Shipped — desktop-icon drag escalates to a real Wayland source when it crosses onto a client window |
 
 ## Near term
@@ -42,7 +42,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Trash / gvfs places | Network and trash backends |
 | Notifications | Prefs field exists; no toast daemon |
 | Portal expansion | FileChooser, Settings, Screenshot, Wallpaper, and other Moire-native backend interfaces |
-| Multi-monitor | Effective per-output scaling/wallpapers, rotation, mirror mode, cross-GPU handoff, atomic KMS commits |
+| Multi-monitor | Per-output wallpapers, rotation, mirror mode, cross-GPU handoff, atomic KMS commits |
 | X11 XDND | Out of scope for pure X11; Xwayland via Wayland DnD only |
 
 ## Longer term

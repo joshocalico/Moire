@@ -61,7 +61,7 @@ The compositor owns `org.moire.Display1` at `/org/moire/Display1`:
 | `GetModes` | `→ (as modes, s current, s preferred)` | Enumerate stable mode IDs |
 | `GetOutputInfo` | `→ (s name, i widthMm, i heightMm)` | Read live connector identity and physical size |
 | `ListOutputs` | `→ a(ssssssiiiiib)` | Read stable identity, labels, mode, geometry, scale and primary state |
-| `SetLayout` | `(a(siib) outputs) → b changed` | Begin a whole-desktop position/primary trial |
+| `SetLayout` | `(a(siiub) outputs) → b changed` | Begin a whole-desktop position/scale/primary trial |
 | `ConfirmLayout` | `→ b confirmed` | Keep and persist the pending layout by display identity |
 | `RevertLayout` | `→ b reverted` | Restore the entire previous layout immediately |
 | `SetMode` | `(s mode) → b changed` | Begin a 15-second live mode trial |
@@ -81,10 +81,11 @@ change, or `try` to exercise automatic rollback.
 | Protocol | Current behavior |
 | --- | --- |
 | `wl_output` v3 | Per-connector globals, modes/geometry, live updates and `wl_surface.enter`/`leave` membership |
+| `zxdg_output_manager_v1` v3 | Logical position/size plus stable connector name and EDID description |
 | `zwp_primary_selection_*` v1 | Independent middle-click selection transfer |
 | `xdg_activation_v1` | One-shot tokens and focus handoff |
-| `wp_fractional_scale_v1` | Native preferred scale in 120ths |
-| `wp_viewporter` | Fractional-scale companion viewport objects |
+| `wp_fractional_scale_v1` | Preferred scale follows the output containing each surface, in 120ths |
+| `wp_viewporter` | Destination size and buffer scale drive logical surface geometry and scaled composition |
 | `wp_cursor_shape_v1` | Semantic text/resize/default cursor requests |
 
 `zwp_text_input_v3` is deliberately not advertised yet. Correct support needs
@@ -97,10 +98,11 @@ IME expectations.
 Simultaneously active outputs on one DRM card form an editable logical desktop.
 Settings provides a draggable monitor map and primary selection; core validates
 the complete non-overlapping layout and owns a 15-second rollback transaction.
-Rotation, effective per-output scale, mirror mode and cross-GPU handoff remain
-future work. The
-renderer remains independent: software currently crops one logical scene into
-per-output targets; a future EGL backend can consume the same layout contract.
+Rotation, mirror mode and cross-GPU handoff remain future work. Per-output
+fractional scaling is effective end to end: clients render through buffer scale
+or viewporter, the compositor works in logical coordinates, and the software
+backend scales each logical output into its physical target. A future EGL
+backend can consume the same presentation contract.
 
 ## Smoke testing
 
@@ -108,7 +110,7 @@ The backend-neutral layout smoke uses synthetic outputs of different sizes and
 a deliberately padded framebuffer pitch. It verifies horizontal coordinates,
 logical bounds, monitor hit-testing, straddling/crossing output membership,
 DRM-owner replacement, exact per-output crop pixels, untouched pitch padding,
-and rejection of out-of-bounds layouts:
+mixed-DPI logical-to-physical pixels, and rejection of out-of-bounds layouts:
 
 ```bash
 pnpm --filter @moire/core smoke:display

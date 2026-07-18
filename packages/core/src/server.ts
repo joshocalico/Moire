@@ -41,7 +41,7 @@ import {
 } from "@moire/sys";
 import { mmapShm, munmapShm, copyFromPool } from "./shm-map.js";
 import {
-  copySceneToOutput,
+  copySceneToOutputScaled,
   desktopBounds,
   horizontalLayout,
   layoutsOverlap,
@@ -143,6 +143,9 @@ const OP = {
   fractional_scale_manager_destroy: 0,
   fractional_scale_manager_get: 1,
   fractional_scale_destroy: 0,
+  xdg_output_manager_destroy: 0,
+  xdg_output_manager_get: 1,
+  xdg_output_destroy: 0,
   viewporter_destroy: 0,
   viewporter_get_viewport: 1,
   viewport_destroy: 0,
@@ -285,6 +288,11 @@ const EV = {
   primary_offer_offer: 0,
   activation_token_done: 0,
   fractional_scale_preferred_scale: 0,
+  xdg_output_logical_position: 0,
+  xdg_output_logical_size: 1,
+  xdg_output_done: 2,
+  xdg_output_name: 3,
+  xdg_output_description: 4,
   xdg_toplevel_decoration_configure: 0,
   drm_device: 0,
   drm_format: 1,
@@ -536,6 +544,10 @@ type SurfaceState = {
   subY: number;
   width: number;
   height: number;
+  /** Physical dimensions of the attached buffer before viewport/buffer scale. */
+  bufferWidth: number;
+  bufferHeight: number;
+  bufferScale: number;
   stride: number;
   title: string;
   appId: string;
@@ -675,6 +687,7 @@ export type TaskWindowInfo = {
 };
 
 export type CompositorShell = {
+  setPrimaryOutput?(output: { x: number; y: number; width: number; height: number }): void;
   paint(
     fb: Uint32Array,
     pitchPx: number,
@@ -927,7 +940,16 @@ export type DisplayLayoutRequest = {
   x: number;
   y: number;
   primary: boolean;
+  scale120: number;
 };
+
+function outputLogicalWidth(output: DisplayOutput): number {
+  return Math.max(1, Math.round((output.kms.width * 120) / output.scale120));
+}
+
+function outputLogicalHeight(output: DisplayOutput): number {
+  return Math.max(1, Math.round((output.kms.height * 120) / output.scale120));
+}
 
 export class CompositorServer {
   private socket: WaylandSocketServer | null = null;
@@ -1634,8 +1656,8 @@ export class CompositorServer {
     const placed = horizontalLayout(
       this.outputs.map((output) => ({
         id: String(output.kms.connectorId),
-        width: output.kms.width,
-        height: output.kms.height,
+        width: outputLogicalWidth(output),
+        height: outputLogicalHeight(output),
       })),
     );
     for (let index = 0; index < this.outputs.length; index++) {
@@ -1655,7 +1677,7 @@ export class CompositorServer {
       if (!item) continue;
       output.x = item.x;
       output.y = item.y;
-      output.scale120 = 120;
+      output.scale120 = item.scale120;
       output.primary = item.primary;
       matched++;
     }
@@ -1671,8 +1693,8 @@ export class CompositorServer {
     const normalized = normalizeLayoutOrigin(this.outputs.map((output) => ({
       ...output,
       id: output.kms.identity.id,
-      width: output.kms.width,
-      height: output.kms.height,
+      width: outputLogicalWidth(output),
+      height: outputLogicalHeight(output),
     })));
     if (layoutsOverlap(normalized)) {
       this.rebuildOutputLayout();
@@ -1690,6 +1712,7 @@ export class CompositorServer {
       x: output.x,
       y: output.y,
       primary: output.primary,
+      scale120: output.scale120,
     }));
   }
 
@@ -1708,12 +1731,16 @@ export class CompositorServer {
     }
     const arranged = normalizeLayoutOrigin(this.outputs.map((output) => {
       const item = byId.get(output.kms.identity.id)!;
+      const scale120 = Math.max(120, Math.min(240, Math.round(item.scale120)));
+      const logicalWidth = Math.max(1, Math.round((output.kms.width * 120) / scale120));
+      const logicalHeight = Math.max(1, Math.round((output.kms.height * 120) / scale120));
       return {
         id: item.id,
         x: Math.round(item.x),
         y: Math.round(item.y),
-        width: output.kms.width,
-        height: output.kms.height,
+        width: logicalWidth,
+        height: logicalHeight,
+        scale120,
       };
     }));
     if (layoutsOverlap(arranged)) throw new Error("Displays cannot overlap");
@@ -1728,10 +1755,12 @@ export class CompositorServer {
       changed ||=
         output.x !== item.x ||
         output.y !== item.y ||
-        output.primary !== primary;
+        output.primary !== primary ||
+        output.scale120 !== item.scale120;
       output.x = item.x;
       output.y = item.y;
       output.primary = primary;
+      output.scale120 = item.scale120;
     });
     if (!changed) return { changed: false, deadlineMs: 0 };
     this.publishDisplayGeometry("layout trial");
@@ -1762,6 +1791,7 @@ export class CompositorServer {
       output.x = item.x;
       output.y = item.y;
       output.primary = item.primary;
+      output.scale120 = item.scale120;
     }
     this.publishDisplayGeometry("layout reverted");
     return true;
@@ -1774,8 +1804,8 @@ export class CompositorServer {
           id: String(output.kms.connectorId),
           x: output.x,
           y: output.y,
-          width: output.kms.width,
-          height: output.kms.height,
+          width: outputLogicalWidth(output),
+          height: outputLogicalHeight(output),
         })),
       );
     }
@@ -1981,8 +2011,8 @@ export class CompositorServer {
         surf.y = output.y;
         entry.session.configureToplevel(
           surf,
-          output.kms.width,
-          output.kms.height,
+          outputLogicalWidth(output),
+          outputLogicalHeight(output),
           [
           XDG_TOPLEVEL_STATE_FULLSCREEN,
           ...(this.focusedToplevel?.session === entry.session &&
@@ -1998,12 +2028,14 @@ export class CompositorServer {
         const contentH = this.usesSsd(surf)
           ? Math.max(
               100,
-              output.kms.height - SSD_PANEL_H - SSD_TITLEBAR_H,
+              outputLogicalHeight(output) -
+                (output.primary ? SSD_PANEL_H : 0) -
+                SSD_TITLEBAR_H,
             )
-          : output.kms.height;
+          : outputLogicalHeight(output);
         entry.session.configureToplevel(
           surf,
-          output.kms.width,
+          outputLogicalWidth(output),
           contentH,
           [
             XDG_TOPLEVEL_STATE_MAXIMIZED,
@@ -2642,28 +2674,31 @@ export class CompositorServer {
 
   /** Keep a newly mapped native toplevel reachable on the current output. */
   fitToplevelToOutput(session: ClientSession, surfaceId: number): void {
-    const kms = this.getKmsSize();
     const surf = session.surfaceById(surfaceId);
     if (!surf || surf.role !== "toplevel") return;
+    const output = this.outputForSurface(surf);
+    const width = outputLogicalWidth(output);
+    const height = outputLogicalHeight(output);
+    const panelH = output.primary ? SSD_PANEL_H : 0;
     const w = surf.geomW > 0 ? surf.geomW : surf.width;
     const h = surf.geomH > 0 ? surf.geomH : surf.height;
     const chromeH = this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
     const maxContentH = Math.max(
       100,
-      kms.height - SSD_PANEL_H - chromeH,
+      height - panelH - chromeH,
     );
-    const nextW = Math.min(w, kms.width);
+    const nextW = Math.min(w, width);
     const nextH = Math.min(h, maxContentH);
     if (nextW !== w || nextH !== h) {
       session.configureToplevel(surf, nextW, nextH, [
         XDG_TOPLEVEL_STATE_ACTIVATED,
       ]);
     }
-    surf.x = Math.max(0, Math.min(Math.max(0, kms.width - nextW), surf.x));
+    surf.x = Math.max(output.x, Math.min(output.x + width - nextW, surf.x));
     surf.y = Math.max(
       0,
       Math.min(
-        Math.max(0, kms.height - SSD_PANEL_H - chromeH - nextH),
+        Math.max(output.y, output.y + height - panelH - chromeH - nextH),
         surf.y,
       ),
     );
@@ -3639,7 +3674,7 @@ export class CompositorServer {
   }
 
   /** Align a maximized/fullscreen toplevel so window geometry fills the output. */
-  private outputForSurface(surf: SurfaceState): DisplayOutput {
+  outputForSurface(surf: SurfaceState): DisplayOutput {
     const frame = this.frameBox(surf);
     const centerX = frame.x + frame.w / 2;
     const centerY = frame.y + frame.h / 2;
@@ -3649,8 +3684,8 @@ export class CompositorServer {
           id: String(output.kms.connectorId),
           x: output.x,
           y: output.y,
-          width: output.kms.width,
-          height: output.kms.height,
+          width: outputLogicalWidth(output),
+          height: outputLogicalHeight(output),
           output,
         })),
         centerX,
@@ -3680,11 +3715,15 @@ export class CompositorServer {
       surf.maximized = true;
       surf.fullscreen = false;
       const output = this.placeMaximized(surf);
-      const kms = output.kms;
+      const width = outputLogicalWidth(output);
+      const height = outputLogicalHeight(output);
       const contentH = this.usesSsd(surf)
-        ? Math.max(100, kms.height - SSD_PANEL_H - SSD_TITLEBAR_H)
-        : kms.height;
-      session.configureToplevel(surf, kms.width, contentH, [
+        ? Math.max(
+            100,
+            height - (output.primary ? SSD_PANEL_H : 0) - SSD_TITLEBAR_H,
+          )
+        : height;
+      session.configureToplevel(surf, width, contentH, [
         XDG_TOPLEVEL_STATE_MAXIMIZED,
         XDG_TOPLEVEL_STATE_ACTIVATED,
       ]);
@@ -3709,20 +3748,33 @@ export class CompositorServer {
       }
       surf.fullscreen = true;
       const output = this.placeMaximized(surf);
-      const kms = output.kms;
-      session.configureToplevel(surf, kms.width, kms.height, [
+      session.configureToplevel(
+        surf,
+        outputLogicalWidth(output),
+        outputLogicalHeight(output),
+        [
         XDG_TOPLEVEL_STATE_FULLSCREEN,
         XDG_TOPLEVEL_STATE_ACTIVATED,
-      ]);
+        ],
+      );
     } else if (!want && surf.fullscreen) {
       surf.fullscreen = false;
       if (surf.maximized) {
         const output = this.placeMaximized(surf);
-        const kms = output.kms;
-        session.configureToplevel(surf, kms.width, kms.height, [
+        session.configureToplevel(
+          surf,
+          outputLogicalWidth(output),
+          Math.max(
+            100,
+            outputLogicalHeight(output) -
+              (output.primary ? SSD_PANEL_H : 0) -
+              (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0),
+          ),
+          [
           XDG_TOPLEVEL_STATE_MAXIMIZED,
           XDG_TOPLEVEL_STATE_ACTIVATED,
-        ]);
+          ],
+        );
       } else {
         this.setGeometryPosition(surf, surf.savedX, surf.savedY);
         session.configureToplevel(surf, surf.savedW, surf.savedH, [
@@ -3943,6 +3995,7 @@ export class CompositorServer {
      * (often solid black margins from clients that don't use real alpha).
      */
     geom?: { x: number; y: number; w: number; h: number },
+    destination?: { width: number; height: number },
   ): void {
     // Wayland wl_shm / linux-dmabuf ARGB8888 is premultiplied.
     const srcWords = new Uint32Array(
@@ -3956,18 +4009,26 @@ export class CompositorServer {
     const gx1 = geom ? geom.x + geom.w : srcW;
     const gy1 = geom ? geom.y + geom.h : srcH;
 
-    for (let row = 0; row < srcH; row++) {
+    const destW = destination?.width ?? srcW;
+    const destH = destination?.height ?? srcH;
+    for (let row = 0; row < destH; row++) {
       const py = dy + row;
       if (py < 0 || py >= fbH) continue;
-      let si = row * stridePx;
-      for (let col = 0; col < srcW; col++, si++) {
+      const sourceRow = Math.min(srcH - 1, Math.floor((row * srcH) / destH));
+      for (let col = 0; col < destW; col++) {
         const px = dx + col;
         if (px < 0 || px >= fbW) continue;
+        const sourceCol = Math.min(srcW - 1, Math.floor((col * srcW) / destW));
+        const si = sourceRow * stridePx + sourceCol;
         const pixel = srcWords[si]!;
         const a = (pixel >>> 24) & 0xff;
         if (a === 0) continue;
         const inGeom =
-          !geom || (col >= gx0 && col < gx1 && row >= gy0 && row < gy1);
+          !geom ||
+          (sourceCol >= gx0 &&
+            sourceCol < gx1 &&
+            sourceRow >= gy0 &&
+            sourceRow < gy1);
         // Opaque pixels outside window geometry are almost always fake CSD
         // "shadow" fill (solid black) — skip them so soft alpha shadows show.
         if (!inGeom && a === 255) continue;
@@ -4011,9 +4072,11 @@ export class CompositorServer {
             dx,
             dy,
             surf.pixels,
-            surf.width,
-            surf.height,
+            surf.bufferWidth,
+            surf.bufferHeight,
             surf.stride,
+            undefined,
+            { width: surf.width, height: surf.height },
           );
           return;
         } catch (err) {
@@ -4292,9 +4355,11 @@ export class CompositorServer {
           (this.cursorX | 0) - cc.hotspotX,
           (this.cursorY | 0) - cc.hotspotY,
           surf.pixels,
-          surf.width,
-          surf.height,
+          surf.bufferWidth,
+          surf.bufferHeight,
           surf.stride,
+          undefined,
+          { width: surf.width, height: surf.height },
         );
         cc.session.finishSurfaceFrame(surf);
         return;
@@ -4372,8 +4437,8 @@ export class CompositorServer {
             surf.x,
             surf.y,
             surf.pixels,
-            surf.width,
-            surf.height,
+            surf.bufferWidth,
+            surf.bufferHeight,
             surf.stride,
             useGeom
               ? {
@@ -4383,6 +4448,7 @@ export class CompositorServer {
                   h: surf.geomH,
                 }
               : undefined,
+            { width: surf.width, height: surf.height },
           );
           painted++;
         } catch (err) {
@@ -4430,6 +4496,14 @@ export class CompositorServer {
     }
 
     try {
+      const primary =
+        this.outputs.find((output) => output.primary) ?? this.outputs[0]!;
+      this.shell?.setPrimaryOutput?.({
+        x: primary.x,
+        y: primary.y,
+        width: outputLogicalWidth(primary),
+        height: outputLogicalHeight(primary),
+      });
       this.shell?.setTasks?.(this.collectTaskWindows());
     } catch (err) {
       console.error("[shell] setTasks:", err);
@@ -4486,8 +4560,8 @@ export class CompositorServer {
                 surf.x,
                 surf.y + ssdY,
                 surf.pixels,
-                surf.width,
-                surf.height,
+                surf.bufferWidth,
+                surf.bufferHeight,
                 surf.stride,
                 useGeom
                   ? {
@@ -4497,6 +4571,7 @@ export class CompositorServer {
                       h: surf.geomH,
                     }
                   : undefined,
+                { width: surf.width, height: surf.height },
               );
               painted++;
             } catch (err) {
@@ -4582,7 +4657,7 @@ export class CompositorServer {
           target = Buffer.alloc(physical.size);
           this.outputStages.set(physical.connectorId, target);
         }
-        copySceneToOutput(
+        copySceneToOutputScaled(
           stage,
           kms.width,
           kms.height,
@@ -4590,10 +4665,12 @@ export class CompositorServer {
             id: physical.connectorName,
             x: output.x,
             y: output.y,
-            width: physical.width,
-            height: physical.height,
+            width: outputLogicalWidth(output),
+            height: outputLogicalHeight(output),
           },
           target,
+          physical.width,
+          physical.height,
           physical.pitch,
         );
         flushMmap(physical.map, target, physical.size);
@@ -5201,6 +5278,12 @@ class ClientSession {
       case "wp_fractional_scale_v1":
         if (opcode === OP.fractional_scale_destroy) this.destroyObject(objectId);
         break;
+      case "zxdg_output_manager_v1":
+        this.handleXdgOutputManager(opcode, r);
+        break;
+      case "zxdg_output_v1":
+        if (opcode === OP.xdg_output_destroy) this.destroyObject(objectId);
+        break;
       case "wp_viewporter":
         this.handleViewporter(opcode, r);
         break;
@@ -5495,7 +5578,9 @@ class ClientSession {
           .int(mode.refreshMilliHz);
       });
     }
-    this.send(id, EV.output_scale, (b) => b.int(1));
+    this.send(id, EV.output_scale, (b) =>
+      b.int(Math.max(1, Math.ceil(output.scale120 / 120))),
+    );
     this.send(id, EV.output_done, () => {});
   }
 
@@ -5513,6 +5598,9 @@ class ClientSession {
           object.id,
           object.data?.output as DisplayOutput | undefined,
         );
+      } else if (object.iface === "zxdg_output_v1") {
+        const output = object.data?.output as DisplayOutput | undefined;
+        if (output) this.sendXdgOutputEvents(object.id, output);
       }
     }
     this.updateAllSurfaceOutputs();
@@ -5530,8 +5618,8 @@ class ClientSession {
                 objectId: object.id,
                 x: output.x,
                 y: output.y,
-                width: output.kms.width,
-                height: output.kms.height,
+                width: outputLogicalWidth(output),
+                height: outputLogicalHeight(output),
               },
             ]
           : [];
@@ -5564,6 +5652,7 @@ class ClientSession {
       this.send(surface.id, EV.surface_enter, (b) => b.uint(outputId));
     }
     surface.enteredOutputIds = membership.next;
+    this.updateSurfacePreferredScale(surface);
   }
 
   clearSurfaceOutputs(surface: SurfaceState): void {
@@ -5773,11 +5862,65 @@ class ClientSession {
         id,
         iface: "wp_fractional_scale_v1",
         version: 1,
-        data: { surfaceId },
+        data: { surfaceId, preferredScale: 0 },
       });
-      // Native scale is currently 1×. The protocol uses increments of 1/120.
-      this.send(id, EV.fractional_scale_preferred_scale, (b) => b.uint(120));
+      this.sendPreferredScale(id, surfaceId);
     }
+  }
+
+  private sendPreferredScale(objectId: number, surfaceId: number): void {
+    const object = this.objects.get(objectId);
+    const surface = this.surfaceById(surfaceId);
+    if (!object || !surface) return;
+    const scale120 = this.server.outputForSurface(surface).scale120;
+    if (object.data?.preferredScale === scale120) return;
+    object.data = { ...object.data, preferredScale: scale120 };
+    this.send(objectId, EV.fractional_scale_preferred_scale, (b) =>
+      b.uint(scale120),
+    );
+  }
+
+  private updateSurfacePreferredScale(surface: SurfaceState): void {
+    for (const object of this.objects.values()) {
+      if (
+        object.iface === "wp_fractional_scale_v1" &&
+        object.data?.surfaceId === surface.id
+      ) this.sendPreferredScale(object.id, surface.id);
+    }
+  }
+
+  private handleXdgOutputManager(opcode: number, r: MessageReader): void {
+    if (opcode === OP.xdg_output_manager_destroy) return;
+    if (opcode !== OP.xdg_output_manager_get) return;
+    const id = r.newId();
+    const wlOutputId = r.object();
+    const wlOutput = this.objects.get(wlOutputId);
+    const output = wlOutput?.data?.output as DisplayOutput | undefined;
+    if (!output) {
+      this.sendError(wlOutputId, 0, "zxdg_output requires a bound wl_output");
+      return;
+    }
+    this.objects.set(id, {
+      id,
+      iface: "zxdg_output_v1",
+      version: 3,
+      data: { output },
+    });
+    this.sendXdgOutputEvents(id, output);
+  }
+
+  private sendXdgOutputEvents(id: number, output: DisplayOutput): void {
+    this.send(id, EV.xdg_output_logical_position, (b) =>
+      b.int(output.x).int(output.y),
+    );
+    this.send(id, EV.xdg_output_logical_size, (b) =>
+      b.int(outputLogicalWidth(output)).int(outputLogicalHeight(output)),
+    );
+    this.send(id, EV.xdg_output_name, (b) => b.string(output.kms.connectorName));
+    this.send(id, EV.xdg_output_description, (b) =>
+      b.string(`${output.kms.identity.make} ${output.kms.identity.model}`.trim()),
+    );
+    this.send(id, EV.xdg_output_done, () => {});
   }
 
   private handleViewporter(opcode: number, r: MessageReader): void {
@@ -6362,6 +6505,9 @@ class ClientSession {
         subY: 0,
         width: 0,
         height: 0,
+        bufferWidth: 0,
+        bufferHeight: 0,
+        bufferScale: 1,
         stride: 0,
         title: "",
         appId: "",
@@ -6565,8 +6711,10 @@ class ClientSession {
       if (bufId) {
         const buf = this.getBuffer(bufId);
         if (buf) {
-          surface.width = buf.width;
-          surface.height = buf.height;
+          surface.bufferWidth = buf.width;
+          surface.bufferHeight = buf.height;
+          surface.width = Math.max(1, Math.round(buf.width / surface.bufferScale));
+          surface.height = Math.max(1, Math.round(buf.height / surface.bufferScale));
         }
       }
     } else if (opcode === OP.surface_damage || opcode === OP.surface_damage_buffer) {
@@ -6582,7 +6730,7 @@ class ClientSession {
     } else if (opcode === OP.surface_set_buffer_transform) {
       r.int();
     } else if (opcode === OP.surface_set_buffer_scale) {
-      r.int();
+      surface.bufferScale = Math.max(1, r.int());
     } else if (opcode === OP.surface_frame) {
       const cbId = r.newId();
       this.objects.set(cbId, { id: cbId, iface: "wl_callback", version: 1 });
@@ -6643,8 +6791,24 @@ class ClientSession {
                 forceOpaqueAlpha(surface.pixels);
               }
             }
-            surface.width = buf.width;
-            surface.height = buf.height;
+            surface.bufferWidth = buf.width;
+            surface.bufferHeight = buf.height;
+            const viewport = [...this.objects.values()].find(
+              (item) =>
+                item.iface === "wp_viewport" &&
+                item.data?.surfaceId === surface.id,
+            );
+            const destination = viewport?.data?.destination as
+              | [number, number]
+              | undefined;
+            surface.width =
+              destination && destination[0] > 0
+                ? destination[0]
+                : Math.max(1, Math.round(buf.width / surface.bufferScale));
+            surface.height =
+              destination && destination[1] > 0
+                ? destination[1]
+                : Math.max(1, Math.round(buf.height / surface.bufferScale));
             surface.mapped = true;
             if (!surface.releaseBuffers.includes(surface.bufferId)) {
               surface.releaseBuffers.push(surface.bufferId);

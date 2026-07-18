@@ -120,6 +120,20 @@ try {
   process.env.XDG_CONFIG_HOME = path.join(smokeHome, ".config");
   const shell = createShell(() => ({ unref() {} }));
   const framebuffer = new Uint32Array(width * height);
+  shell.setPrimaryOutput({ x: width / 2, y: 0, width: width / 2, height });
+  shell.paint(framebuffer, width, width, height);
+  assert.equal(
+    framebuffer[(height - 8) * width + 100],
+    0,
+    "panel painted outside the primary output",
+  );
+  assert.notEqual(
+    framebuffer[(height - 8) * width + width - 100],
+    0,
+    "panel did not follow the primary output",
+  );
+  shell.setPrimaryOutput({ x: 0, y: 0, width, height });
+  framebuffer.fill(0);
   shell.paintDesktop(framebuffer, width, width, height);
   const opened = shell.onDesktopPointerButton?.({
     timeMs: 1,

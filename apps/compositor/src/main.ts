@@ -112,8 +112,8 @@ async function main() {
                 kms.currentModeId,
                 x,
                 y,
-                kms.width,
-                kms.height,
+                Math.max(1, Math.round((kms.width * 120) / scale120)),
+                Math.max(1, Math.round((kms.height * 120) / scale120)),
                 scale120,
                 primary,
               ]),
@@ -121,7 +121,7 @@ async function main() {
           }),
         },
         SetLayout: {
-          inSignature: "a(siib)",
+          inSignature: "a(siiub)",
           outSignature: "b",
           handler: ({ body }) => {
             const rows = Array.isArray(body[0]) ? body[0] : [];
@@ -130,7 +130,8 @@ async function main() {
                 id: String(row[0] ?? ""),
                 x: Number(row[1] ?? 0),
                 y: Number(row[2] ?? 0),
-                primary: row[3] === true,
+                scale120: Number(row[3] ?? 120),
+                primary: row[4] === true,
               })),
             );
             return { body: [result.changed] };

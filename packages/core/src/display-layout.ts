@@ -142,3 +142,44 @@ export function copySceneToOutput(
     );
   }
 }
+
+/** Scale a logical output rectangle into a physical XRGB8888 target. */
+export function copySceneToOutputScaled(
+  source: Uint8Array,
+  sourceWidth: number,
+  sourceHeight: number,
+  output: OutputGeometry,
+  target: Uint8Array,
+  targetWidth: number,
+  targetHeight: number,
+  targetPitch: number,
+): void {
+  if (
+    output.x < 0 || output.y < 0 ||
+    output.x + output.width > sourceWidth ||
+    output.y + output.height > sourceHeight
+  ) throw new RangeError(`Output ${output.id} lies outside the logical scene`);
+  if (
+    targetWidth < 1 || targetHeight < 1 ||
+    targetPitch < targetWidth * 4 ||
+    target.length < targetPitch * targetHeight
+  ) throw new RangeError(`Target for ${output.id} is smaller than its geometry`);
+  for (let py = 0; py < targetHeight; py++) {
+    const sy = output.y + Math.min(
+      output.height - 1,
+      Math.floor((py * output.height) / targetHeight),
+    );
+    for (let px = 0; px < targetWidth; px++) {
+      const sx = output.x + Math.min(
+        output.width - 1,
+        Math.floor((px * output.width) / targetWidth),
+      );
+      const sourceOffset = (sy * sourceWidth + sx) * 4;
+      const targetOffset = py * targetPitch + px * 4;
+      target[targetOffset] = source[sourceOffset]!;
+      target[targetOffset + 1] = source[sourceOffset + 1]!;
+      target[targetOffset + 2] = source[sourceOffset + 2]!;
+      target[targetOffset + 3] = source[sourceOffset + 3]!;
+    }
+  }
+}

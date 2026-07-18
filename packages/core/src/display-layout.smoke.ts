@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   copySceneToOutput,
+  copySceneToOutputScaled,
   desktopBounds,
   horizontalLayout,
   layoutsOverlap,
@@ -121,5 +122,29 @@ assert.throws(
     ),
   /outside the logical scene/,
 );
+
+// Mixed-DPI: a 2×1 logical output scaled into a 4×2 physical target.
+const scaledTarget = new Uint8Array(4 * 2 * 4);
+copySceneToOutputScaled(
+  scene,
+  bounds.width,
+  bounds.height,
+  { id: "hidpi", x: 3, y: 0, width: 2, height: 1 },
+  scaledTarget,
+  4,
+  2,
+  16,
+);
+for (let py = 0; py < 2; py++) {
+  for (let px = 0; px < 4; px++) {
+    const offset = (py * 4 + px) * 4;
+    assert.deepEqual([...scaledTarget.subarray(offset, offset + 4)], [
+      3 + Math.floor(px / 2),
+      0,
+      0xa5,
+      0xff,
+    ]);
+  }
+}
 
 console.log("[core/display-layout-smoke] ok");

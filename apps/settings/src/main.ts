@@ -290,6 +290,9 @@ function SettingsApp(
       primary: output.primary,
     }),
   );
+  const selectedOutput =
+    connectedOutputs.find((output) => output.id === selectedOutputId) ??
+    connectedOutputs[0];
 
   const requestDisplayMode = (modeId: string) => {
     if (!props.display || modeId === displayMode) return;
@@ -337,11 +340,21 @@ function SettingsApp(
 
   const requestDisplayLayout = (next: ConnectedOutput[]) => {
     if (!props.display) return;
+    const normalized = next.map((output) => {
+      const mode = parseDisplayMode(output.mode);
+      return mode
+        ? {
+            ...output,
+            width: Math.max(1, Math.round((mode.width * 120) / output.scale120)),
+            height: Math.max(1, Math.round((mode.height * 120) / output.scale120)),
+          }
+        : output;
+    });
     const previous = connectedOutputs;
     setStatus("Applying display arrangement…");
-    void props.display.setLayout(next).then((changed) => {
+    void props.display.setLayout(normalized).then((changed) => {
       if (!changed) return;
-      setConnectedOutputs(next);
+      setConnectedOutputs(normalized);
       setPendingDisplayLayout({ previous, deadlineMs: Date.now() + 15_000 });
       setStatus("");
     }).catch((error: unknown) => {
@@ -553,6 +566,38 @@ function SettingsApp(
                     width: Math.max(1, innerW - Math.round(160 * ui)),
                     height: labelH,
                   }),
+                )
+              : null,
+            selectedOutput
+              ? createElement(
+                  Row,
+                  { width: innerW, height: btnH, gap: Math.round(6 * ui) },
+                  createElement(Label, {
+                    text: "Scale",
+                    fontWeight: "medium",
+                    width: Math.round(48 * ui),
+                    height: labelH,
+                  }),
+                  ...[120, 150, 180, 210, 240].map((scale120) =>
+                    createElement(Button, {
+                      key: `scale-${scale120}`,
+                      width: Math.round(62 * ui),
+                      height: btnH,
+                      label: `${Math.round((scale120 / 120) * 100)}%`,
+                      variant:
+                        selectedOutput.scale120 === scale120
+                          ? "primary"
+                          : "secondary",
+                      disabled: pendingDisplayLayout != null,
+                      onPress: () => requestDisplayLayout(
+                        connectedOutputs.map((output) =>
+                          output.id === selectedOutput.id
+                            ? { ...output, scale120 }
+                            : output,
+                        ),
+                      ),
+                    }),
+                  ),
                 )
               : null,
             pendingDisplayLayout
@@ -941,8 +986,14 @@ async function connectDisplayController(): Promise<{
             path: "/org/moire/Display1",
             interface: "org.moire.Display1",
             member: "SetLayout",
-            signature: "a(siib)",
-            body: [outputs.map((output) => [output.id, output.x, output.y, output.primary])],
+            signature: "a(siiub)",
+            body: [outputs.map((output) => [
+              output.id,
+              output.x,
+              output.y,
+              output.scale120,
+              output.primary,
+            ])],
           });
           return result.body?.[0] === true;
         },
