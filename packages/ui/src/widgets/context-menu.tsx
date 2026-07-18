@@ -26,6 +26,7 @@ function LayerSurface(props: {
   height: number;
   fill: number;
   radius?: number;
+  clip?: boolean;
   children?: ReactNode;
 }): ReactNode {
   return (

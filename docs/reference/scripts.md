@@ -9,6 +9,7 @@ Host and guest helpers under `scripts/`. Prefer these over ad-hoc `prlctl exec â
 | `guest-clean-restart.sh` | Clean compositor / session restart |
 | `guest-open-with-picker.sh [path]` | Open the portal-owned chooser for input and visual verification |
 | `guest-pointer-drag.sh x y dx dy` | Inject a deterministic pointer drag for compositor input regression checks |
+| `guest-key-tap.sh code` | Inject an evdev key tap (for example `125` for Super) |
 | `guest-status.sh` | Quick session / process status |
 | `guest-tail-logs.sh` | Follow compositor / session logs |
 | `guest-run-compositor.sh` | Run compositor alone |

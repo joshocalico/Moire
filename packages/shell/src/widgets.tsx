@@ -7,6 +7,8 @@ export {
   Button,
   ListItem,
   Icon,
+  ScrollArea,
+  TextField,
   Pressable,
   Surface,
   Separator as Divider,
@@ -16,6 +18,8 @@ export {
   type ButtonProps,
   type ListItemProps,
   type IconProps,
+  type ScrollAreaProps,
+  type TextFieldProps,
   type PressableProps,
   type SurfaceProps,
 } from "@moire/ui";

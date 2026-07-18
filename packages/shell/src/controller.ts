@@ -93,6 +93,8 @@ export type ShellBridge = {
   }): boolean;
   /** Pointer motion for top shell overlays and panel hover feedback. */
   onPointerMotion?(ev: { x: number; y: number }): boolean;
+  /** Wheel input for launcher/menu scroll regions. */
+  onPointerAxis?(ev: { x: number; y: number; deltaY: number }): boolean;
   /**
    * Pointer over empty desktop (no window under cursor).
    * Handles icon select / open. Returns true if consumed.
@@ -239,7 +241,7 @@ type ShellAppProps = {
 
 function ShellApp(props: ShellAppProps) {
   const filtered = useMemo(
-    () => filterApplications(props.apps, props.query).slice(0, 12),
+    () => filterApplications(props.apps, props.query),
     [props.apps, props.query],
   );
 
@@ -289,6 +291,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       name: "Settings",
       comment: "Moire system settings",
       exec: settingsExec,
+      icon: "preferences-system",
       terminal: false,
       categories: ["Settings", "System"],
     },
@@ -297,6 +300,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       name: "Files",
       comment: "Moire file browser",
       exec: filesExec,
+      icon: "system-file-manager",
       terminal: false,
       categories: ["FileManager", "System"],
     },
@@ -304,7 +308,9 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   const mergeApps = (): DesktopEntry[] => [
     ...builtinApps,
     ...discoverApplications(process.env.XDG_CURRENT_DESKTOP ?? "Moire").filter(
-      (a) => a.id !== "moire-settings.desktop",
+      (app) =>
+        app.id !== "moire-settings.desktop" &&
+        app.id !== "moire-files.desktop",
     ),
   ];
   let apps = mergeApps();
@@ -1142,13 +1148,13 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         return true;
       }
       if (ev.code === KEY_ENTER) {
-        const list = filterApplications(apps, query).slice(0, 12);
+        const list = filterApplications(apps, query);
         const app = list[selected];
         if (app) launch(app);
         return true;
       }
       if (ev.code === 103 || ev.code === 108) {
-        const list = filterApplications(apps, query).slice(0, 12);
+        const list = filterApplications(apps, query);
         if (list.length === 0) return true;
         if (ev.code === 103) selected = (selected - 1 + list.length) % list.length;
         else selected = (selected + 1) % list.length;
@@ -1198,6 +1204,14 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       }
       for (let i = hits.length - 1; i >= 0; i--) {
         const h = hits[i]!;
+        if (
+          !h.onPointerDown &&
+          !h.onPress &&
+          !h.onContextMenu &&
+          !h.focusable
+        ) {
+          continue;
+        }
         if (
           ev.x >= h.x &&
           ev.y >= h.y &&
@@ -1272,6 +1286,33 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       }
 
       return open || desktopMenu != null || next != null;
+    },
+
+    onPointerAxis(ev) {
+      for (let i = hits.length - 1; i >= 0; i--) {
+        const hit = hits[i]!;
+        if (
+          hit.onWheel &&
+          ev.x >= hit.x &&
+          ev.y >= hit.y &&
+          ev.x < hit.x + hit.width &&
+          ev.y < hit.y + hit.height
+        ) {
+          hit.onWheel({
+            x: ev.x,
+            y: ev.y,
+            localX: ev.x - hit.x,
+            localY: ev.y - hit.y,
+            // evdev REL_WHEEL is a signed notch count, while ScrollArea uses
+            // logical pixels. Match Wayland's direction and advance about one
+            // launcher row per notch so wheel input is visibly responsive.
+            deltaY: -ev.deltaY * 44,
+          });
+          dirty = true;
+          return true;
+        }
+      }
+      return open || desktopMenu != null;
     },
 
     onDesktopPointerButton(ev) {

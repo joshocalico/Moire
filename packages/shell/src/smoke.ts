@@ -7,8 +7,10 @@ import {
   createShellRoot,
   rasterize,
   renderShell,
+  type SceneNode,
 } from "@moire/react-host";
 import { Panel } from "./Panel.js";
+import { Launcher } from "./Launcher.js";
 import { createShell } from "./controller.js";
 
 const width = 1024;
@@ -31,6 +33,58 @@ for (const pixel of new Uint32Array(out.pixels.buffer)) {
 assert.equal(root.container.children.length, 1, "panel scene did not mount");
 assert.ok(nonzero >= width * 40, "panel scene rendered transparent");
 assert.ok(out.hits.length >= 1, "panel lost its launcher hit region");
+
+const launcherRoot = createShellRoot();
+renderShell(
+  launcherRoot,
+  React.createElement(Launcher, {
+    open: true,
+    screenW: width,
+    screenH: height,
+    apps: Array.from({ length: 20 }, (_, index) => ({
+      id: `icon-smoke-${index}.desktop`,
+      name: `Icon Smoke ${index}`,
+      exec: "true",
+      icon: path.resolve(process.cwd(), "../ui/icons/app.png"),
+      terminal: false,
+      categories: [],
+    })),
+    query: "",
+    selected: 0,
+    onQueryChange: () => {},
+    onLaunch: () => {},
+    onDismiss: () => {},
+    onSelect: () => {},
+  }),
+);
+const containsImage = (node: SceneNode): boolean =>
+  node.kind === "image" || node.children.some(containsImage);
+assert.equal(
+  containsImage(launcherRoot.container),
+  true,
+  "launcher discarded the desktop entry icon",
+);
+const launcherPaint = rasterize(launcherRoot.container, width, height);
+assert.equal(
+  launcherPaint.hits.some((hit) => !!hit.onWheel),
+  true,
+  "launcher did not expose a wheel target for the full application list",
+);
+const searchHit = launcherPaint.hits
+  .filter(
+    (hit) =>
+      40 >= hit.x &&
+      170 >= hit.y &&
+      40 < hit.x + hit.width &&
+      170 < hit.y + hit.height &&
+      (!!hit.onPress || !!hit.focusable),
+  )
+  .at(-1);
+assert.equal(
+  searchHit?.focusable,
+  true,
+  "launcher search click would fall through to the dismiss backdrop",
+);
 
 const originalHome = process.env.HOME;
 const smokeHome = fs.mkdtempSync(path.join(os.tmpdir(), "moire-shell-smoke-"));

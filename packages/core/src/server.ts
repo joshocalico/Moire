@@ -630,6 +630,7 @@ export type CompositorShell = {
     y: number;
   }): boolean;
   onPointerMotion?(ev: { x: number; y: number }): boolean;
+  onPointerAxis?(ev: { x: number; y: number; deltaY: number }): boolean;
   /** Desktop icon clicks when no client surface is under the cursor. */
   onDesktopPointerButton?(ev: {
     timeMs: number;
@@ -2496,6 +2497,16 @@ export class CompositorServer {
   }
 
   private onPointerAxis(ev: EvdevPointerAxis): void {
+    if (
+      !this.hitTestPopup(this.cursorX, this.cursorY) &&
+      this.shell?.onPointerAxis?.({
+        x: this.cursorX,
+        y: this.cursorY,
+        deltaY: ev.value,
+      })
+    ) {
+      return;
+    }
     this.updatePointerFocus(ev.timeMs, false);
     this.pointerFocus?.session.pointerAxis(ev);
   }

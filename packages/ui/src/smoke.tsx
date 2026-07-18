@@ -353,19 +353,6 @@ async function openWithPickerInteractionSmoke(): Promise<void> {
   const platformWindow = backend.getWindows()[0];
   assert.ok(platformWindow);
 
-  platformWindow.injectPointer({
-    type: "down",
-    x: 320,
-    y: 42,
-    button: "left",
-    timeMs: 0,
-  });
-  assert.equal(
-    platformWindow.moveRequests,
-    1,
-    "Standalone picker header should begin an interactive window move",
-  );
-
   platformWindow.injectKey({
     type: "down",
     code: 108,
@@ -391,6 +378,19 @@ async function openWithPickerInteractionSmoke(): Promise<void> {
     timeMs: 3,
   });
   assert.equal(dismissed, true, "Escape should dismiss the picker");
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 320,
+    y: 42,
+    button: "left",
+    timeMs: 4,
+  });
+  assert.equal(
+    platformWindow.moveRequests,
+    1,
+    "Standalone picker header should begin an interactive window move",
+  );
 
   win.destroy();
   backend.disconnect();
