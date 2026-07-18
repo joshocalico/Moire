@@ -17,8 +17,8 @@ Its largest gaps are structural:
 
 - The Files breadcrumb is a label inside a drop zone, not navigation.
 - Sidebar places are a hard-coded array with no editing or persistence.
-- `TextField` is display-only; widgets have no focus manager or keyboard
-  dispatch.
+- Focus and basic single-line editing now exist, but selection, clipboard,
+  composition, shortcut scopes, and full control keyboard parity remain.
 - Lists and grids have no shared selection or keyboard-navigation model.
 - File operations are synchronous calls embedded in the main view.
 - `Draggable` owns clicking, double-clicking, context menus, drag initiation,

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { FunctionComponent, ReactNode } from "react";
 import { createContext } from "react";
 import Reconciler from "react-reconciler";
 import {
@@ -11,6 +11,18 @@ import {
   getTextRenderer,
   type TextDrawStyle,
 } from "./text-renderer.js";
+import type {
+  RendererBackend,
+  RenderViewport,
+  SoftwareFrame,
+} from "./renderer.js";
+
+export type {
+  RendererBackend,
+  RenderFrame,
+  RenderViewport,
+  SoftwareFrame,
+} from "./renderer.js";
 
 // Present at runtime in React 19; @types/react-reconciler may lag.
 const NoEventPriority = 0;
@@ -33,6 +45,80 @@ export type HitPressEvent = HitPointerEvent;
 
 export type HitHandler = (ev: HitPressEvent) => void;
 
+export type HitKeyEvent = {
+  code: number;
+  key?: string;
+  text?: string;
+  repeat?: boolean;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+};
+
+export type HitKeyHandler = (ev: HitKeyEvent) => void;
+
+type HostPointerProps = {
+  onPress?: HitHandler;
+  onPointerEnter?: HitHandler;
+  onPointerLeave?: HitHandler;
+  onPointerDown?: HitHandler;
+  onPointerMove?: HitHandler;
+  onPointerUp?: HitHandler;
+  onContextMenu?: HitHandler;
+  onWheel?: (ev: HitPointerEvent) => void;
+  data?: unknown;
+  onDropHoverChange?: (hovering: boolean) => void;
+  focusable?: boolean;
+  focusId?: string;
+  onFocusChange?: (focused: boolean) => void;
+  onKeyDown?: HitKeyHandler;
+  onKeyUp?: HitKeyHandler;
+};
+
+export type GroupProps = HostPointerProps & {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  clip?: boolean;
+  opacity?: number;
+  children?: ReactNode;
+};
+
+export type RectProps = HostPointerProps & {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  fill?: number;
+  radius?: number;
+  stroke?: number;
+  strokeWidth?: number;
+};
+
+export type TextProps = {
+  x?: number;
+  y?: number;
+  text: string;
+  color?: number;
+  scale?: number;
+  fontSize?: number;
+  fontWeight?: string;
+  fontFamily?: string;
+};
+
+export type ImageProps = {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  imagePixels: Uint8Array;
+  imageWidth: number;
+  imageHeight: number;
+  opacity?: number;
+};
+
 export type SceneNode = {
   kind: SceneKind;
   id: string;
@@ -41,6 +127,9 @@ export type SceneNode = {
   width: number;
   height: number;
   fill?: number;
+  radius?: number;
+  stroke?: number;
+  strokeWidth?: number;
   color?: number;
   text?: string;
   clip?: boolean;
@@ -61,6 +150,11 @@ export type SceneNode = {
   onPointerUp?: HitHandler;
   onContextMenu?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
+  focusable?: boolean;
+  focusId?: string;
+  onFocusChange?: (focused: boolean) => void;
+  onKeyDown?: HitKeyHandler;
+  onKeyUp?: HitKeyHandler;
   /** Opaque payload for position-aware lookups (e.g. DnD drop-target resolution). */
   data?: unknown;
   /**
@@ -79,6 +173,7 @@ export type HitRegion = {
   y: number;
   width: number;
   height: number;
+  radius?: number;
   onPress?: HitHandler;
   onPointerEnter?: HitHandler;
   onPointerLeave?: HitHandler;
@@ -87,6 +182,11 @@ export type HitRegion = {
   onPointerUp?: HitHandler;
   onContextMenu?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
+  focusable?: boolean;
+  focusId?: string;
+  onFocusChange?: (focused: boolean) => void;
+  onKeyDown?: HitKeyHandler;
+  onKeyUp?: HitKeyHandler;
   /** Opaque payload for position-aware lookups (e.g. DnD drop-target resolution). */
   data?: unknown;
   /** See `SceneNode.onDropHoverChange`. */
@@ -108,6 +208,10 @@ function makeNode(
     width: Number(props.width ?? 0),
     height: Number(props.height ?? 0),
     fill: props.fill as number | undefined,
+    radius: props.radius != null ? Number(props.radius) : undefined,
+    stroke: props.stroke as number | undefined,
+    strokeWidth:
+      props.strokeWidth != null ? Number(props.strokeWidth) : undefined,
     color: props.color as number | undefined,
     text: props.text as string | undefined,
     clip: props.clip as boolean | undefined,
@@ -127,6 +231,13 @@ function makeNode(
     onPointerUp: props.onPointerUp as HitHandler | undefined,
     onContextMenu: props.onContextMenu as HitHandler | undefined,
     onWheel: props.onWheel as ((ev: HitPointerEvent) => void) | undefined,
+    focusable: props.focusable as boolean | undefined,
+    focusId: props.focusId as string | undefined,
+    onFocusChange: props.onFocusChange as
+      | ((focused: boolean) => void)
+      | undefined,
+    onKeyDown: props.onKeyDown as HitKeyHandler | undefined,
+    onKeyUp: props.onKeyUp as HitKeyHandler | undefined,
     children: [],
     parent: null,
   };
@@ -155,6 +266,14 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   if ("width" in props) node.width = Number(props.width ?? 0);
   if ("height" in props) node.height = Number(props.height ?? 0);
   if ("fill" in props) node.fill = props.fill as number | undefined;
+  if ("radius" in props) {
+    node.radius = props.radius != null ? Number(props.radius) : undefined;
+  }
+  if ("stroke" in props) node.stroke = props.stroke as number | undefined;
+  if ("strokeWidth" in props) {
+    node.strokeWidth =
+      props.strokeWidth != null ? Number(props.strokeWidth) : undefined;
+  }
   if ("color" in props) node.color = props.color as number | undefined;
   if ("text" in props) node.text = props.text as string | undefined;
   if ("clip" in props) node.clip = props.clip as boolean | undefined;
@@ -201,6 +320,19 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   }
   if ("onWheel" in props) {
     node.onWheel = props.onWheel as ((ev: HitPointerEvent) => void) | undefined;
+  }
+  if ("focusable" in props) node.focusable = props.focusable as boolean | undefined;
+  if ("focusId" in props) node.focusId = props.focusId as string | undefined;
+  if ("onFocusChange" in props) {
+    node.onFocusChange = props.onFocusChange as
+      | ((focused: boolean) => void)
+      | undefined;
+  }
+  if ("onKeyDown" in props) {
+    node.onKeyDown = props.onKeyDown as HitKeyHandler | undefined;
+  }
+  if ("onKeyUp" in props) {
+    node.onKeyUp = props.onKeyUp as HitKeyHandler | undefined;
   }
   if ("data" in props) node.data = props.data;
   if ("onDropHoverChange" in props) {
@@ -451,6 +583,7 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       node.onPointerUp ||
       node.onContextMenu ||
       node.onWheel ||
+      node.focusable ||
       // A pure position lookup tag (e.g. DropZone) with no pointer handlers
       // still needs to be findable by hitTestDropData.
       node.data !== undefined) &&
@@ -462,6 +595,7 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       y,
       width: node.width,
       height: node.height,
+      radius: node.radius,
       onPress: node.onPress,
       onPointerEnter: node.onPointerEnter,
       onPointerLeave: node.onPointerLeave,
@@ -470,6 +604,11 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       onPointerUp: node.onPointerUp,
       onContextMenu: node.onContextMenu,
       onWheel: node.onWheel,
+      focusable: node.focusable,
+      focusId: node.focusId ?? node.id,
+      onFocusChange: node.onFocusChange,
+      onKeyDown: node.onKeyDown,
+      onKeyUp: node.onKeyUp,
       data: node.data,
       onDropHoverChange: node.onDropHoverChange,
     });
@@ -478,11 +617,28 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
   return out;
 }
 
-export function rasterize(
+/** Geometry-aware hit test shared by input dispatchers and renderer backends. */
+export function hitRegionContains(
+  hit: HitRegion,
+  x: number,
+  y: number,
+): boolean {
+  return insideRoundedRect(
+    x,
+    y,
+    hit.x,
+    hit.y,
+    hit.width,
+    hit.height,
+    hit.radius ?? 0,
+  );
+}
+
+function renderSoftwareFrame(
   root: SceneNode,
   fbW: number,
   fbH: number,
-): { pixels: Uint8Array; hits: HitRegion[] } {
+): SoftwareFrame {
   const pixels = new Uint8Array(fbW * fbH * 4);
   const fb = new Uint32Array(pixels.buffer);
   const pitchPx = fbW;
@@ -496,18 +652,52 @@ export function rasterize(
     x: number,
     y: number,
   ) => {
-    if (node.kind === "rect" && node.fill != null) {
-      fillRect(
-        target,
-        targetPitch,
-        targetW,
-        targetH,
-        x,
-        y,
-        node.width,
-        node.height,
-        node.fill,
-      );
+    if (node.kind === "rect") {
+      const radius = Math.max(0, node.radius ?? 0);
+      const strokeWidth = Math.max(0, node.strokeWidth ?? 1);
+      if (node.fill != null) {
+        if (radius > 0) {
+          fillRoundedRect(
+            target,
+            targetPitch,
+            targetW,
+            targetH,
+            x,
+            y,
+            node.width,
+            node.height,
+            radius,
+            node.fill,
+          );
+        } else {
+          fillRect(
+            target,
+            targetPitch,
+            targetW,
+            targetH,
+            x,
+            y,
+            node.width,
+            node.height,
+            node.fill,
+          );
+        }
+      }
+      if (node.stroke != null && strokeWidth > 0) {
+        fillRoundedStroke(
+          target,
+          targetPitch,
+          targetW,
+          targetH,
+          x,
+          y,
+          node.width,
+          node.height,
+          radius,
+          strokeWidth,
+          node.stroke,
+        );
+      }
     } else if (node.kind === "text" && node.text) {
       const style = textStyleOf(node);
       style.color = node.color ?? 0xffffffff;
@@ -577,7 +767,34 @@ export function rasterize(
     }
   };
   paint(root, fb, fbW, fbH, pitchPx, root.x, root.y);
-  return { pixels, hits: collectHits(root) };
+  return { pixels, width: fbW, height: fbH };
+}
+
+/** Deterministic CPU implementation of the backend-neutral scene renderer. */
+export class SoftwareRenderer implements RendererBackend<SoftwareFrame> {
+  readonly id = "software";
+
+  render(root: SceneNode, viewport: RenderViewport): SoftwareFrame {
+    return renderSoftwareFrame(root, viewport.width, viewport.height);
+  }
+}
+
+const defaultSoftwareRenderer = new SoftwareRenderer();
+
+/**
+ * Backward-compatible convenience used by the compositor shell. Hit testing
+ * remains scene-owned and is deliberately not part of RendererBackend.
+ */
+export function rasterize(
+  root: SceneNode,
+  fbW: number,
+  fbH: number,
+): { pixels: Uint8Array; hits: HitRegion[] } {
+  const frame = defaultSoftwareRenderer.render(root, {
+    width: fbW,
+    height: fbH,
+  });
+  return { pixels: frame.pixels, hits: collectHits(root) };
 }
 
 function blitImage(
@@ -762,11 +979,122 @@ function fillRect(
   }
 }
 
-/** Host primitive components — used as reconciler element types. */
-export const Rect = "rect";
-export const Text = "text";
-export const Group = "group";
-export const Image = "image";
+function clampedRadius(w: number, h: number, radius: number): number {
+  return Math.max(0, Math.min(radius, Math.abs(w) / 2, Math.abs(h) / 2));
+}
+
+function insideRoundedRect(
+  px: number,
+  py: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+): boolean {
+  if (px < x || py < y || px >= x + w || py >= y + h) return false;
+  const r = clampedRadius(w, h, radius);
+  if (r <= 0) return true;
+  const cx = px < x + r ? x + r : px >= x + w - r ? x + w - r : px;
+  const cy = py < y + r ? y + r : py >= y + h - r ? y + h - r : py;
+  const dx = px - cx;
+  const dy = py - cy;
+  return dx * dx + dy * dy <= r * r;
+}
+
+function blendFillColor(fb: Uint32Array, index: number, color: number): void {
+  const a = (color >>> 24) & 0xff;
+  if (a === 0) return;
+  const c = color >>> 0;
+  if (a === 255) {
+    fb[index] = c;
+    return;
+  }
+  const inv = 255 - a;
+  const dst = fb[index]!;
+  const r = (((c >>> 16) & 0xff) + ((((dst >>> 16) & 0xff) * inv) / 255)) | 0;
+  const g = (((c >>> 8) & 0xff) + ((((dst >>> 8) & 0xff) * inv) / 255)) | 0;
+  const b = ((c & 0xff) + (((dst & 0xff) * inv) / 255)) | 0;
+  fb[index] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
+}
+
+function fillRoundedRect(
+  fb: Uint32Array,
+  pitchPx: number,
+  fbW: number,
+  fbH: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+  color: number,
+): void {
+  const x0 = Math.max(0, x | 0);
+  const y0 = Math.max(0, y | 0);
+  const x1 = Math.min(fbW, (x | 0) + (w | 0));
+  const y1 = Math.min(fbH, (y | 0) + (h | 0));
+  for (let py = y0; py < y1; py++) {
+    for (let px = x0; px < x1; px++) {
+      if (insideRoundedRect(px + 0.5, py + 0.5, x, y, w, h, radius)) {
+        blendFillColor(fb, py * pitchPx + px, color);
+      }
+    }
+  }
+}
+
+function fillRoundedStroke(
+  fb: Uint32Array,
+  pitchPx: number,
+  fbW: number,
+  fbH: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+  strokeWidth: number,
+  color: number,
+): void {
+  const x0 = Math.max(0, x | 0);
+  const y0 = Math.max(0, y | 0);
+  const x1 = Math.min(fbW, (x | 0) + (w | 0));
+  const y1 = Math.min(fbH, (y | 0) + (h | 0));
+  const innerX = x + strokeWidth;
+  const innerY = y + strokeWidth;
+  const innerW = w - strokeWidth * 2;
+  const innerH = h - strokeWidth * 2;
+  const innerRadius = Math.max(0, radius - strokeWidth);
+  for (let py = y0; py < y1; py++) {
+    for (let px = x0; px < x1; px++) {
+      const sx = px + 0.5;
+      const sy = py + 0.5;
+      const outer = insideRoundedRect(sx, sy, x, y, w, h, radius);
+      const inner =
+        innerW > 0 &&
+        innerH > 0 &&
+        insideRoundedRect(
+          sx,
+          sy,
+          innerX,
+          innerY,
+          innerW,
+          innerH,
+          innerRadius,
+        );
+      if (outer && !inner) blendFillColor(fb, py * pitchPx + px, color);
+    }
+  }
+}
+
+/**
+ * Typed JSX host primitives. The casts are type-only: at runtime these remain
+ * string host identities consumed directly by the custom reconciler.
+ */
+export const Rect = "rect" as unknown as FunctionComponent<RectProps>;
+export const Text = "text" as unknown as FunctionComponent<TextProps>;
+export const Group = "group" as unknown as FunctionComponent<GroupProps>;
+export const Image = "image" as unknown as FunctionComponent<ImageProps>;
 
 export function measureText(text: string, scale = 1): number {
   return measureNodeText(text, { scale }).width;

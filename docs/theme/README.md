@@ -19,6 +19,12 @@ ARGB fills. Representative keys:
 
 Exact values can change; always read via `themePalette()` rather than hardcoding.
 
+## Geometry
+
+`radiusSm`, `radiusMd`, `radiusLg`, and `radiusWindow` define control, overlay,
+dialog, and window geometry. They are scene-level values understood by any
+renderer backend; widgets must not implement renderer-specific corner masks.
+
 ## Type roles (`TYPE_ROLES`)
 
 | Role | Typical use |

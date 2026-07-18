@@ -2,10 +2,10 @@
  * Button — four variants with hover/press states via Pressable.
  * primary   → accent fill, white text, top-edge rimLight highlight
  * secondary → surface fill, text colour
- * ghost     → transparent, text colour, border on hover
+ * ghost     → transparent, text colour
  * danger    → danger fill, white text
  */
-import { createElement, type ReactNode } from "react";
+import React, { type ReactNode } from "react";
 import { Group, Rect, Text, measureText, FONT_H } from "@moire/react-host";
 import { themePalette } from "../theme.js";
 import { Pressable } from "./pressable.js";
@@ -34,7 +34,6 @@ export function Button(props: ButtonProps): ReactNode {
   const variant: ButtonVariant = props.variant ?? "secondary";
   const fontSize = props.fontSize ?? DEFAULT_FONT;
 
-  // Resolve fill and label color from variant (explicit fill overrides)
   let baseFill: number;
   let labelColor: number;
   const hasRim = !props.fill && (variant === "primary" || variant === "secondary");
@@ -68,39 +67,39 @@ export function Button(props: ButtonProps): ReactNode {
   const tx = Math.max(4, Math.floor((props.width - tw) / 2));
   const ty = Math.floor((props.height - th) / 2);
 
-  return createElement(
-    Group,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: props.height,
-    },
-    createElement(Pressable, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: props.height,
-      fill: baseFill,
-      disabled: props.disabled,
-      onPress: props.onPress,
-    }),
-    // 1-px top rim highlight for elevated variants
-    hasRim
-      ? createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: props.width,
-          height: 1,
-          fill: pal.rimLight,
-        })
-      : null,
-    createElement(Text, {
-      x: tx,
-      y: ty,
-      text: props.label,
-      color: props.disabled ? pal.muted : labelColor,
-      fontSize,
-    }),
+  return (
+    <Group
+      x={props.x ?? 0}
+      y={props.y ?? 0}
+      width={props.width}
+      height={props.height}
+    >
+      <Pressable
+        x={0}
+        y={0}
+        width={props.width}
+        height={props.height}
+        fill={baseFill}
+        radius={pal.radiusSm}
+        disabled={props.disabled}
+        onPress={props.onPress}
+      />
+      {hasRim ? (
+        <Rect
+          x={0}
+          y={0}
+          width={props.width}
+          height={1}
+          fill={pal.rimLight}
+        />
+      ) : null}
+      <Text
+        x={tx}
+        y={ty}
+        text={props.label}
+        color={props.disabled ? pal.muted : labelColor}
+        fontSize={fontSize}
+      />
+    </Group>
   );
 }

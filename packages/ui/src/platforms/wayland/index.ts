@@ -36,14 +36,16 @@ import {
   Text,
 } from "@moire/react-host";
 import { themePalette } from "../../theme.js";
-import type {
-  PlatformBackend,
-  PlatformWindow,
-  PlatformWindowOpts,
-  UiKeyEvent,
-  UiPointerEvent,
-  PointerButton,
-  DndCapable,
+import {
+  keyFromEvdev,
+  modifiersFromPressed,
+  type DndCapable,
+  type PlatformBackend,
+  type PlatformWindow,
+  type PlatformWindowOpts,
+  type UiKeyEvent,
+  type UiPointerEvent,
+  type PointerButton,
 } from "../../platform.js";
 import {
   setDndBridge,
@@ -222,6 +224,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private seatId = 0;
   private pointerId = 0;
   private keyboardId = 0;
+  private pressedKeys = new Set<number>();
   /** wl_data_device_manager object id. */
   private dataDeviceManagerId = 0;
   /** wl_data_device for the seat. */
@@ -1030,10 +1033,17 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       r.uint();
       const key = r.uint();
       const state = r.uint();
+      if (state === KEY_PRESSED) this.pressedKeys.add(key);
+      else this.pressedKeys.delete(key);
+      const modifiers = modifiersFromPressed(this.pressedKeys);
+      const logical = keyFromEvdev(key, modifiers);
       const win = this.pointerFocus ?? [...this.windows][0] ?? null;
       win?.emitKey({
         type: state === KEY_PRESSED ? "down" : "up",
         code: key,
+        key: logical.key,
+        text: logical.text,
+        modifiers,
         timeMs: Date.now(),
       });
     }

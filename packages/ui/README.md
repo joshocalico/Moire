@@ -13,17 +13,17 @@ Override with `MOIRE_UI_PLATFORM=wayland|headless`.
 
 ## Example
 
-```ts
+```tsx
+import React from "react";
 import { Application, Window, Column, Label, Button } from "@moire/ui";
-import { createElement } from "react";
 
 const app = new Application();
 const win = new Window({ title: "Settings", width: 480, height: 360 });
 win.setContent(
-  createElement(Column, { width: 480, padding: 16 },
-    createElement(Label, { text: "Hello", fontSize: 18, fontWeight: "bold" }),
-    createElement(Button, { width: 100, height: 32, label: "OK" }),
-  ),
+  <Column width={480} padding={16}>
+    <Label text="Hello" fontSize={18} fontWeight="bold" />
+    <Button width={100} height={32} label="OK" />
+  </Column>,
 );
 app.addWindow(win);
 await app.run();

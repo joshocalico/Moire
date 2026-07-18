@@ -20,7 +20,7 @@ This directory is meant to be browsed as a tree or fed to a Markdown site render
 | --- | --- |
 | [Overview](./architecture/overview.md) | Packages, data flow, responsibilities |
 | [Paint order & input](./architecture/paint-and-input.md) | Composite stack, pointer routing |
-| [react-host](./architecture/react-host.md) | CPU scene graph + raster |
+| [react-host](./architecture/react-host.md) | Retained scene graph, renderer contract, software backend |
 
 ## UI toolkit (`@moire/ui`)
 
@@ -81,7 +81,7 @@ packages/
   sys/            DRM/GBM/EGL/libinput FFI
   theme/          Tokens + wallpaper
   prefs/          User settings + apply
-  react-host/     React → CPU scene graph
+  react-host/     React → retained scene + renderer backends
   ui/             App SDK + widgets
   shell/          Panel, launcher, SSD, desktop
   app-discovery/  .desktop discovery, MIME associations, action registry

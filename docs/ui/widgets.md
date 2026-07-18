@@ -1,6 +1,12 @@
 # Widgets
 
-All widgets are React elements built with `createElement` (or JSX if configured). Coordinates are absolute within the parent; `Row` / `Column` position children via Yoga.
+All widgets are React elements and JSX is the presentation standard.
+Coordinates are absolute within the parent; `Row` / `Column` position children
+via Yoga.
+
+Moire currently uses the classic React JSX transform for compatibility with
+the custom reconciler, so `.tsx` presentation modules import `React` as a
+runtime value.
 
 Import from `@moire/ui`. Colors are ARGB numbers from `themePalette()` unless noted.
 
@@ -32,8 +38,10 @@ Flex containers (`ColumnProps` extends the same shape as `Row`).
 | `align` | `start` \| `center` \| `end` \| `stretch` | Row: `center`, Column: `stretch` |
 | `children` | `ReactNode` | |
 
-```ts
-createElement(Row, { width: 400, gap: 12, padding: 16, children: [...] });
+```tsx
+<Row width={400} gap={12} padding={16}>
+  {children}
+</Row>
 ```
 
 ### `Surface` / `Panel`
@@ -113,14 +121,21 @@ Same as `Button` but `icon: string` becomes the label (for emoji/short glyphs). 
 
 ### `TextField`
 
-Display field; **keyboard input is app-managed**.
+Controlled, focusable single-line editor. Pointer presses place the cursor;
+Tab and Shift+Tab participate in window focus traversal. It handles printable
+text, Left/Right, Home/End, Backspace/Delete, Enter, and Escape.
 
 | Prop | Type | Default |
 | --- | --- | --- |
 | `width` | `number` | required |
 | `value` | `string` | required |
 | `placeholder` | `string` | |
-| `focused` | `boolean` | underline accent |
+| `onChange` | `(value: string) => void` | |
+| `onSubmit` | `(value: string) => void` | |
+| `onCancel` | `() => void` | |
+| `onFocusChange` | `(focused: boolean) => void` | |
+| `focused` | `boolean` | optional visual focus override |
+| `disabled`, `readOnly` | `boolean` | |
 | `height` | `number` | `32` |
 
 ### `Tabs`

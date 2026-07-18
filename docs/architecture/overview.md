@@ -26,11 +26,11 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 │  Application / Window / widgets / fonts / motion / DnD API   │
 │  platforms: wayland | headless                               │
 └─────────────┬───────────────────────────────────────────────┘
-              │ rasterizes via
+              │ reconciles via
 ┌─────────────▼─────────────┐   ┌─────────────────────────────┐
 │  packages/react-host      │   │  packages/theme + prefs      │
-│  React reconciler → CPU   │   │  tokens, wallpaper, settings │
-│  scene + hits + TTF text  │   └─────────────────────────────┘
+│  React → retained scene   │   │  tokens, wallpaper, settings │
+│  + renderer contract      │   └─────────────────────────────┘
 └───────────────────────────┘
 ```
 
@@ -41,7 +41,7 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 | `core` | Compositor server, clients, DnD, Xwayland hooks |
 | `theme` | Design tokens, wallpaper raster |
 | `prefs` | User settings + applying theme/GTK/volume |
-| `react-host` | Scene graph, blit, hit regions |
+| `react-host` | Retained scene graph, renderer contract, software renderer, hit regions |
 | `ui` | Portable app SDK (no Wayland in widgets) |
 | `shell` | DE chrome attached to the compositor process |
 | `app-discovery` | Freedesktop `.desktop`, shared MIME, `mimeapps.list`, and context-action registry |

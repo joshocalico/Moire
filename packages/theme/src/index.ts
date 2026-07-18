@@ -26,6 +26,10 @@ export type MoireTokens = {
   overlay: string;
   rimLight: string;
   rimShade: string;
+  radiusSm: number;
+  radiusMd: number;
+  radiusLg: number;
+  radiusWindow: number;
   titlebarHeight: number;
   panelHeight: number;
 };
@@ -94,6 +98,10 @@ const DEFAULT_TOKENS: MoireTokens = {
   overlay: "#0a0c0ee6",
   rimLight: "#ffffff18",
   rimShade: "#00000040",
+  radiusSm: 4,
+  radiusMd: 8,
+  radiusLg: 12,
+  radiusWindow: 10,
   titlebarHeight: 34,
   panelHeight: 48,
 };
@@ -546,6 +554,10 @@ export type ThemePalette = {
   overlay: number;
   rimLight: number;
   rimShade: number;
+  radiusSm: number;
+  radiusMd: number;
+  radiusLg: number;
+  radiusWindow: number;
   titlebarHeight: number;
   panelHeight: number;
 };
@@ -572,6 +584,10 @@ export function themePalette(theme: MoireTheme = getTheme()): ThemePalette {
     overlay: hexToArgb(t.overlay),
     rimLight: hexToArgb(t.rimLight),
     rimShade: hexToArgb(t.rimShade),
+    radiusSm: t.radiusSm,
+    radiusMd: t.radiusMd,
+    radiusLg: t.radiusLg,
+    radiusWindow: t.radiusWindow,
     titlebarHeight: t.titlebarHeight,
     panelHeight: t.panelHeight,
   };

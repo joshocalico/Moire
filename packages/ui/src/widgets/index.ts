@@ -62,6 +62,9 @@ export type {
 export { Tabs } from "./tabs.js";
 export type { TabsProps } from "./tabs.js";
 
+export { TextField } from "./text-field.js";
+export type { TextFieldProps } from "./text-field.js";
+
 export { ContextMenu, OpenWithPicker } from "./context-menu.js";
 export type {
   ContextMenuAction,
@@ -269,6 +272,9 @@ export type SurfaceProps = {
   width: number;
   height: number;
   fill?: number;
+  radius?: number;
+  stroke?: number;
+  strokeWidth?: number;
   children?: ReactNode;
   onPress?: () => void;
   onContextMenu?: (event: HitPressEvent) => void;
@@ -290,6 +296,9 @@ export function Surface(props: SurfaceProps): ReactNode {
       width: props.width,
       height: props.height,
       fill: props.fill ?? pal.panel,
+      radius: props.radius,
+      stroke: props.stroke,
+      strokeWidth: props.strokeWidth,
       onPress: props.onPress,
       onContextMenu: props.onContextMenu,
     }),
@@ -508,46 +517,6 @@ export function Slider(props: SliderProps): ReactNode {
       height: h,
       fill: 0x00000000,
       onPress: (ev: HitPressEvent) => setFromLocalX(ev.localX),
-    }),
-  );
-}
-
-/* ---------- TextField ---------- */
-
-export type TextFieldProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  height?: number;
-  value: string;
-  placeholder?: string;
-  onChange?: (v: string) => void;
-  focused?: boolean;
-};
-
-export function TextField(props: TextFieldProps): ReactNode {
-  const pal = themePalette();
-  const h = props.height ?? 32;
-  const shown = props.value.length > 0 ? props.value : (props.placeholder ?? "");
-  const color = props.value.length > 0 ? pal.text : pal.muted;
-  return createElement(
-    Group,
-    { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h },
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: h,
-      fill: pal.surface,
-    }),
-    props.focused
-      ? createElement(Rect, { x: 0, y: h - 2, width: props.width, height: 2, fill: pal.accentLine })
-      : null,
-    createElement(Text, {
-      x: 10,
-      y: Math.floor((h - FONT_H) / 2),
-      text: shown,
-      color,
     }),
   );
 }

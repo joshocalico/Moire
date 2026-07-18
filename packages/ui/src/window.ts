@@ -2,9 +2,11 @@ import type { ReactNode } from "react";
 import {
   collectHits,
   createShellRoot,
-  rasterize,
+  hitRegionContains,
   renderShell,
+  SoftwareRenderer,
   type HitRegion,
+  type HitKeyEvent,
   type HitPointerEvent,
   type ShellRoot,
 } from "@moire/react-host";
@@ -87,6 +89,10 @@ export class Window {
   private dirty = true;
   private closed = false;
   private onCloseCb: (() => void) | null = null;
+  /** Current Wayland/headless presentation path consumes software frames. */
+  private readonly renderer = new SoftwareRenderer();
+  private focusedId: string | null = null;
+  private focusedHit: HitRegion | null = null;
 
   // Pointer state
   private hoverHit: HitRegion | null = null;
@@ -177,13 +183,7 @@ export class Window {
   private findDropRegion(x: number, y: number): HitRegion | null {
     for (let i = this.hits.length - 1; i >= 0; i--) {
       const h = this.hits[i]!;
-      if (
-        x >= h.x &&
-        x < h.x + h.width &&
-        y >= h.y &&
-        y < h.y + h.height &&
-        h.data !== undefined
-      ) {
+      if (hitRegionContains(h, x, y) && h.data !== undefined) {
         return h;
       }
     }
@@ -232,13 +232,12 @@ export class Window {
         ? this.content({ width: this.width, height: this.height })
         : this.content;
     renderShell(this.root, tree);
-    const { pixels, hits } = rasterize(
-      this.root.container,
-      this.width,
-      this.height,
-    );
-    this.hits = hits;
-    this.platformWin.present(pixels, this.width, this.height);
+    const frame = this.renderer.render(this.root.container, {
+      width: this.width,
+      height: this.height,
+    });
+    this.refreshHits();
+    this.platformWin.present(frame.pixels, frame.width, frame.height);
   }
 
   requestRedraw(): void {
@@ -247,6 +246,9 @@ export class Window {
 
   destroy(): void {
     this.closed = true;
+    this.focusedHit?.onFocusChange?.(false);
+    this.focusedHit = null;
+    this.focusedId = null;
     this.platformWin?.destroy();
     this.platformWin = null;
     if (activeWindowForHitTest === this) activeWindowForHitTest = null;
@@ -262,8 +264,54 @@ export class Window {
         ? this.content({ width: this.width, height: this.height })
         : this.content;
     renderShell(this.root, tree);
-    this.hits = collectHits(this.root.container);
+    this.refreshHits();
     this.dirty = true;
+  }
+
+  private refreshHits(): void {
+    this.hits = collectHits(this.root.container);
+    if (!this.focusedId) {
+      this.focusedHit = null;
+      return;
+    }
+    this.focusedHit =
+      this.hits.find(
+        (hit) => hit.focusable && hit.focusId === this.focusedId,
+      ) ?? null;
+    if (!this.focusedHit) this.focusedId = null;
+  }
+
+  private changeFocus(next: HitRegion | null): boolean {
+    const focusable = next?.focusable ? next : null;
+    const nextId = focusable?.focusId ?? null;
+    if (nextId === this.focusedId) {
+      this.focusedHit = focusable;
+      return false;
+    }
+    this.focusedHit?.onFocusChange?.(false);
+    this.focusedId = nextId;
+    this.focusedHit = focusable;
+    focusable?.onFocusChange?.(true);
+    return true;
+  }
+
+  private moveFocus(reverse: boolean): void {
+    const focusable = this.hits.filter((hit) => hit.focusable);
+    if (focusable.length === 0) {
+      if (this.changeFocus(null)) this.flushAndDirty();
+      return;
+    }
+    const current = focusable.findIndex(
+      (hit) => hit.focusId === this.focusedId,
+    );
+    const nextIndex = reverse
+      ? current <= 0
+        ? focusable.length - 1
+        : current - 1
+      : current < 0 || current === focusable.length - 1
+        ? 0
+        : current + 1;
+    if (this.changeFocus(focusable[nextIndex] ?? null)) this.flushAndDirty();
   }
 
   private findTopHit(
@@ -273,7 +321,7 @@ export class Window {
   ): HitRegion | null {
     for (let i = this.hits.length - 1; i >= 0; i--) {
       const h = this.hits[i]!;
-      if (x >= h.x && x < h.x + h.width && y >= h.y && y < h.y + h.height && pred(h)) {
+      if (hitRegionContains(h, x, y) && pred(h)) {
         return h;
       }
     }
@@ -341,6 +389,8 @@ export class Window {
         (h) => !!(h.onPointerDown || h.onPress),
       );
       this.downPos = { x: ev.x, y: ev.y };
+      const focusHit = this.findTopHit(ev.x, ev.y, (candidate) => !!candidate.focusable);
+      const focusChanged = this.changeFocus(focusHit);
       // Capture for the duration of this press so move/up keep reaching this
       // element regardless of where the cursor travels — required for drag
       // gestures. Reset stale hover so the first post-release move re-derives it.
@@ -348,6 +398,8 @@ export class Window {
       this.hoverHit = null;
       if (hit?.onPointerDown) {
         hit.onPointerDown(this.makeEvArgs(hit, ev));
+        this.flushAndDirty();
+      } else if (focusChanged) {
         this.flushAndDirty();
       } else {
         this.dirty = true;
@@ -405,7 +457,26 @@ export class Window {
     }
   }
 
-  private handleKey(_ev: UiKeyEvent): void {
-    // Apps can subscribe later; TextField input is app-managed for now.
+  private handleKey(ev: UiKeyEvent): void {
+    if (this.closed) return;
+    if ((ev.type === "down" || ev.type === "repeat") && ev.code === 15) {
+      this.moveFocus(ev.modifiers.shift);
+      return;
+    }
+    const focused = this.focusedHit;
+    if (!focused) return;
+    const event: HitKeyEvent = {
+      code: ev.code,
+      key: ev.key,
+      text: ev.text,
+      repeat: ev.type === "repeat",
+      shiftKey: ev.modifiers.shift,
+      ctrlKey: ev.modifiers.ctrl,
+      altKey: ev.modifiers.alt,
+      metaKey: ev.modifiers.meta,
+    };
+    if (ev.type === "up") focused.onKeyUp?.(event);
+    else focused.onKeyDown?.(event);
+    this.flushAndDirty();
   }
 }

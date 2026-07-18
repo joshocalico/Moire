@@ -29,13 +29,18 @@ export class HeadlessPlatform implements PlatformBackend {
     // Synthetic events are pushed by tests via HeadlessWindow.inject*.
   }
 
+  /** Exposes in-memory windows to headless interaction tests. */
+  getWindows(): readonly HeadlessWindow[] {
+    return this.windows;
+  }
+
   disconnect(): void {
     for (const w of this.windows) w.destroy();
     this.windows = [];
   }
 }
 
-class HeadlessWindow implements PlatformWindow {
+export class HeadlessWindow implements PlatformWindow {
   private title: string;
   private width: number;
   private height: number;

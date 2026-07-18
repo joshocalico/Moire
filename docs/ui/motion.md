@@ -5,18 +5,21 @@ Lightweight exponential easing for UI properties. Used by `Pressable` hover/pres
 ## API
 
 ```ts
-import { createMotionValue, easeTo, tickAllMotions } from "@moire/ui";
+import { createMotionValue, useMotionValue, easeTo, tickAllMotions } from "@moire/ui";
 
 const mv = createMotionValue(0);
 easeTo(mv, 1, 18);        // target 1, speed 18 (optional; default 14)
 const v = mv.get();       // current value
 mv.set(0);                // jump
 tickAllMotions(dt);       // seconds; returns true if still moving
+
+// Inside a component: registered once and removed automatically on unmount.
+const hover = useMotionValue(0);
 ```
 
 | Piece | Behavior |
 | --- | --- |
-| Registry | Every `createMotionValue` is ticked globally |
+| Registry | Motion values are ticked globally; `useMotionValue` cleans up on unmount |
 | Integration | `Window.tick` and shell `needsRepaint` call `tickAllMotions` |
 | Settle | Stops when \|target − value\| &lt; 0.5 |
 

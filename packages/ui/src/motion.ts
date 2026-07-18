@@ -2,6 +2,7 @@
  * Simple exponential-ease motion values for animated UI properties.
  * Widgets read .get() during render; window.ts calls tickAllMotions(dt) each tick.
  */
+import { useEffect, useRef } from "react";
 
 export type MotionValue = {
   get(): number;
@@ -60,6 +61,23 @@ export function createMotionValue(initial: number): MotionValue {
   const mv = new MotionValueImpl(initial);
   registry.add(mv);
   return mv;
+}
+
+/**
+ * React-owned motion value. Unlike createMotionValue(), this registers once
+ * for the component lifetime and leaves the global tick registry on unmount.
+ */
+export function useMotionValue(initial: number): MotionValue {
+  const ref = useRef<MotionValueImpl | null>(null);
+  if (!ref.current) {
+    ref.current = new MotionValueImpl(initial);
+    registry.add(ref.current);
+  }
+  const value = ref.current;
+  useEffect(() => () => {
+    registry.delete(value);
+  }, [value]);
+  return value;
 }
 
 /**

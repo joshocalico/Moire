@@ -25,6 +25,10 @@
     "overlay": "#1a1b1e88",
     "rimLight": "#ffffffaa",
     "rimShade": "#00000018",
+    "radiusSm": 4,
+    "radiusMd": 8,
+    "radiusLg": 12,
+    "radiusWindow": 10,
     "titlebarHeight": 34,
     "panelHeight": 48
   }

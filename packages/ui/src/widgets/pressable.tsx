@@ -1,10 +1,10 @@
 /**
  * Pressable — interactive container with eased hover/press fill motion.
  */
-import { createElement, useRef, type ReactNode } from "react";
+import React, { useRef, type ReactNode } from "react";
 import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
 import { themePalette } from "../theme.js";
-import { createMotionValue, easeTo } from "../motion.js";
+import { easeTo, useMotionValue } from "../motion.js";
 
 export type PressableProps = {
   x?: number;
@@ -12,6 +12,9 @@ export type PressableProps = {
   width: number;
   height: number;
   fill?: number;
+  radius?: number;
+  stroke?: number;
+  strokeWidth?: number;
   children?: ReactNode;
   onPress?: () => void;
   onDoublePress?: () => void;
@@ -45,8 +48,8 @@ function lerpArgb(from: number, to: number, t: number): number {
 
 export function Pressable(props: PressableProps): ReactNode {
   const pal = themePalette();
-  const hoverMv = useRef(createMotionValue(0)).current;
-  const pressMv = useRef(createMotionValue(0)).current;
+  const hoverMv = useMotionValue(0);
+  const pressMv = useMotionValue(0);
   const lastClick = useRef(0);
 
   const base = props.fill ?? 0x00000000;
@@ -72,44 +75,55 @@ export function Pressable(props: PressableProps): ReactNode {
     props.onPress?.();
   };
 
-  return createElement(
-    Group,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: props.height,
-    },
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: props.height,
-      fill,
-      onPointerEnter: props.disabled
-        ? undefined
-        : () => {
-            easeTo(hoverMv, 1, 18);
-          },
-      onPointerLeave: props.disabled
-        ? undefined
-        : () => {
-            easeTo(hoverMv, 0, 14);
-            easeTo(pressMv, 0, 20);
-          },
-      onPointerDown: props.disabled
-        ? undefined
-        : () => {
-            easeTo(pressMv, 1, 22);
-          },
-      onPointerUp: props.disabled
-        ? undefined
-        : () => {
-            easeTo(pressMv, 0, 18);
-          },
-      onPress: props.disabled ? undefined : handlePress,
-      onContextMenu: props.disabled ? undefined : props.onContextMenu,
-    }),
-    props.children,
+  return (
+    <Group
+      x={props.x ?? 0}
+      y={props.y ?? 0}
+      width={props.width}
+      height={props.height}
+    >
+      <Rect
+        x={0}
+        y={0}
+        width={props.width}
+        height={props.height}
+        fill={fill}
+        radius={props.radius}
+        stroke={props.stroke}
+        strokeWidth={props.strokeWidth}
+        onPointerEnter={
+          props.disabled
+            ? undefined
+            : () => {
+                easeTo(hoverMv, 1, 18);
+              }
+        }
+        onPointerLeave={
+          props.disabled
+            ? undefined
+            : () => {
+                easeTo(hoverMv, 0, 14);
+                easeTo(pressMv, 0, 20);
+              }
+        }
+        onPointerDown={
+          props.disabled
+            ? undefined
+            : () => {
+                easeTo(pressMv, 1, 22);
+              }
+        }
+        onPointerUp={
+          props.disabled
+            ? undefined
+            : () => {
+                easeTo(pressMv, 0, 18);
+              }
+        }
+        onPress={props.disabled ? undefined : handlePress}
+        onContextMenu={props.disabled ? undefined : props.onContextMenu}
+      />
+      {props.children}
+    </Group>
   );
 }

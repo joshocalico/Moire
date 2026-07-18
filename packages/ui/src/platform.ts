@@ -17,10 +17,109 @@ export type UiKeyEvent = {
   type: "down" | "up" | "repeat";
   /** Linux evdev-ish keycode when available; else 0. */
   code: number;
+  /** Logical key name (for example `Tab`, `ArrowLeft`, or `a`). */
+  key?: string;
   /** UTF-8 character if printable. */
   text?: string;
+  modifiers: UiKeyModifiers;
   timeMs: number;
 };
+
+export type UiKeyModifiers = {
+  shift: boolean;
+  ctrl: boolean;
+  alt: boolean;
+  meta: boolean;
+};
+
+const KEY_NAMES: Record<number, string> = {
+  1: "Escape",
+  14: "Backspace",
+  15: "Tab",
+  28: "Enter",
+  57: " ",
+  102: "Home",
+  103: "ArrowUp",
+  105: "ArrowLeft",
+  106: "ArrowRight",
+  107: "End",
+  108: "ArrowDown",
+  111: "Delete",
+};
+
+const US_PRINTABLE: Record<number, [string, string]> = {
+  2: ["1", "!"],
+  3: ["2", "@"],
+  4: ["3", "#"],
+  5: ["4", "$"],
+  6: ["5", "%"],
+  7: ["6", "^"],
+  8: ["7", "&"],
+  9: ["8", "*"],
+  10: ["9", "("],
+  11: ["0", ")"],
+  12: ["-", "_"],
+  13: ["=", "+"],
+  16: ["q", "Q"],
+  17: ["w", "W"],
+  18: ["e", "E"],
+  19: ["r", "R"],
+  20: ["t", "T"],
+  21: ["y", "Y"],
+  22: ["u", "U"],
+  23: ["i", "I"],
+  24: ["o", "O"],
+  25: ["p", "P"],
+  26: ["[", "{"],
+  27: ["]", "}"],
+  30: ["a", "A"],
+  31: ["s", "S"],
+  32: ["d", "D"],
+  33: ["f", "F"],
+  34: ["g", "G"],
+  35: ["h", "H"],
+  36: ["j", "J"],
+  37: ["k", "K"],
+  38: ["l", "L"],
+  39: [";", ":"],
+  40: ["'", "\""],
+  41: ["`", "~"],
+  43: ["\\", "|"],
+  44: ["z", "Z"],
+  45: ["x", "X"],
+  46: ["c", "C"],
+  47: ["v", "V"],
+  48: ["b", "B"],
+  49: ["n", "N"],
+  50: ["m", "M"],
+  51: [",", "<"],
+  52: [".", ">"],
+  53: ["/", "?"],
+  57: [" ", " "],
+};
+
+export function modifiersFromPressed(
+  pressed: ReadonlySet<number>,
+): UiKeyModifiers {
+  return {
+    shift: pressed.has(42) || pressed.has(54),
+    ctrl: pressed.has(29) || pressed.has(97),
+    alt: pressed.has(56) || pressed.has(100),
+    meta: pressed.has(125) || pressed.has(126),
+  };
+}
+
+export function keyFromEvdev(
+  code: number,
+  modifiers: UiKeyModifiers,
+): { key?: string; text?: string } {
+  const printable = US_PRINTABLE[code];
+  if (printable) {
+    const text = printable[modifiers.shift ? 1 : 0];
+    return { key: text, text };
+  }
+  return { key: KEY_NAMES[code] };
+}
 
 export type PlatformWindowOpts = {
   title: string;

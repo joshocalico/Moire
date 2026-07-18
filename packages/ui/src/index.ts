@@ -15,10 +15,13 @@ export {
   type PlatformKind,
   type UiPointerEvent,
   type UiKeyEvent,
+  type UiKeyModifiers,
   type PointerButton,
   type UiDataTransferItem,
   type UiDataTransfer,
   type DndCapable,
+  keyFromEvdev,
+  modifiersFromPressed,
 } from "./platform.js";
 export {
   installUiFonts,
@@ -36,7 +39,13 @@ export { themePalette, getTheme, loadTheme, hexToArgb } from "./theme.js";
 export type { MoireTheme, ThemePalette, MoireTokens } from "./theme.js";
 
 // Motion system
-export { createMotionValue, easeTo, tickAllMotions, type MotionValue } from "./motion.js";
+export {
+  createMotionValue,
+  useMotionValue,
+  easeTo,
+  tickAllMotions,
+  type MotionValue,
+} from "./motion.js";
 
 // Image loading
 export { loadImage, getCachedImage, clearImageCache, type ImageData } from "./image/load.js";
