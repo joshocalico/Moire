@@ -24,7 +24,7 @@ case "$ACTION" in
       --object-path /org/moire/Display1 \
       --method org.moire.Display1.GetModes
     ;;
-  set)
+  set|try)
     if [[ -z "$MODE" ]]; then
       echo "usage: $0 set WIDTHxHEIGHT@MILLIHZ" >&2
       exit 2
@@ -34,9 +34,18 @@ case "$ACTION" in
       --dest org.moire.Display1 \
       --object-path /org/moire/Display1 \
       --method org.moire.Display1.SetMode "$MODE"
+    if [[ "$ACTION" == "set" ]]; then
+      runuser -u moire -- env DBUS_SESSION_BUS_ADDRESS="$BUS" \
+        gdbus call --session \
+        --dest org.moire.Display1 \
+        --object-path /org/moire/Display1 \
+        --method org.moire.Display1.ConfirmMode
+    else
+      echo "Mode will revert automatically after 15 seconds unless confirmed"
+    fi
     ;;
   *)
-    echo "usage: $0 [list | set WIDTHxHEIGHT@MILLIHZ]" >&2
+    echo "usage: $0 [list | set WIDTHxHEIGHT@MILLIHZ | try WIDTHxHEIGHT@MILLIHZ]" >&2
     exit 2
     ;;
 esac

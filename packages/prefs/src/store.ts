@@ -20,6 +20,8 @@ export type MoireSettings = {
   notifications: boolean;
   /** UI scale factor (1.0 = 100%). Shell/compositor may honor later. */
   uiScale: number;
+  /** Confirmed DRM mode id (`WIDTHxHEIGHT@MILLIHZ`); null uses preferred. */
+  displayMode: string | null;
   /** Last requested sink volume 0..1 (also applied via wpctl/pactl when available). */
   volume: number;
   /** Show file icons on the desktop background. */
@@ -32,6 +34,7 @@ export const DEFAULT_SETTINGS: MoireSettings = {
   dark: true,
   notifications: true,
   uiScale: 1,
+  displayMode: null,
   volume: 0.7,
   showDesktopIcons: true,
   wallpaper: null,
@@ -75,6 +78,11 @@ export function normalizeSettings(s: MoireSettings): MoireSettings {
     dark: !!s.dark,
     notifications: !!s.notifications,
     uiScale: clamp(Number(s.uiScale) || 1, 0.75, 2),
+    displayMode:
+      typeof s.displayMode === "string" &&
+      /^\d+x\d+@\d+$/.test(s.displayMode)
+        ? s.displayMode
+        : null,
     volume: clamp(Number(s.volume) || 0, 0, 1),
     showDesktopIcons: s.showDesktopIcons !== false,
     wallpaper,

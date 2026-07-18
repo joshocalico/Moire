@@ -8,6 +8,7 @@ import {
 } from "@moire/core";
 import { createShell } from "@moire/shell";
 import { SessionBus } from "@moire/dbus";
+import { loadSettings, saveSettings } from "@moire/prefs";
 import { isLinux, listDrmConnectors } from "@moire/sys";
 import path from "node:path";
 import os from "node:os";
@@ -76,20 +77,44 @@ async function main() {
       methods: {
         GetModes: {
           inSignature: "",
-          outSignature: "ass",
+          outSignature: "asss",
           handler: () => ({
             body: [
               server.listDisplayModes().map((mode) => mode.id),
               server.currentDisplayMode(),
+              server.listDisplayModes().find((mode) => mode.preferred)?.id ??
+                "",
             ],
           }),
         },
         SetMode: {
           inSignature: "s",
           outSignature: "b",
-          handler: ({ body }) => ({
-            body: [server.setDisplayMode(String(body[0] ?? ""))],
-          }),
+          handler: ({ body }) => {
+            const result = server.beginDisplayModeChange(
+              String(body[0] ?? ""),
+            );
+            return { body: [result.changed] };
+          },
+        },
+        ConfirmMode: {
+          inSignature: "",
+          outSignature: "b",
+          handler: () => {
+            const confirmedMode = server.confirmDisplayMode();
+            if (confirmedMode) {
+              saveSettings({
+                ...loadSettings(),
+                displayMode: confirmedMode,
+              });
+            }
+            return { body: [confirmedMode != null] };
+          },
+        },
+        RevertMode: {
+          inSignature: "",
+          outSignature: "b",
+          handler: () => ({ body: [server.revertDisplayMode()] }),
         },
       },
     });

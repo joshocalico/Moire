@@ -32,6 +32,9 @@ importers:
       '@moire/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../packages/prefs
       '@moire/shell':
         specifier: workspace:*
         version: link:../../packages/shell

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+TAB="${1:-0}"
+
 FILES_PID="$(pgrep -u moire -f 'apps/files.*tsx src/main.tsx|@moire/files start' | head -n 1)"
 if [[ -z "$FILES_PID" ]]; then
   echo "Files session process not found" >&2
@@ -24,6 +26,7 @@ runuser -u moire -- env \
   XDG_RUNTIME_DIR="$RUNTIME" \
   WAYLAND_DISPLAY="$WAYLAND" \
   MOIRE_UI_PLATFORM=wayland \
+  MOIRE_SETTINGS_TAB="$TAB" \
   bash -lc 'cd /home/moire/moire && exec pnpm --filter @moire/settings start' \
   >/tmp/moire-settings.log 2>&1 &
 

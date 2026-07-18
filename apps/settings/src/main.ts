@@ -35,7 +35,24 @@ import { SessionBus } from "@moire/dbus";
 type DisplayController = {
   modes: string[];
   current: string;
-  setMode: (modeId: string) => Promise<void>;
+  preferred: string;
+  setMode: (modeId: string) => Promise<boolean>;
+  confirmMode: () => Promise<boolean>;
+  revertMode: () => Promise<boolean>;
+};
+
+type ParsedDisplayMode = {
+  id: string;
+  width: number;
+  height: number;
+  refreshMilliHz: number;
+  resolution: string;
+};
+
+type PendingDisplayMode = {
+  previous: string;
+  target: string;
+  deadlineMs: number;
 };
 
 /** Appearance / Sound body height so parent Yoga gets a real flex slot (nested
@@ -50,7 +67,9 @@ function SettingsApp(
   },
 ): ReactNode {
   const pal = themePalette();
-  const [tab, setTab] = useState(0);
+  const [tab, setTab] = useState(
+    Math.max(0, Math.min(3, Number(process.env.MOIRE_SETTINGS_TAB ?? 0))),
+  );
   const [dark, setDark] = useState(props.initial.dark);
   const [notifs, setNotifs] = useState(props.initial.notifications);
   const [volume, setVolume] = useState(props.initial.volume);
@@ -59,6 +78,12 @@ function SettingsApp(
   const [wallpaper, setWallpaper] = useState<WallpaperSettings | null>(props.initial.wallpaper);
   const [status, setStatus] = useState("");
   const [displayMode, setDisplayMode] = useState(props.display?.current ?? "");
+  const [selectedResolution, setSelectedResolution] = useState(
+    resolutionForMode(props.display?.current ?? ""),
+  );
+  const [pendingDisplayMode, setPendingDisplayMode] =
+    useState<PendingDisplayMode | null>(null);
+  const [displayCountdown, setDisplayCountdown] = useState(0);
   const volumeReady = useRef(false);
   const ui = getUiScaleFactor();
   const pad = Math.round(16 * ui);
@@ -79,6 +104,7 @@ function SettingsApp(
       notifications: notifs,
       volume,
       uiScale: uiScaleFromSlider(scale),
+      displayMode: displayMode || props.initial.displayMode,
       showDesktopIcons,
       wallpaper,
       ...patch,
@@ -128,6 +154,89 @@ function SettingsApp(
     }, 80);
     return () => clearTimeout(t);
   }, [volume]);
+
+  useEffect(() => {
+    if (!pendingDisplayMode) return;
+    const update = () => {
+      const remaining = Math.max(
+        0,
+        Math.ceil((pendingDisplayMode.deadlineMs - Date.now()) / 1000),
+      );
+      setDisplayCountdown(remaining);
+      if (remaining === 0) {
+        setDisplayMode(pendingDisplayMode.previous);
+        setSelectedResolution(resolutionForMode(pendingDisplayMode.previous));
+        setPendingDisplayMode(null);
+        setStatus("Display mode reverted automatically");
+      }
+    };
+    update();
+    const timer = setInterval(update, 250);
+    return () => clearInterval(timer);
+  }, [pendingDisplayMode]);
+
+  const parsedModes = (props.display?.modes ?? [])
+    .map(parseDisplayMode)
+    .filter((mode): mode is ParsedDisplayMode => mode != null);
+  const resolutions = [...new Set(parsedModes.map((mode) => mode.resolution))]
+    .sort((a, b) => {
+      if (a === resolutionForMode(displayMode)) return -1;
+      if (b === resolutionForMode(displayMode)) return 1;
+      const am = parsedModes.find((mode) => mode.resolution === a)!;
+      const bm = parsedModes.find((mode) => mode.resolution === b)!;
+      return bm.width * bm.height - am.width * am.height;
+    });
+  const refreshModes = parsedModes.filter(
+    (mode) => mode.resolution === selectedResolution,
+  );
+  const resolutionRows: string[][] = [];
+  for (let index = 0; index < resolutions.length; index += 2) {
+    resolutionRows.push(resolutions.slice(index, index + 2));
+  }
+
+  const requestDisplayMode = (modeId: string) => {
+    if (!props.display || modeId === displayMode) return;
+    const previous = displayMode;
+    setStatus(`Switching to ${displayModeLabel(modeId)}…`);
+    void props.display
+      .setMode(modeId)
+      .then((changed) => {
+        if (!changed) return;
+        setDisplayMode(modeId);
+        setSelectedResolution(resolutionForMode(modeId));
+        setPendingDisplayMode({
+          previous,
+          target: modeId,
+          deadlineMs: Date.now() + 15_000,
+        });
+        setStatus("");
+      })
+      .catch((error: unknown) => {
+        setStatus(
+          `Display change failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+  };
+
+  const confirmDisplayMode = () => {
+    if (!props.display || !pendingDisplayMode) return;
+    void props.display.confirmMode().then((confirmed) => {
+      if (!confirmed) return;
+      setPendingDisplayMode(null);
+      setStatus(`Kept ${displayModeLabel(displayMode)}`);
+    });
+  };
+
+  const revertDisplayMode = () => {
+    if (!props.display || !pendingDisplayMode) return;
+    const previous = pendingDisplayMode.previous;
+    void props.display.revertMode().then(() => {
+      setDisplayMode(previous);
+      setSelectedResolution(resolutionForMode(previous));
+      setPendingDisplayMode(null);
+      setStatus(`Reverted to ${displayModeLabel(previous)}`);
+    });
+  };
 
   return createElement(
     Surface,
@@ -265,7 +374,7 @@ function SettingsApp(
               gap: Math.round(10 * ui),
             },
             createElement(Label, {
-              text: "Display resolution",
+              text: "Resolution",
               fontWeight: "medium",
               width: innerW,
               height: labelH,
@@ -275,51 +384,52 @@ function SettingsApp(
                   ScrollArea,
                   {
                     width: Math.min(Math.round(380 * ui), innerW),
-                    height: Math.max(Math.round(160 * ui), bodyMin - Math.round(72 * ui)),
+                    height: Math.round(112 * ui),
                     contentHeight: Math.max(
                       1,
-                      props.display.modes.length *
-                        (btnH + Math.round(8 * ui)),
+                      resolutionRows.length *
+                        (btnH + Math.round(6 * ui)),
                     ),
                   },
                   createElement(
                     Column,
                     {
-                      width: Math.min(Math.round(360 * ui), innerW),
+                      width: Math.min(Math.round(368 * ui), innerW),
                       height: Math.max(
                         1,
-                        props.display.modes.length *
-                          (btnH + Math.round(8 * ui)),
+                        resolutionRows.length *
+                          (btnH + Math.round(6 * ui)),
                       ),
-                      gap: Math.round(8 * ui),
+                      gap: Math.round(6 * ui),
                     },
-                    ...props.display.modes.map((modeId) =>
-                      createElement(Button, {
-                        key: modeId,
-                        width: Math.min(Math.round(360 * ui), innerW),
-                        height: btnH,
-                        label: displayModeLabel(modeId),
-                        variant:
-                          displayMode === modeId ? "primary" : "secondary",
-                        onPress: () => {
-                          setStatus(
-                            `Switching to ${displayModeLabel(modeId)}…`,
-                          );
-                          void props.display
-                            ?.setMode(modeId)
-                            .then(() => {
-                              setDisplayMode(modeId);
-                              setStatus(
-                                `Display ${displayModeLabel(modeId)}`,
-                              );
-                            })
-                            .catch((error: unknown) => {
-                              setStatus(
-                                `Display change failed: ${error instanceof Error ? error.message : String(error)}`,
-                              );
-                            });
+                    ...resolutionRows.map((row, rowIndex) =>
+                      createElement(
+                        Row,
+                        {
+                          key: `resolution-${rowIndex}`,
+                          width: Math.min(Math.round(368 * ui), innerW),
+                          height: btnH,
+                          gap: Math.round(6 * ui),
                         },
-                      }),
+                        ...row.map((resolution) => {
+                          const isCurrent =
+                            resolution === resolutionForMode(displayMode);
+                          const isPreferred =
+                            resolution ===
+                            resolutionForMode(props.display?.preferred ?? "");
+                          return createElement(Button, {
+                            key: resolution,
+                            width: Math.round(178 * ui),
+                            height: btnH,
+                            label: `${resolution.replace("x", " × ")}${isCurrent ? " · Current" : isPreferred ? " · Preferred" : ""}`,
+                            variant:
+                              selectedResolution === resolution
+                                ? "primary"
+                                : "secondary",
+                            onPress: () => setSelectedResolution(resolution),
+                          });
+                        }),
+                      ),
                     ),
                   ),
                 )
@@ -329,13 +439,80 @@ function SettingsApp(
                   width: innerW,
                   height: labelH,
                 }),
-            createElement(Label, {
-              text: "Changes are applied live and published to Wayland clients.",
-              color: pal.muted,
-              width: innerW,
-              height: Math.round(18 * ui),
-              fontSize: 12,
-            }),
+            props.display
+              ? createElement(Label, {
+                  text: "Refresh rate",
+                  fontWeight: "medium",
+                  width: innerW,
+                  height: Math.round(18 * ui),
+                })
+              : null,
+            props.display
+              ? createElement(
+                  Row,
+                  {
+                    width: Math.min(Math.round(380 * ui), innerW),
+                    height: Math.round(32 * ui),
+                    gap: Math.round(6 * ui),
+                  },
+                  ...refreshModes.map((mode) =>
+                    createElement(Button, {
+                      key: mode.id,
+                      width: Math.round(86 * ui),
+                      height: Math.round(32 * ui),
+                      label: refreshLabel(mode.refreshMilliHz),
+                      variant:
+                        displayMode === mode.id ? "primary" : "secondary",
+                      onPress: () => requestDisplayMode(mode.id),
+                    }),
+                  ),
+                )
+              : null,
+            pendingDisplayMode
+              ? createElement(
+                  Column,
+                  {
+                    width: Math.min(Math.round(380 * ui), innerW),
+                    height: Math.round(62 * ui),
+                    gap: Math.round(6 * ui),
+                  },
+                  createElement(Label, {
+                    text: `Keep this display mode? Reverting in ${displayCountdown}s`,
+                    color: pal.accent,
+                    width: innerW,
+                    height: Math.round(18 * ui),
+                    fontWeight: "medium",
+                  }),
+                  createElement(
+                    Row,
+                    {
+                      width: Math.min(Math.round(380 * ui), innerW),
+                      height: Math.round(32 * ui),
+                      gap: Math.round(8 * ui),
+                    },
+                    createElement(Button, {
+                      width: Math.round(112 * ui),
+                      height: Math.round(32 * ui),
+                      label: "Keep",
+                      variant: "primary",
+                      onPress: confirmDisplayMode,
+                    }),
+                    createElement(Button, {
+                      width: Math.round(112 * ui),
+                      height: Math.round(32 * ui),
+                      label: "Revert",
+                      variant: "secondary",
+                      onPress: revertDisplayMode,
+                    }),
+                  ),
+                )
+              : createElement(Label, {
+                  text: "A new mode reverts automatically unless you keep it.",
+                  color: pal.muted,
+                  width: innerW,
+                  height: Math.round(18 * ui),
+                  fontSize: 12,
+                }),
           )
         : null,
       tab === 2
@@ -445,10 +622,33 @@ function sliderFromUiScale(scale: number): number {
 }
 
 function displayModeLabel(modeId: string): string {
+  const mode = parseDisplayMode(modeId);
+  if (!mode) return modeId;
+  return `${mode.width} × ${mode.height}  ·  ${refreshLabel(mode.refreshMilliHz)}`;
+}
+
+function parseDisplayMode(modeId: string): ParsedDisplayMode | null {
   const match = /^(\d+)x(\d+)@(\d+)$/.exec(modeId);
-  if (!match) return modeId;
-  const hz = Number(match[3]) / 1000;
-  return `${match[1]} × ${match[2]}  ·  ${Number.isInteger(hz) ? hz : hz.toFixed(2)} Hz`;
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const refreshMilliHz = Number(match[3]);
+  return {
+    id: modeId,
+    width,
+    height,
+    refreshMilliHz,
+    resolution: `${width}x${height}`,
+  };
+}
+
+function resolutionForMode(modeId: string): string {
+  return parseDisplayMode(modeId)?.resolution ?? "";
+}
+
+function refreshLabel(refreshMilliHz: number): string {
+  const hz = refreshMilliHz / 1000;
+  return `${Number.isInteger(hz) ? hz : hz.toFixed(2)} Hz`;
 }
 
 async function connectDisplayController(): Promise<{
@@ -467,21 +667,26 @@ async function connectDisplayController(): Promise<{
       ? reply.body[0].map(String)
       : [];
     const current = String(reply.body?.[1] ?? "");
+    const preferred = String(reply.body?.[2] ?? "");
+    const callBoolean = async (member: string, body?: unknown[]) => {
+      const result = await bus.call({
+        destination: "org.moire.Display1",
+        path: "/org/moire/Display1",
+        interface: "org.moire.Display1",
+        member,
+        ...(body ? { signature: "s", body } : {}),
+      });
+      return result.body?.[0] === true;
+    };
     return {
       bus,
       controller: {
         modes,
         current,
-        setMode: async (modeId) => {
-          await bus.call({
-            destination: "org.moire.Display1",
-            path: "/org/moire/Display1",
-            interface: "org.moire.Display1",
-            member: "SetMode",
-            signature: "s",
-            body: [modeId],
-          });
-        },
+        preferred,
+        setMode: (modeId) => callBoolean("SetMode", [modeId]),
+        confirmMode: () => callBoolean("ConfirmMode"),
+        revertMode: () => callBoolean("RevertMode"),
       },
     };
   } catch (error) {

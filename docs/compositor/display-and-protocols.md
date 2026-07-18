@@ -20,7 +20,11 @@ and windows, reconfigures maximized/fullscreen/oversized toplevels, invalidates
 shell chrome, and sends every bound `wl_output` the complete mode list with new
 current/preferred flags.
 
-The initial mode can be selected with `MOIRE_MODE=WIDTHxHEIGHT@MILLIHZ`.
+Settings applies a mode as a 15-second trial. Core owns the timer and restores
+the previous mode automatically unless `ConfirmMode` arrives, so rollback does
+not depend on Settings remaining visible or alive. Confirmed modes are saved as
+`displayMode` and restored at boot. `MOIRE_MODE=WIDTHxHEIGHT@MILLIHZ` overrides
+the saved value for recovery and development.
 
 ## D-Bus display service
 
@@ -28,12 +32,14 @@ The compositor owns `org.moire.Display1` at `/org/moire/Display1`:
 
 | Method | Signature | Role |
 | --- | --- | --- |
-| `GetModes` | `→ (as modes, s current)` | Enumerate stable mode IDs |
-| `SetMode` | `(s mode) → b changed` | Apply a live KMS mode |
+| `GetModes` | `→ (as modes, s current, s preferred)` | Enumerate stable mode IDs |
+| `SetMode` | `(s mode) → b changed` | Begin a 15-second live mode trial |
+| `ConfirmMode` | `→ b confirmed` | Keep and persist the pending mode |
+| `RevertMode` | `→ b reverted` | Immediately restore the previous mode |
 
 Settings consumes this service. It does not link Koffi or import `@moire/sys`.
-For guest diagnostics, use `guest-display-mode.sh list` or
-`guest-display-mode.sh set 1280x720@60000`.
+For guest diagnostics, use `guest-display-mode.sh list`, `set` for a confirmed
+change, or `try` to exercise automatic rollback.
 
 ## Wayland protocol tranche
 

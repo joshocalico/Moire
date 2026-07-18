@@ -16,6 +16,7 @@
     "@moire/core": "workspace:*",
     "@moire/dbus": "workspace:*",
     "@moire/protocol": "workspace:*",
+    "@moire/prefs": "workspace:*",
     "@moire/shell": "workspace:*",
     "@moire/sys": "workspace:*"
   },

@@ -10,6 +10,7 @@ Do **not** use a separate `prefs.json` for Moire UI settings — Settings, shell
 | --- | --- | --- | --- |
 | `dark` | `boolean` | | Dark preference (GTK + theme pick) |
 | `uiScale` | `number` | `1` | Clamped 0.75–2; fonts and Moire UI |
+| `displayMode` | mode id \| `null` | `null` | Last confirmed `WIDTHxHEIGHT@MILLIHZ`; null uses DRM preferred mode |
 | `volume` | `number` | `0.7` | Sink volume 0..1 (`wpctl` / `pactl` when available) |
 | `notifications` | `boolean` | | Prefs field; toast daemon not shipped |
 | `showDesktopIcons` | `boolean` | `true` | When false, `paintDesktop` no-ops |

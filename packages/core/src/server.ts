@@ -54,7 +54,12 @@ import {
   setWallpaperImagePixels,
   type MoireTheme,
 } from "@moire/theme";
-import { createPrefsWatcher, loadRuntimeTheme, type PrefsWatcher } from "@moire/prefs";
+import {
+  createPrefsWatcher,
+  loadRuntimeTheme,
+  loadSettings,
+  type PrefsWatcher,
+} from "@moire/prefs";
 
 const WL_DISPLAY_ID = 1;
 
@@ -982,6 +987,13 @@ export class CompositorServer {
   /** Desktop theme (tokens + wallpaper). */
   private theme: MoireTheme = loadRuntimeTheme();
   private prefsWatcher: PrefsWatcher | null = null;
+  /** Pending user-visible mode trial; compositor owns rollback independently of Settings. */
+  private pendingDisplayMode: {
+    previousModeId: string;
+    targetModeId: string;
+    deadlineMs: number;
+    timer: NodeJS.Timeout;
+  } | null = null;
 
   constructor(
     private readonly runtimeDir: string,
@@ -1002,7 +1014,9 @@ export class CompositorServer {
 
   async start(cardPath?: string): Promise<void> {
     fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
-    this.kms = openKmsOutput(cardPath);
+    const requestedMode =
+      process.env.MOIRE_MODE ?? loadSettings().displayMode ?? undefined;
+    this.kms = openKmsOutput(cardPath, requestedMode);
     const bootBg = hexToArgb(this.theme.tokens.bg);
     fillKmsColor(this.kms, {
       r: (bootBg >>> 16) & 0xff,
@@ -1146,6 +1160,10 @@ export class CompositorServer {
 
   stop(): void {
     this.running = false;
+    if (this.pendingDisplayMode) {
+      clearTimeout(this.pendingDisplayMode.timer);
+      this.pendingDisplayMode = null;
+    }
     if (this.dragWatchdog) {
       clearInterval(this.dragWatchdog);
       this.dragWatchdog = null;
@@ -1521,6 +1539,68 @@ export class CompositorServer {
     console.log(`[output] mode ${modeId} → ${kms.width}x${kms.height}`);
     this.markDirty();
     return true;
+  }
+
+  beginDisplayModeChange(
+    modeId: string,
+    timeoutMs = 15_000,
+  ): { changed: boolean; deadlineMs: number } {
+    if (this.pendingDisplayMode) this.revertDisplayMode();
+    const previousModeId = this.currentDisplayMode();
+    const changed = this.setDisplayMode(modeId);
+    if (!changed) return { changed: false, deadlineMs: 0 };
+    const deadlineMs = Date.now() + timeoutMs;
+    const timer = setTimeout(() => {
+      console.warn(
+        `[output] mode ${modeId} was not confirmed; reverting to ${previousModeId}`,
+      );
+      try {
+        this.revertDisplayMode();
+      } catch (error) {
+        console.error("[output] automatic mode rollback failed:", error);
+      }
+    }, timeoutMs);
+    timer.unref?.();
+    this.pendingDisplayMode = {
+      previousModeId,
+      targetModeId: modeId,
+      deadlineMs,
+      timer,
+    };
+    return { changed: true, deadlineMs };
+  }
+
+  confirmDisplayMode(): string | null {
+    const pending = this.pendingDisplayMode;
+    if (!pending) return null;
+    clearTimeout(pending.timer);
+    this.pendingDisplayMode = null;
+    console.log(`[output] confirmed mode ${pending.targetModeId}`);
+    return pending.targetModeId;
+  }
+
+  revertDisplayMode(): boolean {
+    const pending = this.pendingDisplayMode;
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    this.pendingDisplayMode = null;
+    const changed = this.setDisplayMode(pending.previousModeId);
+    console.log(`[output] reverted mode to ${pending.previousModeId}`);
+    return changed;
+  }
+
+  pendingDisplayModeChange(): {
+    previousModeId: string;
+    targetModeId: string;
+    deadlineMs: number;
+  } | null {
+    const pending = this.pendingDisplayMode;
+    if (!pending) return null;
+    return {
+      previousModeId: pending.previousModeId,
+      targetModeId: pending.targetModeId,
+      deadlineMs: pending.deadlineMs,
+    };
   }
 
   setFocusedSession(session: ClientSession): void {
