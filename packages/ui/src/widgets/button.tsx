@@ -6,7 +6,13 @@
  * danger    → danger fill, white text
  */
 import React, { type ReactNode } from "react";
-import { Group, Rect, Text, measureText, FONT_H } from "@moire/react-host";
+import {
+  Group,
+  Rect,
+  Text,
+  measureText,
+  measureTextBounds,
+} from "@moire/react-host";
 import { themePalette } from "../theme.js";
 import { Pressable } from "./pressable.js";
 
@@ -63,7 +69,7 @@ export function Button(props: ButtonProps): ReactNode {
   }
 
   const tw = measureText(props.label, fontSize / 14);
-  const th = FONT_H;
+  const th = measureTextBounds("Mg", { fontSize }).height;
   const tx = Math.max(4, Math.floor((props.width - tw) / 2));
   const ty = Math.floor((props.height - th) / 2);
 

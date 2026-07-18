@@ -2,7 +2,7 @@
  * Tabs — underline indicator on the active tab (replaces full-slab style).
  */
 import { createElement, type ReactNode } from "react";
-import { Group, Rect, Text, FONT_H } from "@moire/react-host";
+import { Group, Rect, Text, measureTextBounds } from "@moire/react-host";
 import { themePalette } from "../theme.js";
 import { Pressable } from "./pressable.js";
 
@@ -23,6 +23,7 @@ export function Tabs(props: TabsProps): ReactNode {
   const h = props.height ?? 32;
   const n = Math.max(1, props.tabs.length);
   const tw = Math.floor(props.width / n);
+  const lineH = measureTextBounds("Mg", { fontSize: 14 }).height;
 
   return createElement(
     Group,
@@ -37,7 +38,7 @@ export function Tabs(props: TabsProps): ReactNode {
     }),
     ...props.tabs.map((tab, i) => {
       const isActive = i === props.active;
-      const ty = Math.floor((h - FONT_H - UNDERLINE_H) / 2);
+      const ty = Math.floor((h - lineH - UNDERLINE_H) / 2);
 
       return createElement(
         Group,

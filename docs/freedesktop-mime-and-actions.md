@@ -53,3 +53,6 @@ changing `ContextMenu` or either surface's pointer handling.
 - The compositor shell mirrors that dispatch for desktop items and an explicit
   empty-space background trigger, even when desktop icons are hidden.
 - `ContextMenu` and `OpenWithPicker` are shared `@moire/ui` viewport overlays.
+- Open With combines MIME-compatible recommendations with the remaining
+  discovered applications, supports search and keyboard selection, and uses
+  freedesktop PNG icons from hicolor/pixmap data roots when available.

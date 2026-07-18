@@ -53,6 +53,7 @@ import {
   buildDesktopExec,
   discoverApplications,
   loadMimeAssociationDatabase,
+  resolveApplicationIcon,
   type DesktopEntry,
   type FileActionContext,
 } from "@moire/app-discovery";
@@ -539,14 +540,28 @@ function FilesApp(
   const pickerMime = pickerEntry
     ? mimeDb.mimeTypeForPath(pickerEntry.path)
     : "application/octet-stream";
-  const pickerApps = pickerEntry
+  const recommendedPickerApps = pickerEntry
     ? mimeDb.applicationsForMime(pickerMime)
     : [];
-  const pickerChoices = pickerApps.map((app, index) => ({
+  const recommendedPickerIds = new Set(
+    recommendedPickerApps.map((app) => app.id),
+  );
+  const pickerApps = pickerEntry
+    ? [
+        ...recommendedPickerApps,
+        ...applications.filter((app) => !recommendedPickerIds.has(app.id)),
+      ]
+    : [];
+  const defaultPickerApp = pickerEntry
+    ? mimeDb.defaultApplicationForMime(pickerMime)
+    : null;
+  const pickerChoices = pickerApps.map((app) => ({
     id: app.id,
     name: app.name,
     description: app.comment ?? app.genericName ?? app.exec,
-    isDefault: index === 0,
+    isDefault: app.id === defaultPickerApp?.id,
+    recommended: recommendedPickerIds.has(app.id),
+    iconPath: resolveApplicationIcon(app.icon),
   }));
   const finishOpenWith = (desktopId: string, makeDefault: boolean) => {
     if (!pickerEntry) return;

@@ -192,14 +192,11 @@ and Files persistence remain application concerns.
 
 ### Open With and context actions
 
-The Open With picker should provide:
-
-- actual application icons
-- search and keyboard navigation
-- Recommended and Other Applications sections
-- a clear default-application control
-- empty and error states
-- a route to manage file associations
+The Open With picker now provides search, Up/Down/Enter/Escape keyboard
+navigation, Recommended and Other Applications sections, standard
+freedesktop PNG icons with a fallback, explicit default state and assignment,
+scrolling, and useful empty/search states. Theme-inherited SVG icon support,
+launch failure feedback, and a route to manage file associations remain.
 
 The context-action contract should grow from the process-local baseline into a
 versioned plugin host. Context must distinguish selected items, current folder,

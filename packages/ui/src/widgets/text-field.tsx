@@ -1,10 +1,10 @@
 import React, { useEffect, useId, useState, type ReactNode } from "react";
 import {
-  FONT_H,
   Group,
   Rect,
   Text,
   measureText,
+  measureTextBounds,
   type HitKeyEvent,
   type HitPointerEvent,
 } from "@moire/react-host";
@@ -20,6 +20,8 @@ export type TextFieldProps = {
   onChange?: (value: string) => void;
   onSubmit?: (value: string) => void;
   onCancel?: () => void;
+  /** Return true to consume a key before the built-in editor handles it. */
+  onKeyDown?: (event: HitKeyEvent) => boolean | void;
   onFocusChange?: (focused: boolean) => void;
   /** Optional controlled visual focus override. */
   focused?: boolean;
@@ -54,6 +56,7 @@ export function TextField(props: TextFieldProps): ReactNode {
   const [internallyFocused, setInternallyFocused] = useState(false);
   const [cursor, setCursor] = useState(props.value.length);
   const focused = props.focused ?? internallyFocused;
+  const lineH = measureTextBounds("Mg", { fontSize: FONT_SIZE }).height;
 
   useEffect(() => {
     setCursor((current) => Math.min(current, props.value.length));
@@ -95,6 +98,7 @@ export function TextField(props: TextFieldProps): ReactNode {
   };
 
   const handleKey = (event: HitKeyEvent) => {
+    if (props.onKeyDown?.(event) === true) return;
     const editing = !props.disabled && !props.readOnly;
     switch (event.code) {
       case 1:
@@ -181,7 +185,7 @@ export function TextField(props: TextFieldProps): ReactNode {
       />
       <Text
         x={PAD_X}
-        y={Math.floor((h - FONT_H) / 2)}
+        y={Math.floor((h - lineH) / 2)}
         text={shown}
         color={textColor}
         fontSize={FONT_SIZE}
@@ -189,9 +193,9 @@ export function TextField(props: TextFieldProps): ReactNode {
       {focused && !props.disabled ? (
         <Rect
           x={Math.min(props.width - PAD_X, caretX)}
-          y={Math.floor((h - FONT_H) / 2) - 1}
+          y={Math.floor((h - lineH) / 2) - 1}
           width={1}
-          height={FONT_H + 2}
+          height={lineH + 2}
           fill={pal.text}
         />
       ) : null}

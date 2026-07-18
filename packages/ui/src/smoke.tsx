@@ -34,6 +34,7 @@ import {
   CollectionItem,
   ContextMenuTrigger,
   ContextMenu,
+  OpenWithPicker,
   contextMenuSurfaceSize,
   type PlatformPopupOpts,
   type PlatformWindow,
@@ -274,6 +275,96 @@ async function pathBarInteractionSmoke(): Promise<void> {
     timeMs: 6,
   });
   assert.equal(navigated, "/", "Breadcrumb segment should navigate on activation");
+
+  win.destroy();
+  backend.disconnect();
+}
+
+async function openWithPickerInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Open With smoke", width: 620, height: 520 });
+  let selected = "editor.desktop";
+  let opened = "";
+  let dismissed = false;
+
+  function Picker(): ReactNode {
+    const [selectedId, setSelectedId] = useState(selected);
+    return (
+      <OpenWithPicker
+        viewportWidth={620}
+        viewportHeight={520}
+        fileName="Notes.txt"
+        mimeType="text/plain"
+        choices={[
+          {
+            id: "editor.desktop",
+            name: "Editor",
+            description: "Edit plain text",
+            recommended: true,
+            isDefault: true,
+          },
+          {
+            id: "writer.desktop",
+            name: "Writer",
+            description: "Create rich documents",
+            recommended: true,
+          },
+          {
+            id: "terminal.desktop",
+            name: "Terminal",
+            description: "Run a command-line application",
+            recommended: false,
+          },
+        ]}
+        selectedId={selectedId}
+        onSelect={(id) => {
+          selected = id;
+          setSelectedId(id);
+        }}
+        onOpen={(id) => {
+          opened = id;
+        }}
+        onMakeDefault={() => {}}
+        onDismiss={() => {
+          dismissed = true;
+        }}
+      />
+    );
+  }
+
+  win.setContent(<Picker />);
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+
+  platformWindow.injectKey({
+    type: "down",
+    code: 108,
+    key: "ArrowDown",
+    modifiers: NO_MODIFIERS,
+    timeMs: 1,
+  });
+  assert.equal(selected, "writer.desktop", "ArrowDown should move picker selection");
+  platformWindow.injectKey({
+    type: "down",
+    code: 28,
+    key: "Enter",
+    text: "\n",
+    modifiers: NO_MODIFIERS,
+    timeMs: 2,
+  });
+  assert.equal(opened, "writer.desktop", "Enter should open the selected app");
+  platformWindow.injectKey({
+    type: "down",
+    code: 1,
+    key: "Escape",
+    modifiers: NO_MODIFIERS,
+    timeMs: 3,
+  });
+  assert.equal(dismissed, true, "Escape should dismiss the picker");
 
   win.destroy();
   backend.disconnect();
@@ -612,6 +703,7 @@ async function main() {
   rendererSmoke();
   await textFieldInteractionSmoke();
   await pathBarInteractionSmoke();
+  await openWithPickerInteractionSmoke();
   await interactionOwnershipSmoke();
   await nativePopupLifecycleSmoke();
   const app = new Application({ platform: "headless" });

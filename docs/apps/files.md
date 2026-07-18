@@ -12,7 +12,7 @@ Package: `apps/files`.
 | Places sidebar | XDG user dirs plus persisted add/rename/remove favorites |
 | Open / navigate | Back/Forward history; Up; clickable/drop-aware breadcrumbs; editable validated path |
 | Default handler | `moire-files.desktop` for `inode/directory` |
-| Open With | MIME-filtered picker; one-time launch or write a new default |
+| Open With | Searchable Recommended/Other picker with app icons, keyboard selection, one-time launch, and default assignment |
 | Context menu | Scoped action-provider registry; distinct item and background menus |
 | DnD into cwd | `DropTarget` + `text/uri-list` |
 | DnD out | `CollectionItem` composes narrow `useDragSource` behavior |

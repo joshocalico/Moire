@@ -3,7 +3,14 @@
  * GridItem: icon slot + label, selection wash + outline, optional label scrim.
  */
 import { createElement, type ReactNode } from "react";
-import { Group, Rect, Text, FONT_H, measureText, type HitPointerEvent } from "@moire/react-host";
+import {
+  Group,
+  Rect,
+  Text,
+  measureText,
+  measureTextBounds,
+  type HitPointerEvent,
+} from "@moire/react-host";
 import { themePalette } from "../theme.js";
 import { ScrollArea } from "./scroll.js";
 import { Pressable } from "./pressable.js";
@@ -51,7 +58,8 @@ export function GridItem(props: GridItemProps): ReactNode {
   const pal = themePalette();
   const fontSize = 12;
   const labelPad = 4;
-  const labelH = FONT_H + 6;
+  const textH = measureTextBounds("Mg", { fontSize }).height;
+  const labelH = textH + 6;
   const iconSize =
     props.iconSize ?? Math.max(24, Math.min(56, props.height - labelH - 14));
   const iconAreaH = props.height - labelH - 6;
@@ -152,7 +160,7 @@ export function GridItem(props: GridItemProps): ReactNode {
       : null,
     createElement(Text, {
       x: tx,
-      y: labelY + 2,
+      y: labelY + Math.floor((labelH - textH) / 2),
       text: label,
       color: pal.text,
       fontSize,

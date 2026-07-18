@@ -5,11 +5,18 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Group, Rect, Text, FONT_H } from "@moire/react-host";
+import {
+  Group,
+  Rect,
+  Text,
+  measureTextBounds,
+} from "@moire/react-host";
 import { themePalette } from "../theme.js";
 import { Button } from "./button.js";
 import { Icon, type IconName } from "./icon.js";
 import { Pressable } from "./pressable.js";
+import { ScrollArea } from "./scroll.js";
+import { TextField } from "./text-field.js";
 import { easeTo, useMotionValue } from "../motion.js";
 
 function LayerSurface(props: {
@@ -80,6 +87,10 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
   const finalized = useRef(false);
   const width = props.width ?? 244;
   const rowH = 38;
+  const menuLineH = measureTextBounds("Mg", {
+    fontSize: 13,
+    fontWeight: "medium",
+  }).height;
   const titleH = props.title ? 34 : 8;
   const separators = props.actions.filter((action) => action.separatorBefore).length;
   const height = titleH + props.actions.length * rowH + separators * 9 + 8;
@@ -153,7 +164,7 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
         ) : null}
         <Text
           x={action.icon ? 40 : 12}
-          y={Math.floor((rowH - FONT_H) / 2)}
+          y={Math.floor((rowH - menuLineH) / 2)}
           text={action.label}
           color={
             action.disabled
@@ -239,6 +250,8 @@ export type OpenWithChoice = {
   name: string;
   description?: string;
   isDefault?: boolean;
+  recommended?: boolean;
+  iconPath?: string;
 };
 
 export type OpenWithPickerProps = {
@@ -256,16 +269,176 @@ export type OpenWithPickerProps = {
 
 export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
   const pal = themePalette();
-  const width = Math.min(560, Math.max(420, props.viewportWidth - 64));
-  const rowH = 56;
-  const maxRows = Math.max(2, Math.floor((props.viewportHeight - 230) / rowH));
-  const visible = props.choices.slice(0, Math.min(7, maxRows));
-  const listH = Math.max(82, visible.length * rowH);
-  const height = 118 + listH + 68;
+  const [query, setQuery] = useState("");
+  const [scrollY, setScrollY] = useState(0);
+  const width = Math.min(620, Math.max(460, props.viewportWidth - 48));
+  const height = Math.min(600, Math.max(380, props.viewportHeight - 40));
   const x = Math.floor((props.viewportWidth - width) / 2);
   const y = Math.max(20, Math.floor((props.viewportHeight - height) / 2));
-  const selected = props.selectedId;
-  const canOpen = !!selected;
+  const rowH = 56;
+  const headingH = 28;
+  const listTop = 136;
+  const footerH = 72;
+  const listH = Math.max(120, height - listTop - footerH);
+  const footerY = listTop + listH;
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = props.choices.filter((choice) => {
+    if (!normalizedQuery) return true;
+    return (
+      choice.name.toLowerCase().includes(normalizedQuery) ||
+      choice.description?.toLowerCase().includes(normalizedQuery)
+    );
+  });
+  const recommended = filtered.filter((choice) => choice.recommended !== false);
+  const other = filtered.filter((choice) => choice.recommended === false);
+  const selectable = [...recommended, ...other];
+  const selected = selectable.some((choice) => choice.id === props.selectedId)
+    ? props.selectedId
+    : (selectable[0]?.id ?? null);
+  const selectedChoice = selectable.find((choice) => choice.id === selected);
+  const canOpen = !!selectedChoice;
+
+  let contentH = 0;
+  const choiceY = new Map<string, number>();
+  if (recommended.length > 0) {
+    contentH += headingH;
+    for (const choice of recommended) {
+      choiceY.set(choice.id, contentH);
+      contentH += rowH;
+    }
+  }
+  if (other.length > 0) {
+    contentH += headingH;
+    for (const choice of other) {
+      choiceY.set(choice.id, contentH);
+      contentH += rowH;
+    }
+  }
+  contentH = Math.max(listH, contentH);
+
+  useEffect(() => {
+    if (selected && selected !== props.selectedId) props.onSelect(selected);
+  }, [props.onSelect, props.selectedId, selected]);
+
+  useEffect(() => {
+    setScrollY(0);
+  }, [query]);
+
+  const selectAt = (index: number) => {
+    if (selectable.length === 0) return;
+    const next = selectable[Math.max(0, Math.min(selectable.length - 1, index))];
+    if (!next) return;
+    props.onSelect(next.id);
+    const top = choiceY.get(next.id) ?? 0;
+    if (top < scrollY) setScrollY(top);
+    else if (top + rowH > scrollY + listH) {
+      setScrollY(top + rowH - listH);
+    }
+  };
+
+  const moveSelection = (offset: -1 | 1) => {
+    const current = selectable.findIndex((choice) => choice.id === selected);
+    selectAt(current < 0 ? 0 : current + offset);
+  };
+
+  const titleLineH = measureTextBounds("Mg", {
+    fontSize: 14,
+    fontWeight: "medium",
+  }).height;
+  const descriptionLineH = measureTextBounds("Mg", { fontSize: 11 }).height;
+
+  const renderChoice = (choice: OpenWithChoice, rowY: number) => {
+    const hasDescription = !!choice.description;
+    const textBlockH = hasDescription
+      ? titleLineH + 2 + descriptionLineH
+      : titleLineH;
+    const titleY = Math.floor((rowH - textBlockH) / 2);
+    return (
+      <Pressable
+        key={choice.id}
+        x={0}
+        y={rowY}
+        width={width - 40}
+        height={rowH}
+        fill={selected === choice.id ? pal.selection : 0x00000000}
+        indicatorColor={pal.accentLine}
+        onPress={() => props.onSelect(choice.id)}
+        onDoublePress={() => props.onOpen(choice.id)}
+      >
+        {selected === choice.id ? (
+          <Rect x={0} y={0} width={3} height={rowH} fill={pal.accentLine} />
+        ) : null}
+        <Icon
+          x={14}
+          y={14}
+          name="app"
+          path={choice.iconPath}
+          size={28}
+          color={selected === choice.id ? pal.accent : pal.text}
+        />
+        <Text
+          x={56}
+          y={titleY}
+          text={truncate(choice.name, 42)}
+          color={pal.text}
+          fontSize={14}
+          fontWeight="medium"
+        />
+        {choice.description ? (
+          <Text
+            x={56}
+            y={titleY + titleLineH + 2}
+            text={truncate(choice.description, 58)}
+            color={pal.muted}
+            fontSize={11}
+          />
+        ) : null}
+        {choice.isDefault ? (
+          <LayerSurface
+            x={width - 116}
+            y={18}
+            width={62}
+            height={20}
+            fill={pal.surface}
+            radius={pal.radiusSm}
+          >
+            <Text
+              x={10}
+              y={5}
+              text="DEFAULT"
+              color={pal.accent}
+              fontSize={9}
+              fontWeight="medium"
+            />
+          </LayerSurface>
+        ) : null}
+      </Pressable>
+    );
+  };
+
+  const listRows: ReactNode[] = [];
+  let rowY = 0;
+  const appendSection = (title: string, choices: OpenWithChoice[]) => {
+    if (choices.length === 0) return;
+    listRows.push(
+      <Text
+        key={`${title}:heading`}
+        x={14}
+        y={rowY + 9}
+        text={title}
+        color={pal.accent}
+        fontSize={10}
+        fontWeight="medium"
+      />,
+    );
+    rowY += headingH;
+    for (const choice of choices) {
+      listRows.push(renderChoice(choice, rowY));
+      rowY += rowH;
+    }
+  };
+  appendSection("RECOMMENDED", recommended);
+  appendSection("OTHER APPLICATIONS", other);
 
   return (
     <Group
@@ -300,10 +473,10 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
         radius={pal.radiusMd}
       >
         <Rect x={0} y={0} width={width} height={3} fill={pal.accentLine} />
-        <Icon x={24} y={24} name="app" size={48} color={pal.accent} />
+        <Icon x={24} y={22} name="app" size={48} color={pal.accent} />
         <Text
           x={88}
-          y={25}
+          y={22}
           text={`Open ${truncate(props.fileName, 34)} with…`}
           color={pal.text}
           fontSize={18}
@@ -311,105 +484,84 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
         />
         <Text
           x={88}
-          y={54}
+          y={51}
           text={props.mimeType}
           color={pal.muted}
           fontSize={12}
         />
-        <Text
-          x={24}
-          y={91}
-          text="COMPATIBLE APPLICATIONS"
-          color={pal.accent}
-          fontSize={10}
-          fontWeight="medium"
+        <TextField
+          x={20}
+          y={88}
+          width={width - 40}
+          height={34}
+          value={query}
+          placeholder="Search applications"
+          autoFocus
+          onChange={setQuery}
+          onCancel={props.onDismiss}
+          onSubmit={() => {
+            if (selected) props.onOpen(selected);
+          }}
+          onKeyDown={(event) => {
+            if (event.code === 103) {
+              moveSelection(-1);
+              return true;
+            }
+            if (event.code === 108) {
+              moveSelection(1);
+              return true;
+            }
+            return false;
+          }}
         />
         <LayerSurface
           x={20}
-          y={112}
+          y={listTop}
           width={width - 40}
           height={listH}
           fill={pal.bg}
           radius={pal.radiusSm}
         >
-          {visible.length === 0 ? (
-            <Text
-              x={20}
-              y={28}
-              text="No application advertises support for this file type yet."
-              color={pal.muted}
-              fontSize={13}
-            />
-          ) : (
-            visible.map((choice, index) => (
-              <Pressable
-                key={choice.id}
+          {selectable.length === 0 ? (
+            <Group x={20} y={24} width={width - 80} height={70}>
+              <Text
                 x={0}
-                y={index * rowH}
-                width={width - 40}
-                height={rowH}
-                fill={selected === choice.id ? pal.selection : 0x00000000}
-                indicatorColor={pal.accentLine}
-                onPress={() => props.onSelect(choice.id)}
-                onDoublePress={() => props.onOpen(choice.id)}
-              >
-                {selected === choice.id ? (
-                  <Rect
-                    x={0}
-                    y={0}
-                    width={3}
-                    height={rowH}
-                    fill={pal.accentLine}
-                  />
-                ) : null}
-                <Icon
-                  x={14}
-                  y={14}
-                  name="app"
-                  size={28}
-                  color={selected === choice.id ? pal.accent : pal.text}
-                />
-                <Text
-                  x={56}
-                  y={choice.description ? 10 : 20}
-                  text={choice.name}
-                  color={pal.text}
-                  fontSize={14}
-                  fontWeight="medium"
-                />
-                {choice.description ? (
-                  <Text
-                    x={56}
-                    y={31}
-                    text={truncate(choice.description, 52)}
-                    color={pal.muted}
-                    fontSize={11}
-                  />
-                ) : null}
-                {choice.isDefault ? (
-                  <Text
-                    x={width - 108}
-                    y={20}
-                    text="DEFAULT"
-                    color={pal.accent}
-                    fontSize={10}
-                    fontWeight="medium"
-                  />
-                ) : null}
-              </Pressable>
-            ))
+                y={0}
+                text={query ? "No applications match this search." : "No applications are available."}
+                color={pal.text}
+                fontSize={14}
+                fontWeight="medium"
+              />
+              <Text
+                x={0}
+                y={28}
+                text={query ? "Try a broader application name." : "Install an application and try again."}
+                color={pal.muted}
+                fontSize={12}
+              />
+            </Group>
+          ) : (
+            <ScrollArea
+              width={width - 40}
+              height={listH}
+              contentHeight={contentH}
+              scrollY={scrollY}
+              onScroll={setScrollY}
+            >
+              {listRows}
+            </ScrollArea>
           )}
         </LayerSurface>
         <Rect
           x={0}
-          y={112 + listH + 15}
+          y={footerY}
           width={width}
           height={1}
           fill={pal.borderSubtle}
         />
         <Button
           x={20}
-          y={112 + listH + 28}
+          y={footerY + 20}
           width={86}
           height={34}
           label="Cancel"
@@ -417,18 +569,18 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
           onPress={props.onDismiss}
         />
         <Button
-          x={width - 244}
-          y={112 + listH + 28}
-          width={126}
+          x={width - 250}
+          y={footerY + 20}
+          width={132}
           height={34}
-          label="Always Use"
+          label={selectedChoice?.isDefault ? "Default App" : "Set as Default"}
           variant="secondary"
-          disabled={!canOpen}
+          disabled={!canOpen || selectedChoice?.isDefault}
           onPress={selected ? () => props.onMakeDefault(selected) : undefined}
         />
         <Button
           x={width - 108}
-          y={112 + listH + 28}
+          y={footerY + 20}
           width={88}
           height={34}
           label="Open"

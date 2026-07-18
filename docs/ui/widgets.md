@@ -335,8 +335,9 @@ Both are viewport overlays: they clamp themselves to the visible bounds,
 install an outside-click dismiss target, and render after the app/shell content
 so hit order matches paint order. `ContextMenu` consumes action descriptions
 from a registry without depending on plugin code. `OpenWithPicker` receives
-plain application choices and exposes separate one-time and “Always Use”
-callbacks.
+plain application choices, separates Recommended and Other Applications,
+supports search and keyboard selection, and exposes separate one-time and
+default-assignment callbacks.
 
 ---
 

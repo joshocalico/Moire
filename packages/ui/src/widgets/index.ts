@@ -12,11 +12,11 @@ import {
   type ReactNode,
 } from "react";
 import {
-  FONT_H,
   Group,
   Rect,
   Text,
   measureText,
+  measureTextBounds,
   type HitPressEvent,
 } from "@moire/react-host";
 import { themePalette } from "../theme.js";
@@ -96,6 +96,13 @@ export type {
 /* ---------- Layout helpers ---------- */
 
 const DEFAULT_FONT = 14;
+
+function textLineHeight(
+  fontSize = DEFAULT_FONT,
+  fontWeight?: "regular" | "medium" | "bold",
+): number {
+  return measureTextBounds("Mg", { fontSize, fontWeight }).height;
+}
 
 function textH(scale = 1, fontSize?: number): number {
   const base = fontSize ?? DEFAULT_FONT * scale;
@@ -399,8 +406,10 @@ export function Checkbox(props: CheckboxProps): ReactNode {
   const pal = themePalette();
   const box = 18;
   const label = props.label ?? "";
+  const labelLineH = textLineHeight();
+  const markLineH = textLineHeight(12);
   const w = props.width ?? box + (label ? measureText(label) + 10 : 0);
-  const h = props.height ?? Math.max(box, FONT_H + 4);
+  const h = props.height ?? Math.max(box, labelLineH + 4);
   return createElement(
     Group,
     { x: props.x ?? 0, y: props.y ?? 0, width: w, height: h },
@@ -415,7 +424,7 @@ export function Checkbox(props: CheckboxProps): ReactNode {
     props.checked
       ? createElement(Text, {
           x: 4,
-          y: Math.floor((h - FONT_H) / 2),
+          y: Math.floor((h - markLineH) / 2),
           text: "x",
           color: 0xffffffff,
           fontSize: 12,
@@ -424,7 +433,7 @@ export function Checkbox(props: CheckboxProps): ReactNode {
     label
       ? createElement(Text, {
           x: box + 8,
-          y: Math.floor((h - FONT_H) / 2),
+          y: Math.floor((h - labelLineH) / 2),
           text: label,
           color: pal.text,
         })
@@ -450,8 +459,9 @@ export function Toggle(props: ToggleProps): ReactNode {
   const trackH = 20;
   const knob = 16;
   const label = props.label ?? "";
+  const labelLineH = textLineHeight();
   const w = props.width ?? trackW + (label ? measureText(label) + 10 : 0);
-  const h = props.height ?? Math.max(trackH, FONT_H + 4);
+  const h = props.height ?? Math.max(trackH, labelLineH + 4);
   const ty = Math.floor((h - trackH) / 2);
   return createElement(
     Group,
@@ -475,7 +485,7 @@ export function Toggle(props: ToggleProps): ReactNode {
     label
       ? createElement(Text, {
           x: trackW + 8,
-          y: Math.floor((h - FONT_H) / 2),
+          y: Math.floor((h - labelLineH) / 2),
           text: label,
           color: pal.text,
         })
@@ -577,6 +587,7 @@ export type DialogProps = {
 
 export function Dialog(props: DialogProps): ReactNode {
   const pal = themePalette();
+  const titleLineH = textLineHeight(14, "medium");
   return createElement(
     Surface,
     {
@@ -589,7 +600,7 @@ export function Dialog(props: DialogProps): ReactNode {
     createElement(Rect, { x: 0, y: 0, width: props.width, height: 36, fill: pal.titlebar }),
     createElement(Text, {
       x: 12,
-      y: 10,
+      y: Math.floor((36 - titleLineH) / 2),
       text: props.title,
       color: pal.text,
       fontWeight: "medium",
@@ -625,6 +636,7 @@ export type MenuItemProps = {
 export function MenuItem(props: MenuItemProps): ReactNode {
   const pal = themePalette();
   const h = props.height ?? 28;
+  const lineH = textLineHeight();
   return createElement(
     Group,
     { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h },
@@ -633,7 +645,7 @@ export function MenuItem(props: MenuItemProps): ReactNode {
     }),
     createElement(Text, {
       x: 10,
-      y: Math.floor((h - FONT_H) / 2),
+      y: Math.floor((h - lineH) / 2),
       text: props.label,
       color: pal.text,
     }),

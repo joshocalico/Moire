@@ -9,8 +9,8 @@ Each frame in `packages/core` `CompositorServer.composite()`:
 | 1 | Wallpaper | `paintWallpaper` (`@moire/theme`), optional atmosphere phase |
 | 2 | Desktop icons | `shell.paintDesktop` |
 | 3 | Toplevel surfaces + SSD | Stack bottom→top; `shell.paintSsdWindow` after each SSD window |
-| 4 | Popups | Above toplevels |
-| 5 | Panel, launcher, desktop menus/pickers | `shell.paint` |
+| 4 | Panel, launcher, desktop menus/pickers | `shell.paint` |
+| 5 | Native client popups | `xdg_popup` surfaces above shell chrome |
 | 6 | Drag preview | Hotspot-anchored client surface or return-animation snapshot, else `shell.paintDragPreview` |
 | 7 | Cursor | Client cursor or fallback shape |
 | 8 | Present | `flushMmap` + `presentKms` (required on Parallels VIRTUAL DRM) |
@@ -22,12 +22,14 @@ Atmosphere wallpaper sets `markDirty()` while active so the desktop can drift sl
 Simplified path in `onPointerButton`:
 
 1. If a DnD session is active and the button releases → `endDrag`.
-2. `shell.onPointerButton` — top shell overlays, panel, and launcher (consumes
+2. A grabbed native popup receives inside presses; outside presses dismiss and
+   are consumed before shell chrome can react.
+3. `shell.onPointerButton` — top shell overlays, panel, and launcher (consumes
    both press and matching release if hit).
-3. SSD hit-test (`hitSsd`) on press — move/close/maximize/minimize.
-4. `updatePointerFocus` for the surface under the cursor.
-5. If **no** surface under cursor → `shell.onDesktopPointerButton` (icons).
-6. Otherwise focus / resize edges / forward `pointerButton` to the client.
+4. SSD hit-test (`hitSsd`) on press — move/close/maximize/minimize.
+5. `updatePointerFocus` for the surface under the cursor.
+6. If **no** surface under cursor → `shell.onDesktopPointerButton` (icons).
+7. Otherwise focus / resize edges / forward `pointerButton` to the client.
 
 Desktop icons remain below windows, but their context menus and Open With
 picker are promoted into the final shell overlay. This keeps menus above every
