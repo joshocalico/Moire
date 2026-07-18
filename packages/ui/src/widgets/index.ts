@@ -65,6 +65,13 @@ export type { TabsProps } from "./tabs.js";
 export { TextField } from "./text-field.js";
 export type { TextFieldProps } from "./text-field.js";
 
+export { Breadcrumbs, PathBar } from "./breadcrumbs.js";
+export type {
+  BreadcrumbSegment,
+  BreadcrumbsProps,
+  PathBarProps,
+} from "./breadcrumbs.js";
+
 export { ContextMenu, OpenWithPicker } from "./context-menu.js";
 export type {
   ContextMenuAction,

@@ -6,8 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import {
-  createElement,
+import React, {
   useCallback,
   useEffect,
   useMemo,
@@ -33,15 +32,16 @@ import {
   ScrollArea,
   ContextMenu,
   OpenWithPicker,
+  PathBar,
   themePalette,
   getUiScaleFactor,
   setUiScaleFactor,
   hitTestDropData,
   SPACE,
-  TYPE_ROLES,
   type WindowSize,
   type IconName,
   type ContextMenuAction,
+  type BreadcrumbSegment,
 } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
 import {
@@ -131,6 +131,22 @@ function formatSize(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function breadcrumbSegments(cwd: string): BreadcrumbSegment[] {
+  const resolved = path.resolve(cwd);
+  const h = home();
+  const insideHome = resolved === h || resolved.startsWith(h + path.sep);
+  const root = insideHome ? h : path.parse(resolved).root;
+  const segments: BreadcrumbSegment[] = [
+    { id: root, label: insideHome ? "Home" : root },
+  ];
+  let current = root;
+  for (const part of path.relative(root, resolved).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    segments.push({ id: current, label: part });
+  }
+  return segments;
 }
 
 function openPath(p: string): void {
@@ -429,7 +445,6 @@ function FilesApp(
     setPickerSelection(null);
   };
 
-  const crumb = cwd.replace(home(), "~");
   const toolbarH = Math.round(62 * ui);
   const bodyH = Math.max(1, props.height - toolbarH - 1);
   const contentW = Math.max(1, props.width - sideW - 1);
@@ -437,287 +452,277 @@ function FilesApp(
   const cellH = Math.round(132 * ui);
   const iconSz = Math.round(52 * ui);
   const btn = Math.round(36 * ui);
+  const pathBarWidth = Math.max(80, props.width - Math.round(256 * ui));
 
-  return createElement(
-    Surface,
-    {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: props.height,
-      fill: pal.panel,
-    },
-    createElement(
-      Column,
-      { x: 0, y: 0, width: props.width, height: props.height, gap: 0 },
-      createElement(
-        Row,
-        {
-          width: props.width,
-          height: toolbarH,
-          padding: Math.round(SPACE.md * ui),
-          gap: Math.round(SPACE.sm * ui),
-          align: "center",
-        },
-        createElement(Button, {
-          width: Math.round(72 * ui),
-          height: btn,
-          label: "↑  Up",
-          variant: "secondary",
-          onPress: goUp,
-        }),
-        createElement(
-          DropZone,
-          {
-            width: Math.max(80, props.width - Math.round(256 * ui)),
-            height: btn,
-            id: cwd,
-          },
-          createElement(Label, {
-            text: `Location  /  ${crumb}`,
-            color: pal.text,
-            width: Math.max(80, props.width - Math.round(256 * ui)),
-            height: btn,
-            fontSize: TYPE_ROLES.body.size,
-            fontWeight: "medium",
-          }),
-        ),
-        createElement(Button, {
-          width: Math.round(88 * ui),
-          height: btn,
-          label: view === "grid" ? "List View" : "Grid View",
-          variant: "secondary",
-          onPress: () => setView((v) => (v === "grid" ? "list" : "grid")),
-        }),
-      ),
-      createElement(Separator, { width: props.width, height: 1 }),
-      createElement(
-        Row,
-        { width: props.width, height: bodyH, gap: 0 },
-        createElement(
-          Column,
-          {
-            width: sideW,
-            height: bodyH,
-            padding: Math.round(SPACE.md * ui),
-            gap: Math.round(SPACE.xs * ui),
-          },
-          createElement(Label, {
-            text: "FAVORITES",
-            color: pal.accent,
-            fontSize: 10,
-            fontWeight: "medium",
-            width: sideW - pad,
-            height: Math.round(18 * ui),
-          }),
-          ...placeList.map((p) =>
-            createElement(
-              DropZone,
-              {
-                key: p.id,
-                width: sideW - Math.round(SPACE.lg * ui),
-                height: Math.round(40 * ui),
-                id: p.path,
-              },
-              createElement(ListItem, {
-                width: sideW - Math.round(SPACE.lg * ui),
-                height: Math.round(40 * ui),
-                title: p.label,
-                leading: createElement(Icon, {
-                  name: p.icon,
-                  size: Math.round(20 * ui),
-                  color: activePlace === p.id ? pal.accent : pal.text,
-                }),
-                selected: activePlace === p.id,
-                onPress: () => {
-                  ensureDir(p.path);
-                  setCwd(p.path);
-                  setSelected(-1);
-                },
-              }),
-            ),
-          ),
-          createElement(Separator, {
-            width: sideW - Math.round(SPACE.xl * ui),
-            height: 1,
-            color: pal.borderSubtle,
-          }),
-          createElement(Label, {
-            text: "SELECTION",
-            color: pal.muted,
-            fontSize: 10,
-            fontWeight: "medium",
-            width: sideW - pad,
-            height: Math.round(18 * ui),
-          }),
-          createElement(Label, {
-            text: selectedEntry?.name ?? "Nothing selected",
-            color: selectedEntry ? pal.text : pal.muted,
-            fontSize: 12,
-            fontWeight: selectedEntry ? "medium" : "regular",
-            width: sideW - pad,
-            height: Math.round(20 * ui),
-          }),
-          createElement(Label, {
-            text: selectedEntry
-              ? selectedEntry.isDir
-                ? "Folder"
-                : `${mimeDb.mimeTypeForPath(selectedEntry.path)} · ${formatSize(selectedEntry.size)}`
-              : `${entries.length} ${entries.length === 1 ? "item" : "items"} in this folder`,
-            color: pal.muted,
-            fontSize: 10,
-            width: sideW - pad,
-            height: Math.round(30 * ui),
-          }),
-        ),
-        createElement(Separator, { width: 1, height: bodyH }),
-        createElement(
-          DropTarget,
-          {
-            width: contentW,
-            height: bodyH,
-            mimeTypes: ["text/uri-list"],
-            onDrop: (payload, _mimes, x, y) => onDropPayload(payload, x, y),
-          },
-          createElement(
-            Surface,
-            {
-              x: 0,
-              y: 0,
-              width: contentW,
-              height: bodyH,
-              fill: pal.bg,
-            },
-            view === "grid"
-              ? createElement(Grid, {
-                  width: contentW,
-                  height: bodyH,
-                  items: entries,
-                  itemWidth: cellW,
-                  itemHeight: cellH,
-                  gap: Math.round(SPACE.md * ui),
-                  padding: Math.round(SPACE.lg * ui),
-                  renderItem: (eRaw, i) => {
-                    const e = eRaw as Entry;
-                    return createElement(
-                      Draggable,
-                      {
-                        key: e.path,
-                        width: cellW,
-                        height: cellH,
-                        mimeTypes: ["text/uri-list"],
-                        getPayload: () => pathToUri(e.path) + "\n",
-                        dropData: e.isDir ? e.path : undefined,
-                        previewIcon: { name: iconFor(e) },
-                        onPress: () => {
-                          setSelected(i);
-                          setMenu(null);
-                        },
-                        onDoublePress: () => openEntry(e),
-                        onContextMenu: (event) => {
-                          setSelected(i);
-                          setMenu({ entry: e, x: event.x, y: event.y });
-                        },
-                      },
-                      createElement(GridItem, {
-                        width: cellW,
-                        height: cellH,
-                        label: e.name,
-                        iconSize: iconSz,
-                        selected: selected === i,
-                        interactive: false,
-                        icon: createElement(Icon, {
-                          name: iconFor(e),
-                          size: iconSz,
-                          color: e.isDir ? pal.accent : pal.text,
-                        }),
-                      }),
-                    );
-                  },
-                })
-              : createElement(
-                  ScrollArea,
-                  {
-                    width: contentW,
-                    height: bodyH,
-                    contentHeight: Math.max(
-                      bodyH,
-                      entries.length * Math.round(44 * ui) + pad,
-                    ),
-                  },
-                  ...entries.map((e, i) =>
-                    createElement(
-                      Draggable,
-                      {
-                        key: e.path,
-                        x: Math.round(SPACE.sm * ui),
-                        y: Math.round(SPACE.sm * ui) + i * Math.round(44 * ui),
-                        width: contentW - Math.round(SPACE.lg * ui),
-                        height: Math.round(40 * ui),
-                        mimeTypes: ["text/uri-list"],
-                        getPayload: () => pathToUri(e.path) + "\n",
-                        dropData: e.isDir ? e.path : undefined,
-                        previewIcon: { name: iconFor(e) },
-                        onPress: () => {
-                          setSelected(i);
-                          setMenu(null);
-                        },
-                        onDoublePress: () => openEntry(e),
-                        onContextMenu: (event) => {
-                          setSelected(i);
-                          setMenu({ entry: e, x: event.x, y: event.y });
-                        },
-                      },
-                      createElement(ListItem, {
-                        width: contentW - Math.round(SPACE.lg * ui),
-                        height: Math.round(40 * ui),
-                        title: e.name,
-                        subtitle: e.isDir
-                          ? "Folder"
-                          : `${mimeDb.mimeTypeForPath(e.path)} · ${formatSize(e.size)}`,
-                        selected: selected === i,
-                        interactive: false,
-                        leading: createElement(Icon, {
-                          name: iconFor(e),
-                          size: Math.round(22 * ui),
-                          color: e.isDir ? pal.accent : pal.text,
-                        }),
-                      }),
-                    ),
-                  ),
-                ),
-          ),
-        ),
-      ),
-    ),
-    menu
-      ? createElement(ContextMenu, {
-          viewportWidth: props.width,
-          viewportHeight: props.height,
-          x: menu.x,
-          y: menu.y,
-          title: menu.entry.name,
-          actions: contextActions(menu.entry),
-          onDismiss: () => setMenu(null),
-        })
-      : null,
-    pickerEntry
-      ? createElement(OpenWithPicker, {
-          viewportWidth: props.width,
-          viewportHeight: props.height,
-          fileName: pickerEntry.name,
-          mimeType: pickerMime,
-          choices: pickerChoices,
-          selectedId: pickerSelection,
-          onSelect: setPickerSelection,
-          onOpen: (id) => finishOpenWith(id, false),
-          onMakeDefault: (id) => finishOpenWith(id, true),
-          onDismiss: () => {
+  const navigateTo = (destination: string) => {
+    setCwd(destination);
+    setSelected(-1);
+    setMenu(null);
+  };
+
+  const commitLocation = (value: string): string | undefined => {
+    const expanded =
+      value === "~" ? home() : value.startsWith(`~${path.sep}`) ? path.join(home(), value.slice(2)) : value;
+    const destination = path.resolve(cwd, expanded);
+    try {
+      if (!fs.statSync(destination).isDirectory()) return "Not a folder";
+      navigateTo(destination);
+      return undefined;
+    } catch {
+      return "Folder not found";
+    }
+  };
+
+  return (
+    <Surface x={0} y={0} width={props.width} height={props.height} fill={pal.panel}>
+      <Column x={0} y={0} width={props.width} height={props.height} gap={0}>
+        <Row
+          width={props.width}
+          height={toolbarH}
+          padding={Math.round(SPACE.md * ui)}
+          gap={Math.round(SPACE.sm * ui)}
+          align="center"
+        >
+          <Button
+            width={Math.round(72 * ui)}
+            height={btn}
+            label="↑  Up"
+            variant="secondary"
+            onPress={goUp}
+          />
+          <PathBar
+            width={pathBarWidth}
+            height={btn}
+            value={cwd.replace(home(), "~")}
+            segments={breadcrumbSegments(cwd)}
+            onNavigate={navigateTo}
+            onCommit={commitLocation}
+          />
+          <Button
+            width={Math.round(88 * ui)}
+            height={btn}
+            label={view === "grid" ? "List View" : "Grid View"}
+            variant="secondary"
+            onPress={() => setView((current) => (current === "grid" ? "list" : "grid"))}
+          />
+        </Row>
+        <Separator width={props.width} height={1} />
+        <Row width={props.width} height={bodyH} gap={0}>
+          <Column
+            width={sideW}
+            height={bodyH}
+            padding={Math.round(SPACE.md * ui)}
+            gap={Math.round(SPACE.xs * ui)}
+          >
+            <Label
+              text="FAVORITES"
+              color={pal.accent}
+              fontSize={10}
+              fontWeight="medium"
+              width={sideW - pad}
+              height={Math.round(18 * ui)}
+            />
+            {placeList.map((place) => (
+              <DropZone
+                key={place.id}
+                width={sideW - Math.round(SPACE.lg * ui)}
+                height={Math.round(40 * ui)}
+                id={place.path}
+              >
+                <ListItem
+                  width={sideW - Math.round(SPACE.lg * ui)}
+                  height={Math.round(40 * ui)}
+                  title={place.label}
+                  leading={
+                    <Icon
+                      name={place.icon}
+                      size={Math.round(20 * ui)}
+                      color={activePlace === place.id ? pal.accent : pal.text}
+                    />
+                  }
+                  selected={activePlace === place.id}
+                  onPress={() => {
+                    ensureDir(place.path);
+                    navigateTo(place.path);
+                  }}
+                />
+              </DropZone>
+            ))}
+            <Separator
+              width={sideW - Math.round(SPACE.xl * ui)}
+              height={1}
+              color={pal.borderSubtle}
+            />
+            <Label
+              text="SELECTION"
+              color={pal.muted}
+              fontSize={10}
+              fontWeight="medium"
+              width={sideW - pad}
+              height={Math.round(18 * ui)}
+            />
+            <Label
+              text={selectedEntry?.name ?? "Nothing selected"}
+              color={selectedEntry ? pal.text : pal.muted}
+              fontSize={12}
+              fontWeight={selectedEntry ? "medium" : "regular"}
+              width={sideW - pad}
+              height={Math.round(20 * ui)}
+            />
+            <Label
+              text={
+                selectedEntry
+                  ? selectedEntry.isDir
+                    ? "Folder"
+                    : `${mimeDb.mimeTypeForPath(selectedEntry.path)} · ${formatSize(selectedEntry.size)}`
+                  : `${entries.length} ${entries.length === 1 ? "item" : "items"} in this folder`
+              }
+              color={pal.muted}
+              fontSize={10}
+              width={sideW - pad}
+              height={Math.round(30 * ui)}
+            />
+          </Column>
+          <Separator width={1} height={bodyH} />
+          <DropTarget
+            width={contentW}
+            height={bodyH}
+            mimeTypes={["text/uri-list"]}
+            onDrop={(payload, _mimes, x, y) => onDropPayload(payload, x, y)}
+          >
+            <Surface x={0} y={0} width={contentW} height={bodyH} fill={pal.bg}>
+              {view === "grid" ? (
+                <Grid<Entry>
+                  width={contentW}
+                  height={bodyH}
+                  items={entries}
+                  itemWidth={cellW}
+                  itemHeight={cellH}
+                  gap={Math.round(SPACE.md * ui)}
+                  padding={Math.round(SPACE.lg * ui)}
+                  renderItem={(entry, index) => (
+                    <Draggable
+                      key={entry.path}
+                      width={cellW}
+                      height={cellH}
+                      mimeTypes={["text/uri-list"]}
+                      getPayload={() => pathToUri(entry.path) + "\n"}
+                      dropData={entry.isDir ? entry.path : undefined}
+                      previewIcon={{ name: iconFor(entry) }}
+                      onPress={() => {
+                        setSelected(index);
+                        setMenu(null);
+                      }}
+                      onDoublePress={() => openEntry(entry)}
+                      onContextMenu={(event) => {
+                        setSelected(index);
+                        setMenu({ entry, x: event.x, y: event.y });
+                      }}
+                    >
+                      <GridItem
+                        width={cellW}
+                        height={cellH}
+                        label={entry.name}
+                        iconSize={iconSz}
+                        selected={selected === index}
+                        interactive={false}
+                        icon={
+                          <Icon
+                            name={iconFor(entry)}
+                            size={iconSz}
+                            color={entry.isDir ? pal.accent : pal.text}
+                          />
+                        }
+                      />
+                    </Draggable>
+                  )}
+                />
+              ) : (
+                <ScrollArea
+                  width={contentW}
+                  height={bodyH}
+                  contentHeight={Math.max(
+                    bodyH,
+                    entries.length * Math.round(44 * ui) + pad,
+                  )}
+                >
+                  {entries.map((entry, index) => (
+                    <Draggable
+                      key={entry.path}
+                      x={Math.round(SPACE.sm * ui)}
+                      y={Math.round(SPACE.sm * ui) + index * Math.round(44 * ui)}
+                      width={contentW - Math.round(SPACE.lg * ui)}
+                      height={Math.round(40 * ui)}
+                      mimeTypes={["text/uri-list"]}
+                      getPayload={() => pathToUri(entry.path) + "\n"}
+                      dropData={entry.isDir ? entry.path : undefined}
+                      previewIcon={{ name: iconFor(entry) }}
+                      onPress={() => {
+                        setSelected(index);
+                        setMenu(null);
+                      }}
+                      onDoublePress={() => openEntry(entry)}
+                      onContextMenu={(event) => {
+                        setSelected(index);
+                        setMenu({ entry, x: event.x, y: event.y });
+                      }}
+                    >
+                      <ListItem
+                        width={contentW - Math.round(SPACE.lg * ui)}
+                        height={Math.round(40 * ui)}
+                        title={entry.name}
+                        subtitle={
+                          entry.isDir
+                            ? "Folder"
+                            : `${mimeDb.mimeTypeForPath(entry.path)} · ${formatSize(entry.size)}`
+                        }
+                        selected={selected === index}
+                        interactive={false}
+                        leading={
+                          <Icon
+                            name={iconFor(entry)}
+                            size={Math.round(22 * ui)}
+                            color={entry.isDir ? pal.accent : pal.text}
+                          />
+                        }
+                      />
+                    </Draggable>
+                  ))}
+                </ScrollArea>
+              )}
+            </Surface>
+          </DropTarget>
+        </Row>
+      </Column>
+      {menu ? (
+        <ContextMenu
+          viewportWidth={props.width}
+          viewportHeight={props.height}
+          x={menu.x}
+          y={menu.y}
+          title={menu.entry.name}
+          actions={contextActions(menu.entry)}
+          onDismiss={() => setMenu(null)}
+        />
+      ) : null}
+      {pickerEntry ? (
+        <OpenWithPicker
+          viewportWidth={props.width}
+          viewportHeight={props.height}
+          fileName={pickerEntry.name}
+          mimeType={pickerMime}
+          choices={pickerChoices}
+          selectedId={pickerSelection}
+          onSelect={setPickerSelection}
+          onOpen={(id) => finishOpenWith(id, false)}
+          onMakeDefault={(id) => finishOpenWith(id, true)}
+          onDismiss={() => {
             setPickerEntry(null);
             setPickerSelection(null);
-          },
-        })
-      : null,
+          }}
+        />
+      ) : null}
+    </Surface>
   );
 }
 
@@ -735,16 +740,16 @@ async function main() {
     height: Math.round(540 * settings.uiScale),
     resizable: true,
   });
-  win.setContent((size) =>
-    createElement(FilesApp, {
-      ...size,
-      initialPath: desktop,
-      onQuit: () => {
+  win.setContent((size) => (
+    <FilesApp
+      {...size}
+      initialPath={desktop}
+      onQuit={() => {
         win.destroy();
         app.quit();
-      },
-    }),
-  );
+      }}
+    />
+  ));
   win.onClose(() => app.quit());
   app.addWindow(win);
   await app.run();

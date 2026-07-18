@@ -181,7 +181,7 @@ pnpm --filter @moire/ui smoke
 ## Source map
 
 ```
-apps/files/src/main.ts
+apps/files/src/main.tsx
 apps/session/moire-session
 packages/ui/src/widgets/{pressable,button,scroll,list,grid,icon,dnd,tabs}.ts
 packages/ui/icons/*.png

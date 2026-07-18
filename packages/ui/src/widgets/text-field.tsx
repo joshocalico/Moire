@@ -23,6 +23,8 @@ export type TextFieldProps = {
   onFocusChange?: (focused: boolean) => void;
   /** Optional controlled visual focus override. */
   focused?: boolean;
+  autoFocus?: boolean;
+  invalid?: boolean;
   disabled?: boolean;
   readOnly?: boolean;
 };
@@ -164,9 +166,10 @@ export function TextField(props: TextFieldProps): ReactNode {
         height={h}
         fill={pal.surface}
         radius={pal.radiusSm}
-        stroke={focused ? pal.focusRing : pal.borderSubtle}
+        stroke={props.invalid ? pal.danger : focused ? pal.focusRing : pal.borderSubtle}
         strokeWidth={focused ? 2 : 1}
         focusable={!props.disabled}
+        autoFocus={props.autoFocus}
         focusId={`text-field:${generatedId}`}
         onFocusChange={(next) => {
           setInternallyFocused(next);

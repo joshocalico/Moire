@@ -30,6 +30,7 @@ import {
   Grid,
   GridItem,
   TextField,
+  PathBar,
 } from "./index.js";
 import { HeadlessPlatform } from "./platforms/headless/index.js";
 
@@ -94,6 +95,7 @@ async function textFieldInteractionSmoke(): Promise<void> {
         y={10}
         width={240}
         value={first}
+        autoFocus
         onChange={(value) => {
           first = value;
         }}
@@ -126,6 +128,7 @@ async function textFieldInteractionSmoke(): Promise<void> {
 
   const platformWindow = backend.getWindows()[0];
   assert.ok(platformWindow, "headless platform should contain the mounted window");
+  assert.equal(focused, "first", "autoFocus should claim initial keyboard focus");
   const pointerBase = { x: 11, y: 26, button: "left" as const, timeMs: 1 };
   platformWindow.injectPointer({ ...pointerBase, type: "down" });
   platformWindow.injectPointer({ ...pointerBase, type: "up", timeMs: 2 });
@@ -176,6 +179,88 @@ async function textFieldInteractionSmoke(): Promise<void> {
     timeMs: 7,
   });
   assert.equal(focused, "first");
+
+  win.destroy();
+  backend.disconnect();
+}
+
+async function pathBarInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Path bar smoke", width: 280, height: 60 });
+  let committed = "";
+  let navigated = "";
+  win.setContent(
+    <PathBar
+      x={10}
+      y={10}
+      width={260}
+      value="/Alpha"
+      segments={[
+        { id: "/", label: "/" },
+        { id: "/Alpha", label: "Alpha" },
+      ]}
+      onNavigate={(id) => {
+        navigated = id;
+      }}
+      onCommit={(value) => {
+        committed = value;
+        return undefined;
+      }}
+    />,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectPointer({
+    type: "down",
+    x: 230,
+    y: 26,
+    button: "left",
+    timeMs: 1,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 230,
+    y: 26,
+    button: "left",
+    timeMs: 2,
+  });
+  platformWindow.injectKey({
+    type: "down",
+    code: 45,
+    key: "x",
+    text: "x",
+    modifiers: NO_MODIFIERS,
+    timeMs: 3,
+  });
+  platformWindow.injectKey({
+    type: "down",
+    code: 28,
+    key: "Enter",
+    modifiers: NO_MODIFIERS,
+    timeMs: 4,
+  });
+  assert.equal(committed, "/Alphax", "Edit should autofocus and commit typed input");
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 16,
+    y: 26,
+    button: "left",
+    timeMs: 5,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 16,
+    y: 26,
+    button: "left",
+    timeMs: 6,
+  });
+  assert.equal(navigated, "/", "Breadcrumb segment should navigate on activation");
 
   win.destroy();
   backend.disconnect();
@@ -316,6 +401,7 @@ async function main() {
   process.env.MOIRE_UI_PLATFORM = "headless";
   rendererSmoke();
   await textFieldInteractionSmoke();
+  await pathBarInteractionSmoke();
   const app = new Application({ platform: "headless" });
   const win = new Window({ title: "Smoke", width: 460, height: 600 });
   win.setContent(<SmokeApp onQuit={() => app.quit()} />);

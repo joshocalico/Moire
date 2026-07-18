@@ -70,6 +70,7 @@ type HostPointerProps = {
   data?: unknown;
   onDropHoverChange?: (hovering: boolean) => void;
   focusable?: boolean;
+  autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
   onKeyDown?: HitKeyHandler;
@@ -151,6 +152,7 @@ export type SceneNode = {
   onContextMenu?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
   focusable?: boolean;
+  autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
   onKeyDown?: HitKeyHandler;
@@ -183,6 +185,7 @@ export type HitRegion = {
   onContextMenu?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
   focusable?: boolean;
+  autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
   onKeyDown?: HitKeyHandler;
@@ -232,6 +235,7 @@ function makeNode(
     onContextMenu: props.onContextMenu as HitHandler | undefined,
     onWheel: props.onWheel as ((ev: HitPointerEvent) => void) | undefined,
     focusable: props.focusable as boolean | undefined,
+    autoFocus: props.autoFocus as boolean | undefined,
     focusId: props.focusId as string | undefined,
     onFocusChange: props.onFocusChange as
       | ((focused: boolean) => void)
@@ -322,6 +326,7 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
     node.onWheel = props.onWheel as ((ev: HitPointerEvent) => void) | undefined;
   }
   if ("focusable" in props) node.focusable = props.focusable as boolean | undefined;
+  if ("autoFocus" in props) node.autoFocus = props.autoFocus as boolean | undefined;
   if ("focusId" in props) node.focusId = props.focusId as string | undefined;
   if ("onFocusChange" in props) {
     node.onFocusChange = props.onFocusChange as
@@ -605,6 +610,7 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       onContextMenu: node.onContextMenu,
       onWheel: node.onWheel,
       focusable: node.focusable,
+      autoFocus: node.autoFocus,
       focusId: node.focusId ?? node.id,
       onFocusChange: node.onFocusChange,
       onKeyDown: node.onKeyDown,

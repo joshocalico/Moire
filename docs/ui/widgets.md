@@ -135,7 +135,23 @@ text, Left/Right, Home/End, Backspace/Delete, Enter, and Escape.
 | `onCancel` | `() => void` | |
 | `onFocusChange` | `(focused: boolean) => void` | |
 | `focused` | `boolean` | optional visual focus override |
+| `autoFocus` | `boolean` | focus once when mounted |
+| `invalid` | `boolean` | danger validation stroke |
 | `disabled`, `readOnly` | `boolean` | |
+
+### `Breadcrumbs` / `PathBar`
+
+`Breadcrumbs` renders width-aware, clickable path segments. Every segment is
+also a geometric drop zone identified by its `id`. `PathBar` adds an explicit
+Edit action and swaps to an autofocus `TextField`; Enter validates through
+`onCommit`, while Escape returns to breadcrumbs.
+
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `segments` | `{ id, label }[]` | ordered root-to-current path |
+| `onNavigate` | `(id: string) => void` | segment activation |
+| `value` | `string` | `PathBar` editable location |
+| `onCommit` | `(value) => string \| undefined` | return an error string to remain in edit mode |
 | `height` | `number` | `32` |
 
 ### `Tabs`

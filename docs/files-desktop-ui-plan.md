@@ -15,7 +15,8 @@ registry.
 
 Its largest gaps are structural:
 
-- The Files breadcrumb is a label inside a drop zone, not navigation.
+- Files now has a reusable clickable/editable path bar with breadcrumb drop
+  targets; history, completion, and keyboard location shortcuts remain.
 - Sidebar places are a hard-coded array with no editing or persistence.
 - Focus and basic single-line editing now exist, but selection, clipboard,
   composition, shortcut scopes, and full control keyboard parity remain.

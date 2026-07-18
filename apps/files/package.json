@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Moire Files — native file browser",
   "scripts": {
-    "start": "tsx src/main.ts",
+    "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

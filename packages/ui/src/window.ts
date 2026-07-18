@@ -93,6 +93,7 @@ export class Window {
   private readonly renderer = new SoftwareRenderer();
   private focusedId: string | null = null;
   private focusedHit: HitRegion | null = null;
+  private readonly consumedAutoFocusIds = new Set<string>();
 
   // Pointer state
   private hoverHit: HitRegion | null = null;
@@ -270,8 +271,28 @@ export class Window {
 
   private refreshHits(): void {
     this.hits = collectHits(this.root.container);
+    const presentAutoFocusIds = new Set(
+      this.hits
+        .filter((hit) => hit.autoFocus && hit.focusId)
+        .map((hit) => hit.focusId!),
+    );
+    for (const id of this.consumedAutoFocusIds) {
+      if (!presentAutoFocusIds.has(id)) this.consumedAutoFocusIds.delete(id);
+    }
     if (!this.focusedId) {
       this.focusedHit = null;
+      const candidate = this.hits.find(
+        (hit) =>
+          hit.focusable &&
+          hit.autoFocus &&
+          !!hit.focusId &&
+          !this.consumedAutoFocusIds.has(hit.focusId),
+      );
+      if (candidate?.focusId) {
+        this.consumedAutoFocusIds.add(candidate.focusId);
+        this.changeFocus(candidate);
+        this.dirty = true;
+      }
       return;
     }
     this.focusedHit =
