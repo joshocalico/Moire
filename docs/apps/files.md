@@ -36,8 +36,9 @@ the rest of the desktop.
 
 ## MIME associations and actions
 
-Files resolves a path through `MimeAssociationDatabase` rather than assuming
-an extension-to-app table. Candidate applications combine:
+Files resolves and launches paths through the shared `FileActivationService`
+rather than constructing an extension-to-app table or picker model locally.
+Its `MimeAssociationDatabase` inputs combine:
 
 - shared-mime-info `globs2` and `subclasses`
 - desktop entry `MimeType=` declarations

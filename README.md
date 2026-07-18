@@ -17,8 +17,9 @@ apps/
   session/        # moire-session (dbus + day-0 clients)
   files/          # Moire Files
   settings/       # Appearance / prefs UI
-  portal/         # stub xdg-desktop-portal-moire
+  portal/         # native xdg-desktop-portal AppChooser backend
 packages/
+  dbus/           # pure-TypeScript session D-Bus wire/client/server
   protocol/       # Wayland wire codec
   core/           # surfaces, xdg-shell, DnD, composite
   sys/            # koffi FFI → libdrm, gbm, EGL, libinput, libc
@@ -27,7 +28,7 @@ packages/
   react-host/     # react-reconciler → CPU scene graph + TTF
   ui/             # @moire/ui app SDK + widgets
   shell/          # SSD, launcher, panel, desktop icons
-  app-discovery/  # Freedesktop .desktop + icons
+  app-discovery/  # Freedesktop .desktop + MIME/file activation
 themes/           # bundled theme.json + GTK Moire theme
 docs/             # full documentation tree (start at docs/README.md)
 ```

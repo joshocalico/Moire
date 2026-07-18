@@ -50,11 +50,7 @@ import {
 import { loadSettings } from "@moire/prefs";
 import {
   ContextActionRegistry,
-  buildDesktopExec,
-  discoverApplications,
-  loadMimeAssociationDatabase,
-  resolveApplicationIcon,
-  type DesktopEntry,
+  FileActivationService,
   type FileActionContext,
 } from "@moire/app-discovery";
 import {
@@ -160,14 +156,6 @@ function breadcrumbSegments(cwd: string): BreadcrumbSegment[] {
 
 function openPath(p: string): void {
   spawn("xdg-open", [p], { detached: true, stdio: "ignore" }).unref();
-}
-
-function launchWith(app: DesktopEntry, filePath: string): void {
-  const command = buildDesktopExec(app, [filePath]);
-  spawn("/bin/sh", ["-lc", command], {
-    detached: true,
-    stdio: "ignore",
-  }).unref();
 }
 
 function ensureDir(p: string): void {
@@ -279,14 +267,17 @@ function FilesApp(
   const [renamingPlaceId, setRenamingPlaceId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const activePlace = activePlaceId(cwd, placeList);
-  const applications = useMemo(
-    () => discoverApplications(process.env.XDG_CURRENT_DESKTOP ?? "Moire"),
+  const activation = useMemo(
+    () =>
+      new FileActivationService(({ command }) => {
+        spawn("/bin/sh", ["-lc", command], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
+      }),
     [],
   );
-  const mimeDb = useMemo(
-    () => loadMimeAssociationDatabase(applications),
-    [applications],
-  );
+  const mimeDb = activation.mimeDatabase;
 
   const navigateTo = useCallback((destination: string) => {
     const resolved = path.resolve(destination);
@@ -334,12 +325,9 @@ function FilesApp(
 
   const openDefault = useCallback(
     (filePath: string) => {
-      const mime = mimeDb.mimeTypeForPath(filePath);
-      const app = mimeDb.defaultApplicationForMime(mime);
-      if (app) launchWith(app, filePath);
-      else openPath(filePath);
+      if (!activation.openDefault(filePath)) openPath(filePath);
     },
-    [mimeDb],
+    [activation],
   );
 
   const openEntry = useCallback(
@@ -355,12 +343,12 @@ function FilesApp(
 
   const showOpenWith = useCallback(
     (e: Entry) => {
-      const choices = mimeDb.applicationsForPath(e.path);
+      const model = activation.openWithModel(e.path);
       setPickerEntry(e);
-      setPickerSelection(choices[0]?.id ?? null);
+      setPickerSelection(model.selectedId);
       setMenu(null);
     },
-    [mimeDb],
+    [activation],
   );
 
   const actionRegistry = useMemo(() => {
@@ -537,38 +525,12 @@ function FilesApp(
   };
 
   const selectedEntry = entries[selected] ?? null;
-  const pickerMime = pickerEntry
-    ? mimeDb.mimeTypeForPath(pickerEntry.path)
-    : "application/octet-stream";
-  const recommendedPickerApps = pickerEntry
-    ? mimeDb.applicationsForMime(pickerMime)
-    : [];
-  const recommendedPickerIds = new Set(
-    recommendedPickerApps.map((app) => app.id),
-  );
-  const pickerApps = pickerEntry
-    ? [
-        ...recommendedPickerApps,
-        ...applications.filter((app) => !recommendedPickerIds.has(app.id)),
-      ]
-    : [];
-  const defaultPickerApp = pickerEntry
-    ? mimeDb.defaultApplicationForMime(pickerMime)
+  const pickerModel = pickerEntry
+    ? activation.openWithModel(pickerEntry.path)
     : null;
-  const pickerChoices = pickerApps.map((app) => ({
-    id: app.id,
-    name: app.name,
-    description: app.comment ?? app.genericName ?? app.exec,
-    isDefault: app.id === defaultPickerApp?.id,
-    recommended: recommendedPickerIds.has(app.id),
-    iconPath: resolveApplicationIcon(app.icon),
-  }));
   const finishOpenWith = (desktopId: string, makeDefault: boolean) => {
     if (!pickerEntry) return;
-    const app = pickerApps.find((candidate) => candidate.id === desktopId);
-    if (!app) return;
-    if (makeDefault) mimeDb.setDefaultApplication(pickerMime, desktopId);
-    launchWith(app, pickerEntry.path);
+    if (!activation.openWith(pickerEntry.path, desktopId, makeDefault)) return;
     setPickerEntry(null);
     setPickerSelection(null);
   };
@@ -1071,13 +1033,13 @@ function FilesApp(
           onDismiss={() => setMenu(null)}
         />
       ) : null}
-      {pickerEntry ? (
+      {pickerEntry && pickerModel ? (
         <OpenWithPicker
           viewportWidth={props.width}
           viewportHeight={props.height}
-          fileName={pickerEntry.name}
-          mimeType={pickerMime}
-          choices={pickerChoices}
+          fileName={pickerModel.fileName}
+          mimeType={pickerModel.mimeType}
+          choices={pickerModel.choices}
           selectedId={pickerSelection}
           onSelect={setPickerSelection}
           onOpen={(id) => finishOpenWith(id, false)}

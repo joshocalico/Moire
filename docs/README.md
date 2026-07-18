@@ -74,8 +74,9 @@ apps/
   session/        moire-session (dbus + day-0 clients)
   files/          Moire Files
   settings/       Settings
-  portal/         xdg-desktop-portal stub
+  portal/         native xdg-desktop-portal AppChooser backend
 packages/
+  dbus/           pure-TypeScript session D-Bus wire/client/server
   protocol/       Wayland wire codec
   core/           Surfaces, xdg-shell, DnD, composite
   sys/            DRM/GBM/EGL/libinput FFI
@@ -84,7 +85,7 @@ packages/
   react-host/     React → retained scene + renderer backends
   ui/             App SDK + widgets
   shell/          Panel, launcher, SSD, desktop
-  app-discovery/  .desktop discovery, MIME associations, action registry
+  app-discovery/  .desktop discovery, MIME/file activation, action registry
 themes/
   default/ light/ Bundled theme.json
   Moire/          GTK theme for CSD clients

@@ -8,6 +8,7 @@ How Moire runs inside the Parallels guest (MoireDev).
 | --- | --- |
 | Files | File manager |
 | foot | Terminal |
+| Portal backend | Moire-native Open With chooser, D-Bus activated on demand |
 
 Nautilus is intentionally out of the Moire session once Files is verified.
 
@@ -27,6 +28,13 @@ This makes `xdg-open <folder>` launch Files with that folder. The association is
 - Config under `~/.config/moire/`.
 - Default-app association under `~/.config/mimeapps.list`.
 - Files launcher/entry under `~/.local/bin` and `~/.local/share/applications`.
+- AppChooser backend manifest/config under `~/.local/share/xdg-desktop-portal/`.
+- D-Bus activation entry under `~/.local/share/dbus-1/services/`.
+
+`xdg-desktop-portal` owns the public `org.freedesktop.portal.Desktop` API.
+For Moire sessions it routes `org.freedesktop.impl.portal.AppChooser` to the
+D-Bus-activatable `apps/portal` process; unsupported interfaces fall back to
+the GTK backend.
 
 ## Scripts
 

@@ -44,7 +44,9 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 | `react-host` | Retained scene graph, renderer contract, software renderer, hit regions |
 | `ui` | Portable app SDK (no Wayland in widgets) |
 | `shell` | DE chrome attached to the compositor process |
-| `app-discovery` | Freedesktop `.desktop`, shared MIME, `mimeapps.list`, and context-action registry |
+| `app-discovery` | Freedesktop `.desktop`, shared MIME, canonical file activation/Open With policy, and context-action registry |
+| `dbus` | Pure-TypeScript session-bus authentication, wire codec, calls, exported objects, replies, errors, and signals |
+| `apps/portal` | D-Bus-activatable `org.freedesktop.impl.portal.AppChooser` backend using the shared picker/model |
 
 ## Two React worlds
 
@@ -52,6 +54,11 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 2. **UI apps** — Files/Settings use `Application` + `Window`, connect as normal Wayland clients, present SHM buffers each tick.
 
 Both share widgets/tokens where possible; shell re-exports or duplicates thin wrappers (`packages/shell/src/widgets.tsx`).
+
+Files and the desktop shell host `FileActivationService` directly today. The
+portal hosts the same policy behind the session bus, so sandboxed and third-party
+apps reach the canonical chooser through `org.freedesktop.portal.OpenURI` while
+native Moire surfaces do not fork MIME/default/icon logic.
 
 ## Design rules
 

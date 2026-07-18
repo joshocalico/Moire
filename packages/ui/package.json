@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "bin": {
-    "moire-ui-smoke": "./src/smoke.ts"
+    "moire-ui-smoke": "./src/smoke.tsx"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",

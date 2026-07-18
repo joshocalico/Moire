@@ -305,6 +305,12 @@ async function openWithPickerInteractionSmoke(): Promise<void> {
             isDefault: true,
           },
           {
+            id: "editor.desktop",
+            name: "Duplicate Editor Association",
+            description: "A malformed duplicate must be ignored",
+            recommended: true,
+          },
+          {
             id: "writer.desktop",
             name: "Writer",
             description: "Create rich documents",

@@ -2,8 +2,7 @@ import {
   discoverApplications,
   filterApplications,
   ContextActionRegistry,
-  buildDesktopExec,
-  loadMimeAssociationDatabase,
+  FileActivationService,
   type DesktopEntry,
   type FileActionContext,
 } from "@moire/app-discovery";
@@ -309,7 +308,16 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     ),
   ];
   let apps = mergeApps();
-  let mimeDb = loadMimeAssociationDatabase(apps);
+  const createActivationService = (applications: DesktopEntry[]) =>
+    new FileActivationService((activation) => {
+      const child = spawn({ exec: activation.command });
+      child.unref?.();
+      console.log(
+        `[shell] file activation: ${activation.filePath} → ${activation.command}`,
+      );
+    }, applications);
+  let activation = createActivationService(apps);
+  let mimeDb = activation.mimeDatabase;
   let open = process.env.MOIRE_SHELL_START_OPEN === "1";
   let query = "";
   let selected = 0;
@@ -402,7 +410,8 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
   const refreshApps = () => {
     apps = mergeApps();
-    mimeDb = loadMimeAssociationDatabase(apps);
+    activation = createActivationService(apps);
+    mimeDb = activation.mimeDatabase;
     dirty = true;
     desktopDirty = true;
   };
@@ -419,14 +428,12 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   const openDesktopEntry = (name: string) => {
     const filePath = path.join(desktopDir(), name);
     try {
-      const mime = mimeDb.mimeTypeForPath(filePath);
-      const app = mimeDb.defaultApplicationForMime(mime);
-      const exec = app
-        ? buildDesktopExec(app, [filePath])
-        : `xdg-open ${pathToFileURL(filePath).href}`;
-      const child = spawn({ exec });
-      child.unref?.();
-      console.log(`[shell] desktop open: ${filePath} → ${exec}`);
+      if (!activation.openDefault(filePath)) {
+        const exec = `xdg-open ${pathToFileURL(filePath).href}`;
+        const child = spawn({ exec });
+        child.unref?.();
+        console.log(`[shell] desktop open fallback: ${filePath} → ${exec}`);
+      }
     } catch (err) {
       console.error(`[shell] desktop open failed:`, err);
     }
@@ -434,10 +441,10 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
   const showDesktopOpenWith = (name: string) => {
     const filePath = path.join(desktopDir(), name);
-    const choices = mimeDb.applicationsForPath(filePath);
+    const model = activation.openWithModel(filePath);
     desktopMenu = null;
     desktopPickerName = name;
-    desktopPickerSelection = choices[0]?.id ?? null;
+    desktopPickerSelection = model.selectedId;
     dirty = true;
   };
 
@@ -447,17 +454,8 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     makeDefault: boolean,
   ) => {
     const filePath = path.join(desktopDir(), name);
-    const mime = mimeDb.mimeTypeForPath(filePath);
-    const app = mimeDb
-      .applicationsForMime(mime)
-      .find((candidate) => candidate.id === desktopId);
-    if (!app) return;
     try {
-      if (makeDefault) mimeDb.setDefaultApplication(mime, desktopId);
-      const exec = buildDesktopExec(app, [filePath]);
-      const child = spawn({ exec });
-      child.unref?.();
-      console.log(`[shell] desktop open-with: ${filePath} → ${exec}`);
+      if (!activation.openWith(filePath, desktopId, makeDefault)) return;
     } catch (err) {
       console.error(`[shell] desktop open-with failed:`, err);
     }
@@ -667,12 +665,9 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     const pickerPath = pickerName
       ? path.join(desktopDir(), pickerName)
       : null;
-    const pickerMime = pickerPath
-      ? mimeDb.mimeTypeForPath(pickerPath)
-      : "application/octet-stream";
-    const pickerApps = pickerPath
-      ? mimeDb.applicationsForMime(pickerMime)
-      : [];
+    const pickerModel = pickerPath
+      ? activation.openWithModel(pickerPath)
+      : null;
     renderShell(
       root,
       createElement(
@@ -729,18 +724,13 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
               },
             })
           : null,
-        pickerName
+        pickerName && pickerModel
           ? createElement(OpenWithPicker, {
               viewportWidth: width,
               viewportHeight: height - pal.panelHeight,
-              fileName: pickerName,
-              mimeType: pickerMime,
-              choices: pickerApps.map((app, index) => ({
-                id: app.id,
-                name: app.name,
-                description: app.comment ?? app.genericName ?? app.exec,
-                isDefault: index === 0,
-              })),
+              fileName: pickerModel.fileName,
+              mimeType: pickerModel.mimeType,
+              choices: pickerModel.choices,
               selectedId: desktopPickerSelection,
               onSelect: (id) => {
                 desktopPickerSelection = id;

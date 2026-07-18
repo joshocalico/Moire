@@ -14,6 +14,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Theme tokens + atmosphere wallpaper | Shipped — cached paint, ambient drift, prefs override |
 | Settings (Appearance / Sound) | Shipped — live `applySettings`, wallpaper presets |
 | Moire Files | Shipped — richer navigation/selection hierarchy, grid/list, Open With, context actions, Wayland DnD |
+| Portal / session D-Bus | Shipped baseline — internal TypeScript D-Bus stack and native AppChooser backend; remaining portal interfaces use GTK |
 | Desktop icons | Shipped — paint under windows, select/open, layout persist, reposition + folder drops |
 | Wayland DnD | Shipped — compositor session, desktop drop sink, hotspot previews + rejected-drop return animation |
 | Panel / launcher chrome | Shipped — brand-forward panel, list launcher |
@@ -37,7 +38,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | File thumbnails | Image widget ready; generators not shipped |
 | Trash / gvfs places | Network and trash backends |
 | Notifications | Prefs field exists; no toast daemon |
-| Portal | `xdg-desktop-portal-moire` beyond stub |
+| Portal expansion | FileChooser, Settings, Screenshot, Wallpaper, and other Moire-native backend interfaces |
 | Multi-monitor | Per-output wallpapers / layout |
 | X11 XDND | Out of scope for pure X11; Xwayland via Wayland DnD only |
 

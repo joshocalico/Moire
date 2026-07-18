@@ -13,6 +13,8 @@ export GDK_BACKEND="${GDK_BACKEND:-wayland}"
 # GTK/GSK: virgl path still SIGSEGVs on Parallels; Cairo is the day-0 renderer.
 export GSK_RENDERER="${GSK_RENDERER:-cairo}"
 export PATH="$HOME/.local/bin:$PATH"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 
 # Moire GTK theme helpers (LibreOffice GTK3 CSD + libadwaita dark chrome).
 # shellcheck source=apply-gtk-theme.sh
@@ -25,6 +27,23 @@ if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
 fi
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
+
+# Install the development-tree portal backend into this session's XDG roots.
+# The D-Bus daemon can then activate it on demand when xdg-desktop-portal asks
+# for Moire's AppChooser implementation.
+mkdir -p \
+  "$XDG_DATA_HOME/dbus-1/services" \
+  "$XDG_DATA_HOME/xdg-desktop-portal/portals" \
+  "$XDG_DATA_HOME/xdg-desktop-portal"
+cp "$ROOT/apps/portal/moire.portal" \
+  "$XDG_DATA_HOME/xdg-desktop-portal/portals/moire.portal"
+cp "$ROOT/apps/portal/moire-portals.conf" \
+  "$XDG_DATA_HOME/xdg-desktop-portal/moire-portals.conf"
+cat >"$XDG_DATA_HOME/dbus-1/services/org.freedesktop.impl.portal.desktop.moire.service" <<EOF
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.moire
+Exec=$ROOT/apps/portal/moire-portal
+EOF
 
 if [[ -z "${MOIRE_COMPOSITOR:-}" ]]; then
   MOIRE_COMPOSITOR="pnpm --dir ${ROOT} --filter @moire/compositor exec tsx src/main.ts"
@@ -132,6 +151,6 @@ session_inner() {
 
 export -f session_inner
 export -f moire_apply_gtk_theme
-export MOIRE_COMPOSITOR SOCKET ROOT
+export MOIRE_COMPOSITOR SOCKET ROOT XDG_DATA_HOME XDG_CONFIG_HOME
 # Run inside one D-Bus session so GTK apps share the bus with the compositor.
 exec dbus-run-session -- bash -c 'session_inner'

@@ -104,7 +104,7 @@ export class Window {
   private hits: HitRegion[] = [];
   private dirty = true;
   private closed = false;
-  private onCloseCb: (() => void) | null = null;
+  private readonly onCloseCallbacks = new Set<() => void>();
   /** Current Wayland/headless presentation path consumes software frames. */
   private readonly renderer = new SoftwareRenderer();
   private focusedId: string | null = null;
@@ -146,7 +146,7 @@ export class Window {
   }
 
   onClose(cb: () => void): void {
-    this.onCloseCb = cb;
+    this.onCloseCallbacks.add(cb);
   }
 
   getWidth(): number {
@@ -193,7 +193,7 @@ export class Window {
     });
     pw.onClose(() => {
       this.closed = true;
-      this.onCloseCb?.();
+      for (const callback of this.onCloseCallbacks) callback();
     });
     pw.onPointer((ev) => this.handlePointer(ev));
     pw.onKey((ev) => this.handleKey(ev));
@@ -291,6 +291,7 @@ export class Window {
 
   private tickFrame(advanceMotions: boolean): void {
     if (this.closed || !this.platformWin) return;
+    const platformWin = this.platformWin;
 
     // Advance motions; mark dirty if anything is still moving.
     const now = Date.now();
@@ -308,12 +309,15 @@ export class Window {
         ? this.content({ width: this.width, height: this.height })
         : this.content;
     renderShell(this.root, tree);
+    // Rendering may synchronously finish a closing popup and destroy this
+    // platform window. Do not present through a handle invalidated mid-frame.
+    if (this.closed || this.platformWin !== platformWin) return;
     const frame = this.renderer.render(this.root.container, {
       width: this.width,
       height: this.height,
     });
     this.refreshHits();
-    this.platformWin.present(frame.pixels, frame.width, frame.height);
+    platformWin.present(frame.pixels, frame.width, frame.height);
   }
 
   requestRedraw(): void {

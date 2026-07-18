@@ -2,5 +2,24 @@
   "name": "@moire/portal",
   "version": "0.0.0",
   "private": true,
-  "description": "Stub — xdg-desktop-portal-moire (post day-0)"
+  "type": "module",
+  "description": "Moire xdg-desktop-portal backend",
+  "scripts": {
+    "start": "tsx src/main.tsx",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx src/smoke.ts"
+  },
+  "dependencies": {
+    "@moire/app-discovery": "workspace:*",
+    "@moire/dbus": "workspace:*",
+    "@moire/prefs": "workspace:*",
+    "@moire/ui": "workspace:*",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
 }

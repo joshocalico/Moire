@@ -24,9 +24,9 @@ Path: `~/.config/moire/desktop-layout.json` (guest home under the Moire session 
 
 Stores icon positions keyed by path/id. Missing entries get auto-placed on a grid.
 
-Desktop opens resolve through Moire's freedesktop association database and
-expand the selected desktop entry's `Exec` field codes safely. The Open With
-picker can launch once or update the user default. `moire-session` still
+Desktop opens resolve through the same `FileActivationService` used by Files;
+the shell no longer builds its own shortened Open With list. The canonical
+picker model can launch once or update the user default. `moire-session` still
 registers Files as the initial `inode/directory` handler; see
 [Files](../apps/files.md#default-directory-handler).
 

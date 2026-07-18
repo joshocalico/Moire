@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { discoverApplications, xdgDataDirs } from "./index.js";
+import { discoverApplications, xdgDataDirs } from "./applications.js";
 import type { DesktopEntry } from "./desktop.js";
 
 type Associations = {

@@ -264,6 +264,8 @@ export type OpenWithPickerProps = {
   onSelect: (id: string) => void;
   onOpen: (id: string) => void;
   onMakeDefault: (id: string) => void;
+  /** Portal choosers select an app but do not change MIME defaults directly. */
+  allowMakeDefault?: boolean;
   onDismiss: () => void;
 };
 
@@ -282,7 +284,13 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
   const listH = Math.max(120, height - listTop - footerH);
   const footerY = listTop + listH;
   const normalizedQuery = query.trim().toLowerCase();
-  const filtered = props.choices.filter((choice) => {
+  const seenChoiceIds = new Set<string>();
+  const uniqueChoices = props.choices.filter((choice) => {
+    if (seenChoiceIds.has(choice.id)) return false;
+    seenChoiceIds.add(choice.id);
+    return true;
+  });
+  const filtered = uniqueChoices.filter((choice) => {
     if (!normalizedQuery) return true;
     return (
       choice.name.toLowerCase().includes(normalizedQuery) ||
@@ -568,16 +576,18 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
           variant="ghost"
           onPress={props.onDismiss}
         />
-        <Button
-          x={width - 250}
-          y={footerY + 20}
-          width={132}
-          height={34}
-          label={selectedChoice?.isDefault ? "Default App" : "Set as Default"}
-          variant="secondary"
-          disabled={!canOpen || selectedChoice?.isDefault}
-          onPress={selected ? () => props.onMakeDefault(selected) : undefined}
-        />
+        {props.allowMakeDefault !== false ? (
+          <Button
+            x={width - 250}
+            y={footerY + 20}
+            width={132}
+            height={34}
+            label={selectedChoice?.isDefault ? "Default App" : "Set as Default"}
+            variant="secondary"
+            disabled={!canOpen || selectedChoice?.isDefault}
+            onPress={selected ? () => props.onMakeDefault(selected) : undefined}
+          />
+        ) : null}
         <Button
           x={width - 108}
           y={footerY + 20}

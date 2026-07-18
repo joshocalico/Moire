@@ -13,6 +13,7 @@ sudo apt-get install -y \
   libinput-dev libxkbcommon-dev libseat-dev seatd \
   wayland-protocols libwayland-dev \
   dbus dbus-user-session \
+  xdg-desktop-portal xdg-desktop-portal-gtk \
   nautilus gvfs gvfs-backends foot xwayland \
   adwaita-icon-theme hicolor-icon-theme mesa-utils
 
