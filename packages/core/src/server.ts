@@ -1961,36 +1961,6 @@ export class CompositorServer {
     });
   }
 
-  /** True if (session, surfaceId) is a mapped popup under an active grab. */
-  isUnderPopupGrab(session: ClientSession, surfaceId: number): boolean {
-    let s = session.surfaceById(surfaceId);
-    while (s) {
-      if (s.role === "popup" && s.popupGrabbed) return true;
-      if (s.role === "popup" && s.parentId != null) {
-        s = session.surfaceById(s.parentId);
-        continue;
-      }
-      break;
-    }
-    // Also: any popup in the grab chain that is this surface
-    for (const e of this.popupStack) {
-      if (e.session === session && e.surfaceId === surfaceId) {
-        const p = e.session.surfaceById(e.surfaceId);
-        if (p?.popupGrabbed) return true;
-        // Child of a grabbed popup?
-        let cur = p;
-        while (cur?.parentId != null) {
-          const parent = e.session.surfaceById(cur.parentId);
-          if (!parent) break;
-          if (parent.popupGrabbed) return true;
-          if (parent.role !== "popup") break;
-          cur = parent;
-        }
-      }
-    }
-    return false;
-  }
-
   /** Move toplevel to the top of the stack (painted last / hit first). */
   raiseToplevel(session: ClientSession, surfaceId: number): void {
     // Reorder only — do not clear focusedToplevel (unregister would).
@@ -2161,7 +2131,13 @@ export class CompositorServer {
       return;
     }
 
-    if (this.shell?.onKey(ev)) return;
+    if (this.shell?.onKey(ev)) {
+      // Shell overlays and grabbed client popups are both modal layers. If a
+      // global shortcut opens shell chrome, close the client popup first so
+      // two competing modal layers can never coexist.
+      if (this.hasGrabbedPopup()) this.dismissGrabbedPopups();
+      return;
+    }
 
     if (!this.focused) {
       for (const c of this.clients) {
@@ -2195,6 +2171,11 @@ export class CompositorServer {
     // never sees a stray hover enter/motion ahead of the DnD enter.
     // (startDesktopDrag already runs updateDragFocus once for this position.)
     if (this.maybeEscalateDesktopDrag()) return;
+    const popupHit = this.hitTestPopup(this.cursorX, this.cursorY);
+    if (popupHit || this.hasGrabbedPopup()) {
+      this.updatePointerFocus(ev.timeMs, true, popupHit);
+      return;
+    }
     if (
       this.shell?.onPointerMotion?.({ x: this.cursorX, y: this.cursorY })
     ) {
@@ -2238,6 +2219,11 @@ export class CompositorServer {
     // never sees a stray hover enter/motion ahead of the DnD enter.
     // (startDesktopDrag already runs updateDragFocus once for this position.)
     if (this.maybeEscalateDesktopDrag()) return;
+    const popupHit = this.hitTestPopup(this.cursorX, this.cursorY);
+    if (popupHit || this.hasGrabbedPopup()) {
+      this.updatePointerFocus(ev.timeMs, true, popupHit);
+      return;
+    }
     if (
       this.shell?.onPointerMotion?.({ x: this.cursorX, y: this.cursorY })
     ) {
@@ -2314,7 +2300,19 @@ export class CompositorServer {
       this.endGrab();
     }
 
+    const popupHit = this.hitTestPopup(this.cursorX, this.cursorY);
+    const popupGrabbed = this.hasGrabbedPopup();
+    // Popup grabs outrank shell chrome. A press outside dismisses and is
+    // consumed; a press inside routes to the popup even over the panel.
+    if (ev.value === 1 && popupGrabbed && !popupHit) {
+      this.updatePointerFocus(ev.timeMs, false, null);
+      this.dismissGrabbedPopups();
+      return;
+    }
+
     if (
+      !popupHit &&
+      !popupGrabbed &&
       this.shell?.onPointerButton({
         timeMs: ev.timeMs,
         button: ev.code,
@@ -2327,7 +2325,7 @@ export class CompositorServer {
     }
 
     // Geometric SSD hit-test — refresh list so positions match latest moves.
-    if (ev.value === 1) {
+    if (ev.value === 1 && !popupHit) {
       this.ssdWindows = this.collectSsdWindows();
       const action = this.hitSsd(this.cursorX, this.cursorY);
       if (action) {
@@ -2337,7 +2335,11 @@ export class CompositorServer {
       }
     }
 
-    this.updatePointerFocus(ev.timeMs, false);
+    this.updatePointerFocus(
+      ev.timeMs,
+      false,
+      popupHit || popupGrabbed ? popupHit : undefined,
+    );
     this.updateHoverEdges();
     const hit = this.pointerFocus;
 
@@ -2352,17 +2354,6 @@ export class CompositorServer {
           y: this.cursorY,
         })
       ) {
-        return;
-      }
-    }
-
-    // Grabbing popup: press outside the grab tree dismisses and consumes.
-    if (ev.value === 1 && this.hasGrabbedPopup()) {
-      if (
-        !hit ||
-        !this.isUnderPopupGrab(hit.session, hit.surfaceId)
-      ) {
-        this.dismissGrabbedPopups();
         return;
       }
     }
@@ -2801,29 +2792,8 @@ export class CompositorServer {
     y: number,
   ): { session: ClientSession; surface: SurfaceState } | null {
     // Popups sit above all toplevels.
-    for (let i = this.popupStack.length - 1; i >= 0; i--) {
-      const entry = this.popupStack[i]!;
-      entry.session.layout();
-      const surf = entry.session.surfaceById(entry.surfaceId);
-      if (!surf || !surf.mapped || !surf.pixels) continue;
-      if (entry.session.isHidden(surf)) continue;
-      this.layoutPopup(entry.session, surf);
-      const gw = surf.geomW > 0 ? surf.geomW : surf.width;
-      const gh = surf.geomH > 0 ? surf.geomH : surf.height;
-      const ox = surf.x + (surf.geomW > 0 ? surf.geomX : 0);
-      const oy = surf.y + (surf.geomH > 0 ? surf.geomY : 0);
-      if (x >= ox && y >= oy && x < ox + gw && y < oy + gh) {
-        return { session: entry.session, surface: surf };
-      }
-      if (
-        x >= surf.x &&
-        y >= surf.y &&
-        x < surf.x + surf.width &&
-        y < surf.y + surf.height
-      ) {
-        return { session: entry.session, surface: surf };
-      }
-    }
+    const popup = this.hitTestPopup(x, y);
+    if (popup) return popup;
 
     // Walk top → bottom so the raised window wins.
     for (let i = this.stack.length - 1; i >= 0; i--) {
@@ -2876,8 +2846,45 @@ export class CompositorServer {
     return null;
   }
 
-  private updatePointerFocus(timeMs: number, sendMotion: boolean): void {
-    const hit = this.hitTest(this.cursorX, this.cursorY);
+  private hitTestPopup(
+    x: number,
+    y: number,
+  ): { session: ClientSession; surface: SurfaceState } | null {
+    for (let i = this.popupStack.length - 1; i >= 0; i--) {
+      const entry = this.popupStack[i]!;
+      entry.session.layout();
+      const surf = entry.session.surfaceById(entry.surfaceId);
+      if (!surf || !surf.mapped || !surf.pixels) continue;
+      if (entry.session.isHidden(surf)) continue;
+      this.layoutPopup(entry.session, surf);
+      const gw = surf.geomW > 0 ? surf.geomW : surf.width;
+      const gh = surf.geomH > 0 ? surf.geomH : surf.height;
+      const ox = surf.x + (surf.geomW > 0 ? surf.geomX : 0);
+      const oy = surf.y + (surf.geomH > 0 ? surf.geomY : 0);
+      if (x >= ox && y >= oy && x < ox + gw && y < oy + gh) {
+        return { session: entry.session, surface: surf };
+      }
+      if (
+        x >= surf.x &&
+        y >= surf.y &&
+        x < surf.x + surf.width &&
+        y < surf.y + surf.height
+      ) {
+        return { session: entry.session, surface: surf };
+      }
+    }
+    return null;
+  }
+
+  private updatePointerFocus(
+    timeMs: number,
+    sendMotion: boolean,
+    forcedHit?: { session: ClientSession; surface: SurfaceState } | null,
+  ): void {
+    const hit =
+      forcedHit === undefined
+        ? this.hitTest(this.cursorX, this.cursorY)
+        : forcedHit;
     const prev = this.pointerFocus;
     const nextId = hit?.surface.id ?? null;
     const prevId = prev?.surfaceId ?? null;
@@ -3329,6 +3336,72 @@ export class CompositorServer {
     }
   }
 
+  /** Paint mapped xdg_popup surfaces above chrome and release their buffers. */
+  private paintPopups(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+  ): number {
+    let painted = 0;
+    for (const entry of this.popupStack) {
+      const client = entry.session;
+      const surf = client.surfaceById(entry.surfaceId);
+      if (!surf || !surf.mapped || !surf.pixels) continue;
+      this.layoutPopup(client, surf);
+      const hidden = client.isHidden(surf);
+      if (
+        !hidden &&
+        !(
+          surf.x >= width ||
+          surf.y >= height ||
+          surf.x + surf.width <= 0 ||
+          surf.y + surf.height <= 0
+        )
+      ) {
+        try {
+          const useGeom = surf.geomW > 0 && surf.geomH > 0;
+          this.blitArgb(
+            fb,
+            pitchPx,
+            width,
+            height,
+            surf.x,
+            surf.y,
+            surf.pixels,
+            surf.width,
+            surf.height,
+            surf.stride,
+            useGeom
+              ? {
+                  x: surf.geomX,
+                  y: surf.geomY,
+                  w: surf.geomW,
+                  h: surf.geomH,
+                }
+              : undefined,
+          );
+          painted++;
+        } catch (err) {
+          console.error(
+            `[composite] popup blit failed ${surf.width}x${surf.height}:`,
+            err,
+          );
+        }
+      }
+      for (const cbId of surf.frameCallbacks) {
+        client.sendCallbackDone(cbId, monotonicMs());
+        client.deleteId(cbId);
+      }
+      surf.frameCallbacks = [];
+      for (const bufId of surf.releaseBuffers) {
+        client.sendBufferRelease(bufId);
+      }
+      surf.releaseBuffers = [];
+    }
+    return painted;
+  }
+
   /** Paint wallpaper + all mapped surfaces into the KMS dumb buffer. */
   composite(): void {
     const kms = this.kms;
@@ -3462,62 +3535,6 @@ export class CompositorServer {
         }
       }
 
-      // xdg_popup surfaces — above all toplevels.
-      for (const entry of this.popupStack) {
-        const client = entry.session;
-        const surf = client.surfaceById(entry.surfaceId);
-        if (!surf || !surf.mapped || !surf.pixels) continue;
-        this.layoutPopup(client, surf);
-        const hidden = client.isHidden(surf);
-        if (
-          !hidden &&
-          !(
-            surf.x >= kms.width ||
-            surf.y >= kms.height ||
-            surf.x + surf.width <= 0 ||
-            surf.y + surf.height <= 0
-          )
-        ) {
-          try {
-            const useGeom = surf.geomW > 0 && surf.geomH > 0;
-            this.blitArgb(
-              fb,
-              pitchPx,
-              kms.width,
-              kms.height,
-              surf.x,
-              surf.y,
-              surf.pixels,
-              surf.width,
-              surf.height,
-              surf.stride,
-              useGeom
-                ? {
-                    x: surf.geomX,
-                    y: surf.geomY,
-                    w: surf.geomW,
-                    h: surf.geomH,
-                  }
-                : undefined,
-            );
-            painted++;
-          } catch (err) {
-            console.error(
-              `[composite] popup blit failed ${surf.width}x${surf.height}:`,
-              err,
-            );
-          }
-        }
-        for (const cbId of surf.frameCallbacks) {
-          client.sendCallbackDone(cbId, monotonicMs());
-          client.deleteId(cbId);
-        }
-        surf.frameCallbacks = [];
-        for (const bufId of surf.releaseBuffers) {
-          client.sendBufferRelease(bufId);
-        }
-        surf.releaseBuffers = [];
-      }
     } finally {
       try {
         this.ssdWindows = this.collectSsdWindows();
@@ -3534,6 +3551,13 @@ export class CompositorServer {
         this.shell?.paint(fb, pitchPx, kms.width, kms.height);
       } catch (err) {
         console.error("[shell] paint:", err);
+      }
+      // Native menus/flyouts are the top interactive layer. They must remain
+      // visible and clickable even when their bounds cross the bottom panel.
+      try {
+        painted += this.paintPopups(fb, pitchPx, kms.width, kms.height);
+      } catch (err) {
+        console.error("[composite] paintPopups:", err);
       }
       this.paintDragPreview(fb, pitchPx, kms.width, kms.height);
       this.drawCursor(fb, pitchPx, kms.width, kms.height);
