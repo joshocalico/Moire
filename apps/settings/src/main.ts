@@ -16,6 +16,7 @@ import {
   Tabs,
   Slider,
   ProgressBar,
+  ScrollArea,
   Surface,
   themePalette,
   setUiScaleFactor,
@@ -29,6 +30,13 @@ import {
   type MoireSettings,
   type WallpaperSettings,
 } from "@moire/prefs";
+import { SessionBus } from "@moire/dbus";
+
+type DisplayController = {
+  modes: string[];
+  current: string;
+  setMode: (modeId: string) => Promise<void>;
+};
 
 /** Appearance / Sound body height so parent Yoga gets a real flex slot (nested
  *  Columns without height collapse to 0 and overlap siblings). */
@@ -38,6 +46,7 @@ function SettingsApp(
   props: WindowSize & {
     onQuit: () => void;
     initial: MoireSettings;
+    display: DisplayController | null;
   },
 ): ReactNode {
   const pal = themePalette();
@@ -49,6 +58,7 @@ function SettingsApp(
   const [showDesktopIcons, setShowDesktopIcons] = useState(props.initial.showDesktopIcons);
   const [wallpaper, setWallpaper] = useState<WallpaperSettings | null>(props.initial.wallpaper);
   const [status, setStatus] = useState("");
+  const [displayMode, setDisplayMode] = useState(props.display?.current ?? "");
   const volumeReady = useRef(false);
   const ui = getUiScaleFactor();
   const pad = Math.round(16 * ui);
@@ -147,7 +157,7 @@ function SettingsApp(
       }),
       createElement(Tabs, {
         width: innerW,
-        tabs: ["Appearance", "Sound", "About"],
+        tabs: ["Appearance", "Displays", "Sound", "About"],
         active: tab,
         onChange: setTab,
         height: tabH,
@@ -252,6 +262,89 @@ function SettingsApp(
               width: innerW,
               height: bodyMin,
               minHeight: bodyMin,
+              gap: Math.round(10 * ui),
+            },
+            createElement(Label, {
+              text: "Display resolution",
+              fontWeight: "medium",
+              width: innerW,
+              height: labelH,
+            }),
+            props.display
+              ? createElement(
+                  ScrollArea,
+                  {
+                    width: Math.min(Math.round(380 * ui), innerW),
+                    height: Math.max(Math.round(160 * ui), bodyMin - Math.round(72 * ui)),
+                    contentHeight: Math.max(
+                      1,
+                      props.display.modes.length *
+                        (btnH + Math.round(8 * ui)),
+                    ),
+                  },
+                  createElement(
+                    Column,
+                    {
+                      width: Math.min(Math.round(360 * ui), innerW),
+                      height: Math.max(
+                        1,
+                        props.display.modes.length *
+                          (btnH + Math.round(8 * ui)),
+                      ),
+                      gap: Math.round(8 * ui),
+                    },
+                    ...props.display.modes.map((modeId) =>
+                      createElement(Button, {
+                        key: modeId,
+                        width: Math.min(Math.round(360 * ui), innerW),
+                        height: btnH,
+                        label: displayModeLabel(modeId),
+                        variant:
+                          displayMode === modeId ? "primary" : "secondary",
+                        onPress: () => {
+                          setStatus(
+                            `Switching to ${displayModeLabel(modeId)}…`,
+                          );
+                          void props.display
+                            ?.setMode(modeId)
+                            .then(() => {
+                              setDisplayMode(modeId);
+                              setStatus(
+                                `Display ${displayModeLabel(modeId)}`,
+                              );
+                            })
+                            .catch((error: unknown) => {
+                              setStatus(
+                                `Display change failed: ${error instanceof Error ? error.message : String(error)}`,
+                              );
+                            });
+                        },
+                      }),
+                    ),
+                  ),
+                )
+              : createElement(Label, {
+                  text: "Display service unavailable",
+                  color: pal.muted,
+                  width: innerW,
+                  height: labelH,
+                }),
+            createElement(Label, {
+              text: "Changes are applied live and published to Wayland clients.",
+              color: pal.muted,
+              width: innerW,
+              height: Math.round(18 * ui),
+              fontSize: 12,
+            }),
+          )
+        : null,
+      tab === 2
+        ? createElement(
+            Column,
+            {
+              width: innerW,
+              height: bodyMin,
+              minHeight: bodyMin,
               gap: Math.round(12 * ui),
             },
             createElement(Label, {
@@ -279,7 +372,7 @@ function SettingsApp(
             }),
           )
         : null,
-      tab === 2
+      tab === 3
         ? createElement(
             Column,
             {
@@ -351,6 +444,52 @@ function sliderFromUiScale(scale: number): number {
   return Math.max(0, Math.min(1, (scale - 0.75) / 1.25));
 }
 
+function displayModeLabel(modeId: string): string {
+  const match = /^(\d+)x(\d+)@(\d+)$/.exec(modeId);
+  if (!match) return modeId;
+  const hz = Number(match[3]) / 1000;
+  return `${match[1]} × ${match[2]}  ·  ${Number.isInteger(hz) ? hz : hz.toFixed(2)} Hz`;
+}
+
+async function connectDisplayController(): Promise<{
+  bus: SessionBus;
+  controller: DisplayController;
+} | null> {
+  try {
+    const bus = await SessionBus.connect();
+    const reply = await bus.call({
+      destination: "org.moire.Display1",
+      path: "/org/moire/Display1",
+      interface: "org.moire.Display1",
+      member: "GetModes",
+    });
+    const modes = Array.isArray(reply.body?.[0])
+      ? reply.body[0].map(String)
+      : [];
+    const current = String(reply.body?.[1] ?? "");
+    return {
+      bus,
+      controller: {
+        modes,
+        current,
+        setMode: async (modeId) => {
+          await bus.call({
+            destination: "org.moire.Display1",
+            path: "/org/moire/Display1",
+            interface: "org.moire.Display1",
+            member: "SetMode",
+            signature: "s",
+            body: [modeId],
+          });
+        },
+      },
+    };
+  } catch (error) {
+    console.warn("[settings] display service unavailable:", error);
+    return null;
+  }
+}
+
 async function main() {
   const initial = loadSettings();
   const sysVol = readSystemVolume();
@@ -358,6 +497,7 @@ async function main() {
   applySettings(initial);
   setUiScaleFactor(initial.uiScale);
   const ui = initial.uiScale;
+  const displayConnection = await connectDisplayController();
 
   const app = new Application();
   const win = new Window({
@@ -371,13 +511,18 @@ async function main() {
     createElement(SettingsApp, {
       ...size,
       initial,
+      display: displayConnection?.controller ?? null,
       onQuit: () => {
+        displayConnection?.bus.close();
         win.destroy();
         app.quit();
       },
     }),
   );
-  win.onClose(() => app.quit());
+  win.onClose(() => {
+    displayConnection?.bus.close();
+    app.quit();
+  });
   app.addWindow(win);
   await app.run();
 }

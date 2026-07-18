@@ -57,6 +57,7 @@ This directory is meant to be browsed as a tree or fed to a Markdown site render
 | --- | --- |
 | [Compositor index](./compositor/README.md) | Core package map |
 | [Wayland DnD](./compositor/dnd.md) | `wl_data_device`, desktop drop, preview |
+| [Display modes & protocols](./compositor/display-and-protocols.md) | Runtime KMS modes and desktop protocol tranche |
 | [Parallels DRM present](./parallels-drm-present.md) | Why `presentKms` is required |
 
 ## Reference

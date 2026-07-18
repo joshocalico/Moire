@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@moire/dbus": "workspace:*",
     "@moire/prefs": "workspace:*",
     "@moire/ui": "workspace:*",
     "react": "^19.0.0"

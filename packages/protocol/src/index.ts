@@ -173,7 +173,17 @@ export const CORE_GLOBALS = {
   wl_seat: 5,
   wl_output: 3,
   wl_data_device_manager: 3,
+  /** Middle-click primary selection, separate from the clipboard. */
+  zwp_primary_selection_device_manager_v1: 1,
   xdg_wm_base: 3,
+  /** Focus handoff for newly launched applications. */
+  xdg_activation_v1: 1,
+  /** Per-surface scale in 120ths; 120 is native 1×. */
+  wp_fractional_scale_manager_v1: 1,
+  /** Source/destination viewport companion required by fractional scaling. */
+  wp_viewporter: 1,
+  /** Theme-independent semantic cursor requests. */
+  wp_cursor_shape_manager_v1: 1,
   /** Negotiates zxdg_decoration; compositor prefers server (React SSD). */
   zxdg_decoration_manager_v1: 1,
   /**

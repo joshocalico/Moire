@@ -7,6 +7,7 @@ import {
   type XwaylandHandle,
 } from "@moire/core";
 import { createShell } from "@moire/shell";
+import { SessionBus } from "@moire/dbus";
 import { isLinux, listDrmConnectors } from "@moire/sys";
 import path from "node:path";
 import os from "node:os";
@@ -35,6 +36,7 @@ async function main() {
   const server = new CompositorServer(runtimeDir, display);
   let xwayland: XwaylandHandle | null = null;
   let xwm: X11Wm | null = null;
+  let displayBus: SessionBus | null = null;
 
   const clientEnv = (): NodeJS.ProcessEnv => ({
     WAYLAND_DISPLAY: display,
@@ -58,6 +60,7 @@ async function main() {
     console.log("\nShutting down…");
     xwm?.stop();
     xwayland?.stop();
+    displayBus?.close();
     server.stop();
     process.exit(0);
   };
@@ -65,6 +68,41 @@ async function main() {
   process.on("SIGTERM", stop);
 
   await server.start(cardPath);
+
+  try {
+    displayBus = await SessionBus.connect();
+    displayBus.exportObject("/org/moire/Display1", {
+      name: "org.moire.Display1",
+      methods: {
+        GetModes: {
+          inSignature: "",
+          outSignature: "ass",
+          handler: () => ({
+            body: [
+              server.listDisplayModes().map((mode) => mode.id),
+              server.currentDisplayMode(),
+            ],
+          }),
+        },
+        SetMode: {
+          inSignature: "s",
+          outSignature: "b",
+          handler: ({ body }) => ({
+            body: [server.setDisplayMode(String(body[0] ?? ""))],
+          }),
+        },
+      },
+    });
+    const ownership = await displayBus.requestName("org.moire.Display1");
+    if (ownership !== 1) {
+      throw new Error(`name ownership result ${ownership}`);
+    }
+    console.log("[display] D-Bus org.moire.Display1 ready");
+  } catch (error) {
+    displayBus?.close();
+    displayBus = null;
+    console.warn("[display] D-Bus control unavailable:", error);
+  }
 
   // Xwayland — rootless by default (MOIRE_XWAYLAND=rootful for nested screen).
   if (process.env.MOIRE_XWAYLAND !== "0") {

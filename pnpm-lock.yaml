@@ -26,6 +26,9 @@ importers:
       '@moire/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@moire/dbus':
+        specifier: workspace:*
+        version: link:../../packages/dbus
       '@moire/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -109,6 +112,9 @@ importers:
 
   apps/settings:
     dependencies:
+      '@moire/dbus':
+        specifier: workspace:*
+        version: link:../../packages/dbus
       '@moire/prefs':
         specifier: workspace:*
         version: link:../../packages/prefs

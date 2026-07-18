@@ -9,6 +9,7 @@ Writes `~/.config/moire/settings.json` via `@moire/prefs` (not `prefs.json`).
 | Section | Controls |
 | --- | --- |
 | Appearance | Dark, UI scale, wallpaper mode / atmosphere / image |
+| Displays | Live connector modes through `org.moire.Display1` |
 | Sound | Volume-related prefs applied through prefs pipeline |
 | (others) | Expand as schema grows |
 
@@ -20,11 +21,14 @@ Full key list: [Prefs reference](../reference/prefs.md).
 
 ## Toolkit
 
-Standard `@moire/ui` window — Tabs, Slider, Toggle, Buttons — same tokens as Files and shell.
+Standard `@moire/ui` window — Tabs, Slider, Toggle, Buttons, and a scrollable
+mode list — using the same tokens as Files and shell. Display management stays
+behind D-Bus; Settings does not access DRM directly.
 
 ## Guest checks
 
 ```bash
 prlctl exec MoireDev bash /media/psf/moire/scripts/guest-verify-prefs-hotreload.sh
 prlctl exec MoireDev bash /media/psf/moire/scripts/guest-launch-settings-only.sh
+prlctl exec MoireDev bash /media/psf/moire/scripts/guest-display-mode.sh list
 ```

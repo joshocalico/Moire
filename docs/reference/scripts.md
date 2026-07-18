@@ -15,6 +15,8 @@ Host and guest helpers under `scripts/`. Prefer these over ad-hoc `prlctl exec â
 | `guest-run-compositor.sh` | Run compositor alone |
 | `guest-run-foot.sh` | Launch foot |
 | `guest-launch-files.sh` | Launch Moire Files |
+| `guest-launch-settings.sh` | Launch Settings in the active Moire D-Bus/Wayland session |
+| `guest-display-mode.sh [list \| set MODE]` | Query or change the live KMS mode through D-Bus |
 | `guest-kill-files.sh` | Kill Files clients |
 | `guest-seed-desktop.sh` | Seed `~/Desktop` test files |
 | `guest-prep-desktop-shot.sh` | Clear windows for icon screenshots |

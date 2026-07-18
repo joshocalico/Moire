@@ -13,6 +13,7 @@ import {
 } from "./libc.js";
 
 const DRM_MODE_CONNECTED = 1;
+const DRM_MODE_TYPE_PREFERRED = 1 << 3;
 
 const DrmModeModeInfo = koffi.struct("drmModeModeInfo_kms", {
   clock: "uint32_t",
@@ -112,6 +113,17 @@ function loadLibdrm() {
 
 export type Rgba = { r: number; g: number; b: number; a?: number };
 
+export type KmsMode = {
+  /** Stable selector used by Settings and the compositor D-Bus API. */
+  id: string;
+  width: number;
+  height: number;
+  refreshMilliHz: number;
+  preferred: boolean;
+};
+
+type KmsModeData = KmsMode & { raw: Record<string, unknown> };
+
 export type KmsOutput = {
   fd: number;
   cardPath: string;
@@ -125,6 +137,8 @@ export type KmsOutput = {
   size: number;
   map: unknown;
   modePtr: unknown;
+  modes: KmsMode[];
+  currentModeId: string;
   /** Durable connector id array for presentKms — avoid per-frame koffi.alloc. */
   connectorsPtr: unknown;
   /** Cached drmModeSetCrtc — avoid loadLibdrm/func lookup every present. */
@@ -138,12 +152,64 @@ export type KmsOutput = {
     count: number,
     mode: unknown,
   ) => number;
+  /** Cached allocation functions used by transactional runtime mode changes. */
+  drmIoctl: (fd: number, request: number, arg: unknown) => number;
+  addFb: (
+    fd: number,
+    width: number,
+    height: number,
+    depth: number,
+    bpp: number,
+    pitch: number,
+    handle: number,
+    fbId: unknown,
+  ) => number;
+  rmFb: (fd: number, fbId: number) => number;
+  modeData: Map<string, KmsModeData>;
 };
+
+function refreshMilliHz(mode: Record<string, unknown>): number {
+  const advertised = Number(mode.vrefresh ?? 0);
+  if (advertised > 0) return Math.round(advertised * 1000);
+  const clockKhz = Number(mode.clock ?? 0);
+  const htotal = Number(mode.htotal ?? 0);
+  const vtotal = Number(mode.vtotal ?? 0);
+  if (clockKhz > 0 && htotal > 0 && vtotal > 0) {
+    return Math.round((clockKhz * 1_000_000) / (htotal * vtotal));
+  }
+  return 60_000;
+}
+
+function describeModes(rawModes: Record<string, unknown>[]): KmsModeData[] {
+  const seen = new Set<string>();
+  const modes: KmsModeData[] = [];
+  for (const raw of rawModes) {
+    const width = Number(raw.hdisplay ?? 0);
+    const height = Number(raw.vdisplay ?? 0);
+    if (width <= 0 || height <= 0) continue;
+    const refresh = refreshMilliHz(raw);
+    const baseId = `${width}x${height}@${refresh}`;
+    if (seen.has(baseId)) continue;
+    seen.add(baseId);
+    modes.push({
+      id: baseId,
+      width,
+      height,
+      refreshMilliHz: refresh,
+      preferred: (Number(raw.type ?? 0) & DRM_MODE_TYPE_PREFERRED) !== 0,
+      raw,
+    });
+  }
+  return modes;
+}
 
 /**
  * Open a DRM card, pick the first connected connector, create a dumb FB, and modeset it.
  */
-export function openKmsOutput(cardPath = "/dev/dri/card1"): KmsOutput {
+export function openKmsOutput(
+  cardPath = "/dev/dri/card1",
+  requestedModeId = process.env.MOIRE_MODE,
+): KmsOutput {
   assertLinux("KMS");
 
   const libdrm = loadLibdrm();
@@ -161,6 +227,7 @@ export function openKmsOutput(cardPath = "/dev/dri/card1"): KmsOutput {
   const drmModeAddFB = libdrm.func(
     "int drmModeAddFB(int fd, uint32_t width, uint32_t height, uint8_t depth, uint8_t bpp, uint32_t pitch, uint32_t bo_handle, _Out_ uint32_t *buf_id)",
   );
+  const drmModeRmFB = libdrm.func("int drmModeRmFB(int fd, uint32_t bufferId)");
   const drmModeSetCrtc = libdrm.func(
     "int drmModeSetCrtc(int fd, uint32_t crtcId, uint32_t bufferId, uint32_t x, uint32_t y, uint32_t *connectors, int count, void *mode)",
   );
@@ -219,13 +286,19 @@ export function openKmsOutput(cardPath = "/dev/dri/card1"): KmsOutput {
           continue;
         }
 
-        const modes = koffi.decode(
+        const rawModes = koffi.decode(
           conn.modes,
           koffi.array(DrmModeModeInfo, conn.count_modes),
-        ) as Array<{ hdisplay: number; vdisplay: number }>;
-        const mode = modes[0];
-        const width = mode.hdisplay;
-        const height = mode.vdisplay;
+        ) as Record<string, unknown>[];
+        const modes = describeModes(rawModes);
+        const selected =
+          modes.find((candidate) => candidate.id === requestedModeId) ??
+          modes.find((candidate) => candidate.preferred) ??
+          modes[0];
+        if (!selected) continue;
+        const mode = selected.raw;
+        const width = selected.width;
+        const height = selected.height;
 
         // Prefer current encoder; else first possible
         let crtcId = 0;
@@ -325,11 +398,7 @@ export function openKmsOutput(cardPath = "/dev/dri/card1"): KmsOutput {
 
         // Copy first mode into a durable allocation for SetCrtc
         const modePtr = koffi.alloc(DrmModeModeInfo, 1);
-        const mode0 = koffi.decode(
-          conn.modes,
-          koffi.array(DrmModeModeInfo, 1),
-        ) as unknown[];
-        koffi.encode(modePtr, DrmModeModeInfo, mode0[0]);
+        koffi.encode(modePtr, DrmModeModeInfo, mode);
 
         const connectors = koffi.alloc("uint32_t", 1);
         koffi.encode(connectors, "uint32_t", connectorId);
@@ -363,8 +432,14 @@ export function openKmsOutput(cardPath = "/dev/dri/card1"): KmsOutput {
           size,
           map,
           modePtr,
+          modes: modes.map(({ raw: _raw, ...publicMode }) => publicMode),
+          currentModeId: selected.id,
           connectorsPtr: connectors,
           setCrtc: drmModeSetCrtc as KmsOutput["setCrtc"],
+          drmIoctl: drmIoctl as KmsOutput["drmIoctl"],
+          addFb: drmModeAddFB as KmsOutput["addFb"],
+          rmFb: drmModeRmFB as KmsOutput["rmFb"],
+          modeData: new Map(modes.map((candidate) => [candidate.id, candidate])),
         };
       } finally {
         drmModeFreeConnector(connPtr);
@@ -374,6 +449,180 @@ export function openKmsOutput(cardPath = "/dev/dri/card1"): KmsOutput {
     throw new Error("No connected DRM connector with modes found");
   } finally {
     drmModeFreeResources(resPtr);
+  }
+}
+
+type KmsFramebuffer = {
+  width: number;
+  height: number;
+  pitch: number;
+  handle: number;
+  fbId: number;
+  size: number;
+  map: unknown;
+  modePtr: unknown;
+};
+
+function destroyFramebuffer(out: KmsOutput, fb: KmsFramebuffer): void {
+  try {
+    munmap(fb.map, fb.size);
+  } catch {
+    // best effort while replacing or closing an output
+  }
+  try {
+    out.rmFb(out.fd, fb.fbId);
+  } catch {
+    // best effort
+  }
+  try {
+    const destroy = koffi.alloc(DrmModeDestroyDumb, 1);
+    koffi.encode(destroy, DrmModeDestroyDumb, { handle: fb.handle });
+    out.drmIoctl(out.fd, DRM_IOCTL_MODE_DESTROY_DUMB, destroy);
+    koffi.free(destroy);
+  } catch {
+    // best effort
+  }
+  try {
+    koffi.free(fb.modePtr);
+  } catch {
+    // best effort
+  }
+}
+
+/**
+ * Switch an already-open connector to another advertised mode. The new dumb
+ * framebuffer is fully allocated and accepted by KMS before the old one is
+ * released, so a failed request leaves the current display intact.
+ */
+export function setKmsMode(out: KmsOutput, modeId: string): boolean {
+  if (modeId === out.currentModeId) return false;
+  const mode = out.modeData.get(modeId);
+  if (!mode) throw new Error(`Unknown KMS mode ${modeId}`);
+
+  let next: KmsFramebuffer | null = null;
+  try {
+    const createBuf = koffi.alloc(DrmModeCreateDumb, 1);
+    koffi.encode(createBuf, DrmModeCreateDumb, {
+      height: mode.height,
+      width: mode.width,
+      bpp: 32,
+      flags: 0,
+      handle: 0,
+      pitch: 0,
+      size: 0n,
+    });
+    if (out.drmIoctl(out.fd, DRM_IOCTL_MODE_CREATE_DUMB, createBuf) !== 0) {
+      koffi.free(createBuf);
+      throw new Error("DRM_IOCTL_MODE_CREATE_DUMB failed during mode switch");
+    }
+    const created = koffi.decode(createBuf, DrmModeCreateDumb) as {
+      handle: number;
+      pitch: number;
+      size: bigint | number;
+    };
+    koffi.free(createBuf);
+
+    const mapBuf = koffi.alloc(DrmModeMapDumb, 1);
+    koffi.encode(mapBuf, DrmModeMapDumb, {
+      handle: created.handle,
+      pad: 0,
+      offset: 0n,
+    });
+    if (out.drmIoctl(out.fd, DRM_IOCTL_MODE_MAP_DUMB, mapBuf) !== 0) {
+      koffi.free(mapBuf);
+      const destroy = koffi.alloc(DrmModeDestroyDumb, 1);
+      koffi.encode(destroy, DrmModeDestroyDumb, { handle: created.handle });
+      out.drmIoctl(out.fd, DRM_IOCTL_MODE_DESTROY_DUMB, destroy);
+      koffi.free(destroy);
+      throw new Error("DRM_IOCTL_MODE_MAP_DUMB failed during mode switch");
+    }
+    const mapped = koffi.decode(mapBuf, DrmModeMapDumb) as {
+      offset: bigint | number;
+    };
+    koffi.free(mapBuf);
+
+    const size = Number(created.size);
+    const map = mmap(
+      size,
+      PROT_READ | PROT_WRITE,
+      MAP_SHARED,
+      out.fd,
+      Number(mapped.offset),
+    );
+    const fbIdOut = koffi.alloc("uint32_t", 1);
+    const add = out.addFb(
+      out.fd,
+      mode.width,
+      mode.height,
+      24,
+      32,
+      created.pitch,
+      created.handle,
+      fbIdOut,
+    );
+    if (add !== 0) {
+      koffi.free(fbIdOut);
+      munmap(map, size);
+      const destroy = koffi.alloc(DrmModeDestroyDumb, 1);
+      koffi.encode(destroy, DrmModeDestroyDumb, { handle: created.handle });
+      out.drmIoctl(out.fd, DRM_IOCTL_MODE_DESTROY_DUMB, destroy);
+      koffi.free(destroy);
+      throw new Error(`drmModeAddFB failed during mode switch (${add})`);
+    }
+    const fbId = koffi.decode(fbIdOut, "uint32_t") as number;
+    koffi.free(fbIdOut);
+    const modePtr = koffi.alloc(DrmModeModeInfo, 1);
+    koffi.encode(modePtr, DrmModeModeInfo, mode.raw);
+    next = {
+      width: mode.width,
+      height: mode.height,
+      pitch: created.pitch,
+      handle: created.handle,
+      fbId,
+      size,
+      map,
+      modePtr,
+    };
+
+    const set = out.setCrtc(
+      out.fd,
+      out.crtcId,
+      next.fbId,
+      0,
+      0,
+      out.connectorsPtr,
+      1,
+      next.modePtr,
+    );
+    if (set !== 0) {
+      throw new Error(`drmModeSetCrtc mode switch failed (${set})`);
+    }
+
+    const previous: KmsFramebuffer = {
+      width: out.width,
+      height: out.height,
+      pitch: out.pitch,
+      handle: out.handle,
+      fbId: out.fbId,
+      size: out.size,
+      map: out.map,
+      modePtr: out.modePtr,
+    };
+    out.width = next.width;
+    out.height = next.height;
+    out.pitch = next.pitch;
+    out.handle = next.handle;
+    out.fbId = next.fbId;
+    out.size = next.size;
+    out.map = next.map;
+    out.modePtr = next.modePtr;
+    out.currentModeId = mode.id;
+    next = null;
+    destroyFramebuffer(out, previous);
+    return true;
+  } catch (error) {
+    if (next) destroyFramebuffer(out, next);
+    throw error;
   }
 }
 

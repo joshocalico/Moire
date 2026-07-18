@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   CORE_GLOBALS,
   decodeHeader,
@@ -11,7 +12,9 @@ import {
   fillKmsColor,
   presentKms,
   openKmsOutput,
+  setKmsMode,
   closeKmsOutput,
+  type KmsMode,
   type KmsOutput,
   WaylandSocketServer,
   type WaylandClientConn,
@@ -98,6 +101,35 @@ const OP = {
   data_offer_destroy: 2,
   data_offer_finish: 3,
   data_offer_set_actions: 4,
+  primary_manager_create_source: 0,
+  primary_manager_get_device: 1,
+  primary_manager_destroy: 2,
+  primary_source_offer: 0,
+  primary_source_destroy: 1,
+  primary_device_set_selection: 0,
+  primary_device_destroy: 1,
+  primary_offer_receive: 0,
+  primary_offer_destroy: 1,
+  activation_destroy: 0,
+  activation_get_token: 1,
+  activation_activate: 2,
+  activation_token_set_serial: 0,
+  activation_token_set_app_id: 1,
+  activation_token_set_surface: 2,
+  activation_token_commit: 3,
+  fractional_scale_manager_destroy: 0,
+  fractional_scale_manager_get: 1,
+  fractional_scale_destroy: 0,
+  viewporter_destroy: 0,
+  viewporter_get_viewport: 1,
+  viewport_destroy: 0,
+  viewport_set_source: 1,
+  viewport_set_destination: 2,
+  cursor_shape_manager_destroy: 0,
+  cursor_shape_manager_get_pointer: 1,
+  cursor_shape_manager_get_tablet_tool: 2,
+  cursor_shape_device_destroy: 0,
+  cursor_shape_device_set_shape: 1,
   xdg_decoration_manager_destroy: 0,
   xdg_decoration_manager_get_toplevel_decoration: 1,
   xdg_toplevel_decoration_destroy: 0,
@@ -222,6 +254,13 @@ const EV = {
   data_device_motion: 3,
   data_device_drop: 4,
   data_device_selection: 5,
+  primary_source_send: 0,
+  primary_source_cancelled: 1,
+  primary_device_data_offer: 0,
+  primary_device_selection: 1,
+  primary_offer_offer: 0,
+  activation_token_done: 0,
+  fractional_scale_preferred_scale: 0,
   xdg_toplevel_decoration_configure: 0,
   drm_device: 0,
   drm_format: 1,
@@ -232,6 +271,7 @@ const EV = {
 const WL_SEAT_CAPABILITY_POINTER = 1;
 const WL_SEAT_CAPABILITY_KEYBOARD = 2;
 const WL_OUTPUT_MODE_CURRENT = 0x1;
+const WL_OUTPUT_MODE_PREFERRED = 0x2;
 const WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 = 1;
 const WL_KEYBOARD_KEY_STATE_RELEASED = 0;
 const WL_KEYBOARD_KEY_STATE_PRESSED = 1;
@@ -721,6 +761,14 @@ type ClipboardSelection = {
   mimeTypes: string[];
 };
 
+type PrimarySelection = {
+  sourceSession: ClientSession;
+  sourceId: number;
+  mimeTypes: string[];
+};
+
+type PrimaryOfferState = PrimarySelection & { deviceId: number };
+
 type DataSourceState = {
   mimeTypes: string[];
   /** DnD action bitmask (1=copy, 2=move, 4=ask). */
@@ -869,6 +917,9 @@ export class CompositorServer {
     hotspotX: number;
     hotspotY: number;
   } | null = null;
+  /** Semantic cursor requested through wp_cursor_shape_device_v1. */
+  private clientCursorShape: { session: ClientSession; shape: number } | null =
+    null;
   /** Resize edges under the pointer (compositor grip), for cursor fallback. */
   private hoverEdges = 0;
   private grab: InteractiveGrab | null = null;
@@ -899,6 +950,10 @@ export class CompositorServer {
   /** DRM device advertised via zwp_linux_dmabuf_feedback_v1.main_device. */
   /** Seat-wide clipboard selection. */
   private selection: ClipboardSelection | null = null;
+  /** Middle-click primary selection, independent from the clipboard. */
+  private primarySelection: PrimarySelection | null = null;
+  /** One-shot xdg-activation tokens issued by this compositor. */
+  private activationTokens = new Set<string>();
   /** Active DnD session (one at a time). */
   private drag: DragSession | null = null;
   /** Pixel snapshot retained while a rejected/cancelled drag snaps home. */
@@ -1031,8 +1086,14 @@ export class CompositorServer {
         if (this.pointerFocus?.session === session) this.pointerFocus = null;
         if (this.grab?.session === session) this.grab = null;
         if (this.clientCursor?.session === session) this.clientCursor = null;
+        if (this.clientCursorShape?.session === session) {
+          this.clientCursorShape = null;
+        }
         if (this.selection?.sourceSession === session) {
           this.selection = null;
+        }
+        if (this.primarySelection?.sourceSession === session) {
+          this.clearPrimarySelection("cleared");
         }
         this.stack = this.stack.filter((e) => e.session !== session);
         for (const key of this.taskOrder.keys()) {
@@ -1381,6 +1442,87 @@ export class CompositorServer {
     };
   }
 
+  listDisplayModes(): KmsMode[] {
+    return this.kms?.modes.map((mode) => ({ ...mode })) ?? [];
+  }
+
+  currentDisplayMode(): string {
+    return this.kms?.currentModeId ?? "";
+  }
+
+  /** Switch the physical output and publish the new logical desktop size. */
+  setDisplayMode(modeId: string): boolean {
+    const kms = this.kms;
+    if (!kms) throw new Error("KMS not started");
+    const changed = setKmsMode(kms, modeId);
+    if (!changed) return false;
+
+    this.stage = null;
+    this.cursorX = Math.max(0, Math.min(kms.width - 1, this.cursorX));
+    this.cursorY = Math.max(0, Math.min(kms.height - 1, this.cursorY));
+    for (const client of this.clients) client.outputChanged();
+    for (const entry of this.stack) {
+      const surf = entry.session.surfaceById(entry.surfaceId);
+      if (!surf || surf.role !== "toplevel") continue;
+      if (surf.fullscreen) {
+        surf.x = 0;
+        surf.y = 0;
+        entry.session.configureToplevel(surf, kms.width, kms.height, [
+          XDG_TOPLEVEL_STATE_FULLSCREEN,
+          ...(this.focusedToplevel?.session === entry.session &&
+          this.focusedToplevel.surfaceId === surf.id
+            ? [XDG_TOPLEVEL_STATE_ACTIVATED]
+            : []),
+        ]);
+      } else if (surf.maximized) {
+        surf.x = 0;
+        surf.y = 0;
+        const contentH = this.usesSsd(surf)
+          ? Math.max(100, kms.height - SSD_PANEL_H - SSD_TITLEBAR_H)
+          : kms.height;
+        entry.session.configureToplevel(
+          surf,
+          kms.width,
+          contentH,
+          [
+            XDG_TOPLEVEL_STATE_MAXIMIZED,
+            ...(this.focusedToplevel?.session === entry.session &&
+            this.focusedToplevel.surfaceId === surf.id
+              ? [XDG_TOPLEVEL_STATE_ACTIVATED]
+              : []),
+          ],
+        );
+      } else {
+        const w = surf.geomW > 0 ? surf.geomW : surf.width;
+        const h = surf.geomH > 0 ? surf.geomH : surf.height;
+        const maxContentH = this.usesSsd(surf)
+          ? Math.max(100, kms.height - SSD_PANEL_H - SSD_TITLEBAR_H)
+          : Math.max(100, kms.height - SSD_PANEL_H);
+        const nextW = Math.min(w, kms.width);
+        const nextH = Math.min(h, maxContentH);
+        if (nextW !== w || nextH !== h) {
+          const states =
+            this.focusedToplevel?.session === entry.session &&
+            this.focusedToplevel.surfaceId === surf.id
+              ? [XDG_TOPLEVEL_STATE_ACTIVATED]
+              : [];
+          entry.session.configureToplevel(surf, nextW, nextH, states);
+        }
+        const chromeH = this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
+        const maxY = Math.max(
+          0,
+          kms.height - SSD_PANEL_H - chromeH - nextH,
+        );
+        surf.x = Math.max(0, Math.min(Math.max(0, kms.width - nextW), surf.x));
+        surf.y = Math.max(0, Math.min(maxY, surf.y));
+      }
+    }
+    this.shell?.invalidateChrome?.();
+    console.log(`[output] mode ${modeId} → ${kms.width}x${kms.height}`);
+    this.markDirty();
+    return true;
+  }
+
   setFocusedSession(session: ClientSession): void {
     this.focused = session;
   }
@@ -1434,6 +1576,81 @@ export class CompositorServer {
 
   getSelection(): ClipboardSelection | null {
     return this.selection;
+  }
+
+  clearPrimarySelection(reason: "cancelled" | "cleared" = "cancelled"): void {
+    const previous = this.primarySelection;
+    this.primarySelection = null;
+    if (previous && reason === "cancelled") {
+      previous.sourceSession.sendPrimarySourceCancelled(previous.sourceId);
+    }
+    for (const client of this.clients) client.sendPrimarySelection(null);
+  }
+
+  setPrimarySelection(
+    sourceSession: ClientSession,
+    sourceId: number | null,
+    _serial: number,
+  ): void {
+    if (!sourceId) {
+      this.clearPrimarySelection();
+      return;
+    }
+    const mimeTypes = sourceSession.primarySourceMimes(sourceId);
+    if (!mimeTypes) return;
+    const previous = this.primarySelection;
+    if (
+      previous &&
+      (previous.sourceSession !== sourceSession || previous.sourceId !== sourceId)
+    ) {
+      previous.sourceSession.sendPrimarySourceCancelled(previous.sourceId);
+    }
+    this.primarySelection = {
+      sourceSession,
+      sourceId,
+      mimeTypes: [...mimeTypes],
+    };
+    for (const client of this.clients) {
+      client.sendPrimarySelection(this.primarySelection);
+    }
+  }
+
+  getPrimarySelection(): PrimarySelection | null {
+    return this.primarySelection;
+  }
+
+  forwardPrimarySelectionReceive(mime: string, fd: number): void {
+    const selection = this.primarySelection;
+    if (!selection) {
+      try {
+        closeFd(fd);
+      } catch {
+        // ok
+      }
+      return;
+    }
+    selection.sourceSession.sendPrimarySourceSend(
+      selection.sourceId,
+      mime,
+      fd,
+    );
+  }
+
+  issueActivationToken(): string {
+    const token = `moire-${randomUUID()}`;
+    this.activationTokens.add(token);
+    return token;
+  }
+
+  activateWithToken(
+    token: string,
+    session: ClientSession,
+    surfaceId: number,
+  ): void {
+    if (!this.activationTokens.delete(token)) return;
+    const surface = session.toplevelFor(surfaceId);
+    if (!surface?.mapped || surface.role !== "toplevel") return;
+    this.focusClient(session, surface.id);
   }
 
   /** Source client writes clipboard bytes into `fd` (from offer.receive). */
@@ -1838,6 +2055,35 @@ export class CompositorServer {
     const key = `${session.clientId}:${surfaceId}`;
     if (!this.taskOrder.has(key)) this.taskOrder.set(key, this.nextTaskOrder++);
     this.markDirty();
+  }
+
+  /** Keep a newly mapped native toplevel reachable on the current output. */
+  fitToplevelToOutput(session: ClientSession, surfaceId: number): void {
+    const kms = this.kms;
+    const surf = session.surfaceById(surfaceId);
+    if (!kms || !surf || surf.role !== "toplevel") return;
+    const w = surf.geomW > 0 ? surf.geomW : surf.width;
+    const h = surf.geomH > 0 ? surf.geomH : surf.height;
+    const chromeH = this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
+    const maxContentH = Math.max(
+      100,
+      kms.height - SSD_PANEL_H - chromeH,
+    );
+    const nextW = Math.min(w, kms.width);
+    const nextH = Math.min(h, maxContentH);
+    if (nextW !== w || nextH !== h) {
+      session.configureToplevel(surf, nextW, nextH, [
+        XDG_TOPLEVEL_STATE_ACTIVATED,
+      ]);
+    }
+    surf.x = Math.max(0, Math.min(Math.max(0, kms.width - nextW), surf.x));
+    surf.y = Math.max(
+      0,
+      Math.min(
+        Math.max(0, kms.height - SSD_PANEL_H - chromeH - nextH),
+        surf.y,
+      ),
+    );
   }
 
   unregisterToplevel(session: ClientSession, surfaceId: number): void {
@@ -3021,11 +3267,17 @@ export class CompositorServer {
 
   private clearClientCursor(session?: ClientSession): void {
     const cc = this.clientCursor;
-    if (!cc) return;
-    if (session && cc.session !== session) return;
-    const prev = cc.session.surfaceById(cc.surfaceId);
-    if (prev?.role === "cursor") prev.role = "none";
-    this.clientCursor = null;
+    if (cc && (!session || cc.session === session)) {
+      const prev = cc.session.surfaceById(cc.surfaceId);
+      if (prev?.role === "cursor") prev.role = "none";
+      this.clientCursor = null;
+    }
+    if (
+      this.clientCursorShape &&
+      (!session || this.clientCursorShape.session === session)
+    ) {
+      this.clientCursorShape = null;
+    }
   }
 
   /** wl_pointer.set_cursor — surface is drawn at the hotspot, never as a window. */
@@ -3057,6 +3309,14 @@ export class CompositorServer {
     }
     surf.role = "cursor";
     this.clientCursor = { session, surfaceId, hotspotX, hotspotY };
+    this.clientCursorShape = null;
+  }
+
+  setClientCursorShape(session: ClientSession, shape: number): void {
+    if (this.pointerFocus?.session !== session) return;
+    this.clearClientCursor(session);
+    this.clientCursorShape = { session, shape };
+    this.markDirty();
   }
 
   private blitArgb(
@@ -3234,8 +3494,50 @@ export class CompositorServer {
 
   private fallbackCursorShape(): { shape: string[]; hotX: number; hotY: number } {
     const g = this.grab;
-    const edges =
+    const semanticShape = this.clientCursorShape?.shape ?? 0;
+    if (semanticShape === 9 || semanticShape === 10) {
+      return {
+        hotX: 4,
+        hotY: 8,
+        shape: [
+          " XXXXXXX ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          "    X    ",
+          " XXXXXXX ",
+        ],
+      };
+    }
+    let edges =
       g?.kind === "resize" ? g.edges : this.hoverEdges;
+    if (semanticShape >= 18 && semanticShape <= 29) {
+      const semanticEdges: Record<number, number> = {
+        18: XDG_TOPLEVEL_RESIZE_EDGE_RIGHT,
+        19: XDG_TOPLEVEL_RESIZE_EDGE_TOP,
+        20: XDG_TOPLEVEL_RESIZE_EDGE_TOP | XDG_TOPLEVEL_RESIZE_EDGE_RIGHT,
+        21: XDG_TOPLEVEL_RESIZE_EDGE_TOP | XDG_TOPLEVEL_RESIZE_EDGE_LEFT,
+        22: XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM,
+        23: XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM | XDG_TOPLEVEL_RESIZE_EDGE_RIGHT,
+        24: XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM | XDG_TOPLEVEL_RESIZE_EDGE_LEFT,
+        25: XDG_TOPLEVEL_RESIZE_EDGE_LEFT,
+        26: XDG_TOPLEVEL_RESIZE_EDGE_LEFT | XDG_TOPLEVEL_RESIZE_EDGE_RIGHT,
+        27: XDG_TOPLEVEL_RESIZE_EDGE_TOP | XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM,
+        28: XDG_TOPLEVEL_RESIZE_EDGE_TOP | XDG_TOPLEVEL_RESIZE_EDGE_RIGHT,
+        29: XDG_TOPLEVEL_RESIZE_EDGE_TOP | XDG_TOPLEVEL_RESIZE_EDGE_LEFT,
+      };
+      edges = semanticEdges[semanticShape] ?? edges;
+    }
     const left = !!(edges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT);
     const right = !!(edges & XDG_TOPLEVEL_RESIZE_EDGE_RIGHT);
     const top = !!(edges & XDG_TOPLEVEL_RESIZE_EDGE_TOP);
@@ -3700,6 +4002,8 @@ class ClientSession {
   private lastInputSerial = 0;
   /** Bound wl_data_device object ids for this client. */
   private dataDeviceIds = new Set<number>();
+  /** Bound primary-selection device object ids for this client. */
+  private primaryDeviceIds = new Set<number>();
   /** True when peer looks like Xwayland (SO_PEERCRED + /proc/exe). */
   readonly isXwayland: boolean;
 
@@ -4145,6 +4449,12 @@ class ClientSession {
       ) {
         fdsForMsg.push(this.pendingFds.shift()!);
       } else if (
+        obj?.iface === "zwp_primary_selection_offer_v1" &&
+        header.opcode === OP.primary_offer_receive &&
+        this.pendingFds.length > 0
+      ) {
+        fdsForMsg.push(this.pendingFds.shift()!);
+      } else if (
         obj?.iface === "wl_drm" &&
         header.opcode === OP.drm_create_prime_buffer &&
         this.pendingFds.length > 0
@@ -4228,6 +4538,42 @@ class ClientSession {
         break;
       case "wl_data_offer":
         this.handleDataOffer(obj, opcode, r);
+        break;
+      case "zwp_primary_selection_device_manager_v1":
+        this.handlePrimarySelectionManager(opcode, r);
+        break;
+      case "zwp_primary_selection_source_v1":
+        this.handlePrimarySelectionSource(obj, opcode, r);
+        break;
+      case "zwp_primary_selection_device_v1":
+        this.handlePrimarySelectionDevice(obj, opcode, r);
+        break;
+      case "zwp_primary_selection_offer_v1":
+        this.handlePrimarySelectionOffer(obj, opcode, r);
+        break;
+      case "xdg_activation_v1":
+        this.handleXdgActivation(opcode, r);
+        break;
+      case "xdg_activation_token_v1":
+        this.handleXdgActivationToken(obj, opcode, r);
+        break;
+      case "wp_fractional_scale_manager_v1":
+        this.handleFractionalScaleManager(opcode, r);
+        break;
+      case "wp_fractional_scale_v1":
+        if (opcode === OP.fractional_scale_destroy) this.destroyObject(objectId);
+        break;
+      case "wp_viewporter":
+        this.handleViewporter(opcode, r);
+        break;
+      case "wp_viewport":
+        this.handleViewport(obj, opcode, r);
+        break;
+      case "wp_cursor_shape_manager_v1":
+        this.handleCursorShapeManager(opcode, r);
+        break;
+      case "wp_cursor_shape_device_v1":
+        this.handleCursorShapeDevice(obj, opcode, r);
         break;
       case "zxdg_decoration_manager_v1":
         this.handleXdgDecorationManager(opcode, r);
@@ -4468,14 +4814,25 @@ class ClientSession {
         .string("Virtual")
         .int(0); // transform normal
     });
-    this.send(id, EV.output_mode, (b) => {
-      b.uint(WL_OUTPUT_MODE_CURRENT)
-        .int(kms.width)
-        .int(kms.height)
-        .int(60_000); // mHz
-    });
+    for (const mode of kms.modes) {
+      let flags = 0;
+      if (mode.id === kms.currentModeId) flags |= WL_OUTPUT_MODE_CURRENT;
+      if (mode.preferred) flags |= WL_OUTPUT_MODE_PREFERRED;
+      this.send(id, EV.output_mode, (b) => {
+        b.uint(flags)
+          .int(mode.width)
+          .int(mode.height)
+          .int(mode.refreshMilliHz);
+      });
+    }
     this.send(id, EV.output_scale, (b) => b.int(1));
     this.send(id, EV.output_done, () => {});
+  }
+
+  outputChanged(): void {
+    for (const object of this.objects.values()) {
+      if (object.iface === "wl_output") this.sendOutputEvents(object.id);
+    }
   }
 
   private handleSubcompositor(opcode: number, r: MessageReader): void {
@@ -4606,6 +4963,213 @@ class ClientSession {
       if (this.pointerId != null) this.destroyObject(this.pointerId);
       this.pointerId = null;
       this.pointerSurfaceId = null;
+    }
+  }
+
+  private handleCursorShapeManager(opcode: number, r: MessageReader): void {
+    if (opcode === OP.cursor_shape_manager_get_pointer) {
+      const id = r.newId();
+      r.object(); // wl_pointer
+      this.objects.set(id, {
+        id,
+        iface: "wp_cursor_shape_device_v1",
+        version: 1,
+      });
+    } else if (opcode === OP.cursor_shape_manager_get_tablet_tool) {
+      const id = r.newId();
+      r.object();
+      this.objects.set(id, {
+        id,
+        iface: "wp_cursor_shape_device_v1",
+        version: 1,
+      });
+    }
+  }
+
+  private handleCursorShapeDevice(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    if (opcode === OP.cursor_shape_device_set_shape) {
+      r.uint(); // enter serial
+      this.server.setClientCursorShape(this, r.uint());
+    } else if (opcode === OP.cursor_shape_device_destroy) {
+      this.destroyObject(obj.id);
+    }
+  }
+
+  private handleFractionalScaleManager(
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    if (opcode === OP.fractional_scale_manager_get) {
+      const id = r.newId();
+      const surfaceId = r.object();
+      this.objects.set(id, {
+        id,
+        iface: "wp_fractional_scale_v1",
+        version: 1,
+        data: { surfaceId },
+      });
+      // Native scale is currently 1×. The protocol uses increments of 1/120.
+      this.send(id, EV.fractional_scale_preferred_scale, (b) => b.uint(120));
+    }
+  }
+
+  private handleViewporter(opcode: number, r: MessageReader): void {
+    if (opcode !== OP.viewporter_get_viewport) return;
+    const id = r.newId();
+    const surfaceId = r.object();
+    this.objects.set(id, {
+      id,
+      iface: "wp_viewport",
+      version: 1,
+      data: { surfaceId },
+    });
+  }
+
+  private handleViewport(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    if (opcode === OP.viewport_destroy) {
+      this.destroyObject(obj.id);
+    } else if (opcode === OP.viewport_set_source) {
+      obj.data = {
+        ...(obj.data ?? {}),
+        source: [r.int(), r.int(), r.int(), r.int()],
+      };
+    } else if (opcode === OP.viewport_set_destination) {
+      obj.data = {
+        ...(obj.data ?? {}),
+        destination: [r.int(), r.int()],
+      };
+    }
+  }
+
+  private handleXdgActivation(opcode: number, r: MessageReader): void {
+    if (opcode === OP.activation_get_token) {
+      const id = r.newId();
+      this.objects.set(id, {
+        id,
+        iface: "xdg_activation_token_v1",
+        version: 1,
+      });
+    } else if (opcode === OP.activation_activate) {
+      const token = r.string() ?? "";
+      const surfaceId = r.object();
+      this.server.activateWithToken(token, this, surfaceId);
+    }
+  }
+
+  private handleXdgActivationToken(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    if (opcode === OP.activation_token_set_serial) {
+      r.uint();
+      r.object();
+    } else if (opcode === OP.activation_token_set_app_id) {
+      obj.data = { ...(obj.data ?? {}), appId: r.string() ?? "" };
+    } else if (opcode === OP.activation_token_set_surface) {
+      obj.data = { ...(obj.data ?? {}), surfaceId: r.object() };
+    } else if (opcode === OP.activation_token_commit) {
+      const token = this.server.issueActivationToken();
+      this.send(obj.id, EV.activation_token_done, (b) => b.string(token));
+    }
+  }
+
+  private handlePrimarySelectionManager(
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    if (opcode === OP.primary_manager_create_source) {
+      const id = r.newId();
+      this.objects.set(id, {
+        id,
+        iface: "zwp_primary_selection_source_v1",
+        version: 1,
+        data: {
+          source: { mimeTypes: [], dndActions: 0 } satisfies DataSourceState,
+        },
+      });
+    } else if (opcode === OP.primary_manager_get_device) {
+      const id = r.newId();
+      r.object(); // wl_seat
+      this.objects.set(id, {
+        id,
+        iface: "zwp_primary_selection_device_v1",
+        version: 1,
+      });
+      this.primaryDeviceIds.add(id);
+      this.sendPrimarySelection(this.server.getPrimarySelection(), id);
+    }
+  }
+
+  private handlePrimarySelectionSource(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    const source = obj.data?.source as DataSourceState | undefined;
+    if (opcode === OP.primary_source_offer) {
+      const mime = r.string();
+      if (mime && source && !source.mimeTypes.includes(mime)) {
+        source.mimeTypes.push(mime);
+      }
+    } else if (opcode === OP.primary_source_destroy) {
+      const selection = this.server.getPrimarySelection();
+      if (selection?.sourceSession === this && selection.sourceId === obj.id) {
+        this.server.clearPrimarySelection();
+      }
+      this.destroyObject(obj.id);
+    }
+  }
+
+  private handlePrimarySelectionDevice(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    if (opcode === OP.primary_device_set_selection) {
+      const sourceId = r.object();
+      const serial = r.uint();
+      this.server.setPrimarySelection(this, sourceId || null, serial);
+    } else if (opcode === OP.primary_device_destroy) {
+      this.primaryDeviceIds.delete(obj.id);
+      this.destroyObject(obj.id);
+    }
+  }
+
+  private handlePrimarySelectionOffer(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    const offer = obj.data?.offer as PrimaryOfferState | undefined;
+    if (opcode === OP.primary_offer_receive) {
+      const mime = r.string() ?? "";
+      const fd = r.fd();
+      const selection = this.server.getPrimarySelection();
+      if (
+        !offer ||
+        !selection ||
+        offer.sourceSession !== selection.sourceSession ||
+        offer.sourceId !== selection.sourceId
+      ) {
+        try {
+          closeFd(fd);
+        } catch {
+          // ok
+        }
+        return;
+      }
+      this.server.forwardPrimarySelectionReceive(mime, fd);
+    } else if (opcode === OP.primary_offer_destroy) {
+      this.destroyObject(obj.id);
     }
   }
 
@@ -4884,6 +5448,71 @@ class ClientSession {
         this.send(offerId, EV.data_offer_offer, (b) => b.string(mime));
       }
       this.send(deviceId, EV.data_device_selection, (b) => b.object(offerId));
+    }
+  }
+
+  primarySourceMimes(sourceId: number): string[] | null {
+    const object = this.objects.get(sourceId);
+    if (object?.iface !== "zwp_primary_selection_source_v1") return null;
+    const source = object.data?.source as DataSourceState | undefined;
+    return source ? [...source.mimeTypes] : null;
+  }
+
+  sendPrimarySourceCancelled(sourceId: number): void {
+    if (!this.objects.has(sourceId)) return;
+    this.send(sourceId, EV.primary_source_cancelled, () => {});
+  }
+
+  sendPrimarySourceSend(sourceId: number, mime: string, fd: number): void {
+    if (!this.objects.has(sourceId)) {
+      try {
+        closeFd(fd);
+      } catch {
+        // ok
+      }
+      return;
+    }
+    this.send(sourceId, EV.primary_source_send, (b) => {
+      b.string(mime).fd(fd);
+    });
+    try {
+      closeFd(fd);
+    } catch {
+      // ok
+    }
+  }
+
+  sendPrimarySelection(
+    selection: PrimarySelection | null,
+    onlyDeviceId?: number,
+  ): void {
+    const devices = onlyDeviceId
+      ? [onlyDeviceId]
+      : [...this.primaryDeviceIds];
+    for (const deviceId of devices) {
+      if (!this.objects.has(deviceId)) continue;
+      if (!selection) {
+        this.send(deviceId, EV.primary_device_selection, (b) => b.object(0));
+        continue;
+      }
+      const offerId = this.allocServerId();
+      const offer: PrimaryOfferState = {
+        sourceSession: selection.sourceSession,
+        sourceId: selection.sourceId,
+        mimeTypes: [...selection.mimeTypes],
+        deviceId,
+      };
+      this.objects.set(offerId, {
+        id: offerId,
+        iface: "zwp_primary_selection_offer_v1",
+        version: 1,
+        data: { offer },
+      });
+      this.send(deviceId, EV.primary_device_data_offer, (b) => b.newId(offerId));
+      for (const mime of selection.mimeTypes) {
+        this.send(offerId, EV.primary_offer_offer, (b) => b.string(mime));
+      }
+      this.send(deviceId, EV.primary_device_selection, (b) => b.object(offerId));
     }
   }
 
@@ -5268,6 +5897,7 @@ class ClientSession {
               // would get double titlebars. SSD only after SERVER negotiate
               // (or explicit Xwayland rootful title hack above).
               const firstMap = !this.server.isStacked(this, surface.id);
+              if (firstMap) this.server.fitToplevelToOutput(this, surface.id);
               this.server.registerToplevel(this, surface.id);
               // Focus / raise only on first map — not every commit.
               // Ends any xdg_popup.grab for this client before keyboard_enter.

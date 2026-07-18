@@ -44,6 +44,7 @@ Use this file as a sidebar / SUMMARY for Markdown site generators (Docsify, mdBo
 
 * [Compositor index](compositor/README.md)
 * [Wayland DnD](compositor/dnd.md)
+* [Display modes & protocols](compositor/display-and-protocols.md)
 * [Parallels DRM present](parallels-drm-present.md)
 
 ## Reference

@@ -6,10 +6,12 @@ export { listDrmConnectors, type DrmConnectorInfo } from "./drm.js";
 export {
   openKmsOutput,
   fillKmsColor,
+  setKmsMode,
   presentKms,
   closeKmsOutput,
   runClearColorLoop,
   type KmsOutput,
+  type KmsMode,
   type Rgba,
 } from "./kms.js";
 export {
