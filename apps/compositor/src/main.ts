@@ -98,6 +98,22 @@ async function main() {
             return { body: [output.name, output.widthMm, output.heightMm] };
           },
         },
+        ListOutputs: {
+          inSignature: "",
+          outSignature: "a(ssiiii)",
+          handler: () => ({
+            body: [
+              server.getDisplayOutputs().map(({ kms, x, y }) => [
+                kms.connectorName,
+                kms.currentModeId,
+                x,
+                y,
+                kms.width,
+                kms.height,
+              ]),
+            ],
+          }),
+        },
         SetMode: {
           inSignature: "s",
           outSignature: "b",

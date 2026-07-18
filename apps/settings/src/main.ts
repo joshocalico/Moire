@@ -46,6 +46,16 @@ type DisplayState = {
   name: string;
   widthMm: number;
   heightMm: number;
+  outputs: ConnectedOutput[];
+};
+
+type ConnectedOutput = {
+  name: string;
+  mode: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
 type ParsedDisplayMode = {
@@ -90,6 +100,9 @@ function SettingsApp(
     props.display?.preferred ?? "",
   );
   const [displayName, setDisplayName] = useState(props.display?.name ?? "Display");
+  const [connectedOutputs, setConnectedOutputs] = useState(
+    props.display?.outputs ?? [],
+  );
   const [selectedResolution, setSelectedResolution] = useState(
     resolutionForMode(props.display?.current ?? ""),
   );
@@ -198,6 +211,7 @@ function SettingsApp(
         setDisplayModes(next.modes);
         setDisplayPreferred(next.preferred);
         setDisplayName(next.name || "Display");
+        setConnectedOutputs(next.outputs);
         if (next.current && next.current !== displayMode) {
           setDisplayMode(next.current);
           setSelectedResolution(resolutionForMode(next.current));
@@ -413,7 +427,10 @@ function SettingsApp(
               gap: Math.round(10 * ui),
             },
             createElement(Label, {
-              text: displayName,
+              text:
+                connectedOutputs.length > 1
+                  ? `${connectedOutputs.length} displays · ${connectedOutputs.map((output) => output.name).join("  +  ")}`
+                  : displayName,
               color: pal.accent,
               fontWeight: "medium",
               width: innerW,
@@ -704,7 +721,7 @@ async function connectDisplayController(): Promise<{
   try {
     const bus = await SessionBus.connect();
     const getState = async (): Promise<DisplayState> => {
-      const [reply, outputReply] = await Promise.all([
+      const [reply, outputReply, outputsReply] = await Promise.all([
         bus.call({
           destination: "org.moire.Display1",
           path: "/org/moire/Display1",
@@ -717,7 +734,16 @@ async function connectDisplayController(): Promise<{
           interface: "org.moire.Display1",
           member: "GetOutputInfo",
         }),
+        bus.call({
+          destination: "org.moire.Display1",
+          path: "/org/moire/Display1",
+          interface: "org.moire.Display1",
+          member: "ListOutputs",
+        }),
       ]);
+      const outputRows = Array.isArray(outputsReply.body?.[0])
+        ? outputsReply.body[0]
+        : [];
       return {
         modes: Array.isArray(reply.body?.[0])
           ? reply.body[0].map(String)
@@ -727,6 +753,16 @@ async function connectDisplayController(): Promise<{
         name: String(outputReply.body?.[0] ?? "Display"),
         widthMm: Number(outputReply.body?.[1] ?? 0),
         heightMm: Number(outputReply.body?.[2] ?? 0),
+        outputs: outputRows
+          .filter((row): row is unknown[] => Array.isArray(row))
+          .map((row) => ({
+            name: String(row[0] ?? "Display"),
+            mode: String(row[1] ?? ""),
+            x: Number(row[2] ?? 0),
+            y: Number(row[3] ?? 0),
+            width: Number(row[4] ?? 0),
+            height: Number(row[5] ?? 0),
+          })),
       };
     };
     const initial = await getState();

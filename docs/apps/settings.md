@@ -9,7 +9,7 @@ Writes `~/.config/moire/settings.json` via `@moire/prefs` (not `prefs.json`).
 | Section | Controls |
 | --- | --- |
 | Appearance | Dark, UI scale, wallpaper mode / atmosphere / image |
-| Displays | Live connector identity, resolution + refresh controls, preferred/current state, Keep/Revert countdown |
+| Displays | Live connector/layout identity, resolution + refresh controls, preferred/current state, Keep/Revert countdown |
 | Sound | Volume-related prefs applied through prefs pipeline |
 | (others) | Expand as schema grows |
 
@@ -23,7 +23,8 @@ Full key list: [Prefs reference](../reference/prefs.md).
 
 Standard `@moire/ui` window — Tabs, Slider, Toggle, Buttons, and scrollable
 resolution controls — using the same tokens as Files and shell. The view
-reconciles live connector/mode changes while it is open. Display management
+reconciles live connector/mode changes while it is open and reports the active
+multi-output layout. Display management
 stays behind D-Bus; Settings does not access DRM directly.
 
 ## Guest checks

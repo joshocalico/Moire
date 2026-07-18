@@ -126,6 +126,8 @@ type KmsModeData = KmsMode & { raw: Record<string, unknown> };
 
 export type KmsOutput = {
   fd: number;
+  /** Only the primary output owns DRM mastership and closes the shared fd. */
+  ownsFd: boolean;
   cardPath: string;
   connectorId: number;
   connectorName: string;
@@ -469,6 +471,7 @@ export function openKmsOutput(
 
         return {
           fd,
+          ownsFd: true,
           cardPath,
           connectorId,
           connectorName: connectorName(
@@ -764,6 +767,226 @@ function destroyFramebuffer(out: KmsOutput, fb: KmsFramebuffer): void {
   }
 }
 
+function createFramebuffer(
+  out: KmsOutput,
+  mode: KmsModeData,
+): KmsFramebuffer {
+  const createBuf = koffi.alloc(DrmModeCreateDumb, 1);
+  koffi.encode(createBuf, DrmModeCreateDumb, {
+    height: mode.height,
+    width: mode.width,
+    bpp: 32,
+    flags: 0,
+    handle: 0,
+    pitch: 0,
+    size: 0n,
+  });
+  if (out.drmIoctl(out.fd, DRM_IOCTL_MODE_CREATE_DUMB, createBuf) !== 0) {
+    koffi.free(createBuf);
+    throw new Error("DRM_IOCTL_MODE_CREATE_DUMB failed");
+  }
+  const created = koffi.decode(createBuf, DrmModeCreateDumb) as {
+    handle: number;
+    pitch: number;
+    size: bigint | number;
+  };
+  koffi.free(createBuf);
+
+  const mapBuf = koffi.alloc(DrmModeMapDumb, 1);
+  koffi.encode(mapBuf, DrmModeMapDumb, {
+    handle: created.handle,
+    pad: 0,
+    offset: 0n,
+  });
+  if (out.drmIoctl(out.fd, DRM_IOCTL_MODE_MAP_DUMB, mapBuf) !== 0) {
+    koffi.free(mapBuf);
+    const destroy = koffi.alloc(DrmModeDestroyDumb, 1);
+    koffi.encode(destroy, DrmModeDestroyDumb, { handle: created.handle });
+    out.drmIoctl(out.fd, DRM_IOCTL_MODE_DESTROY_DUMB, destroy);
+    koffi.free(destroy);
+    throw new Error("DRM_IOCTL_MODE_MAP_DUMB failed");
+  }
+  const mapped = koffi.decode(mapBuf, DrmModeMapDumb) as {
+    offset: bigint | number;
+  };
+  koffi.free(mapBuf);
+
+  const size = Number(created.size);
+  const map = mmap(
+    size,
+    PROT_READ | PROT_WRITE,
+    MAP_SHARED,
+    out.fd,
+    Number(mapped.offset),
+  );
+  const fbIdOut = koffi.alloc("uint32_t", 1);
+  const add = out.addFb(
+    out.fd,
+    mode.width,
+    mode.height,
+    24,
+    32,
+    created.pitch,
+    created.handle,
+    fbIdOut,
+  );
+  if (add !== 0) {
+    koffi.free(fbIdOut);
+    munmap(map, size);
+    const destroy = koffi.alloc(DrmModeDestroyDumb, 1);
+    koffi.encode(destroy, DrmModeDestroyDumb, { handle: created.handle });
+    out.drmIoctl(out.fd, DRM_IOCTL_MODE_DESTROY_DUMB, destroy);
+    koffi.free(destroy);
+    throw new Error(`drmModeAddFB failed (${add})`);
+  }
+  const fbId = koffi.decode(fbIdOut, "uint32_t") as number;
+  koffi.free(fbIdOut);
+  const modePtr = koffi.alloc(DrmModeModeInfo, 1);
+  koffi.encode(modePtr, DrmModeModeInfo, mode.raw);
+  return {
+    width: mode.width,
+    height: mode.height,
+    pitch: created.pitch,
+    handle: created.handle,
+    fbId,
+    size,
+    map,
+    modePtr,
+  };
+}
+
+/**
+ * Activate another connector on the primary output's already-master DRM fd.
+ * Callers close additional outputs before the owning primary output.
+ */
+export function openAdditionalKmsOutput(
+  primary: KmsOutput,
+  connectorId: number,
+  requestedModeId?: string,
+  usedCrtcIds: ReadonlySet<number> = new Set([primary.crtcId]),
+): KmsOutput {
+  const connPtr = primary.getConnector(primary.fd, connectorId);
+  if (!connPtr) throw new Error(`DRM connector ${connectorId} not found`);
+  try {
+    const conn = koffi.decode(connPtr, DrmModeConnector) as {
+      encoder_id: number;
+      connector_type: number;
+      connector_type_id: number;
+      connection: number;
+      mmWidth: number;
+      mmHeight: number;
+      count_modes: number;
+      modes: unknown;
+      count_encoders: number;
+      encoders: unknown;
+    };
+    if (conn.connection !== DRM_MODE_CONNECTED || conn.count_modes < 1) {
+      throw new Error(`DRM connector ${connectorId} is not connected`);
+    }
+    const rawModes = koffi.decode(
+      conn.modes,
+      koffi.array(DrmModeModeInfo, conn.count_modes),
+    ) as Record<string, unknown>[];
+    const modes = describeModes(rawModes);
+    const selected =
+      modes.find((mode) => mode.id === requestedModeId) ??
+      modes.find((mode) => mode.preferred) ??
+      modes[0];
+    if (!selected) throw new Error(`DRM connector ${connectorId} has no modes`);
+
+    const encoderIds = conn.encoder_id
+      ? [conn.encoder_id]
+      : conn.count_encoders > 0
+        ? (koffi.decode(
+            conn.encoders,
+            koffi.array("uint32_t", conn.count_encoders),
+          ) as number[])
+        : [];
+    const resourcesPtr = primary.getResources(primary.fd);
+    if (!resourcesPtr) throw new Error("drmModeGetResources failed");
+    let crtcId = 0;
+    try {
+      const resources = koffi.decode(resourcesPtr, DrmModeRes) as {
+        count_crtcs: number;
+        crtcs: unknown;
+      };
+      const crtcIds = koffi.decode(
+        resources.crtcs,
+        koffi.array("uint32_t", resources.count_crtcs),
+      ) as number[];
+      for (const encoderId of encoderIds) {
+        const encoderPtr = primary.getEncoder(primary.fd, encoderId);
+        if (!encoderPtr) continue;
+        try {
+          const encoder = koffi.decode(encoderPtr, DrmModeEncoder) as {
+            crtc_id: number;
+            possible_crtcs: number;
+          };
+          if (encoder.crtc_id && !usedCrtcIds.has(encoder.crtc_id)) {
+            crtcId = encoder.crtc_id;
+            break;
+          }
+          for (let index = 0; index < crtcIds.length; index++) {
+            const candidate = crtcIds[index]!;
+            if (
+              encoder.possible_crtcs & (1 << index) &&
+              !usedCrtcIds.has(candidate)
+            ) {
+              crtcId = candidate;
+              break;
+            }
+          }
+        } finally {
+          primary.freeEncoder(encoderPtr);
+        }
+        if (crtcId) break;
+      }
+    } finally {
+      primary.freeResources(resourcesPtr);
+    }
+    if (!crtcId) throw new Error(`No unused CRTC for ${connectorId}`);
+
+    const connectorsPtr = koffi.alloc("uint32_t", 1);
+    koffi.encode(connectorsPtr, "uint32_t", connectorId);
+    const frame = createFramebuffer(primary, selected);
+    const set = primary.setCrtc(
+      primary.fd,
+      crtcId,
+      frame.fbId,
+      0,
+      0,
+      connectorsPtr,
+      1,
+      frame.modePtr,
+    );
+    if (set !== 0) {
+      destroyFramebuffer(primary, frame);
+      koffi.free(connectorsPtr);
+      throw new Error(`drmModeSetCrtc additional output failed (${set})`);
+    }
+
+    return {
+      ...primary,
+      ownsFd: false,
+      connectorId,
+      connectorName: connectorName(
+        conn.connector_type,
+        conn.connector_type_id,
+      ),
+      physicalWidthMm: conn.mmWidth,
+      physicalHeightMm: conn.mmHeight,
+      crtcId,
+      ...frame,
+      modes: modes.map(({ raw: _raw, ...mode }) => mode),
+      currentModeId: selected.id,
+      connectorsPtr,
+      modeData: new Map(modes.map((mode) => [mode.id, mode])),
+    };
+  } finally {
+    primary.freeConnector(connPtr);
+  }
+}
+
 /**
  * Switch an already-open connector to another advertised mode. The new dumb
  * framebuffer is fully allocated and accepted by KMS before the old one is
@@ -979,12 +1202,14 @@ export function closeKmsOutput(out: KmsOutput): void {
   } catch {
     // ignore
   }
-  try {
-    drmDropMaster(out.fd);
-  } catch {
-    // ignore
+  if (out.ownsFd) {
+    try {
+      drmDropMaster(out.fd);
+    } catch {
+      // ignore
+    }
+    closeFd(out.fd);
   }
-  closeFd(out.fd);
 }
 
 /**

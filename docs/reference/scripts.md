@@ -16,7 +16,8 @@ Host and guest helpers under `scripts/`. Prefer these over ad-hoc `prlctl exec â
 | `guest-run-foot.sh` | Launch foot |
 | `guest-launch-files.sh` | Launch Moire Files |
 | `guest-launch-settings.sh [tab]` | Launch Settings in the active session; optional tab index aids visual checks |
-| `guest-display-mode.sh [list \| output \| set MODE \| try MODE]` | Query live modes/connector identity, confirm, or trial a KMS mode through D-Bus |
+| `guest-display-mode.sh [list \| output \| outputs \| set MODE \| try MODE]` | Query live modes, connector identity/layout, confirm, or trial a KMS mode through D-Bus |
+| `guest-smoke-multi-output.sh` | Run synthetic layout/crop checks, inject a DRM change, and verify topology/session survival |
 | `guest-kill-files.sh` | Kill Files clients |
 | `guest-seed-desktop.sh` | Seed `~/Desktop` test files |
 | `guest-prep-desktop-shot.sh` | Clear windows for icon screenshots |

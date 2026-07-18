@@ -12,6 +12,7 @@ import {
   fillKmsColor,
   presentKms,
   openKmsOutput,
+  openAdditionalKmsOutput,
   refreshKmsOutputModes,
   setKmsMode,
   switchKmsConnector,
@@ -39,6 +40,15 @@ import {
   getLibc,
 } from "@moire/sys";
 import { mmapShm, munmapShm, copyFromPool } from "./shm-map.js";
+import {
+  copySceneToOutput,
+  desktopBounds,
+  horizontalLayout,
+  outputContainingPoint,
+  outputsIntersectingRect,
+  outputMembershipDelta,
+  replacementOwner,
+} from "./display-layout.js";
 import {
   closeDmabufPlanes,
   copyFromDmabuf,
@@ -89,6 +99,7 @@ const OP = {
   surface_set_buffer_transform: 7,
   surface_set_buffer_scale: 8,
   surface_damage_buffer: 9,
+  output_release: 0,
   buffer_destroy: 0,
   subcompositor_destroy: 0,
   subcompositor_get_subsurface: 1,
@@ -208,6 +219,7 @@ const EV = {
   display_error: 0,
   display_delete_id: 1,
   registry_global: 0,
+  registry_global_remove: 1,
   callback_done: 0,
   shm_format: 0,
   buffer_release: 0,
@@ -512,6 +524,8 @@ type SurfaceState = {
   bufferOffsetY: number;
   frameCallbacks: number[];
   mapped: boolean;
+  /** wl_output object ids for which wl_surface.enter has been sent. */
+  enteredOutputIds: Set<number>;
   /** Absolute desktop position (computed for subsurfaces). */
   x: number;
   y: number;
@@ -898,13 +912,23 @@ type DragReturnAnimation = {
   durationMs: number;
 };
 
+export type DisplayOutput = {
+  kms: KmsOutput;
+  x: number;
+  y: number;
+};
+
 export class CompositorServer {
   private socket: WaylandSocketServer | null = null;
   private kms: KmsOutput | null = null;
+  /** Active outputs arranged in one logical desktop coordinate space. */
+  private outputs: DisplayOutput[] = [];
+  private outputStages = new Map<number, Buffer>();
   private clients = new Set<ClientSession>();
   private running = false;
   private nextGlobalName = 1;
   private globals: { name: number; iface: string; version: number }[] = [];
+  private outputGlobalNames: number[] = [];
   private keymap: KeymapMemfd | null = null;
   private evdev: EvdevKeyboard | null = null;
   private pointerDev: EvdevPointer | null = null;
@@ -1011,11 +1035,13 @@ export class CompositorServer {
     private readonly displayName = "wayland-1",
   ) {
     for (const [iface, version] of Object.entries(CORE_GLOBALS)) {
+      const name = this.nextGlobalName++;
       this.globals.push({
-        name: this.nextGlobalName++,
+        name,
         iface,
         version,
       });
+      if (iface === "wl_output") this.outputGlobalNames.push(name);
     }
   }
 
@@ -1028,20 +1054,54 @@ export class CompositorServer {
     const requestedMode =
       process.env.MOIRE_MODE ?? loadSettings().displayMode ?? undefined;
     this.kms = openKmsOutput(cardPath, requestedMode);
+    this.outputs = [{ kms: this.kms, x: 0, y: 0 }];
+    const connected = listDrmConnectors().filter(
+      (connector) =>
+        connector.cardPath === this.kms!.cardPath &&
+        connector.connection === "connected" &&
+        connector.connectorId !== this.kms!.connectorId,
+    );
+    const usedCrtcs = new Set([this.kms.crtcId]);
+    for (const connector of connected) {
+      try {
+        const output = openAdditionalKmsOutput(
+          this.kms,
+          connector.connectorId,
+          requestedMode,
+          usedCrtcs,
+        );
+        usedCrtcs.add(output.crtcId);
+        this.outputs.push({ kms: output, x: 0, y: 0 });
+      } catch (error) {
+        console.warn(
+          `[output] could not activate connector ${connector.connectorId}:`,
+          error,
+        );
+      }
+    }
+    this.rebuildOutputLayout();
+    while (this.outputGlobalNames.length < this.outputs.length) {
+      const name = this.nextGlobalName++;
+      this.outputGlobalNames.push(name);
+      this.globals.push({
+        name,
+        iface: "wl_output",
+        version: CORE_GLOBALS.wl_output,
+      });
+    }
     const bootBg = hexToArgb(this.theme.tokens.bg);
-    fillKmsColor(this.kms, {
-      r: (bootBg >>> 16) & 0xff,
-      g: (bootBg >>> 8) & 0xff,
-      b: bootBg & 0xff,
-    });
+    for (const output of this.outputs) {
+      fillKmsColor(output.kms, {
+        r: (bootBg >>> 16) & 0xff,
+        g: (bootBg >>> 8) & 0xff,
+        b: bootBg & 0xff,
+      });
+    }
     console.log(
       `[theme] ${this.theme.name} wallpaper=${this.theme.wallpaper.mode}`,
     );
     console.log(
-      `[output] ${this.kms.connectorName} ${this.kms.currentModeId}` +
-        (this.kms.physicalWidthMm > 0 && this.kms.physicalHeightMm > 0
-          ? ` ${this.kms.physicalWidthMm}x${this.kms.physicalHeightMm}mm`
-          : ""),
+      `[output] layout ${this.outputs.map(({ kms, x, y }) => `${kms.connectorName}:${kms.currentModeId}@${x},${y}`).join(" ")}`,
     );
     try {
       this.drmHotplugMonitor = watchDrmHotplug((event) => {
@@ -1118,8 +1178,9 @@ export class CompositorServer {
     this.pointerDev.start();
 
     if (this.kms) {
-      this.cursorX = Math.floor(this.kms.width / 2);
-      this.cursorY = Math.floor(this.kms.height / 2);
+      const desktop = this.getKmsSize();
+      this.cursorX = Math.floor(desktop.width / 2);
+      this.cursorY = Math.floor(desktop.height / 2);
     }
     this.socket = new WaylandSocketServer(this.socketPath);
     this.socket.on("connection", (conn: WaylandClientConn) => {
@@ -1160,7 +1221,7 @@ export class CompositorServer {
     console.log(`Wayland display: ${this.displayName}`);
     console.log(`Socket: ${this.socketPath}`);
     console.log(
-      `KMS: ${this.kms.width}x${this.kms.height} on ${this.kms.cardPath}`,
+      `KMS: ${this.outputs.length} output(s), desktop ${this.getKmsSize().width}x${this.getKmsSize().height} on ${this.kms.cardPath}`,
     );
     console.log(
       `Export: WAYLAND_DISPLAY=${this.displayName} XDG_RUNTIME_DIR=${this.runtimeDir}`,
@@ -1239,6 +1300,11 @@ export class CompositorServer {
         this.dmabufFormatTable = null;
       }
       this.drmFeedback = null;
+      for (const output of [...this.outputs].reverse()) {
+        if (output.kms !== this.kms) closeKmsOutput(output.kms);
+      }
+      this.outputs = [];
+      this.outputStages.clear();
       closeKmsOutput(this.kms);
       this.kms = null;
     }
@@ -1295,6 +1361,7 @@ export class CompositorServer {
       const surf = pair.session.surfaceById(pair.surfaceId);
       if (surf) {
         surf.mapped = false;
+        pair.session.clearSurfaceOutputs(surf);
         this.unregisterToplevel(pair.session, pair.surfaceId);
       }
     });
@@ -1308,6 +1375,7 @@ export class CompositorServer {
         surf.x11Wid = null;
         surf.xwaylandSerial = null;
         surf.mapped = false;
+        pair.session.clearSurfaceOutputs(surf);
         this.unregisterToplevel(pair.session, pair.surfaceId);
       }
     });
@@ -1418,7 +1486,7 @@ export class CompositorServer {
       const childW = win.width > 0 ? win.width : Math.max(1, surf.width);
       const childH = win.height > 0 ? win.height : Math.max(1, surf.height);
       const frameH = childH + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
-      const kms = this.kms;
+      const kms = this.getKmsSize();
       let x = parentFrame.x + Math.floor((parentFrame.w - childW) / 2);
       let y = parentFrame.y + Math.floor((parentFrame.h - frameH) / 2);
       if (kms) {
@@ -1494,7 +1562,74 @@ export class CompositorServer {
     return this.gbm;
   }
 
+  getDisplayOutputs(): DisplayOutput[] {
+    return this.outputs.map((output) => ({ ...output }));
+  }
+
+  displayOutputForGlobal(globalName: number): DisplayOutput | null {
+    const index = this.outputGlobalNames.indexOf(globalName);
+    return index >= 0 ? this.outputs[index] ?? null : null;
+  }
+
+  private addOutput(output: KmsOutput): void {
+    const x = this.outputs.reduce(
+      (right, current) => Math.max(right, current.x + current.kms.width),
+      0,
+    );
+    const layout = { kms: output, x, y: 0 };
+    this.outputs.push(layout);
+    const name = this.nextGlobalName++;
+    this.outputGlobalNames.push(name);
+    const global = {
+      name,
+      iface: "wl_output",
+      version: CORE_GLOBALS.wl_output,
+    };
+    this.globals.push(global);
+    for (const client of this.clients) client.globalAdded(global);
+  }
+
+  private removeOutputAt(index: number): void {
+    const [removed] = this.outputs.splice(index, 1);
+    if (!removed) return;
+    for (const client of this.clients) client.outputRemoved(removed);
+    const [globalName] = this.outputGlobalNames.splice(index, 1);
+    if (globalName != null) {
+      this.globals = this.globals.filter((global) => global.name !== globalName);
+      for (const client of this.clients) client.globalRemoved(globalName);
+    }
+    this.outputStages.delete(removed.kms.connectorId);
+    closeKmsOutput(removed.kms);
+  }
+
+  private rebuildOutputLayout(): void {
+    const placed = horizontalLayout(
+      this.outputs.map((output) => ({
+        id: String(output.kms.connectorId),
+        width: output.kms.width,
+        height: output.kms.height,
+      })),
+    );
+    for (let index = 0; index < this.outputs.length; index++) {
+      this.outputs[index]!.x = placed[index]!.x;
+      this.outputs[index]!.y = placed[index]!.y;
+    }
+    this.stage = null;
+    this.outputStages.clear();
+  }
+
   getKmsSize(): { width: number; height: number } {
+    if (this.outputs.length > 0) {
+      return desktopBounds(
+        this.outputs.map((output) => ({
+          id: String(output.kms.connectorId),
+          x: output.x,
+          y: output.y,
+          width: output.kms.width,
+          height: output.kms.height,
+        })),
+      );
+    }
     return {
       width: this.kms?.width ?? 1920,
       height: this.kms?.height ?? 1080,
@@ -1528,67 +1663,116 @@ export class CompositorServer {
 
   /** Reconcile the active connector's live EDID/mode list after hotplug. */
   refreshDisplayOutput(): boolean {
-    const kms = this.kms;
-    if (!kms) return false;
-    const refresh = refreshKmsOutputModes(kms);
-    if (!refresh.connected) {
-      const replacement = listDrmConnectors().find(
-        (connector) =>
-          connector.cardPath === kms.cardPath &&
-          connector.connection === "connected" &&
-          connector.connectorId !== kms.connectorId,
-      );
-      if (!replacement) {
-        const now = Date.now();
-        if (now - this.lastMissingOutputLogMs >= 10_000) {
-          this.lastMissingOutputLogMs = now;
-          console.warn(
-            `[output] ${kms.connectorName} disconnected; waiting for a connected output on ${kms.cardPath}`,
-          );
-        }
-        return false;
-      }
-      if (this.pendingDisplayMode) {
-        clearTimeout(this.pendingDisplayMode.timer);
-        this.pendingDisplayMode = null;
-      }
-      const previousName = kms.connectorName;
-      switchKmsConnector(
-        kms,
-        replacement.connectorId,
-        loadSettings().displayMode ?? undefined,
-      );
-      this.publishDisplayGeometry(
-        `connector ${previousName} → ${kms.connectorName}`,
-      );
-      return true;
-    }
-    this.lastMissingOutputLogMs = 0;
-
-    if (!refresh.currentModeAvailable) {
-      if (this.pendingDisplayMode) {
-        clearTimeout(this.pendingDisplayMode.timer);
-        this.pendingDisplayMode = null;
-      }
-      const configured = loadSettings().displayMode;
-      const nextMode =
-        (configured && kms.modes.some((mode) => mode.id === configured)
-          ? configured
-          : null) ?? refresh.preferredModeId;
-      if (!nextMode) return false;
-      console.log(
-        `[output] ${kms.currentModeId} is no longer advertised; selecting ${nextMode}`,
-      );
-      return this.setDisplayMode(nextMode);
-    }
-
-    if (!refresh.modesChanged) return false;
-    console.log(
-      `[output] refreshed ${kms.connectorName}: ${kms.modes.length} modes, preferred=${refresh.preferredModeId ?? "none"}`,
+    const owner = this.kms;
+    if (!owner) return false;
+    const configured = loadSettings().displayMode;
+    const topology = listDrmConnectors().filter(
+      (connector) =>
+        connector.cardPath === owner.cardPath &&
+        connector.connection === "connected",
     );
-    for (const client of this.clients) client.outputChanged();
-    this.notifyDisplayChanged();
-    this.markDirty();
+    let changed = false;
+
+    for (let index = this.outputs.length - 1; index >= 0; index--) {
+      const entry = this.outputs[index]!;
+      const refresh = refreshKmsOutputModes(entry.kms);
+      if (!refresh.connected) {
+        if (this.outputs.length > 1) {
+          if (entry.kms === this.kms) {
+            const nextOwner = replacementOwner(this.outputs, index)!;
+            entry.kms.ownsFd = false;
+            nextOwner.kms.ownsFd = true;
+            this.kms = nextOwner.kms;
+          }
+          console.log(`[output] removed ${entry.kms.connectorName}`);
+          this.removeOutputAt(index);
+          changed = true;
+          continue;
+        }
+
+        const replacement = topology.find(
+          (connector) => connector.connectorId !== entry.kms.connectorId,
+        );
+        if (replacement) {
+          const previousName = entry.kms.connectorName;
+          switchKmsConnector(
+            entry.kms,
+            replacement.connectorId,
+            configured ?? undefined,
+          );
+          console.log(
+            `[output] connector ${previousName} → ${entry.kms.connectorName}`,
+          );
+          changed = true;
+        } else {
+          const now = Date.now();
+          if (now - this.lastMissingOutputLogMs >= 10_000) {
+            this.lastMissingOutputLogMs = now;
+            console.warn(
+              `[output] ${entry.kms.connectorName} disconnected; waiting for a connected output on ${entry.kms.cardPath}`,
+            );
+          }
+        }
+        continue;
+      }
+
+      this.lastMissingOutputLogMs = 0;
+      if (!refresh.currentModeAvailable) {
+        const nextMode =
+          (configured &&
+          entry.kms.modes.some((mode) => mode.id === configured)
+            ? configured
+            : null) ?? refresh.preferredModeId;
+        if (nextMode) {
+          console.log(
+            `[output] ${entry.kms.connectorName} no longer advertises ${entry.kms.currentModeId}; selecting ${nextMode}`,
+          );
+          setKmsMode(entry.kms, nextMode);
+          changed = true;
+        }
+      } else if (refresh.modesChanged) {
+        console.log(
+          `[output] refreshed ${entry.kms.connectorName}: ${entry.kms.modes.length} modes`,
+        );
+        changed = true;
+      }
+    }
+
+    const activeIds = new Set(
+      this.outputs.map((output) => output.kms.connectorId),
+    );
+    const usedCrtcs = new Set(this.outputs.map((output) => output.kms.crtcId));
+    for (const connector of topology) {
+      if (activeIds.has(connector.connectorId)) continue;
+      try {
+        const output = openAdditionalKmsOutput(
+          this.getKms(),
+          connector.connectorId,
+          configured ?? undefined,
+          usedCrtcs,
+        );
+        usedCrtcs.add(output.crtcId);
+        activeIds.add(output.connectorId);
+        this.addOutput(output);
+        console.log(`[output] added ${output.connectorName} ${output.currentModeId}`);
+        changed = true;
+      } catch (error) {
+        console.warn(
+          `[output] could not activate connector ${connector.connectorId}:`,
+          error,
+        );
+      }
+    }
+
+    if (!changed) return false;
+    if (this.pendingDisplayMode) {
+      clearTimeout(this.pendingDisplayMode.timer);
+      this.pendingDisplayMode = null;
+    }
+    this.rebuildOutputLayout();
+    this.publishDisplayGeometry(
+      `layout ${this.outputs.map((output) => output.kms.connectorName).join(" + ")}`,
+    );
     return true;
   }
 
@@ -1623,12 +1807,13 @@ export class CompositorServer {
     const changed = setKmsMode(kms, modeId);
     if (!changed) return false;
 
+    this.rebuildOutputLayout();
     this.publishDisplayGeometry(`mode ${modeId}`);
     return true;
   }
 
   private publishDisplayGeometry(description: string): void {
-    const kms = this.getKms();
+    const kms = this.getKmsSize();
     this.stage = null;
     this.cursorX = Math.max(0, Math.min(kms.width - 1, this.cursorX));
     this.cursorY = Math.max(0, Math.min(kms.height - 1, this.cursorY));
@@ -1637,24 +1822,34 @@ export class CompositorServer {
       const surf = entry.session.surfaceById(entry.surfaceId);
       if (!surf || surf.role !== "toplevel") continue;
       if (surf.fullscreen) {
-        surf.x = 0;
-        surf.y = 0;
-        entry.session.configureToplevel(surf, kms.width, kms.height, [
+        const output = this.outputForSurface(surf);
+        surf.x = output.x;
+        surf.y = output.y;
+        entry.session.configureToplevel(
+          surf,
+          output.kms.width,
+          output.kms.height,
+          [
           XDG_TOPLEVEL_STATE_FULLSCREEN,
           ...(this.focusedToplevel?.session === entry.session &&
           this.focusedToplevel.surfaceId === surf.id
             ? [XDG_TOPLEVEL_STATE_ACTIVATED]
             : []),
-        ]);
+          ],
+        );
       } else if (surf.maximized) {
-        surf.x = 0;
-        surf.y = 0;
+        const output = this.outputForSurface(surf);
+        surf.x = output.x;
+        surf.y = output.y;
         const contentH = this.usesSsd(surf)
-          ? Math.max(100, kms.height - SSD_PANEL_H - SSD_TITLEBAR_H)
-          : kms.height;
+          ? Math.max(
+              100,
+              output.kms.height - SSD_PANEL_H - SSD_TITLEBAR_H,
+            )
+          : output.kms.height;
         entry.session.configureToplevel(
           surf,
-          kms.width,
+          output.kms.width,
           contentH,
           [
             XDG_TOPLEVEL_STATE_MAXIMIZED,
@@ -2293,9 +2488,9 @@ export class CompositorServer {
 
   /** Keep a newly mapped native toplevel reachable on the current output. */
   fitToplevelToOutput(session: ClientSession, surfaceId: number): void {
-    const kms = this.kms;
+    const kms = this.getKmsSize();
     const surf = session.surfaceById(surfaceId);
-    if (!kms || !surf || surf.role !== "toplevel") return;
+    if (!surf || surf.role !== "toplevel") return;
     const w = surf.geomW > 0 ? surf.geomW : surf.width;
     const h = surf.geomH > 0 ? surf.geomH : surf.height;
     const chromeH = this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
@@ -2420,6 +2615,7 @@ export class CompositorServer {
       console.log(`[popup] popup_done surface=${surfaceId}`);
     }
     surf.mapped = false;
+    session.clearSurfaceOutputs(surf);
     surf.popupGrabbed = false;
     surf.xdgPopupId = null;
     if (surf.role === "popup") surf.role = "none";
@@ -2709,8 +2905,7 @@ export class CompositorServer {
   }
 
   private onPointerMotion(ev: EvdevPointerMotion): void {
-    const kms = this.kms;
-    if (!kms) return;
+    const kms = this.getKmsSize();
     const nx = Math.max(0, Math.min(kms.width - 1, this.cursorX + ev.dx));
     const ny = Math.max(0, Math.min(kms.height - 1, this.cursorY + ev.dy));
     if (nx !== this.cursorX || ny !== this.cursorY) this.markDirty();
@@ -2751,8 +2946,7 @@ export class CompositorServer {
   }
 
   private onPointerAbsolute(ev: EvdevPointerAbsolute): void {
-    const kms = this.kms;
-    if (!kms) return;
+    const kms = this.getKmsSize();
     const nx = Math.max(
       0,
       Math.min(kms.width - 1, Math.round(ev.x * (kms.width - 1))),
@@ -3226,8 +3420,8 @@ export class CompositorServer {
   /** Apply interactive move/resize; returns true if a grab consumed the motion. */
   private applyGrab(): boolean {
     const g = this.grab;
-    const kms = this.kms;
-    if (!g || !kms) return false;
+    const kms = this.getKmsSize();
+    if (!g) return false;
     const surf = g.session.surfaceById(g.surfaceId);
     if (!surf || !surf.mapped) {
       this.grab = null;
@@ -3291,14 +3485,35 @@ export class CompositorServer {
   }
 
   /** Align a maximized/fullscreen toplevel so window geometry fills the output. */
-  placeMaximized(surf: SurfaceState): void {
-    this.setGeometryPosition(surf, 0, 0);
+  private outputForSurface(surf: SurfaceState): DisplayOutput {
+    const frame = this.frameBox(surf);
+    const centerX = frame.x + frame.w / 2;
+    const centerY = frame.y + frame.h / 2;
+    return (
+      outputContainingPoint(
+        this.outputs.map((output) => ({
+          id: String(output.kms.connectorId),
+          x: output.x,
+          y: output.y,
+          width: output.kms.width,
+          height: output.kms.height,
+          output,
+        })),
+        centerX,
+        centerY,
+      )?.output ?? this.outputs[0]!
+    );
+  }
+
+  placeMaximized(surf: SurfaceState): DisplayOutput {
+    const output = this.outputForSurface(surf);
+    this.setGeometryPosition(surf, output.x, output.y);
+    return output;
   }
 
   toggleMaximized(session: ClientSession, surfaceId: number, want: boolean): void {
     const surf = session.surfaceById(surfaceId);
-    const kms = this.kms;
-    if (!surf || !kms || surf.role !== "toplevel") return;
+    if (!surf || surf.role !== "toplevel") return;
     if (want && !surf.maximized) {
       const frame = this.frameBox(surf);
       const size = this.contentSize(surf);
@@ -3308,7 +3523,8 @@ export class CompositorServer {
       surf.savedH = size.h;
       surf.maximized = true;
       surf.fullscreen = false;
-      this.placeMaximized(surf);
+      const output = this.placeMaximized(surf);
+      const kms = output.kms;
       const contentH = this.usesSsd(surf)
         ? Math.max(100, kms.height - SSD_PANEL_H - SSD_TITLEBAR_H)
         : kms.height;
@@ -3327,8 +3543,7 @@ export class CompositorServer {
 
   toggleFullscreen(session: ClientSession, surfaceId: number, want: boolean): void {
     const surf = session.surfaceById(surfaceId);
-    const kms = this.kms;
-    if (!surf || !kms || surf.role !== "toplevel") return;
+    if (!surf || surf.role !== "toplevel") return;
     if (want && !surf.fullscreen) {
       if (!surf.maximized) {
         surf.savedX = surf.x + surf.geomX;
@@ -3337,7 +3552,8 @@ export class CompositorServer {
         surf.savedH = surf.geomH > 0 ? surf.geomH : surf.height;
       }
       surf.fullscreen = true;
-      this.placeMaximized(surf);
+      const output = this.placeMaximized(surf);
+      const kms = output.kms;
       session.configureToplevel(surf, kms.width, kms.height, [
         XDG_TOPLEVEL_STATE_FULLSCREEN,
         XDG_TOPLEVEL_STATE_ACTIVATED,
@@ -3345,7 +3561,8 @@ export class CompositorServer {
     } else if (!want && surf.fullscreen) {
       surf.fullscreen = false;
       if (surf.maximized) {
-        this.placeMaximized(surf);
+        const output = this.placeMaximized(surf);
+        const kms = output.kms;
         session.configureToplevel(surf, kms.width, kms.height, [
           XDG_TOPLEVEL_STATE_MAXIMIZED,
           XDG_TOPLEVEL_STATE_ACTIVATED,
@@ -3978,6 +4195,7 @@ export class CompositorServer {
       const surf = client.surfaceById(entry.surfaceId);
       if (!surf || !surf.mapped || !surf.pixels) continue;
       this.layoutPopup(client, surf);
+      client.updateSurfaceOutputs(surf);
       const hidden = client.isHidden(surf);
       if (
         !hidden &&
@@ -4033,11 +4251,12 @@ export class CompositorServer {
 
   /** Paint wallpaper + all mapped surfaces into the KMS dumb buffer. */
   composite(): void {
-    const kms = this.kms;
-    if (!kms) return;
+    if (this.outputs.length === 0) return;
+    const kms = this.getKmsSize();
+    const stageSize = kms.width * kms.height * 4;
 
-    if (!this.stage || this.stage.byteLength !== kms.size) {
-      this.stage = Buffer.alloc(kms.size);
+    if (!this.stage || this.stage.byteLength !== stageSize) {
+      this.stage = Buffer.alloc(stageSize);
     }
     const stage = this.stage;
     const fb = new Uint32Array(
@@ -4046,7 +4265,7 @@ export class CompositorServer {
       stage.byteLength >>> 2,
     );
     // Wallpaper from theme (atmosphere / gradient / image) — cached in @moire/theme.
-    const pitchPx = kms.pitch >>> 2;
+    const pitchPx = kms.width;
     const wallPhase = (Date.now() / 60000) % 1; // ~60s period
     paintWallpaper(fb, pitchPx, kms.width, kms.height, this.theme, wallPhase);
     // Keep atmosphere drifting even when otherwise idle.
@@ -4075,6 +4294,7 @@ export class CompositorServer {
         const client = entry.session;
         client.layout();
         for (const surf of client.paintTree(entry.surfaceId)) {
+          client.updateSurfaceOutputs(surf);
           if (!surf.mapped || !surf.pixels) continue;
           // Minimized windows still need frame callbacks + buffer releases,
           // otherwise arrays grow without bound and clients stall.
@@ -4196,15 +4416,41 @@ export class CompositorServer {
       }
       this.paintDragPreview(fb, pitchPx, kms.width, kms.height);
       this.drawCursor(fb, pitchPx, kms.width, kms.height);
-      // Always flush — a mid-frame blit throw used to skip present entirely.
-      flushMmap(kms.map, stage, kms.size);
-      // Parallels VIRTUAL DRM does not pick up dumb-buffer dirties until SetCrtc
-      // is re-applied (or a page flip). Without this, CPU readback looks correct
-      // while prlctl capture / the display stay on the last modeset image.
-      try {
-        presentKms(kms);
-      } catch (err) {
-        console.error("[composite] presentKms:", err);
+      // Crop the logical desktop into each physical output. This is the
+      // software backend boundary; EGL can later implement the same output
+      // layout contract with per-output render targets.
+      for (const output of this.outputs) {
+        const physical = output.kms;
+        let target = this.outputStages.get(physical.connectorId);
+        if (!target || target.byteLength !== physical.size) {
+          target = Buffer.alloc(physical.size);
+          this.outputStages.set(physical.connectorId, target);
+        }
+        copySceneToOutput(
+          stage,
+          kms.width,
+          kms.height,
+          {
+            id: physical.connectorName,
+            x: output.x,
+            y: output.y,
+            width: physical.width,
+            height: physical.height,
+          },
+          target,
+          physical.pitch,
+        );
+        flushMmap(physical.map, target, physical.size);
+        // Parallels VIRTUAL DRM does not pick up dumb-buffer dirties until
+        // SetCrtc is re-applied (or a page flip).
+        try {
+          presentKms(physical);
+        } catch (err) {
+          console.error(
+            `[composite] presentKms ${physical.connectorName}:`,
+            err,
+          );
+        }
       }
     }
 
@@ -4759,7 +5005,9 @@ class ClientSession {
         break;
       case "wl_keyboard":
       case "wl_touch":
+        break;
       case "wl_output":
+        if (opcode === OP.output_release) this.releaseOutput(obj);
         break;
       case "wl_data_device_manager":
         this.handleDataDeviceManager(opcode, r);
@@ -4875,6 +5123,24 @@ class ClientSession {
     }
   }
 
+  globalAdded(global: { name: number; iface: string; version: number }): void {
+    for (const object of this.objects.values()) {
+      if (object.iface !== "wl_registry") continue;
+      this.send(object.id, EV.registry_global, (b) => {
+        b.uint(global.name).string(global.iface).uint(global.version);
+      });
+    }
+  }
+
+  globalRemoved(globalName: number): void {
+    for (const object of this.objects.values()) {
+      if (object.iface !== "wl_registry") continue;
+      this.send(object.id, EV.registry_global_remove, (b) => {
+        b.uint(globalName);
+      });
+    }
+  }
+
   private handleRegistry(opcode: number, r: MessageReader): void {
     if (opcode !== OP.registry_bind) return;
     const name = r.uint();
@@ -4883,8 +5149,16 @@ class ClientSession {
     const iface = r.string()!;
     const version = r.uint();
     const id = r.newId();
-    void name;
-    this.objects.set(id, { id, iface, version });
+    const output =
+      iface === "wl_output"
+        ? this.server.displayOutputForGlobal(name)
+        : null;
+    this.objects.set(id, {
+      id,
+      iface,
+      version,
+      ...(output ? { data: { output } } : {}),
+    });
 
     if (iface === "wl_shm") {
       this.send(id, EV.shm_format, (b) => b.uint(WL_SHM_FORMAT_ARGB8888));
@@ -4898,7 +5172,8 @@ class ClientSession {
         : WL_SEAT_CAPABILITY_POINTER;
       this.send(id, EV.seat_capabilities, (b) => b.uint(caps));
     } else if (iface === "wl_output") {
-      this.sendOutputEvents(id);
+      this.sendOutputEvents(id, output);
+      this.updateAllSurfaceOutputs();
     } else if (iface === "wl_data_device_manager") {
       // no immediate events
     } else if (iface === "wl_drm") {
@@ -5036,11 +5311,16 @@ class ClientSession {
     }
   }
 
-  private sendOutputEvents(id: number): void {
-    const kms = this.server.getKms();
+  private sendOutputEvents(
+    id: number,
+    selectedOutput?: DisplayOutput | null,
+  ): void {
+    const output = selectedOutput ?? this.server.getDisplayOutputs()[0];
+    if (!output) return;
+    const { kms, x, y } = output;
     this.send(id, EV.output_geometry, (b) => {
-      b.int(0)
-        .int(0)
+      b.int(x)
+        .int(y)
         .int(kms.physicalWidthMm)
         .int(kms.physicalHeightMm)
         .int(0) // unknown subpixel
@@ -5063,9 +5343,102 @@ class ClientSession {
     this.send(id, EV.output_done, () => {});
   }
 
+  private releaseOutput(object: WlObject): void {
+    for (const surface of this.surfaces()) {
+      surface.enteredOutputIds.delete(object.id);
+    }
+    this.destroyObject(object.id);
+  }
+
   outputChanged(): void {
     for (const object of this.objects.values()) {
-      if (object.iface === "wl_output") this.sendOutputEvents(object.id);
+      if (object.iface === "wl_output") {
+        this.sendOutputEvents(
+          object.id,
+          object.data?.output as DisplayOutput | undefined,
+        );
+      }
+    }
+    this.updateAllSurfaceOutputs();
+  }
+
+  updateSurfaceOutputs(surface: SurfaceState): void {
+    const available = [...this.objects.values()]
+      .filter((object) => object.iface === "wl_output")
+      .flatMap((object) => {
+        const output = object.data?.output as DisplayOutput | undefined;
+        return output
+          ? [
+              {
+                id: String(object.id),
+                objectId: object.id,
+                x: output.x,
+                y: output.y,
+                width: output.kms.width,
+                height: output.kms.height,
+              },
+            ]
+          : [];
+      });
+    const desired =
+      surface.mapped && surface.pixels && !this.isHidden(surface)
+        ? new Set(
+            outputsIntersectingRect(available, {
+              x: surface.x,
+              y:
+                surface.y +
+                (surface.role === "toplevel" &&
+                this.server.usesSsd(surface)
+                  ? SSD_TITLEBAR_H
+                  : 0),
+              width: surface.width,
+              height: surface.height,
+            }).map((output) => output.objectId),
+          )
+        : new Set<number>();
+
+    const membership = outputMembershipDelta(
+      surface.enteredOutputIds,
+      desired,
+    );
+    for (const outputId of membership.left) {
+      this.send(surface.id, EV.surface_leave, (b) => b.uint(outputId));
+    }
+    for (const outputId of membership.entered) {
+      this.send(surface.id, EV.surface_enter, (b) => b.uint(outputId));
+    }
+    surface.enteredOutputIds = membership.next;
+  }
+
+  clearSurfaceOutputs(surface: SurfaceState): void {
+    for (const outputId of surface.enteredOutputIds) {
+      if (this.objects.has(outputId)) {
+        this.send(surface.id, EV.surface_leave, (b) => b.uint(outputId));
+      }
+    }
+    surface.enteredOutputIds.clear();
+  }
+
+  private updateAllSurfaceOutputs(): void {
+    this.layout();
+    for (const surface of this.surfaces()) this.updateSurfaceOutputs(surface);
+  }
+
+  outputRemoved(output: DisplayOutput): void {
+    const removedIds = new Set(
+      [...this.objects.values()]
+        .filter(
+          (object) =>
+            object.iface === "wl_output" && object.data?.output === output,
+        )
+        .map((object) => object.id),
+    );
+    for (const surface of this.surfaces()) {
+      for (const outputId of removedIds) {
+        if (!surface.enteredOutputIds.has(outputId)) continue;
+        this.send(surface.id, EV.surface_leave, (b) => b.uint(outputId));
+        surface.enteredOutputIds.delete(outputId);
+      }
     }
   }
 
@@ -5826,6 +6199,7 @@ class ClientSession {
         bufferOffsetY: 0,
         frameCallbacks: [],
         mapped: false,
+        enteredOutputIds: new Set(),
         x: 0,
         y: 0,
         subX: 0,
@@ -6156,9 +6530,13 @@ class ClientSession {
           }
         }
       } else if (surface.bufferAttached && !surface.bufferId) {
-        // Explicit attach(null) — detach; keep last pixels for now.
+        // Explicit attach(null) unmaps the surface and leaves every output.
         surface.bufferAttached = false;
+        surface.mapped = false;
+        surface.pixels = null;
+        this.clearSurfaceOutputs(surface);
       }
+      this.updateSurfaceOutputs(surface);
       // Commits (buffer, frame callback, or xwayland serial) need a composite pass.
       this.server.markDirty();
     } else if (opcode === OP.surface_destroy) {
@@ -6168,6 +6546,7 @@ class ClientSession {
         this.server.dismissPopup(this, surface.id, false);
       }
       this.finishSurfaceFrame(surface);
+      this.clearSurfaceOutputs(surface);
       surface.pixels = null;
       this.destroyObject(obj.id);
     }

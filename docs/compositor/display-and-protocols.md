@@ -36,11 +36,19 @@ preferred mode come from DRM rather than Parallels-specific configuration.
 `@moire/sys` also owns an internal libudev monitor implemented through Koffi.
 DRM change events schedule a debounced connector re-probe, backed by a
 two-second reconciliation poll for virtual GPUs which coalesce notifications.
-If the active connector changes its EDID/mode list, Moire updates `wl_output`,
-Settings, and the shell. If the active mode disappears it selects the saved
-mode when still valid, then the new preferred mode. If the connector is
-unplugged, the single logical desktop is transactionally handed to another
-connected connector on the same DRM card.
+If a connector changes its EDID/mode list, Moire updates `wl_output`, Settings,
+and the shell. If an active mode disappears it selects the saved mode when
+still valid, then the new preferred mode.
+
+Connected outputs on one DRM card now share the DRM-master file descriptor but
+own independent CRTCs, dumb framebuffers and connector mode state. Core lays
+them out horizontally in one logical coordinate space. The software renderer
+paints that logical desktop once, crops the appropriate region into every
+output framebuffer, and presents each CRTC. Runtime connector additions and
+removals add/remove `wl_output` globals; if the original primary is unplugged,
+DRM-fd ownership transfers to a surviving output before its framebuffer is
+released. Maximized and fullscreen windows target the output containing the
+window rather than spanning the combined desktop.
 
 ## D-Bus display service
 
@@ -50,6 +58,7 @@ The compositor owns `org.moire.Display1` at `/org/moire/Display1`:
 | --- | --- | --- |
 | `GetModes` | `→ (as modes, s current, s preferred)` | Enumerate stable mode IDs |
 | `GetOutputInfo` | `→ (s name, i widthMm, i heightMm)` | Read live connector identity and physical size |
+| `ListOutputs` | `→ a(ssiiii)` | Read `(name, mode, x, y, width, height)` for every active output |
 | `SetMode` | `(s mode) → b changed` | Begin a 15-second live mode trial |
 | `ConfirmMode` | `→ b confirmed` | Keep and persist the pending mode |
 | `RevertMode` | `→ b reverted` | Immediately restore the previous mode |
@@ -66,7 +75,7 @@ change, or `try` to exercise automatic rollback.
 
 | Protocol | Current behavior |
 | --- | --- |
-| `wl_output` v3 | All DRM modes, current/preferred flags, live updates |
+| `wl_output` v3 | Per-connector globals, modes/geometry, live updates and `wl_surface.enter`/`leave` membership |
 | `zwp_primary_selection_*` v1 | Independent middle-click selection transfer |
 | `xdg_activation_v1` | One-shot tokens and focus handoff |
 | `wp_fractional_scale_v1` | Native preferred scale in 120ths |
@@ -80,9 +89,33 @@ IME expectations.
 
 ## Current boundary
 
-This is still one logical output, but it now detects live mode-table changes
-and can fail over between connectors on one DRM card. Simultaneously active
-multi-monitor layout, cross-GPU handoff, output placement, rotation and
-per-output scaling remain future work. The renderer remains independent: both
-the software backend and a future EGL backend consume output dimensions owned
-by core.
+Simultaneously active outputs on one DRM card now work as a horizontal logical
+desktop. User-editable placement, saved per-monitor profiles, rotation,
+per-output scale, mirror mode and cross-GPU handoff remain future work. The
+renderer remains independent: software currently crops one logical scene into
+per-output targets; a future EGL backend can consume the same layout contract.
+
+## Smoke testing
+
+The backend-neutral layout smoke uses synthetic outputs of different sizes and
+a deliberately padded framebuffer pitch. It verifies horizontal coordinates,
+logical bounds, monitor hit-testing, straddling/crossing output membership,
+DRM-owner replacement, exact per-output crop pixels, untouched pitch padding,
+and rejection of out-of-bounds layouts:
+
+```bash
+pnpm --filter @moire/core smoke:display
+```
+
+Inside MoireDev, the integration wrapper runs that smoke, reads the live
+`ListOutputs` D-Bus topology, injects a harmless DRM udev change and confirms
+the compositor/socket and topology survive:
+
+```bash
+prlctl exec MoireDev bash /media/psf/moire/scripts/guest-smoke-multi-output.sh
+```
+
+This VM kernel has VKMS, but its module exposes the older single-connector
+interface. The synthetic smoke therefore covers multi-output layout and
+presentation deterministically; a same-card two-connector machine is still
+needed to exercise multiple live CRTCs.

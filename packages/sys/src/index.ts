@@ -10,6 +10,7 @@ export {
 } from "./drm-hotplug.js";
 export {
   openKmsOutput,
+  openAdditionalKmsOutput,
   fillKmsColor,
   setKmsMode,
   refreshKmsOutputModes,
