@@ -28,7 +28,8 @@ import {
   Icon,
   DropTarget,
   DropZone,
-  Draggable,
+  CollectionItem,
+  ContextMenuTrigger,
   ScrollArea,
   ContextMenu,
   OpenWithPicker,
@@ -169,6 +170,20 @@ function ensureDir(p: string): void {
   }
 }
 
+function createUniqueFolder(parent: string): string | null {
+  for (let index = 1; index < 10_000; index++) {
+    const name = index === 1 ? "New Folder" : `New Folder ${index}`;
+    const destination = path.join(parent, name);
+    try {
+      fs.mkdirSync(destination);
+      return destination;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
+    }
+  }
+  return null;
+}
+
 function pathToUri(p: string): string {
   return `file://${encodeURI(p)}`;
 }
@@ -234,9 +249,11 @@ function FilesApp(
   const [selected, setSelected] = useState(-1);
   const [view, setView] = useState<"grid" | "list">("grid");
   const [tick, setTick] = useState(0);
-  const [menu, setMenu] = useState<{ entry: Entry; x: number; y: number } | null>(
-    null,
-  );
+  const [menu, setMenu] = useState<
+    | { kind: "entry"; entry: Entry; x: number; y: number }
+    | { kind: "background"; x: number; y: number }
+    | null
+  >(null);
   const [pickerEntry, setPickerEntry] = useState<Entry | null>(null);
   const [pickerSelection, setPickerSelection] = useState<string | null>(null);
   const placeList = useMemo(() => places(), []);
@@ -363,13 +380,51 @@ function FilesApp(
         ];
       },
     });
+    registry.register({
+      id: "moire.background",
+      actions(context) {
+        if (context.scope !== "background") return [];
+        const directory = context.currentDirectory;
+        if (!directory) return [];
+        return [
+          {
+            id: "new-folder",
+            label: "New Folder",
+            icon: "folder",
+            run: () => {
+              const created = createUniqueFolder(directory);
+              if (created) {
+                setTick((current) => current + 1);
+                setSelected(-1);
+              }
+            },
+          },
+          {
+            id: "refresh",
+            label: "Refresh",
+            icon: "folder",
+            separatorBefore: true,
+            run: () => setTick((current) => current + 1),
+          },
+          {
+            id: "toggle-view",
+            label: view === "grid" ? "Use List View" : "Use Grid View",
+            icon: view === "grid" ? "list" : "grid",
+            run: () =>
+              setView((current) => (current === "grid" ? "list" : "grid")),
+          },
+        ];
+      },
+    });
     return registry;
-  }, [openEntry, showOpenWith]);
+  }, [openEntry, showOpenWith, view]);
 
   const contextActions = useCallback(
     (entry: Entry): ContextMenuAction[] => {
       const context: FileActionContext = {
         source: "files",
+        scope: "items",
+        currentDirectory: cwd,
         paths: [entry.path],
         mimeTypes: [mimeDb.mimeTypeForPath(entry.path)],
         directories: [entry.isDir],
@@ -385,8 +440,29 @@ function FilesApp(
         onPress: action.run,
       }));
     },
-    [actionRegistry, mimeDb],
+    [actionRegistry, cwd, mimeDb],
   );
+
+  const backgroundContextActions = (): ContextMenuAction[] =>
+    actionRegistry
+      .actionsFor({
+        source: "files",
+        scope: "background",
+        currentDirectory: cwd,
+        paths: [],
+        mimeTypes: [],
+        directories: [],
+      })
+      .map((action) => ({
+        id: action.id,
+        label: action.label,
+        description: action.description,
+        icon: actionIcon(action.icon),
+        danger: action.danger,
+        disabled: action.enabled === false,
+        separatorBefore: action.separatorBefore,
+        onPress: action.run,
+      }));
 
   const goUp = () => {
     const parent = path.dirname(cwd);
@@ -590,9 +666,21 @@ function FilesApp(
             mimeTypes={["text/uri-list"]}
             onDrop={(payload, _mimes, x, y) => onDropPayload(payload, x, y)}
           >
-            <Surface x={0} y={0} width={contentW} height={bodyH} fill={pal.bg}>
-              {view === "grid" ? (
-                <Grid<Entry>
+            <ContextMenuTrigger
+              width={contentW}
+              height={bodyH}
+              onPress={() => {
+                setSelected(-1);
+                setMenu(null);
+              }}
+              onContextMenu={(event) => {
+                setSelected(-1);
+                setMenu({ kind: "background", x: event.x, y: event.y });
+              }}
+            >
+              <Surface x={0} y={0} width={contentW} height={bodyH} fill={pal.bg}>
+                {view === "grid" ? (
+                  <Grid<Entry>
                   width={contentW}
                   height={bodyH}
                   items={entries}
@@ -601,14 +689,17 @@ function FilesApp(
                   gap={Math.round(SPACE.md * ui)}
                   padding={Math.round(SPACE.lg * ui)}
                   renderItem={(entry, index) => (
-                    <Draggable
+                    <CollectionItem
                       key={entry.path}
                       width={cellW}
                       height={cellH}
-                      mimeTypes={["text/uri-list"]}
-                      getPayload={() => pathToUri(entry.path) + "\n"}
+                      focusId={`file:${entry.path}`}
+                      dragSource={{
+                        mimeTypes: ["text/uri-list"],
+                        getPayload: () => pathToUri(entry.path) + "\n",
+                        previewIcon: { name: iconFor(entry) },
+                      }}
                       dropData={entry.isDir ? entry.path : undefined}
-                      previewIcon={{ name: iconFor(entry) }}
                       onPress={() => {
                         setSelected(index);
                         setMenu(null);
@@ -616,7 +707,7 @@ function FilesApp(
                       onDoublePress={() => openEntry(entry)}
                       onContextMenu={(event) => {
                         setSelected(index);
-                        setMenu({ entry, x: event.x, y: event.y });
+                        setMenu({ kind: "entry", entry, x: event.x, y: event.y });
                       }}
                     >
                       <GridItem
@@ -634,11 +725,11 @@ function FilesApp(
                           />
                         }
                       />
-                    </Draggable>
+                    </CollectionItem>
                   )}
-                />
-              ) : (
-                <ScrollArea
+                  />
+                ) : (
+                  <ScrollArea
                   width={contentW}
                   height={bodyH}
                   contentHeight={Math.max(
@@ -647,16 +738,19 @@ function FilesApp(
                   )}
                 >
                   {entries.map((entry, index) => (
-                    <Draggable
+                    <CollectionItem
                       key={entry.path}
                       x={Math.round(SPACE.sm * ui)}
                       y={Math.round(SPACE.sm * ui) + index * Math.round(44 * ui)}
                       width={contentW - Math.round(SPACE.lg * ui)}
                       height={Math.round(40 * ui)}
-                      mimeTypes={["text/uri-list"]}
-                      getPayload={() => pathToUri(entry.path) + "\n"}
+                      focusId={`file:${entry.path}`}
+                      dragSource={{
+                        mimeTypes: ["text/uri-list"],
+                        getPayload: () => pathToUri(entry.path) + "\n",
+                        previewIcon: { name: iconFor(entry) },
+                      }}
                       dropData={entry.isDir ? entry.path : undefined}
-                      previewIcon={{ name: iconFor(entry) }}
                       onPress={() => {
                         setSelected(index);
                         setMenu(null);
@@ -664,7 +758,7 @@ function FilesApp(
                       onDoublePress={() => openEntry(entry)}
                       onContextMenu={(event) => {
                         setSelected(index);
-                        setMenu({ entry, x: event.x, y: event.y });
+                        setMenu({ kind: "entry", entry, x: event.x, y: event.y });
                       }}
                     >
                       <ListItem
@@ -686,11 +780,12 @@ function FilesApp(
                           />
                         }
                       />
-                    </Draggable>
+                    </CollectionItem>
                   ))}
-                </ScrollArea>
-              )}
-            </Surface>
+                  </ScrollArea>
+                )}
+              </Surface>
+            </ContextMenuTrigger>
           </DropTarget>
         </Row>
       </Column>
@@ -700,8 +795,14 @@ function FilesApp(
           viewportHeight={props.height}
           x={menu.x}
           y={menu.y}
-          title={menu.entry.name}
-          actions={contextActions(menu.entry)}
+          title={
+            menu.kind === "entry" ? menu.entry.name : path.basename(cwd) || cwd
+          }
+          actions={
+            menu.kind === "entry"
+              ? contextActions(menu.entry)
+              : backgroundContextActions()
+          }
           onDismiss={() => setMenu(null)}
         />
       ) : null}

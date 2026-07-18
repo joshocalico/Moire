@@ -22,8 +22,8 @@ Its largest gaps are structural:
   composition, shortcut scopes, and full control keyboard parity remain.
 - Lists and grids have no shared selection or keyboard-navigation model.
 - File operations are synchronous calls embedded in the main view.
-- `Draggable` owns clicking, double-clicking, context menus, drag initiation,
-  and drop identity because it owns the topmost hit layer.
+- `CollectionItem` now owns focus, activation, and context-menu semantics while
+  `useDragSource` owns drag mechanics; broader selection models are still due.
 - The renderer cannot yet express rounded geometry, strokes, shadows, or
   general transforms.
 - Presentation code uses deeply nested `createElement` calls even though the
@@ -117,10 +117,9 @@ CollectionItem
   - optional DropZone
 ```
 
-`Draggable` should become a narrowly scoped behavior or hook. It should not be
-the semantic owner of selection or context menus. A context menu should receive
-an explicit subject: item selection, sidebar entry, folder background, or
-desktop background.
+The new `useDragSource` hook is narrowly scoped and does not own selection or
+context menus. Files and the desktop now distinguish item and background menu
+subjects; sidebar and multi-selection contexts remain to be added.
 
 ## Complete Files behavior
 
@@ -355,7 +354,8 @@ view components. A single component should not own the whole application.
 
 ### Phase 6: desktop completeness
 
-- Add the background context menu and route background preferences to Settings.
+- Extend the initial background menu (New Folder, arrange, refresh, Files, and
+  Settings routing) with paste, sort modes, icon sizing, and selection actions.
 - Share selection and file-operation behavior with Files where appropriate.
 - Add multi-select, rubber-band, rename, arrange/sort, and complete feedback.
 

@@ -59,6 +59,7 @@ export {
   type ContextActionPlugin,
   type FileActionContext,
   type FileActionSource,
+  type FileActionScope,
 } from "./actions.js";
 
 export function filterApplications(

@@ -216,7 +216,7 @@ Note: `onSelect` is declared on the type but selection is owned by the app via `
 | `subtitle` | `string` | |
 | `leading` | `ReactNode` | icon slot |
 | `selected` | `boolean` | wash + 3px accent |
-| `interactive` | `boolean` | `true` — set `false` inside `Draggable` |
+| `interactive` | `boolean` | `true` — set `false` inside `CollectionItem` |
 | `onPress` / `onDoublePress` | | |
 
 ### `Grid` / `GridItem`
@@ -246,6 +246,18 @@ Note: `onSelect` is declared on the type but selection is owned by the app via `
 
 ## Media and DnD
 
+### `CollectionItem` / `ContextMenuTrigger`
+
+`CollectionItem` is the semantic interaction owner for a list or grid item. It
+provides focus, Enter/Space activation, click/double-click, item context menus,
+optional drop identity, and optional drag behavior without making drag code
+own selection policy. `ContextMenuTrigger` supplies a background hit region
+behind its children, so item menus win over background menus geometrically.
+
+Use `dragSource={{ mimeTypes, getPayload, previewIcon }}` on `CollectionItem`.
+For lower-level composition, `useDragSource()` exposes the same narrow drag
+threshold/session behavior.
+
 ### `Icon`
 
 | Prop | Type | Default |
@@ -271,7 +283,9 @@ Bundled files: `packages/ui/icons/<name>.png`.
 
 ### `Draggable` / `DropTarget`
 
-**Draggable** — press + move ≥ 6px starts platform drag; otherwise click / double-click.
+**Draggable** is the compatibility wrapper for older callers. New collection
+code should prefer `CollectionItem` plus `dragSource`; `DropTarget` remains the
+window-level incoming-drop sink.
 
 | Prop | Type | Notes |
 | --- | --- | --- |
@@ -290,25 +304,27 @@ Bundled files: `packages/ui/icons/<name>.png`.
 | `onDrop` | `(payload, mimeTypes) => void` | |
 | `children` | | |
 
-```ts
-createElement(
-  Draggable,
-  {
-    width: cellW,
-    height: cellH,
+```tsx
+<CollectionItem
+  width={cellW}
+  height={cellH}
+  dragSource={{
     mimeTypes: ["text/uri-list"],
     getPayload: () => pathToUri(file) + "\n",
-    onPress: () => setSelected(i),
-    onDoublePress: () => open(file),
-  },
-  createElement(GridItem, {
-    width: cellW,
-    height: cellH,
-    label: file.name,
-    interactive: false,
-    icon: createElement(Icon, { name: "file", size: 48 }),
-  }),
-);
+    previewIcon: { name: "file" },
+  }}
+  onPress={() => setSelected(i)}
+  onDoublePress={() => open(file)}
+  onContextMenu={showItemMenu}
+>
+  <GridItem
+    width={cellW}
+    height={cellH}
+    label={file.name}
+    interactive={false}
+    icon={<Icon name="file" size={48} />}
+  />
+</CollectionItem>
 ```
 
 Platforms call `setDndBridge` on connect — apps do not.

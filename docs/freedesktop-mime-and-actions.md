@@ -36,9 +36,11 @@ database.
 
 `ContextActionRegistry` is deliberately UI-independent and process-local. A
 plugin provides an id plus an `actions(context)` function. The context includes
-source surface (`files` or `desktop`), paths, MIME types, and directory flags.
+source surface (`files` or `desktop`), semantic scope (`items`, `background`,
+or `sidebar`), current directory, paths, MIME types, and directory flags.
 Actions return labels, descriptions, optional icon/danger/separator metadata,
-and a callback.
+and a callback. Files and desktop background actions now use the same registry
+contract as item actions.
 
 Core Open/Open With and location actions are registered through this same API.
 Future external plugin discovery can load providers into both processes without
@@ -48,5 +50,6 @@ changing `ContextMenu` or either surface's pointer handling.
 
 - Right-click is carried by `react-host` hit regions as `onContextMenu`.
 - `Window` dispatches right-button presses to the topmost matching region.
-- The compositor shell mirrors that dispatch for its desktop icon layer.
+- The compositor shell mirrors that dispatch for desktop items and an explicit
+  empty-space background trigger, even when desktop icons are hidden.
 - `ContextMenu` and `OpenWithPicker` are shared `@moire/ui` viewport overlays.

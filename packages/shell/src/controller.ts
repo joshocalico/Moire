@@ -19,6 +19,7 @@ import {
   setUiScaleFactor,
   tickAllMotions,
   ContextMenu,
+  ContextMenuTrigger,
   OpenWithPicker,
   Icon,
   GridItem,
@@ -338,7 +339,10 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   let desktopEntries: string[] = listDesktopEntries();
   let desktopLayout: DesktopLayout = loadDesktopLayout();
   let desktopSelectedName: string | undefined;
-  let desktopMenu: { name: string; x: number; y: number } | null = null;
+  let desktopMenu:
+    | { kind: "item"; name: string; x: number; y: number }
+    | { kind: "background"; x: number; y: number }
+    | null = null;
   let desktopPickerName: string | null = null;
   let desktopPickerSelection: string | null = null;
   /** Folder icon currently hovered by an active external/escalated drag. */
@@ -512,6 +516,8 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     }
     const context: FileActionContext = {
       source: "desktop",
+      scope: "items",
+      currentDirectory: desktopDir(),
       paths: [filePath],
       mimeTypes: [mimeDb.mimeTypeForPath(filePath)],
       directories: [directory],
@@ -531,6 +537,102 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       onPress: action.run,
     }));
   };
+
+  const createDesktopFolder = (): void => {
+    const root = desktopDir();
+    for (let index = 1; index < 10_000; index++) {
+      const name = index === 1 ? "New Folder" : `New Folder ${index}`;
+      try {
+        fs.mkdirSync(path.join(root, name), { recursive: false });
+        desktopSelectedName = name;
+        refreshDesktop();
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          console.error("[shell] new desktop folder failed:", error);
+          return;
+        }
+      }
+    }
+  };
+
+  desktopActionRegistry.register({
+    id: "moire.background",
+    actions(context) {
+      if (context.scope !== "background") return [];
+      return [
+        {
+          id: "new-folder",
+          label: "New Folder",
+          icon: "folder",
+          run: createDesktopFolder,
+        },
+        {
+          id: "open-in-files",
+          label: "Open Desktop in Files",
+          icon: "folder",
+          separatorBefore: true,
+          run: () => {
+            const child = spawn({
+              exec: `${filesExec} ${JSON.stringify(pathToFileURL(desktopDir()).href)}`,
+            });
+            child.unref?.();
+          },
+        },
+        {
+          id: "arrange-icons",
+          label: "Arrange Icons",
+          icon: "grid",
+          run: () => {
+            desktopLayout = {};
+            saveDesktopLayout(desktopLayout);
+            desktopDirty = true;
+          },
+        },
+        {
+          id: "refresh",
+          label: "Refresh Desktop",
+          icon: "desktop",
+          run: refreshDesktop,
+        },
+        {
+          id: "change-background",
+          label: "Change Background…",
+          icon: "app",
+          separatorBefore: true,
+          run: () => {
+            const child = spawn({ exec: settingsExec });
+            child.unref?.();
+          },
+        },
+      ];
+    },
+  });
+
+  const desktopBackgroundActions = (): ContextMenuAction[] =>
+    desktopActionRegistry
+      .actionsFor({
+        source: "desktop",
+        scope: "background",
+        currentDirectory: desktopDir(),
+        paths: [],
+        mimeTypes: [],
+        directories: [],
+      })
+      .map((action) => ({
+        id: action.id,
+        label: action.label,
+        description: action.description,
+        icon: (["app", "desktop", "folder", "grid"] as IconName[]).includes(
+          action.icon as IconName,
+        )
+          ? (action.icon as IconName)
+          : undefined,
+        danger: action.danger,
+        disabled: action.enabled === false,
+        separatorBefore: action.separatorBefore,
+        onPress: action.run,
+      }));
   setInterval(() => {
     const next = formatClock();
     if (next !== clock) {
@@ -679,6 +781,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
   const rebuildDesktop = (width: number, height: number) => {
     const pal = themePalette();
+    const settings = loadSettings();
     const pickerName = desktopPickerName;
     const pickerPath = pickerName
       ? path.join(desktopDir(), pickerName)
@@ -694,36 +797,66 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
       createElement(
         Group,
         { x: 0, y: 0, width, height: height - pal.panelHeight },
-        createElement(DesktopIcons, {
-          screenW: width,
-          screenH: height,
-          panelH: pal.panelHeight,
-          entries: desktopEntries,
-          layout: desktopLayout,
-          selectedName: desktopSelectedName,
-          dropHoverName: desktopDropHoverName,
-          dragActive: desktopDragActive,
-          onSelect: (name) => {
-            desktopSelectedName = name;
-            desktopMenu = null;
-            desktopDirty = true;
+        createElement(
+          ContextMenuTrigger,
+          {
+            width,
+            height: height - pal.panelHeight,
+            onPress: () => {
+              desktopSelectedName = undefined;
+              desktopMenu = null;
+              desktopPickerName = null;
+              desktopPickerSelection = null;
+              desktopDirty = true;
+            },
+            onContextMenu: (event) => {
+              desktopSelectedName = undefined;
+              desktopPickerName = null;
+              desktopPickerSelection = null;
+              desktopMenu = { kind: "background", x: event.x, y: event.y };
+              desktopDirty = true;
+            },
           },
-          onOpen: openDesktopEntry,
-          onContextMenu: (name, event) => {
-            desktopSelectedName = name;
-            desktopPickerName = null;
-            desktopMenu = { name, x: event.x, y: event.y };
-            desktopDirty = true;
-          },
-        }),
+          createElement(DesktopIcons, {
+            screenW: width,
+            screenH: height,
+            panelH: pal.panelHeight,
+            entries: settings.showDesktopIcons ? desktopEntries : [],
+            layout: desktopLayout,
+            selectedName: desktopSelectedName,
+            dropHoverName: desktopDropHoverName,
+            dragActive: desktopDragActive,
+            onSelect: (name) => {
+              desktopSelectedName = name;
+              desktopMenu = null;
+              desktopDirty = true;
+            },
+            onOpen: openDesktopEntry,
+            onContextMenu: (name, event) => {
+              desktopSelectedName = name;
+              desktopPickerName = null;
+              desktopMenu = {
+                kind: "item",
+                name,
+                x: event.x,
+                y: event.y,
+              };
+              desktopDirty = true;
+            },
+          }),
+        ),
         desktopMenu
           ? createElement(ContextMenu, {
               viewportWidth: width,
               viewportHeight: height - pal.panelHeight,
               x: desktopMenu.x,
               y: desktopMenu.y,
-              title: desktopMenu.name,
-              actions: desktopContextActions(desktopMenu.name),
+              title:
+                desktopMenu.kind === "item" ? desktopMenu.name : "Desktop",
+              actions:
+                desktopMenu.kind === "item"
+                  ? desktopContextActions(desktopMenu.name)
+                  : desktopBackgroundActions(),
               onDismiss: () => {
                 desktopMenu = null;
                 desktopDirty = true;
@@ -1098,8 +1231,6 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     },
 
     onDesktopPointerButton(ev) {
-      const settings = loadSettings();
-      if (!settings.showDesktopIcons) return false;
       const left = ev.button === PANEL_BTN_LEFT || ev.button === 272;
       const right = ev.button === PANEL_BTN_RIGHT || ev.button === 273;
       if (!left && !right) return false;
@@ -1208,7 +1339,13 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
     onDesktopPointerMotion(ev) {
       const settings = loadSettings();
-      if (!settings.showDesktopIcons) return;
+      if (
+        !settings.showDesktopIcons &&
+        desktopMenu == null &&
+        desktopPickerName == null
+      ) {
+        return;
+      }
       ensureDesktopHits();
 
       if (desktopDown?.name && !desktopDrag) {
@@ -1326,7 +1463,6 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
     paintDesktop(fb, pitchPx, width, height) {
       const settings = loadSettings();
-      if (!settings.showDesktopIcons) return;
       if (
         desktopDirty ||
         !desktopOverlay ||
@@ -1334,6 +1470,13 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         desktopH !== height
       ) {
         rebuildDesktop(width, height);
+      }
+      if (
+        !settings.showDesktopIcons &&
+        desktopMenu == null &&
+        desktopPickerName == null
+      ) {
+        return;
       }
       if (!desktopOverlay) return;
       blendOverlay(fb, pitchPx, width, height, desktopOverlay);

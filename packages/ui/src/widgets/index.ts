@@ -57,7 +57,16 @@ export type {
   DropZoneProps,
   DragIconSpec,
   DragPreviewSpec,
+  DragSourceOptions,
+  DragSourceController,
 } from "./dnd.js";
+export { useDragSource } from "./dnd.js";
+
+export { CollectionItem, ContextMenuTrigger } from "./interaction.js";
+export type {
+  CollectionItemProps,
+  ContextMenuTriggerProps,
+} from "./interaction.js";
 
 export { Tabs } from "./tabs.js";
 export type { TabsProps } from "./tabs.js";

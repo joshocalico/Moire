@@ -86,9 +86,12 @@ export {
   ImageWidget,
   Icon,
   Draggable,
+  CollectionItem,
+  ContextMenuTrigger,
   DropTarget,
   DropZone,
   setDndBridge,
+  useDragSource,
   usePalette,
 } from "./widgets/index.js";
 export type {
@@ -131,4 +134,8 @@ export type {
   DropZoneProps,
   DragIconSpec,
   DragPreviewSpec,
+  DragSourceOptions,
+  DragSourceController,
+  CollectionItemProps,
+  ContextMenuTriggerProps,
 } from "./widgets/index.js";

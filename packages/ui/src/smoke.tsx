@@ -31,8 +31,11 @@ import {
   GridItem,
   TextField,
   PathBar,
+  CollectionItem,
+  ContextMenuTrigger,
 } from "./index.js";
 import { HeadlessPlatform } from "./platforms/headless/index.js";
+import { notifyDragEnded } from "./widgets/dnd.js";
 
 const NO_MODIFIERS = {
   shift: false,
@@ -266,6 +269,120 @@ async function pathBarInteractionSmoke(): Promise<void> {
   backend.disconnect();
 }
 
+async function interactionOwnershipSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Interaction smoke", width: 180, height: 100 });
+  let itemContexts = 0;
+  let backgroundContexts = 0;
+  let selections = 0;
+  let opens = 0;
+  win.setContent(
+    <ContextMenuTrigger
+      width={180}
+      height={100}
+      onContextMenu={() => {
+        backgroundContexts++;
+      }}
+    >
+      <CollectionItem
+        x={10}
+        y={10}
+        width={70}
+        height={48}
+        dragSource={{
+          mimeTypes: ["text/plain"],
+          getPayload: () => "Alpha",
+        }}
+        onPress={() => {
+          selections++;
+        }}
+        onDoublePress={() => {
+          opens++;
+        }}
+        onContextMenu={() => {
+          itemContexts++;
+        }}
+      >
+        <Rect x={0} y={0} width={70} height={48} fill={0xff223344} />
+      </CollectionItem>
+    </ContextMenuTrigger>,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 20,
+    y: 20,
+    button: "right",
+    timeMs: 1,
+  });
+  platformWindow.injectPointer({
+    type: "down",
+    x: 140,
+    y: 70,
+    button: "right",
+    timeMs: 2,
+  });
+  assert.equal(itemContexts, 1, "item context should win over its background");
+  assert.equal(backgroundContexts, 1, "empty space should retain its own context");
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 20,
+    y: 20,
+    button: "left",
+    timeMs: 3,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 20,
+    y: 20,
+    button: "left",
+    timeMs: 4,
+  });
+  assert.equal(selections, 1);
+  platformWindow.injectKey({
+    type: "down",
+    code: 28,
+    key: "Enter",
+    modifiers: NO_MODIFIERS,
+    timeMs: 5,
+  });
+  assert.equal(opens, 1, "focused collection item should activate with Enter");
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 20,
+    y: 20,
+    button: "left",
+    timeMs: 6,
+  });
+  platformWindow.injectPointer({
+    type: "move",
+    x: 27,
+    y: 20,
+    button: "left",
+    timeMs: 7,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 27,
+    y: 20,
+    button: "left",
+    timeMs: 8,
+  });
+  assert.equal(selections, 1, "crossing the drag threshold must suppress click");
+
+  notifyDragEnded();
+  win.destroy();
+  backend.disconnect();
+}
+
 function ScrollSmoke(): ReactNode {
   return (
     <ScrollArea width={300} height={120} contentHeight={400} scrollbar>
@@ -402,6 +519,7 @@ async function main() {
   rendererSmoke();
   await textFieldInteractionSmoke();
   await pathBarInteractionSmoke();
+  await interactionOwnershipSmoke();
   const app = new Application({ platform: "headless" });
   const win = new Window({ title: "Smoke", width: 460, height: 600 });
   win.setContent(<SmokeApp onQuit={() => app.quit()} />);

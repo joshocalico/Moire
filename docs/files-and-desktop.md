@@ -24,7 +24,7 @@ Bottom → top:
 ```
 react-host (rect, text, image, clip, hits)
         ↓
-@moire/ui (Pressable, ScrollArea, List, Grid, Icon, Draggable, DropTarget, motion)
+@moire/ui (CollectionItem, useDragSource, ContextMenuTrigger, collections, overlays, motion)
         ↓
    apps/files   ·   shell DesktopIcons / Panel / Launcher   ·   Settings
 ```
@@ -62,9 +62,9 @@ Important widgets (`packages/ui/src/widgets/`):
 | `Button` | Variants: `primary`, `secondary`, `ghost`, `danger` |
 | `ScrollArea` | Clip group + wheel |
 | `List` / `ListItem` | Generic `items` + `renderItem`; selection wash + left accent |
-| `Grid` / `GridItem` | Fixed cell size; set `interactive={false}` when wrapped in `Draggable` |
+| `Grid` / `GridItem` | Fixed cell size; set `interactive={false}` when wrapped in `CollectionItem` |
 | `Icon` | PNGs in `packages/ui/icons/`; sync load; geometric fallback |
-| `Draggable` / `DropTarget` | Platform bridge; see DnD below |
+| `CollectionItem` / `useDragSource` / `DropTarget` | Item semantics, narrow drag behavior, and platform drop bridge |
 
 Headless check: `pnpm --filter @moire/ui smoke`.
 
@@ -77,7 +77,8 @@ Package: `apps/files` (`@moire/files`).
 - Open: directories navigate; files via `xdg-open`.
 - Launch target: accepts a filesystem path or `file://` URI; otherwise starts at `~/Desktop`.
 - Default folder handler: session installs `moire-files.desktop` and associates it with `inode/directory`, so `xdg-open <folder>` opens Files there.
-- DnD: items are `Draggable` (`text/uri-list`); view is a `DropTarget` that moves/copies into the current directory.
+- DnD: `CollectionItem` composes `useDragSource` (`text/uri-list`); the view is a `DropTarget` that moves/copies into the current directory.
+- Empty-space context menu is distinct from item menus and provides New Folder, Refresh, and view switching.
 - Started by `apps/session/moire-session` and listed in the launcher.
 
 ## Desktop icons
@@ -91,18 +92,22 @@ Implementation: `packages/shell/src/DesktopIcons.tsx`, wired from `packages/shel
 - Drag past a small threshold starts a local shell drag (ghost preview). Release on empty desktop persists a new position; release over another desktop folder moves the item into it.
 - Drag onto a client window (e.g. Files) instead escalates to a real Wayland DnD source — the target gets a normal `text/uri-list` drop and the file moves there; see [Wayland DnD](./compositor/dnd.md).
 - Empty desktop is a drop sink for `text/uri-list` (`acceptDesktopDrop`).
+- Empty desktop has its own context menu: New Folder, open in Files, arrange,
+  refresh, and Change Background (routes to Settings → Appearance).
 
 ## Drag and drop
 
 ### Protocol path
 
-1. Client `Draggable` detects press + move threshold → `dndBridge.startDrag`.
+1. Client `useDragSource` detects press + move threshold → `dndBridge.startDrag`.
 2. Wayland UI creates a `wl_data_source`, offers mimes, builds a **source-sized SHM drag-icon surface** anchored at the pointer-down hotspot, then calls `wl_data_device.start_drag`.
 3. Compositor runs enter / motion / leave / drop against the surface under the cursor.
 4. Drop on a Moire UI window: client `data_offer.receive` → `notifyDrop` → `DropTarget.onDrop`.
 5. Drop with no client target and `text/uri-list`: compositor reads the source and calls `shell.acceptDesktopDrop`.
 
-`Draggable` owns the hit target (drawn above children). Nested `GridItem` / `ListItem` must use `interactive={false}` or the child Pressable steals the gesture and drag never starts.
+`CollectionItem` owns the item hit target and composes narrow drag handlers.
+Nested `GridItem` / `ListItem` use `interactive={false}` so there is one
+semantic interaction owner rather than competing transparent hit layers.
 
 ### Preview
 
@@ -183,7 +188,8 @@ pnpm --filter @moire/ui smoke
 ```
 apps/files/src/main.tsx
 apps/session/moire-session
-packages/ui/src/widgets/{pressable,button,scroll,list,grid,icon,dnd,tabs}.ts
+packages/ui/src/widgets/{pressable,button,text-field,breadcrumbs,interaction}.tsx
+packages/ui/src/widgets/{scroll,list,grid,icon,dnd,tabs}.ts
 packages/ui/icons/*.png
 packages/ui/src/platforms/wayland/index.ts
 packages/ui/src/motion.ts

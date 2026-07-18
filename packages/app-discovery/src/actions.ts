@@ -1,7 +1,11 @@
 export type FileActionSource = "files" | "desktop";
+export type FileActionScope = "items" | "background" | "sidebar";
 
 export type FileActionContext = {
   source: FileActionSource;
+  scope: FileActionScope;
+  /** Folder whose view/background owns the action, when applicable. */
+  currentDirectory?: string;
   paths: string[];
   mimeTypes: string[];
   directories: boolean[];

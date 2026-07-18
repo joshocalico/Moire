@@ -10,12 +10,12 @@ Package: `apps/files`.
 | --- | --- |
 | Browse directories | Grid and list views |
 | Places sidebar | Home, Desktop, Downloads, … — longest-prefix path match |
-| Open / navigate | Double-click; Up; accepts a path or `file://` URI at launch |
+| Open / navigate | Double-click; Up; clickable/drop-aware breadcrumbs; editable validated path |
 | Default handler | `moire-files.desktop` for `inode/directory` |
 | Open With | MIME-filtered picker; one-time launch or write a new default |
-| Context menu | Shared action-provider registry; right-click in grid and list |
+| Context menu | Scoped action-provider registry; distinct item and background menus |
 | DnD into cwd | `DropTarget` + `text/uri-list` |
-| DnD out | `Draggable` per item |
+| DnD out | `CollectionItem` composes narrow `useDragSource` behavior |
 | Icons | Bundled PNG set via `Icon` |
 
 ## Toolkit usage
@@ -24,7 +24,8 @@ Files is a reference consumer of `@moire/ui`:
 
 - `Application` + `Window`
 - `Row` / `Column` / `ScrollArea` / `List` / `Grid` / `GridItem`
-- `Draggable` / `DropTarget` with `interactive={false}` on nested items
+- `CollectionItem` / `useDragSource` / `DropTarget` with one semantic item hit target
+- `PathBar` and real controlled `TextField` editing
 - `ContextMenu` / `OpenWithPicker` overlays and right-click scene events
 - Theme tokens for chrome
 

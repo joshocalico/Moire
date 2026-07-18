@@ -208,6 +208,21 @@ export type DraggableProps = {
   children?: ReactNode;
 };
 
+export type DragSourceOptions = Pick<
+  DraggableProps,
+  "width" | "height" | "mimeTypes" | "getPayload" | "label" | "previewIcon"
+>;
+
+export type DragSourceController = {
+  dragging: boolean;
+  onPointerDown: (event: HitPointerEvent) => void;
+  onPointerMove: (event: HitPointerEvent) => void;
+  onPointerUp: () => void;
+  onPointerLeave: () => void;
+  /** Consume the click suppression left by a drag that crossed the threshold. */
+  consumePressSuppression: () => boolean;
+};
+
 function labelFromPayload(payload: unknown, explicit?: string): string {
   if (explicit && explicit.trim()) return explicit.trim();
   if (typeof payload === "string") {
@@ -230,24 +245,28 @@ function labelFromPayload(payload: unknown, explicit?: string): string {
   return "Item";
 }
 
-export function Draggable(props: DraggableProps): ReactNode {
+/**
+ * Narrow drag behavior for composition by semantic interaction owners such as
+ * CollectionItem. It owns only drag threshold/session state, never selection,
+ * activation, or context-menu policy.
+ */
+export function useDragSource(options: DragSourceOptions): DragSourceController {
   const [dragging, setDragging] = useState(false);
-  const [dropHover, setDropHover] = useState(false);
-  const pal = themePalette();
   const down = useRef<{ x: number; y: number } | null>(null);
   const started = useRef(false);
-  const lastClick = useRef(0);
+  const suppressPress = useRef(false);
 
   const beginDrag = () => {
     if (started.current) return;
     started.current = true;
+    suppressPress.current = true;
     const hotspot = down.current ?? {
-      x: props.width / 2,
-      y: props.height / 2,
+      x: options.width / 2,
+      y: options.height / 2,
     };
-    const payload = props.getPayload?.() ?? null;
-    const types = props.mimeTypes ?? [];
-    const label = labelFromPayload(payload, props.label);
+    const payload = options.getPayload?.() ?? null;
+    const types = options.mimeTypes ?? [];
+    const label = labelFromPayload(payload, options.label);
     activeDrag = { payload, mimeTypes: types };
     setDragging(true);
     activeDragEndCb = () => {
@@ -257,15 +276,53 @@ export function Draggable(props: DraggableProps): ReactNode {
     };
     dndBridge?.startDrag?.(payload, types, {
       label,
-      icon: props.previewIcon,
-      width: props.width,
-      height: props.height,
+      icon: options.previewIcon,
+      width: options.width,
+      height: options.height,
       hotspotX: hotspot.x,
       hotspotY: hotspot.y,
     });
   };
 
+  return {
+    dragging,
+    onPointerDown(event) {
+      down.current = { x: event.localX, y: event.localY };
+      started.current = false;
+      suppressPress.current = false;
+    },
+    onPointerMove(event) {
+      if (!down.current || started.current) return;
+      const dx = event.localX - down.current.x;
+      const dy = event.localY - down.current.y;
+      if (dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+        beginDrag();
+      }
+    },
+    onPointerUp() {
+      down.current = null;
+      if (dragging) setDragging(false);
+      started.current = false;
+    },
+    onPointerLeave() {
+      if (!started.current) down.current = null;
+    },
+    consumePressSuppression() {
+      const suppressed = suppressPress.current;
+      suppressPress.current = false;
+      return suppressed;
+    },
+  };
+}
+
+export function Draggable(props: DraggableProps): ReactNode {
+  const drag = useDragSource(props);
+  const [dropHover, setDropHover] = useState(false);
+  const pal = themePalette();
+  const lastClick = useRef(0);
+
   const handleClick = () => {
+    if (drag.consumePressSuppression()) return;
     const now = Date.now();
     if (props.onDoublePress && now - lastClick.current < 400) {
       lastClick.current = 0;
@@ -294,33 +351,14 @@ export function Draggable(props: DraggableProps): ReactNode {
       fill: 0x00000000,
       data: props.dropData,
       onDropHoverChange: props.dropData !== undefined ? setDropHover : undefined,
-      onPointerDown: (ev: HitPointerEvent) => {
-        down.current = { x: ev.localX, y: ev.localY };
-        started.current = false;
-      },
-      onPointerMove: (ev: HitPointerEvent) => {
-        if (!down.current || started.current) return;
-        const dx = ev.localX - down.current.x;
-        const dy = ev.localY - down.current.y;
-        if (dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
-          beginDrag();
-        }
-      },
-      onPointerUp: () => {
-        const wasDrag = started.current;
-        down.current = null;
-        if (!wasDrag) handleClick();
-        if (dragging) setDragging(false);
-        started.current = false;
-      },
-      onPointerLeave: () => {
-        // If pointer leaves while held and we've moved enough, drag already started.
-        // Otherwise cancel the pending click arm.
-        if (!started.current) down.current = null;
-      },
+      onPointerDown: drag.onPointerDown,
+      onPointerMove: drag.onPointerMove,
+      onPointerUp: drag.onPointerUp,
+      onPointerLeave: drag.onPointerLeave,
+      onPress: handleClick,
       onContextMenu: props.onContextMenu,
     }),
-    dragging
+    drag.dragging
       ? createElement(Rect, {
           x: 0,
           y: 0,
@@ -329,7 +367,7 @@ export function Draggable(props: DraggableProps): ReactNode {
           fill: pal.accent,
         })
       : null,
-    dragging
+    drag.dragging
       ? createElement(Rect, {
           x: 0,
           y: props.height - 1,
@@ -338,7 +376,7 @@ export function Draggable(props: DraggableProps): ReactNode {
           fill: pal.accent,
         })
       : null,
-    dragging
+    drag.dragging
       ? createElement(Rect, {
           x: 0,
           y: 1,
@@ -347,7 +385,7 @@ export function Draggable(props: DraggableProps): ReactNode {
           fill: pal.accent,
         })
       : null,
-    dragging
+    drag.dragging
       ? createElement(Rect, {
           x: props.width - 1,
           y: 1,

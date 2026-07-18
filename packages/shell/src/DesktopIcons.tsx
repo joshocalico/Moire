@@ -1,9 +1,9 @@
 /**
  * Desktop icon layer — ~/Desktop entries as GridItem cells over wallpaper.
  */
-import { createElement, type ReactNode } from "react";
+import React, { type ReactNode } from "react";
 import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
-import { GridItem, Icon, themePalette } from "@moire/ui";
+import { CollectionItem, GridItem, Icon, themePalette } from "@moire/ui";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -162,67 +162,62 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
     const dirEntry = isDirectory(filePath);
     const iconName = dirEntry ? "folder" : "file";
 
-    return createElement(GridItem, {
-      key: name,
-      x: ix,
-      y: iy,
-      width: DESKTOP_ITEM_W,
-      height: DESKTOP_ITEM_H,
-      label: name,
-      iconSize: ICON_SIZE,
-      labelScrim: true,
-      selected: props.selectedName === name,
-      dropHover: dirEntry && props.dropHoverName === name,
-      icon: createElement(Icon, {
-        name: iconName,
-        size: ICON_SIZE,
-        color: dirEntry ? pal.accent : pal.text,
-      }),
-      onPress: () => props.onSelect?.(name),
-      onDoublePress: () => props.onOpen?.(name),
-      onContextMenu: (event) => props.onContextMenu?.(name, event),
-    });
+    return (
+      <CollectionItem
+        key={name}
+        x={ix}
+        y={iy}
+        width={DESKTOP_ITEM_W}
+        height={DESKTOP_ITEM_H}
+        focusId={`desktop:${filePath}`}
+        onPress={() => props.onSelect?.(name)}
+        onDoublePress={() => props.onOpen?.(name)}
+        onContextMenu={(event) => props.onContextMenu?.(name, event)}
+      >
+        <GridItem
+          width={DESKTOP_ITEM_W}
+          height={DESKTOP_ITEM_H}
+          label={name}
+          iconSize={ICON_SIZE}
+          labelScrim
+          selected={props.selectedName === name}
+          dropHover={dirEntry && props.dropHoverName === name}
+          interactive={false}
+          icon={
+            <Icon
+              name={iconName}
+              size={ICON_SIZE}
+              color={dirEntry ? pal.accent : pal.text}
+            />
+          }
+        />
+      </CollectionItem>
+    );
   });
 
-  return createElement(
-    Group,
-    { x: 0, y: 0, width: screenW, height: availH },
-    showAreaHighlight
-      ? createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: screenW,
-          height: 3,
-          fill: pal.accent,
-        })
-      : null,
-    showAreaHighlight
-      ? createElement(Rect, {
-          x: 0,
-          y: availH - 3,
-          width: screenW,
-          height: 3,
-          fill: pal.accent,
-        })
-      : null,
-    showAreaHighlight
-      ? createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: 3,
-          height: availH,
-          fill: pal.accent,
-        })
-      : null,
-    showAreaHighlight
-      ? createElement(Rect, {
-          x: screenW - 3,
-          y: 0,
-          width: 3,
-          height: availH,
-          fill: pal.accent,
-        })
-      : null,
-    ...icons,
+  return (
+    <Group x={0} y={0} width={screenW} height={availH}>
+      {showAreaHighlight ? (
+        <>
+          <Rect x={0} y={0} width={screenW} height={3} fill={pal.accent} />
+          <Rect
+            x={0}
+            y={availH - 3}
+            width={screenW}
+            height={3}
+            fill={pal.accent}
+          />
+          <Rect x={0} y={0} width={3} height={availH} fill={pal.accent} />
+          <Rect
+            x={screenW - 3}
+            y={0}
+            width={3}
+            height={availH}
+            fill={pal.accent}
+          />
+        </>
+      ) : null}
+      {icons}
+    </Group>
   );
 }
