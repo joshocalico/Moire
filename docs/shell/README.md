@@ -10,12 +10,12 @@ It runs **inside** the Moire compositor process (not a separate Wayland client f
 | --- | --- | --- |
 | Bridge | `createShell` → `ShellBridge` | Only supported compositor ↔ shell API |
 | Desktop | `DesktopIcons.tsx`, controller desktop handlers | Icons on wallpaper |
-| Panel / launcher | painted via `paint` | Top chrome + app start |
+| Panel / launcher / taskbar | painted via `paint` | App start, running-window state, focus and minimize/restore |
 | SSD | `paintSsdWindow` / `hitSsd` | Titlebars in window z-order |
 
 ## Startup
 
-1. Compositor constructs `createShell(spawn)`.
+1. Compositor constructs `createShell(spawn, onTaskAction)`.
 2. Prefs load (scale, wallpaper, `showDesktopIcons`).
 3. Each composite frame calls paint hooks in [paint order](../architecture/paint-and-input.md).
 4. Pointer/key events route through the bridge before or instead of clients.
@@ -23,18 +23,20 @@ It runs **inside** the Moire compositor process (not a separate Wayland client f
 ## `ShellBridge` API
 
 ```ts
-createShell(spawn: ShellSpawn): ShellBridge
+createShell(spawn: ShellSpawn, onTaskAction?: (task: TaskWindowAction) => void): ShellBridge
 ```
 
 | Method | Role |
 | --- | --- |
 | `paint(fb, …)` | Panel + launcher into the framebuffer |
+| `setTasks(tasks)` | Publish the compositor's mapped top-level windows to the panel |
 | `beginSsdFrame()` | Clear per-frame SSD hit list before stacking windows |
 | `paintSsdWindow(…, window)` | One titlebar after that window’s buffers (preferred) |
 | `paintSsd(…, windows)` | All SSD bars (legacy / batch) |
 | `hitSsd(x, y)` | Move / close / maximize / minimize action or null |
 | `onKey` | Super → launcher; launcher keyboard; returns consumed |
 | `onPointerButton` | Panel / launcher hits |
+| `onPointerAxis` | Launcher list scrolling |
 | `onDesktopPointerButton?` | Icon select/open when **no** window under cursor |
 | `onDesktopPointerMotion?` | Icon hover + local reposition/folder drag |
 | `isLauncherOpen()` | Launcher visibility |
@@ -47,6 +49,12 @@ createShell(spawn: ShellSpawn): ShellBridge
 | `desktopDragLabel?()` | Label while a desktop icon drag/return animation is active |
 
 Do not reach past this bridge into shell internals from `packages/core`.
+
+Task buttons keep creation order even when window z-order changes. Pressing a
+minimized task restores it, pressing an inactive task focuses it, and pressing
+the focused task minimizes it. If the focused window is minimized, the
+compositor promotes the next visible top-level so keyboard focus and
+`_NET_ACTIVE_WINDOW` do not point at a hidden surface.
 
 ## Two React worlds
 

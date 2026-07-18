@@ -4,6 +4,7 @@ import {
   ContextActionRegistry,
   FileActivationPortalClient,
   FileActivationService,
+  resolveApplicationIcon,
   type DesktopEntry,
   type FileActionContext,
 } from "@moire/app-discovery";
@@ -47,7 +48,12 @@ import {
   ICON_SIZE,
   type DesktopLayout,
 } from "./DesktopIcons.js";
-import type { SsdAction, SsdWindowInfo } from "./ssd.js";
+import type {
+  SsdAction,
+  SsdWindowInfo,
+  TaskWindowAction,
+  TaskWindowInfo,
+} from "./ssd.js";
 import { Group, Rect, measureText } from "@moire/react-host";
 
 export type ShellSpawn = (opts: { exec: string }) => { unref?: () => void };
@@ -95,6 +101,7 @@ export type ShellBridge = {
   onPointerMotion?(ev: { x: number; y: number }): boolean;
   /** Wheel input for launcher/menu scroll regions. */
   onPointerAxis?(ev: { x: number; y: number; deltaY: number }): boolean;
+  setTasks?(tasks: TaskWindowInfo[]): void;
   /**
    * Pointer over empty desktop (no window under cursor).
    * Handles icon select / open. Returns true if consumed.
@@ -231,12 +238,14 @@ type ShellAppProps = {
   query: string;
   selected: number;
   apps: DesktopEntry[];
+  tasks: TaskWindowInfo[];
   clock: string;
   onToggle: () => void;
   onQuery: (q: string) => void;
   onSelect: (i: number) => void;
   onLaunch: (app: DesktopEntry) => void;
   onDismiss: () => void;
+  onTaskPress: (task: TaskWindowInfo) => void;
 };
 
 function ShellApp(props: ShellAppProps) {
@@ -258,7 +267,9 @@ function ShellApp(props: ShellAppProps) {
       screenW: props.width,
       screenH: props.height,
       clock: props.clock,
+      tasks: props.tasks,
       onLauncherClick: props.onToggle,
+      onTaskPress: props.onTaskPress,
     }),
     createElement(Launcher, {
       open: props.open,
@@ -278,7 +289,10 @@ function ShellApp(props: ShellAppProps) {
 /**
  * In-process DE shell: bottom panel + Super-key launcher + SSD titlebars.
  */
-export function createShell(spawn: ShellSpawn): ShellBridge {
+export function createShell(
+  spawn: ShellSpawn,
+  onTaskAction: (action: TaskWindowAction) => void = () => {},
+): ShellBridge {
   const root: ShellRoot = createShellRoot();
   const moireRoot =
     process.env.MOIRE_ROOT ??
@@ -329,6 +343,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   let query = "";
   let selected = 0;
   let clock = formatClock();
+  let tasks: TaskWindowInfo[] = [];
   let dirty = true;
   setUiScaleFactor(loadSettings().uiScale);
   void installUiFonts().then(() => {
@@ -654,6 +669,17 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
   const rebuild = (width: number, height: number) => {
     const pal = themePalette();
+    const panelTasks = tasks.map((task) => {
+      const normalized = task.appId.toLowerCase().replace(/\.desktop$/, "");
+      const application = apps.find((app) => {
+        const id = app.id.toLowerCase().replace(/\.desktop$/, "");
+        return id === normalized || normalized.endsWith(id) || id.endsWith(normalized);
+      });
+      return {
+        ...task,
+        iconPath: resolveApplicationIcon(application?.icon),
+      };
+    });
     renderShell(
       root,
       createElement(
@@ -667,6 +693,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           selected,
           apps,
           clock,
+          tasks: panelTasks,
           onToggle: () => {
             open = !open;
             if (!open) {
@@ -690,6 +717,12 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
             query = "";
             selected = 0;
             dirty = true;
+          },
+          onTaskPress: (task: TaskWindowInfo) => {
+            onTaskAction({
+              clientId: task.clientId,
+              surfaceId: task.surfaceId,
+            });
           },
         }),
         desktopMenu
@@ -1065,6 +1098,25 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   };
 
   return {
+    setTasks(nextTasks) {
+      const changed =
+        nextTasks.length !== tasks.length ||
+        nextTasks.some((task, index) => {
+          const current = tasks[index];
+          return (
+            !current ||
+            current.clientId !== task.clientId ||
+            current.surfaceId !== task.surfaceId ||
+            current.title !== task.title ||
+            current.appId !== task.appId ||
+            current.focused !== task.focused ||
+            current.minimized !== task.minimized
+          );
+        });
+      if (!changed) return;
+      tasks = nextTasks;
+      dirty = true;
+    },
     paint(fb, pitchPx, width, height) {
       if (dirty || !overlay || ow !== width || oh !== height) {
         rebuild(width, height);

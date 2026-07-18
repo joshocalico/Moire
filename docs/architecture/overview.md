@@ -12,12 +12,12 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 ┌────────────────────────────▼────────────────────────────────┐
 │  apps/compositor + packages/core                             │
 │  Wayland socket, surfaces, xdg-shell, seat, DnD, KMS present │
-│  optional ShellBridge (panel, SSD, desktop, drops)           │
+│  optional ShellBridge (panel, taskbar, SSD, desktop, drops)  │
 └─────────────┬───────────────────────────────┬───────────────┘
               │                               │
 ┌─────────────▼─────────────┐   ┌─────────────▼───────────────┐
 │  packages/shell           │   │  Wayland clients             │
-│  Panel, Launcher, SSD,    │   │  foot, Xwayland apps, …      │
+│  Panel, Launcher, Taskbar │   │  foot, Xwayland apps, …      │
 │  DesktopIcons             │   └──────────────────────────────┘
 └─────────────┬─────────────┘
               │ uses
@@ -50,7 +50,7 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 
 ## Two React worlds
 
-1. **In-compositor shell** — `createShell()` renders panel/launcher/SSD/desktop with `react-host` directly inside the compositor process. No `Application` loop; dirty flags + `needsRepaint()`.
+1. **In-compositor shell** — `createShell()` renders panel/launcher/taskbar/SSD/desktop with `react-host` directly inside the compositor process. The compositor publishes its top-level window model through `ShellBridge.setTasks()`, and task actions return through a narrow callback. No `Application` loop; dirty flags + `needsRepaint()`.
 2. **UI apps** — Files/Settings use `Application` + `Window`, connect as normal Wayland clients, present SHM buffers each tick.
 
 Both share widgets/tokens where possible; shell re-exports or duplicates thin wrappers (`packages/shell/src/widgets.tsx`).

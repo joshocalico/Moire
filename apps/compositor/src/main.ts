@@ -50,6 +50,7 @@ async function main() {
         exec: opts.exec,
         env: clientEnv(),
       }),
+      (task) => server.toggleTask(task.clientId, task.surfaceId),
     ),
   );
 

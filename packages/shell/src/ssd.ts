@@ -20,3 +20,18 @@ export type SsdAction =
   | { kind: "close"; surfaceId: number; clientId: number }
   | { kind: "maximize"; surfaceId: number; clientId: number }
   | { kind: "minimize"; surfaceId: number; clientId: number };
+
+export type TaskWindowInfo = {
+  surfaceId: number;
+  clientId: number;
+  title: string;
+  appId: string;
+  focused: boolean;
+  minimized: boolean;
+  iconPath?: string;
+};
+
+export type TaskWindowAction = {
+  surfaceId: number;
+  clientId: number;
+};

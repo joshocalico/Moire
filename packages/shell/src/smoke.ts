@@ -16,12 +16,26 @@ import { createShell } from "./controller.js";
 const width = 1024;
 const height = 768;
 const root = createShellRoot();
+let taskPresses = 0;
 renderShell(
   root,
   React.createElement(Panel, {
     screenW: width,
     screenH: height,
     clock: "10:20",
+    tasks: [
+      {
+        clientId: 1,
+        surfaceId: 7,
+        title: "Files",
+        appId: "org.moire.Files",
+        focused: true,
+        minimized: false,
+      },
+    ],
+    onTaskPress: () => {
+      taskPresses++;
+    },
   }),
 );
 const out = rasterize(root.container, width, height);
@@ -33,6 +47,19 @@ for (const pixel of new Uint32Array(out.pixels.buffer)) {
 assert.equal(root.container.children.length, 1, "panel scene did not mount");
 assert.ok(nonzero >= width * 40, "panel scene rendered transparent");
 assert.ok(out.hits.length >= 1, "panel lost its launcher hit region");
+const taskHit = out.hits
+  .filter(
+    (hit) =>
+      210 >= hit.x &&
+      740 >= hit.y &&
+      210 < hit.x + hit.width &&
+      740 < hit.y + hit.height &&
+      !!hit.onPress,
+  )
+  .at(-1);
+assert.ok(taskHit?.onPress, "panel task did not expose a press target");
+taskHit.onPress({ x: 210, y: 740, localX: 14, localY: 12 });
+assert.equal(taskPresses, 1, "panel task did not emit its activation intent");
 
 const launcherRoot = createShellRoot();
 renderShell(

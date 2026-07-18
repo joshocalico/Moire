@@ -17,6 +17,8 @@ export {
   SSD_PANEL_H,
   type SsdWindowInfo,
   type SsdAction,
+  type TaskWindowInfo,
+  type TaskWindowAction,
 } from "./ssd.js";
 export {
   Label,

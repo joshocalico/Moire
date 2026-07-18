@@ -472,6 +472,7 @@ type SurfaceState = {
   height: number;
   stride: number;
   title: string;
+  appId: string;
   /** CPU snapshot of the last committed buffer (ARGB/XRGB). */
   pixels: Uint8Array | null;
   /** Buffer ids waiting for wl_buffer.release after composite. */
@@ -598,6 +599,15 @@ export type SsdAction =
   | { kind: "maximize"; surfaceId: number; clientId: number }
   | { kind: "minimize"; surfaceId: number; clientId: number };
 
+export type TaskWindowInfo = {
+  surfaceId: number;
+  clientId: number;
+  title: string;
+  appId: string;
+  focused: boolean;
+  minimized: boolean;
+};
+
 export type CompositorShell = {
   paint(
     fb: Uint32Array,
@@ -631,6 +641,7 @@ export type CompositorShell = {
   }): boolean;
   onPointerMotion?(ev: { x: number; y: number }): boolean;
   onPointerAxis?(ev: { x: number; y: number; deltaY: number }): boolean;
+  setTasks?(tasks: TaskWindowInfo[]): void;
   /** Desktop icon clicks when no client surface is under the cursor. */
   onDesktopPointerButton?(ev: {
     timeMs: number;
@@ -872,6 +883,9 @@ export class CompositorServer {
   private needsComposite = true;
   /** Bottom → top paint/focus order for mapped toplevels. */
   private stack: { session: ClientSession; surfaceId: number }[] = [];
+  /** Stable taskbar order, independent of focus-driven stack reordering. */
+  private taskOrder = new Map<string, number>();
+  private nextTaskOrder = 1;
   /** Bottom → top mapped xdg_popups (painted/hit above toplevels). */
   private popupStack: { session: ClientSession; surfaceId: number }[] = [];
   private focusedToplevel: { session: ClientSession; surfaceId: number } | null =
@@ -1021,6 +1035,9 @@ export class CompositorServer {
           this.selection = null;
         }
         this.stack = this.stack.filter((e) => e.session !== session);
+        for (const key of this.taskOrder.keys()) {
+          if (key.startsWith(`${session.clientId}:`)) this.taskOrder.delete(key);
+        }
         this.popupStack = this.popupStack.filter((e) => e.session !== session);
         for (const [wid, pair] of this.xwayByWid) {
           if (pair.session === session) this.xwayByWid.delete(wid);
@@ -1818,6 +1835,8 @@ export class CompositorServer {
   registerToplevel(session: ClientSession, surfaceId: number): void {
     if (this.isStacked(session, surfaceId)) return;
     this.stack.push({ session, surfaceId });
+    const key = `${session.clientId}:${surfaceId}`;
+    if (!this.taskOrder.has(key)) this.taskOrder.set(key, this.nextTaskOrder++);
     this.markDirty();
   }
 
@@ -1825,6 +1844,7 @@ export class CompositorServer {
     this.stack = this.stack.filter(
       (e) => !(e.session === session && e.surfaceId === surfaceId),
     );
+    this.taskOrder.delete(`${session.clientId}:${surfaceId}`);
     if (
       this.focusedToplevel?.session === session &&
       this.focusedToplevel.surfaceId === surfaceId
@@ -2042,10 +2062,10 @@ export class CompositorServer {
     const surf = session.surfaceById(surfaceId);
     if (!surf || surf.role !== "toplevel") return;
     surf.minimized = true;
-    if (
+    const wasFocused =
       this.focusedToplevel?.session === session &&
-      this.focusedToplevel.surfaceId === surfaceId
-    ) {
+      this.focusedToplevel.surfaceId === surfaceId;
+    if (wasFocused) {
       this.focusedToplevel = null;
       if (this.focused === session) {
         this.focused.keyboardLeave();
@@ -2053,6 +2073,18 @@ export class CompositorServer {
       }
     }
     console.log(`[wm] minimized surface=${surfaceId}`);
+    if (wasFocused) {
+      const next = [...this.stack].reverse().find((entry) => {
+        const candidate = entry.session.surfaceById(entry.surfaceId);
+        return (
+          candidate?.mapped &&
+          candidate.role === "toplevel" &&
+          !candidate.minimized
+        );
+      });
+      if (next) this.focusClient(next.session, next.surfaceId);
+      else this.xwm?.setActiveWindow(null);
+    }
     this.markDirty();
   }
 
@@ -2062,6 +2094,50 @@ export class CompositorServer {
     surf.minimized = false;
     this.focusClient(session, surfaceId);
     console.log(`[wm] restored surface=${surfaceId}`);
+  }
+
+  /** Taskbar activation: restore, focus, or minimize the selected toplevel. */
+  toggleTask(clientId: number, surfaceId: number): void {
+    const entry = this.stack.find(
+      (candidate) =>
+        candidate.session.clientId === clientId &&
+        candidate.surfaceId === surfaceId,
+    );
+    if (!entry) return;
+    const surf = entry.session.surfaceById(surfaceId);
+    if (!surf?.mapped || surf.role !== "toplevel") return;
+    const focused =
+      this.focusedToplevel?.session === entry.session &&
+      this.focusedToplevel.surfaceId === surfaceId;
+    if (surf.minimized) this.restoreToplevel(entry.session, surfaceId);
+    else if (focused) this.setMinimized(entry.session, surfaceId);
+    else this.focusClient(entry.session, surfaceId);
+  }
+
+  private collectTaskWindows(): TaskWindowInfo[] {
+    return this.stack
+      .map((entry) => {
+        const surf = entry.session.surfaceById(entry.surfaceId);
+        if (!surf?.mapped || surf.role !== "toplevel") return null;
+        return {
+          surfaceId: surf.id,
+          clientId: entry.session.clientId,
+          title: surf.title || surf.appId || "Window",
+          appId: surf.appId,
+          focused:
+            this.focusedToplevel?.session === entry.session &&
+            this.focusedToplevel.surfaceId === surf.id,
+          minimized: surf.minimized,
+          order:
+            this.taskOrder.get(`${entry.session.clientId}:${surf.id}`) ??
+            Number.MAX_SAFE_INTEGER,
+        };
+      })
+      .filter(
+        (task): task is TaskWindowInfo & { order: number } => task !== null,
+      )
+      .sort((a, b) => a.order - b.order)
+      .map(({ order: _order, ...task }) => task);
   }
 
   /** Alt+Tab — cycle to the next (or previous with Shift) toplevel. */
@@ -3440,6 +3516,12 @@ export class CompositorServer {
     // Keep atmosphere drifting even when otherwise idle.
     if (this.theme.wallpaper.mode === "atmosphere") {
       this.markDirty();
+    }
+
+    try {
+      this.shell?.setTasks?.(this.collectTaskWindows());
+    } catch (err) {
+      console.error("[shell] setTasks:", err);
     }
 
     // Desktop icons / DnD drop-zone overlay (after wallpaper, before windows).
@@ -4889,6 +4971,7 @@ class ClientSession {
         height: 0,
         stride: 0,
         title: "",
+        appId: "",
         pixels: null,
         releaseBuffers: [],
         bufferAttached: false,
@@ -5009,13 +5092,18 @@ class ClientSession {
       const title = r.string() ?? "";
       if (surface) {
         surface.title = title;
+        this.server.markDirty();
         // Rootful Xwayland has no CSD — give it Moire SSD.
         if (surface.decoration === "none" && /^Xwayland\b/i.test(title)) {
           surface.decoration = "server";
         }
       }
     } else if (opcode === OP.xdg_toplevel_set_app_id) {
-      r.string();
+      const appId = r.string() ?? "";
+      if (surface) {
+        surface.appId = appId;
+        this.server.markDirty();
+      }
     } else if (opcode === OP.xdg_toplevel_set_parent) {
       r.object();
     } else if (opcode === OP.xdg_toplevel_show_window_menu) {
