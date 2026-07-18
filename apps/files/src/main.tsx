@@ -275,6 +275,8 @@ function FilesApp(
   const [pickerSelection, setPickerSelection] = useState<string | null>(null);
   const [placeList, setPlaceList] = useState<FilePlace[]>(loadPlaces);
   const [editingPlaces, setEditingPlaces] = useState(false);
+  const [renamingPlaceId, setRenamingPlaceId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const activePlace = activePlaceId(cwd, placeList);
   const applications = useMemo(
     () => discoverApplications(process.env.XDG_CURRENT_DESKTOP ?? "Moire"),
@@ -566,9 +568,20 @@ function FilesApp(
   const pathBarWidth = Math.max(80, props.width - Math.round(272 * ui));
 
   const finishEditingPlaces = () => {
-    const normalized = normalizePlaceLabels(placeList);
-    setPlaceList(normalized);
-    savePlaces(normalized);
+    setPlaceList((current) => {
+      const renamed = renamingPlaceId
+        ? current.map((place) =>
+            place.id === renamingPlaceId
+              ? { ...place, label: renameDraft }
+              : place,
+          )
+        : current;
+      const normalized = normalizePlaceLabels(renamed);
+      savePlaces(normalized);
+      return normalized;
+    });
+    setRenamingPlaceId(null);
+    setRenameDraft("");
     setEditingPlaces(false);
   };
 
@@ -578,18 +591,31 @@ function FilesApp(
     savePlaces(next);
   };
 
-  const renameFavorite = (id: string, label: string) => {
-    setPlaceList((current) =>
-      current.map((place) => (place.id === id ? { ...place, label } : place)),
-    );
+  const startRenamingFavorite = (place: FilePlace) => {
+    setRenamingPlaceId(place.id);
+    setRenameDraft(place.label);
   };
 
   const commitFavoriteLabel = () => {
+    if (!renamingPlaceId) return;
     setPlaceList((current) => {
-      const next = normalizePlaceLabels(current);
+      const next = normalizePlaceLabels(
+        current.map((place) =>
+          place.id === renamingPlaceId
+            ? { ...place, label: renameDraft }
+            : place,
+        ),
+      );
       savePlaces(next);
       return next;
     });
+    setRenamingPlaceId(null);
+    setRenameDraft("");
+  };
+
+  const cancelFavoriteLabel = () => {
+    setRenamingPlaceId(null);
+    setRenameDraft("");
   };
 
   const removeFavorite = (id: string) => {
@@ -598,6 +624,7 @@ function FilesApp(
       savePlaces(next);
       return next;
     });
+    if (renamingPlaceId === id) cancelFavoriteLabel();
   };
 
   const commitLocation = (value: string): string | undefined => {
@@ -688,7 +715,7 @@ function FilesApp(
                 width={Math.round(52 * ui)}
                 height={Math.round(26 * ui)}
                 label={editingPlaces ? "Done" : "Edit"}
-                variant="ghost"
+                variant={editingPlaces ? "secondary" : "ghost"}
                 fontSize={11}
                 onPress={() => {
                   if (editingPlaces) finishEditingPlaces();
@@ -697,7 +724,7 @@ function FilesApp(
               />
             </Row>
             {placeList.map((place) => (
-              editingPlaces && !place.builtIn ? (
+              editingPlaces && renamingPlaceId === place.id ? (
                 <Row
                   key={place.id}
                   width={sideW - Math.round(SPACE.lg * ui)}
@@ -705,25 +732,64 @@ function FilesApp(
                   align="center"
                   gap={Math.round(SPACE.xs * ui)}
                 >
-                  <Icon
-                    name="folder"
-                    size={Math.round(18 * ui)}
-                    color={pal.accent}
-                  />
                   <TextField
-                    width={sideW - Math.round(82 * ui)}
-                    height={Math.round(30 * ui)}
-                    value={place.label}
-                    onChange={(label) => renameFavorite(place.id, label)}
+                    width={sideW - Math.round(58 * ui)}
+                    height={Math.round(32 * ui)}
+                    value={renameDraft}
+                    autoFocus
+                    onChange={setRenameDraft}
                     onSubmit={commitFavoriteLabel}
-                    onFocusChange={(focused) => {
-                      if (!focused) commitFavoriteLabel();
-                    }}
+                    onCancel={cancelFavoriteLabel}
+                  />
+                  <Button
+                    width={Math.round(34 * ui)}
+                    height={Math.round(32 * ui)}
+                    label="✓"
+                    variant="primary"
+                    fontSize={13}
+                    onPress={commitFavoriteLabel}
+                  />
+                </Row>
+              ) : editingPlaces && !place.builtIn ? (
+                <Row
+                  key={place.id}
+                  width={sideW - Math.round(SPACE.lg * ui)}
+                  height={Math.round(40 * ui)}
+                  align="center"
+                  gap={Math.round(SPACE.xs * ui)}
+                >
+                  <DropZone
+                    width={sideW - Math.round(98 * ui)}
+                    height={Math.round(40 * ui)}
+                    id={place.path}
+                  >
+                    <ListItem
+                      width={sideW - Math.round(98 * ui)}
+                      height={Math.round(40 * ui)}
+                      title={place.label}
+                      leading={
+                        <Icon
+                          name={place.icon}
+                          size={Math.round(20 * ui)}
+                          color={activePlace === place.id ? pal.accent : pal.text}
+                        />
+                      }
+                      selected={activePlace === place.id}
+                      onPress={() => navigateTo(place.path)}
+                    />
+                  </DropZone>
+                  <Button
+                    width={Math.round(30 * ui)}
+                    height={Math.round(30 * ui)}
+                    label="Aa"
+                    variant="ghost"
+                    fontSize={11}
+                    onPress={() => startRenamingFavorite(place)}
                   />
                   <Button
                     width={Math.round(30 * ui)}
                     height={Math.round(30 * ui)}
-                    label="−"
+                    label="×"
                     variant="ghost"
                     color={pal.danger}
                     fontSize={16}
@@ -763,14 +829,14 @@ function FilesApp(
                 </DropZone>
               )
             ))}
-            {editingPlaces ? (
+            {editingPlaces &&
+            !placeList.some((place) => place.path === cwd) ? (
               <Button
                 width={sideW - Math.round(SPACE.lg * ui)}
                 height={Math.round(34 * ui)}
                 label="+ Add Current Folder"
                 variant="secondary"
                 fontSize={11}
-                disabled={placeList.some((place) => place.path === cwd)}
                 onPress={addCurrentFavorite}
               />
             ) : null}

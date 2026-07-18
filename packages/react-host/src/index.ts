@@ -1105,6 +1105,14 @@ export function measureText(text: string, scale = 1): number {
   return measureNodeText(text, { scale }).width;
 }
 
+/** Measure text using the renderer and style that will actually paint it. */
+export function measureTextBounds(
+  text: string,
+  style: TextDrawStyle = {},
+): { width: number; height: number } {
+  return measureNodeText(text, style);
+}
+
 export function drawText(
   fb: Uint32Array,
   pitchPx: number,

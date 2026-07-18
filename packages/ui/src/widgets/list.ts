@@ -2,8 +2,14 @@
  * List and ListItem — generic item list backed by ScrollArea.
  * ListItem: 3-px left accent rule when selected + selection wash.
  */
-import { createElement, type ReactNode } from "react";
-import { Group, Rect, Text, FONT_H, type HitPointerEvent } from "@moire/react-host";
+import { createElement, isValidElement, type ReactNode } from "react";
+import {
+  Group,
+  Rect,
+  Text,
+  measureTextBounds,
+  type HitPointerEvent,
+} from "@moire/react-host";
 import { themePalette } from "../theme.js";
 import { ScrollArea } from "./scroll.js";
 import { Pressable } from "./pressable.js";
@@ -33,11 +39,24 @@ export function ListItem(props: ListItemProps): ReactNode {
   const ACCENT_W = 3;
   const PAD_L = ACCENT_W + 8;
   const interactive = props.interactive !== false;
+  const titleFontSize = 14;
+  const subtitleFontSize = 11;
+  const titleLineH = measureTextBounds("Mg", {
+    fontSize: titleFontSize,
+  }).height;
+  const subtitleLineH = measureTextBounds("Mg", {
+    fontSize: subtitleFontSize,
+  }).height;
+  const subtitleGap = 1;
 
   const titleY = props.subtitle
-    ? Math.floor(h / 2) - FONT_H
-    : Math.floor((h - FONT_H) / 2);
-  const subtitleY = titleY + FONT_H + 2;
+    ? Math.floor((h - titleLineH - subtitleGap - subtitleLineH) / 2)
+    : Math.floor((h - titleLineH) / 2);
+  const subtitleY = titleY + titleLineH + subtitleGap;
+  const leadingProps = isValidElement(props.leading)
+    ? (props.leading.props as { size?: number; height?: number })
+    : undefined;
+  const leadingH = leadingProps?.size ?? leadingProps?.height ?? 24;
 
   return createElement(
     Group,
@@ -81,7 +100,7 @@ export function ListItem(props: ListItemProps): ReactNode {
       : null,
     // Leading slot
     props.leading
-      ? createElement(Group, { x: PAD_L, y: Math.floor((h - 24) / 2), width: 24, height: 24 },
+      ? createElement(Group, { x: PAD_L, y: Math.floor((h - leadingH) / 2), width: 24, height: leadingH },
           props.leading,
         )
       : null,
@@ -91,6 +110,7 @@ export function ListItem(props: ListItemProps): ReactNode {
       y: titleY,
       text: props.title,
       color: pal.text,
+      fontSize: titleFontSize,
     }),
     // Subtitle
     props.subtitle
@@ -99,7 +119,7 @@ export function ListItem(props: ListItemProps): ReactNode {
           y: subtitleY,
           text: props.subtitle,
           color: pal.muted,
-          fontSize: 11,
+          fontSize: subtitleFontSize,
         })
       : null,
   );
