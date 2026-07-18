@@ -9,6 +9,7 @@ Desktop = wallpaper + shell icon layer + Files as the day-0 file manager. Icons 
 | Click empty desktop | Clears selection (when no window under cursor) |
 | Click icon | Select |
 | Double-click folder | Open through `xdg-open` → default Files handler |
+| Right-click icon | Shared context menu with Open, Open With, and Show in Files |
 | Drag icon onto empty desktop | Reposition; persist layout |
 | Drag icon onto desktop folder | Move the item into that folder |
 | Drag icon onto a client window | Escalates to a real Wayland DnD source — target receives a normal `text/uri-list` drop |
@@ -23,7 +24,11 @@ Path: `~/.config/moire/desktop-layout.json` (guest home under the Moire session 
 
 Stores icon positions keyed by path/id. Missing entries get auto-placed on a grid.
 
-Folder opens are sent as encoded `file://` URIs so names containing spaces are safe. `moire-session` registers Files as the `inode/directory` handler; see [Files](../apps/files.md#default-directory-handler).
+Desktop opens resolve through Moire's freedesktop association database and
+expand the selected desktop entry's `Exec` field codes safely. The Open With
+picker can launch once or update the user default. `moire-session` still
+registers Files as the initial `inode/directory` handler; see
+[Files](../apps/files.md#default-directory-handler).
 
 ## Visuals
 
@@ -40,7 +45,7 @@ A desktop-icon drag starts purely local (no compositor DnD session). If the poin
 | File | Role |
 | --- | --- |
 | `packages/shell/src/DesktopIcons.tsx` | React tree |
-| `packages/shell/src/controller.ts` | Selection, open, layout I/O, drag |
+| `packages/shell/src/controller.ts` | Selection, associations, context actions, layout I/O, drag |
 | Shell composite hooks | Pointer dispatch + drag blit |
 
 ## Related

@@ -62,6 +62,14 @@ export type {
 export { Tabs } from "./tabs.js";
 export type { TabsProps } from "./tabs.js";
 
+export { ContextMenu, OpenWithPicker } from "./context-menu.js";
+export type {
+  ContextMenuAction,
+  ContextMenuProps,
+  OpenWithChoice,
+  OpenWithPickerProps,
+} from "./context-menu.js";
+
 /* ---------- Layout helpers ---------- */
 
 const DEFAULT_FONT = 14;
@@ -263,6 +271,7 @@ export type SurfaceProps = {
   fill?: number;
   children?: ReactNode;
   onPress?: () => void;
+  onContextMenu?: (event: HitPressEvent) => void;
 };
 
 export function Surface(props: SurfaceProps): ReactNode {
@@ -282,6 +291,7 @@ export function Surface(props: SurfaceProps): ReactNode {
       height: props.height,
       fill: props.fill ?? pal.panel,
       onPress: props.onPress,
+      onContextMenu: props.onContextMenu,
     }),
     props.children,
   );

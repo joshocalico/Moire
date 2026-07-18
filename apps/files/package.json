@@ -9,6 +9,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@moire/app-discovery": "workspace:*",
+    "@moire/prefs": "workspace:*",
     "@moire/ui": "workspace:*",
     "react": "^19.0.0"
   },

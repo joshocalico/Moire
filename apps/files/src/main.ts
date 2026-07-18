@@ -31,6 +31,8 @@ import {
   DropZone,
   Draggable,
   ScrollArea,
+  ContextMenu,
+  OpenWithPicker,
   themePalette,
   getUiScaleFactor,
   setUiScaleFactor,
@@ -39,8 +41,17 @@ import {
   TYPE_ROLES,
   type WindowSize,
   type IconName,
+  type ContextMenuAction,
 } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
+import {
+  ContextActionRegistry,
+  buildDesktopExec,
+  discoverApplications,
+  loadMimeAssociationDatabase,
+  type DesktopEntry,
+  type FileActionContext,
+} from "@moire/app-discovery";
 
 type Entry = {
   name: string;
@@ -126,6 +137,14 @@ function openPath(p: string): void {
   spawn("xdg-open", [p], { detached: true, stdio: "ignore" }).unref();
 }
 
+function launchWith(app: DesktopEntry, filePath: string): void {
+  const command = buildDesktopExec(app, [filePath]);
+  spawn("/bin/sh", ["-lc", command], {
+    detached: true,
+    stdio: "ignore",
+  }).unref();
+}
+
 function ensureDir(p: string): void {
   try {
     fs.mkdirSync(p, { recursive: true });
@@ -174,19 +193,46 @@ function payloadToPaths(payload: unknown): string[] {
     .filter(Boolean);
 }
 
+function actionIcon(icon?: string): IconName | undefined {
+  const known: IconName[] = [
+    "app",
+    "desktop",
+    "file",
+    "folder",
+    "grid",
+    "list",
+    "trash",
+    "up",
+  ];
+  return known.includes(icon as IconName) ? (icon as IconName) : undefined;
+}
+
 function FilesApp(
   props: WindowSize & { onQuit: () => void; initialPath: string },
 ): ReactNode {
   const pal = themePalette();
   const ui = getUiScaleFactor();
   const pad = Math.round(SPACE.lg * ui);
-  const sideW = Math.round(188 * ui);
+  const sideW = Math.round(204 * ui);
   const [cwd, setCwd] = useState(props.initialPath);
   const [selected, setSelected] = useState(-1);
   const [view, setView] = useState<"grid" | "list">("grid");
   const [tick, setTick] = useState(0);
+  const [menu, setMenu] = useState<{ entry: Entry; x: number; y: number } | null>(
+    null,
+  );
+  const [pickerEntry, setPickerEntry] = useState<Entry | null>(null);
+  const [pickerSelection, setPickerSelection] = useState<string | null>(null);
   const placeList = useMemo(() => places(), []);
   const activePlace = activePlaceId(cwd, placeList);
+  const applications = useMemo(
+    () => discoverApplications(process.env.XDG_CURRENT_DESKTOP ?? "Moire"),
+    [],
+  );
+  const mimeDb = useMemo(
+    () => loadMimeAssociationDatabase(applications),
+    [applications],
+  );
 
   useEffect(() => {
     ensureDir(path.join(home(), "Desktop"));
@@ -208,14 +254,123 @@ function FilesApp(
     return listDir(cwd);
   }, [cwd, tick]);
 
-  const openEntry = useCallback((e: Entry) => {
-    if (e.isDir) {
-      setCwd(e.path);
-      setSelected(-1);
-    } else {
-      openPath(e.path);
-    }
-  }, []);
+  const openDefault = useCallback(
+    (filePath: string) => {
+      const mime = mimeDb.mimeTypeForPath(filePath);
+      const app = mimeDb.defaultApplicationForMime(mime);
+      if (app) launchWith(app, filePath);
+      else openPath(filePath);
+    },
+    [mimeDb],
+  );
+
+  const openEntry = useCallback(
+    (e: Entry) => {
+      if (e.isDir) {
+        setCwd(e.path);
+        setSelected(-1);
+      } else {
+        openDefault(e.path);
+      }
+    },
+    [openDefault],
+  );
+
+  const showOpenWith = useCallback(
+    (e: Entry) => {
+      const choices = mimeDb.applicationsForPath(e.path);
+      setPickerEntry(e);
+      setPickerSelection(choices[0]?.id ?? null);
+      setMenu(null);
+    },
+    [mimeDb],
+  );
+
+  const actionRegistry = useMemo(() => {
+    const registry = new ContextActionRegistry();
+    registry.register({
+      id: "moire.open",
+      actions(context) {
+        const filePath = context.paths[0];
+        if (!filePath) return [];
+        const directory = context.directories[0] ?? false;
+        return [
+          {
+            id: "open",
+            label: "Open",
+            description: directory ? "Browse this folder" : "Use the default application",
+            icon: directory ? "folder" : "file",
+            run: () =>
+              openEntry({
+                name: path.basename(filePath),
+                path: filePath,
+                isDir: directory,
+                size: 0,
+              }),
+          },
+          {
+            id: "open-with",
+            label: "Open With…",
+            description: "Choose a compatible application",
+            icon: "app",
+            run: () =>
+              showOpenWith({
+                name: path.basename(filePath),
+                path: filePath,
+                isDir: directory,
+                size: 0,
+              }),
+          },
+        ];
+      },
+    });
+    registry.register({
+      id: "moire.location",
+      actions(context) {
+        const filePath = context.paths[0];
+        if (!filePath) return [];
+        const directory = context.directories[0] ?? false;
+        return [
+          {
+            id: directory ? "new-window" : "parent",
+            label: directory ? "Open in New Window" : "Show Parent Folder",
+            icon: directory ? "app" : "folder",
+            separatorBefore: true,
+            run: () => {
+              if (directory) openPath(filePath);
+              else {
+                setCwd(path.dirname(filePath));
+                setSelected(-1);
+              }
+            },
+          },
+        ];
+      },
+    });
+    return registry;
+  }, [openEntry, showOpenWith]);
+
+  const contextActions = useCallback(
+    (entry: Entry): ContextMenuAction[] => {
+      const context: FileActionContext = {
+        source: "files",
+        paths: [entry.path],
+        mimeTypes: [mimeDb.mimeTypeForPath(entry.path)],
+        directories: [entry.isDir],
+      };
+      return actionRegistry.actionsFor(context).map((action) => ({
+        id: action.id,
+        label: action.label,
+        description: action.description,
+        icon: actionIcon(action.icon),
+        danger: action.danger,
+        disabled: action.enabled === false,
+        separatorBefore: action.separatorBefore,
+        onPress: action.run,
+      }));
+    },
+    [actionRegistry, mimeDb],
+  );
 
   const goUp = () => {
     const parent = path.dirname(cwd);
@@ -251,14 +406,37 @@ function FilesApp(
     setTick((t) => t + 1);
   };
 
+  const selectedEntry = entries[selected] ?? null;
+  const pickerMime = pickerEntry
+    ? mimeDb.mimeTypeForPath(pickerEntry.path)
+    : "application/octet-stream";
+  const pickerApps = pickerEntry
+    ? mimeDb.applicationsForMime(pickerMime)
+    : [];
+  const pickerChoices = pickerApps.map((app, index) => ({
+    id: app.id,
+    name: app.name,
+    description: app.comment ?? app.genericName ?? app.exec,
+    isDefault: index === 0,
+  }));
+  const finishOpenWith = (desktopId: string, makeDefault: boolean) => {
+    if (!pickerEntry) return;
+    const app = pickerApps.find((candidate) => candidate.id === desktopId);
+    if (!app) return;
+    if (makeDefault) mimeDb.setDefaultApplication(pickerMime, desktopId);
+    launchWith(app, pickerEntry.path);
+    setPickerEntry(null);
+    setPickerSelection(null);
+  };
+
   const crumb = cwd.replace(home(), "~");
-  const toolbarH = Math.round(52 * ui);
+  const toolbarH = Math.round(62 * ui);
   const bodyH = Math.max(1, props.height - toolbarH - 1);
   const contentW = Math.max(1, props.width - sideW - 1);
-  const cellW = Math.round(112 * ui);
-  const cellH = Math.round(118 * ui);
-  const iconSz = Math.round(48 * ui);
-  const btn = Math.round(32 * ui);
+  const cellW = Math.round(124 * ui);
+  const cellH = Math.round(132 * ui);
+  const iconSz = Math.round(52 * ui);
+  const btn = Math.round(36 * ui);
 
   return createElement(
     Surface,
@@ -277,37 +455,38 @@ function FilesApp(
         {
           width: props.width,
           height: toolbarH,
-          padding: pad,
+          padding: Math.round(SPACE.md * ui),
           gap: Math.round(SPACE.sm * ui),
           align: "center",
         },
         createElement(Button, {
-          width: Math.round(56 * ui),
+          width: Math.round(72 * ui),
           height: btn,
-          label: "Up",
+          label: "↑  Up",
           variant: "secondary",
           onPress: goUp,
         }),
         createElement(
           DropZone,
           {
-            width: Math.max(80, props.width - Math.round(220 * ui)),
-            height: Math.round(22 * ui),
+            width: Math.max(80, props.width - Math.round(256 * ui)),
+            height: btn,
             id: cwd,
           },
           createElement(Label, {
-            text: crumb,
-            width: Math.max(80, props.width - Math.round(220 * ui)),
-            height: Math.round(22 * ui),
+            text: `Location  /  ${crumb}`,
+            color: pal.text,
+            width: Math.max(80, props.width - Math.round(256 * ui)),
+            height: btn,
             fontSize: TYPE_ROLES.body.size,
             fontWeight: "medium",
           }),
         ),
         createElement(Button, {
-          width: Math.round(72 * ui),
+          width: Math.round(88 * ui),
           height: btn,
-          label: view === "grid" ? "List" : "Grid",
-          variant: "ghost",
+          label: view === "grid" ? "List View" : "Grid View",
+          variant: "secondary",
           onPress: () => setView((v) => (v === "grid" ? "list" : "grid")),
         }),
       ),
@@ -324,9 +503,10 @@ function FilesApp(
             gap: Math.round(SPACE.xs * ui),
           },
           createElement(Label, {
-            text: "Places",
-            color: pal.muted,
-            fontSize: TYPE_ROLES.caption.size,
+            text: "FAVORITES",
+            color: pal.accent,
+            fontSize: 10,
+            fontWeight: "medium",
             width: sideW - pad,
             height: Math.round(18 * ui),
           }),
@@ -336,16 +516,17 @@ function FilesApp(
               {
                 key: p.id,
                 width: sideW - Math.round(SPACE.lg * ui),
-                height: Math.round(36 * ui),
+                height: Math.round(40 * ui),
                 id: p.path,
               },
               createElement(ListItem, {
                 width: sideW - Math.round(SPACE.lg * ui),
-                height: Math.round(36 * ui),
+                height: Math.round(40 * ui),
                 title: p.label,
                 leading: createElement(Icon, {
                   name: p.icon,
                   size: Math.round(20 * ui),
+                  color: activePlace === p.id ? pal.accent : pal.text,
                 }),
                 selected: activePlace === p.id,
                 onPress: () => {
@@ -356,6 +537,38 @@ function FilesApp(
               }),
             ),
           ),
+          createElement(Separator, {
+            width: sideW - Math.round(SPACE.xl * ui),
+            height: 1,
+            color: pal.borderSubtle,
+          }),
+          createElement(Label, {
+            text: "SELECTION",
+            color: pal.muted,
+            fontSize: 10,
+            fontWeight: "medium",
+            width: sideW - pad,
+            height: Math.round(18 * ui),
+          }),
+          createElement(Label, {
+            text: selectedEntry?.name ?? "Nothing selected",
+            color: selectedEntry ? pal.text : pal.muted,
+            fontSize: 12,
+            fontWeight: selectedEntry ? "medium" : "regular",
+            width: sideW - pad,
+            height: Math.round(20 * ui),
+          }),
+          createElement(Label, {
+            text: selectedEntry
+              ? selectedEntry.isDir
+                ? "Folder"
+                : `${mimeDb.mimeTypeForPath(selectedEntry.path)} · ${formatSize(selectedEntry.size)}`
+              : `${entries.length} ${entries.length === 1 ? "item" : "items"} in this folder`,
+            color: pal.muted,
+            fontSize: 10,
+            width: sideW - pad,
+            height: Math.round(30 * ui),
+          }),
         ),
         createElement(Separator, { width: 1, height: bodyH }),
         createElement(
@@ -396,8 +609,15 @@ function FilesApp(
                         getPayload: () => pathToUri(e.path) + "\n",
                         dropData: e.isDir ? e.path : undefined,
                         previewIcon: { name: iconFor(e) },
-                        onPress: () => setSelected(i),
+                        onPress: () => {
+                          setSelected(i);
+                          setMenu(null);
+                        },
                         onDoublePress: () => openEntry(e),
+                        onContextMenu: (event) => {
+                          setSelected(i);
+                          setMenu({ entry: e, x: event.x, y: event.y });
+                        },
                       },
                       createElement(GridItem, {
                         width: cellW,
@@ -409,6 +629,7 @@ function FilesApp(
                         icon: createElement(Icon, {
                           name: iconFor(e),
                           size: iconSz,
+                          color: e.isDir ? pal.accent : pal.text,
                         }),
                       }),
                     );
@@ -437,19 +658,29 @@ function FilesApp(
                         getPayload: () => pathToUri(e.path) + "\n",
                         dropData: e.isDir ? e.path : undefined,
                         previewIcon: { name: iconFor(e) },
-                        onPress: () => setSelected(i),
+                        onPress: () => {
+                          setSelected(i);
+                          setMenu(null);
+                        },
                         onDoublePress: () => openEntry(e),
+                        onContextMenu: (event) => {
+                          setSelected(i);
+                          setMenu({ entry: e, x: event.x, y: event.y });
+                        },
                       },
                       createElement(ListItem, {
                         width: contentW - Math.round(SPACE.lg * ui),
                         height: Math.round(40 * ui),
                         title: e.name,
-                        subtitle: e.isDir ? "Folder" : formatSize(e.size),
+                        subtitle: e.isDir
+                          ? "Folder"
+                          : `${mimeDb.mimeTypeForPath(e.path)} · ${formatSize(e.size)}`,
                         selected: selected === i,
                         interactive: false,
                         leading: createElement(Icon, {
                           name: iconFor(e),
                           size: Math.round(22 * ui),
+                          color: e.isDir ? pal.accent : pal.text,
                         }),
                       }),
                     ),
@@ -459,6 +690,34 @@ function FilesApp(
         ),
       ),
     ),
+    menu
+      ? createElement(ContextMenu, {
+          viewportWidth: props.width,
+          viewportHeight: props.height,
+          x: menu.x,
+          y: menu.y,
+          title: menu.entry.name,
+          actions: contextActions(menu.entry),
+          onDismiss: () => setMenu(null),
+        })
+      : null,
+    pickerEntry
+      ? createElement(OpenWithPicker, {
+          viewportWidth: props.width,
+          viewportHeight: props.height,
+          fileName: pickerEntry.name,
+          mimeType: pickerMime,
+          choices: pickerChoices,
+          selectedId: pickerSelection,
+          onSelect: setPickerSelection,
+          onOpen: (id) => finishOpenWith(id, false),
+          onMakeDefault: (id) => finishOpenWith(id, true),
+          onDismiss: () => {
+            setPickerEntry(null);
+            setPickerSelection(null);
+          },
+        })
+      : null,
   );
 }
 

@@ -2,7 +2,7 @@
  * Pressable — interactive container with eased hover/press fill motion.
  */
 import { createElement, useRef, type ReactNode } from "react";
-import { Group, Rect } from "@moire/react-host";
+import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
 import { themePalette } from "../theme.js";
 import { createMotionValue, easeTo } from "../motion.js";
 
@@ -15,6 +15,7 @@ export type PressableProps = {
   children?: ReactNode;
   onPress?: () => void;
   onDoublePress?: () => void;
+  onContextMenu?: (event: HitPointerEvent) => void;
   disabled?: boolean;
 };
 
@@ -107,6 +108,7 @@ export function Pressable(props: PressableProps): ReactNode {
             easeTo(pressMv, 0, 18);
           },
       onPress: props.disabled ? undefined : handlePress,
+      onContextMenu: props.disabled ? undefined : props.onContextMenu,
     }),
     props.children,
   );

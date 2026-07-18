@@ -48,6 +48,12 @@ importers:
 
   apps/files:
     dependencies:
+      '@moire/app-discovery':
+        specifier: workspace:*
+        version: link:../../packages/app-discovery
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../packages/prefs
       '@moire/ui':
         specifier: workspace:*
         version: link:../../packages/ui

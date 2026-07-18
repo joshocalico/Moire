@@ -3,7 +3,7 @@
  * GridItem: icon slot + label, selection wash + outline, optional label scrim.
  */
 import { createElement, type ReactNode } from "react";
-import { Group, Rect, Text, FONT_H, measureText } from "@moire/react-host";
+import { Group, Rect, Text, FONT_H, measureText, type HitPointerEvent } from "@moire/react-host";
 import { themePalette } from "../theme.js";
 import { ScrollArea } from "./scroll.js";
 import { Pressable } from "./pressable.js";
@@ -40,6 +40,7 @@ export type GridItemProps = {
   dropHover?: boolean;
   onPress?: () => void;
   onDoublePress?: () => void;
+  onContextMenu?: (event: HitPointerEvent) => void;
   /** Soft scrim behind label (desktop over wallpaper). */
   labelScrim?: boolean;
   /** When false, no Pressable — parent (e.g. Draggable) owns hits. */
@@ -125,6 +126,7 @@ export function GridItem(props: GridItemProps): ReactNode {
           height: props.height,
           onPress: props.onPress,
           onDoublePress: props.onDoublePress,
+          onContextMenu: props.onContextMenu,
         })
       : null,
     props.icon

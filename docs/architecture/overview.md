@@ -44,7 +44,7 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 | `react-host` | Scene graph, blit, hit regions |
 | `ui` | Portable app SDK (no Wayland in widgets) |
 | `shell` | DE chrome attached to the compositor process |
-| `app-discovery` | Freedesktop `.desktop` scan |
+| `app-discovery` | Freedesktop `.desktop`, shared MIME, `mimeapps.list`, and context-action registry |
 
 ## Two React worlds
 

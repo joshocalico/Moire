@@ -24,6 +24,7 @@ export type HitPointerEvent = {
   /** Position relative to the hit region's top-left. */
   localX: number;
   localY: number;
+  button?: "left" | "right" | "middle";
   deltaY?: number;
 };
 
@@ -58,6 +59,7 @@ export type SceneNode = {
   onPointerDown?: HitHandler;
   onPointerMove?: HitHandler;
   onPointerUp?: HitHandler;
+  onContextMenu?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
   /** Opaque payload for position-aware lookups (e.g. DnD drop-target resolution). */
   data?: unknown;
@@ -83,6 +85,7 @@ export type HitRegion = {
   onPointerDown?: HitHandler;
   onPointerMove?: HitHandler;
   onPointerUp?: HitHandler;
+  onContextMenu?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
   /** Opaque payload for position-aware lookups (e.g. DnD drop-target resolution). */
   data?: unknown;
@@ -122,6 +125,7 @@ function makeNode(
     onPointerDown: props.onPointerDown as HitHandler | undefined,
     onPointerMove: props.onPointerMove as HitHandler | undefined,
     onPointerUp: props.onPointerUp as HitHandler | undefined,
+    onContextMenu: props.onContextMenu as HitHandler | undefined,
     onWheel: props.onWheel as ((ev: HitPointerEvent) => void) | undefined,
     children: [],
     parent: null,
@@ -191,6 +195,9 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   }
   if ("onPointerUp" in props) {
     node.onPointerUp = props.onPointerUp as HitHandler | undefined;
+  }
+  if ("onContextMenu" in props) {
+    node.onContextMenu = props.onContextMenu as HitHandler | undefined;
   }
   if ("onWheel" in props) {
     node.onWheel = props.onWheel as ((ev: HitPointerEvent) => void) | undefined;
@@ -442,6 +449,7 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       node.onPointerDown ||
       node.onPointerMove ||
       node.onPointerUp ||
+      node.onContextMenu ||
       node.onWheel ||
       // A pure position lookup tag (e.g. DropZone) with no pointer handlers
       // still needs to be findable by hitTestDropData.
@@ -460,6 +468,7 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       onPointerDown: node.onPointerDown,
       onPointerMove: node.onPointerMove,
       onPointerUp: node.onPointerUp,
+      onContextMenu: node.onContextMenu,
       onWheel: node.onWheel,
       data: node.data,
       onDropHoverChange: node.onDropHoverChange,

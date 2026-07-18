@@ -204,6 +204,7 @@ export type DraggableProps = {
   /** Fired on click (no drag). */
   onPress?: () => void;
   onDoublePress?: () => void;
+  onContextMenu?: (event: HitPointerEvent) => void;
   children?: ReactNode;
 };
 
@@ -317,6 +318,7 @@ export function Draggable(props: DraggableProps): ReactNode {
         // Otherwise cancel the pending click arm.
         if (!started.current) down.current = null;
       },
+      onContextMenu: props.onContextMenu,
     }),
     dragging
       ? createElement(Rect, {

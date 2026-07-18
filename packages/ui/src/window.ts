@@ -286,6 +286,7 @@ export class Window {
       y: ev.y,
       localX: ev.x - h.x,
       localY: ev.y - h.y,
+      button: ev.button,
       deltaY: ev.deltaY,
     };
   }
@@ -350,6 +351,15 @@ export class Window {
         this.flushAndDirty();
       } else {
         this.dirty = true;
+      }
+      return;
+    }
+
+    if (ev.type === "down" && ev.button === "right") {
+      const hit = this.findTopHit(ev.x, ev.y, (h) => !!h.onContextMenu);
+      if (hit?.onContextMenu) {
+        hit.onContextMenu(this.makeEvArgs(hit, ev));
+        this.flushAndDirty();
       }
       return;
     }

@@ -248,7 +248,7 @@ Bundled files: `packages/ui/icons/<name>.png`.
 | `getPayload` | `() => unknown` | string / buffer / list |
 | `label` | `string` | preview label; else basename of `file://` |
 | `previewIcon` | `DragIconSpec` | graphic for a source-sized preview; the pointer-down point remains its hotspot |
-| `onPress` / `onDoublePress` | | when not dragging |
+| `onPress` / `onDoublePress` / `onContextMenu` | | left-click and right-click actions |
 | `children` | | visuals underneath hit layer |
 
 **DropTarget** — registers for Wayland (and local) drops.
@@ -281,6 +281,15 @@ createElement(
 ```
 
 Platforms call `setDndBridge` on connect — apps do not.
+
+### `ContextMenu` / `OpenWithPicker`
+
+Both are viewport overlays: they clamp themselves to the visible bounds,
+install an outside-click dismiss target, and render after the app/shell content
+so hit order matches paint order. `ContextMenu` consumes action descriptions
+from a registry without depending on plugin code. `OpenWithPicker` receives
+plain application choices and exposes separate one-time and “Always Use”
+callbacks.
 
 ---
 

@@ -2,7 +2,7 @@
  * Desktop icon layer — ~/Desktop entries as GridItem cells over wallpaper.
  */
 import { createElement, type ReactNode } from "react";
-import { Group, Rect } from "@moire/react-host";
+import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
 import { GridItem, Icon, themePalette } from "@moire/ui";
 import fs from "node:fs";
 import path from "node:path";
@@ -136,6 +136,7 @@ export type DesktopIconsProps = {
   dragActive?: boolean;
   onSelect?: (name: string) => void;
   onOpen?: (name: string) => void;
+  onContextMenu?: (name: string, event: HitPointerEvent) => void;
 };
 
 /** Full-screen desktop icon layer. Render under windows, above wallpaper. */
@@ -179,6 +180,7 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
       }),
       onPress: () => props.onSelect?.(name),
       onDoublePress: () => props.onOpen?.(name),
+      onContextMenu: (event) => props.onContextMenu?.(name, event),
     });
   });
 

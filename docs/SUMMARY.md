@@ -6,6 +6,8 @@ Use this file as a sidebar / SUMMARY for Markdown site generators (Docsify, mdBo
 * [Roadmap](roadmap.md)
 * [Getting started (dev VM)](dev-vm.md)
 * [Files & desktop overview](files-and-desktop.md)
+* [Files, desktop & UI completeness plan](files-desktop-ui-plan.md)
+* [Freedesktop MIME & actions](freedesktop-mime-and-actions.md)
 
 ## Architecture
 

@@ -6,9 +6,12 @@ export type DesktopEntry = {
   genericName?: string;
   comment?: string;
   exec: string;
+  /** Original Exec value, including freedesktop field codes. */
+  execTemplate?: string;
   icon?: string;
   terminal: boolean;
   categories: string[];
+  mimeTypes?: string[];
 };
 
 function parseLocaleKey(
@@ -87,11 +90,13 @@ export function parseDesktopFile(
     genericName: parseLocaleKey(keys, "GenericName"),
     comment: parseLocaleKey(keys, "Comment"),
     exec: cleanedExec,
+    execTemplate: exec,
     icon: keys.get("Icon"),
     terminal: keys.get("Terminal") === "true",
     categories: (keys.get("Categories") ?? "")
       .split(";")
       .filter(Boolean),
+    mimeTypes: (keys.get("MimeType") ?? "").split(";").filter(Boolean),
   };
 }
 

@@ -13,7 +13,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | `@moire/ui` toolkit | Shipped — layout, controls, scroll/list/grid, icons, DnD widgets, motion |
 | Theme tokens + atmosphere wallpaper | Shipped — cached paint, ambient drift, prefs override |
 | Settings (Appearance / Sound) | Shipped — live `applySettings`, wallpaper presets |
-| Moire Files | Shipped — Places, grid/list, path/URI launch, default folder handler, Wayland DnD |
+| Moire Files | Shipped — richer navigation/selection hierarchy, grid/list, Open With, context actions, Wayland DnD |
 | Desktop icons | Shipped — paint under windows, select/open, layout persist, reposition + folder drops |
 | Wayland DnD | Shipped — compositor session, desktop drop sink, hotspot previews + rejected-drop return animation |
 | Panel / launcher chrome | Shipped — brand-forward panel, list launcher |
@@ -25,7 +25,8 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | --- | --- |
 | DnD polish | Stronger drop highlights; explicit move vs copy chooser; verify GTK `text/uri-list` peers |
 | Icon set | Richer bundled PNGs or Adwaita fallback; optional SVG later |
-| Files UX | Breadcrumb path control, keyboard nav in grid/list, multi-select |
+| Files UX | Breadcrumb path control, keyboard nav, multi-select, thumbnails, conflict UI |
+| MIME / actions | Content magic matching, external plugin discovery, richer app icons |
 | Launcher | Icons from `.desktop`, categories, pinned apps |
 | Performance | CPU composite still hot; reduce idle dirty from atmosphere when possible |
 

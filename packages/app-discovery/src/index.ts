@@ -5,7 +5,7 @@ import { parseDesktopFile, type DesktopEntry } from "./desktop.js";
 export type { DesktopEntry } from "./desktop.js";
 export { parseDesktopFile } from "./desktop.js";
 
-function dataDirs(): string[] {
+export function xdgDataDirs(): string[] {
   const home = process.env.XDG_DATA_HOME ?? path.join(process.env.HOME ?? "", ".local/share");
   const dirs = (process.env.XDG_DATA_DIRS ?? "/usr/local/share:/usr/share").split(":");
   return [home, ...dirs].filter(Boolean);
@@ -13,13 +13,12 @@ function dataDirs(): string[] {
 
 /**
  * Scan Freedesktop application directories and merge by desktop-file-id.
- * Later directories in XDG_DATA_DIRS win (spec: precedence is reverse of search for overrides —
- * we follow common practice: user data home first, then system dirs; last write wins for same id).
+ * XDG_DATA_HOME is searched first and wins over system entries with the same id.
  */
 export function discoverApplications(desktop = "Moire"): DesktopEntry[] {
   const byId = new Map<string, DesktopEntry>();
 
-  for (const root of dataDirs()) {
+  for (const root of xdgDataDirs()) {
     const appDir = path.join(root, "applications");
     if (!fs.existsSync(appDir)) continue;
 
@@ -35,7 +34,8 @@ export function discoverApplications(desktop = "Moire"): DesktopEntry[] {
       try {
         const text = fs.readFileSync(full, "utf8");
         const entry = parseDesktopFile(text, file, desktop);
-        if (entry) {
+        // XDG_DATA_HOME is first and has highest precedence.
+        if (entry && !byId.has(entry.id)) {
           byId.set(entry.id, entry);
         }
       } catch {
@@ -46,6 +46,20 @@ export function discoverApplications(desktop = "Moire"): DesktopEntry[] {
 
   return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
+
+export {
+  MimeAssociationDatabase,
+  buildDesktopExec,
+  loadMimeAssociationDatabase,
+  type MimeAssociationSnapshot,
+} from "./mime.js";
+export {
+  ContextActionRegistry,
+  type ContextAction,
+  type ContextActionPlugin,
+  type FileActionContext,
+  type FileActionSource,
+} from "./actions.js";
 
 export function filterApplications(
   apps: DesktopEntry[],

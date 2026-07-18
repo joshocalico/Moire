@@ -3,7 +3,7 @@
  * ListItem: 3-px left accent rule when selected + selection wash.
  */
 import { createElement, type ReactNode } from "react";
-import { Group, Rect, Text, FONT_H } from "@moire/react-host";
+import { Group, Rect, Text, FONT_H, type HitPointerEvent } from "@moire/react-host";
 import { themePalette } from "../theme.js";
 import { ScrollArea } from "./scroll.js";
 import { Pressable } from "./pressable.js";
@@ -22,6 +22,7 @@ export type ListItemProps = {
   selected?: boolean;
   onPress?: () => void;
   onDoublePress?: () => void;
+  onContextMenu?: (event: HitPointerEvent) => void;
   /** When false, no Pressable — parent owns hits. */
   interactive?: boolean;
 };
@@ -75,6 +76,7 @@ export function ListItem(props: ListItemProps): ReactNode {
           height: h,
           onPress: props.onPress,
           onDoublePress: props.onDoublePress,
+          onContextMenu: props.onContextMenu,
         })
       : null,
     // Leading slot

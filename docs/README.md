@@ -11,6 +11,8 @@ This directory is meant to be browsed as a tree or fed to a Markdown site render
 | [Getting started (dev VM)](./dev-vm.md) | Parallels Ubuntu VM, packages, day-0 smoke |
 | [Roadmap](./roadmap.md) | Shipped vs planned |
 | [Files & desktop (overview)](./files-and-desktop.md) | Day-0 Files, icons, DnD summary |
+| [Files, desktop & UI completeness plan](./files-desktop-ui-plan.md) | Product, widget, renderer, JSX, and delivery plan |
+| [Freedesktop MIME & actions](./freedesktop-mime-and-actions.md) | Associations, Open With, action plugins |
 
 ## Architecture
 
@@ -82,7 +84,7 @@ packages/
   react-host/     React → CPU scene graph
   ui/             App SDK + widgets
   shell/          Panel, launcher, SSD, desktop
-  app-discovery/  .desktop discovery
+  app-discovery/  .desktop discovery, MIME associations, action registry
 themes/
   default/ light/ Bundled theme.json
   Moire/          GTK theme for CSD clients

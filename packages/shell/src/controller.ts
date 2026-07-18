@@ -1,7 +1,11 @@
 import {
   discoverApplications,
   filterApplications,
+  ContextActionRegistry,
+  buildDesktopExec,
+  loadMimeAssociationDatabase,
   type DesktopEntry,
+  type FileActionContext,
 } from "@moire/app-discovery";
 import {
   createShellRoot,
@@ -10,7 +14,17 @@ import {
   type HitRegion,
   type ShellRoot,
 } from "@moire/react-host";
-import { installUiFonts, setUiScaleFactor, tickAllMotions, Icon, GridItem } from "@moire/ui";
+import {
+  installUiFonts,
+  setUiScaleFactor,
+  tickAllMotions,
+  ContextMenu,
+  OpenWithPicker,
+  Icon,
+  GridItem,
+  type ContextMenuAction,
+  type IconName,
+} from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
 import { themePalette } from "@moire/theme";
 import { createElement, useEffect, useMemo } from "react";
@@ -292,6 +306,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     ),
   ];
   let apps = mergeApps();
+  let mimeDb = loadMimeAssociationDatabase(apps);
   let open = process.env.MOIRE_SHELL_START_OPEN === "1";
   let query = "";
   let selected = 0;
@@ -323,6 +338,9 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   let desktopEntries: string[] = listDesktopEntries();
   let desktopLayout: DesktopLayout = loadDesktopLayout();
   let desktopSelectedName: string | undefined;
+  let desktopMenu: { name: string; x: number; y: number } | null = null;
+  let desktopPickerName: string | null = null;
+  let desktopPickerSelection: string | null = null;
   /** Folder icon currently hovered by an active external/escalated drag. */
   let desktopDropHoverName: string | null = null;
   /** A compatible drag is over the desktop, regardless of a specific folder hit. */
@@ -363,6 +381,7 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   const DESKTOP_DRAG_WATCHDOG_TIMEOUT_MS = 15_000;
   let desktopMotionTick = Date.now();
   const PANEL_BTN_LEFT = 0x110; // BTN_LEFT
+  const PANEL_BTN_RIGHT = 0x111; // BTN_RIGHT
   const dragChipRoot: ShellRoot = createShellRoot();
   let dragChipCache: {
     key: string;
@@ -374,7 +393,9 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
   const refreshApps = () => {
     apps = mergeApps();
+    mimeDb = loadMimeAssociationDatabase(apps);
     dirty = true;
+    desktopDirty = true;
   };
   setInterval(refreshApps, 30_000).unref?.();
 
@@ -389,12 +410,126 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
   const openDesktopEntry = (name: string) => {
     const filePath = path.join(desktopDir(), name);
     try {
-      const child = spawn({ exec: `xdg-open ${pathToFileURL(filePath).href}` });
+      const mime = mimeDb.mimeTypeForPath(filePath);
+      const app = mimeDb.defaultApplicationForMime(mime);
+      const exec = app
+        ? buildDesktopExec(app, [filePath])
+        : `xdg-open ${pathToFileURL(filePath).href}`;
+      const child = spawn({ exec });
       child.unref?.();
-      console.log(`[shell] desktop open: ${filePath}`);
+      console.log(`[shell] desktop open: ${filePath} → ${exec}`);
     } catch (err) {
       console.error(`[shell] desktop open failed:`, err);
     }
+  };
+
+  const showDesktopOpenWith = (name: string) => {
+    const filePath = path.join(desktopDir(), name);
+    const choices = mimeDb.applicationsForPath(filePath);
+    desktopMenu = null;
+    desktopPickerName = name;
+    desktopPickerSelection = choices[0]?.id ?? null;
+    desktopDirty = true;
+  };
+
+  const launchDesktopWith = (
+    name: string,
+    desktopId: string,
+    makeDefault: boolean,
+  ) => {
+    const filePath = path.join(desktopDir(), name);
+    const mime = mimeDb.mimeTypeForPath(filePath);
+    const app = mimeDb
+      .applicationsForMime(mime)
+      .find((candidate) => candidate.id === desktopId);
+    if (!app) return;
+    try {
+      if (makeDefault) mimeDb.setDefaultApplication(mime, desktopId);
+      const exec = buildDesktopExec(app, [filePath]);
+      const child = spawn({ exec });
+      child.unref?.();
+      console.log(`[shell] desktop open-with: ${filePath} → ${exec}`);
+    } catch (err) {
+      console.error(`[shell] desktop open-with failed:`, err);
+    }
+    desktopPickerName = null;
+    desktopPickerSelection = null;
+    desktopDirty = true;
+  };
+
+  const desktopActionRegistry = new ContextActionRegistry();
+  desktopActionRegistry.register({
+    id: "moire.open",
+    actions(context) {
+      const filePath = context.paths[0];
+      if (!filePath) return [];
+      const name = path.basename(filePath);
+      const directory = context.directories[0] ?? false;
+      return [
+        {
+          id: "open",
+          label: "Open",
+          icon: directory ? "folder" : "file",
+          run: () => openDesktopEntry(name),
+        },
+        {
+          id: "open-with",
+          label: "Open With…",
+          description: "Choose a compatible application",
+          icon: "app",
+          run: () => showDesktopOpenWith(name),
+        },
+      ];
+    },
+  });
+  desktopActionRegistry.register({
+    id: "moire.location",
+    actions(context) {
+      const filePath = context.paths[0];
+      if (!filePath) return [];
+      return [
+        {
+          id: "show-in-files",
+          label: "Show in Files",
+          icon: "folder",
+          separatorBefore: true,
+          run: () => {
+            const child = spawn({ exec: `xdg-open ${pathToFileURL(path.dirname(filePath)).href}` });
+            child.unref?.();
+          },
+        },
+      ];
+    },
+  });
+
+  const desktopContextActions = (name: string): ContextMenuAction[] => {
+    const filePath = path.join(desktopDir(), name);
+    let directory = false;
+    try {
+      directory = fs.statSync(filePath).isDirectory();
+    } catch {
+      // keep false
+    }
+    const context: FileActionContext = {
+      source: "desktop",
+      paths: [filePath],
+      mimeTypes: [mimeDb.mimeTypeForPath(filePath)],
+      directories: [directory],
+    };
+    return desktopActionRegistry.actionsFor(context).map((action) => ({
+      id: action.id,
+      label: action.label,
+      description: action.description,
+      icon: (["app", "file", "folder"] as IconName[]).includes(
+        action.icon as IconName,
+      )
+        ? (action.icon as IconName)
+        : undefined,
+      danger: action.danger,
+      disabled: action.enabled === false,
+      separatorBefore: action.separatorBefore,
+      onPress: action.run,
+    }));
   };
   setInterval(() => {
     const next = formatClock();
@@ -544,23 +679,85 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
 
   const rebuildDesktop = (width: number, height: number) => {
     const pal = themePalette();
+    const pickerName = desktopPickerName;
+    const pickerPath = pickerName
+      ? path.join(desktopDir(), pickerName)
+      : null;
+    const pickerMime = pickerPath
+      ? mimeDb.mimeTypeForPath(pickerPath)
+      : "application/octet-stream";
+    const pickerApps = pickerPath
+      ? mimeDb.applicationsForMime(pickerMime)
+      : [];
     renderShell(
       desktopRoot,
-      createElement(DesktopIcons, {
-        screenW: width,
-        screenH: height,
-        panelH: pal.panelHeight,
-        entries: desktopEntries,
-        layout: desktopLayout,
-        selectedName: desktopSelectedName,
-        dropHoverName: desktopDropHoverName,
-        dragActive: desktopDragActive,
-        onSelect: (name) => {
-          desktopSelectedName = name;
-          desktopDirty = true;
-        },
-        onOpen: openDesktopEntry,
-      }),
+      createElement(
+        Group,
+        { x: 0, y: 0, width, height: height - pal.panelHeight },
+        createElement(DesktopIcons, {
+          screenW: width,
+          screenH: height,
+          panelH: pal.panelHeight,
+          entries: desktopEntries,
+          layout: desktopLayout,
+          selectedName: desktopSelectedName,
+          dropHoverName: desktopDropHoverName,
+          dragActive: desktopDragActive,
+          onSelect: (name) => {
+            desktopSelectedName = name;
+            desktopMenu = null;
+            desktopDirty = true;
+          },
+          onOpen: openDesktopEntry,
+          onContextMenu: (name, event) => {
+            desktopSelectedName = name;
+            desktopPickerName = null;
+            desktopMenu = { name, x: event.x, y: event.y };
+            desktopDirty = true;
+          },
+        }),
+        desktopMenu
+          ? createElement(ContextMenu, {
+              viewportWidth: width,
+              viewportHeight: height - pal.panelHeight,
+              x: desktopMenu.x,
+              y: desktopMenu.y,
+              title: desktopMenu.name,
+              actions: desktopContextActions(desktopMenu.name),
+              onDismiss: () => {
+                desktopMenu = null;
+                desktopDirty = true;
+              },
+            })
+          : null,
+        pickerName
+          ? createElement(OpenWithPicker, {
+              viewportWidth: width,
+              viewportHeight: height - pal.panelHeight,
+              fileName: pickerName,
+              mimeType: pickerMime,
+              choices: pickerApps.map((app, index) => ({
+                id: app.id,
+                name: app.name,
+                description: app.comment ?? app.genericName ?? app.exec,
+                isDefault: index === 0,
+              })),
+              selectedId: desktopPickerSelection,
+              onSelect: (id) => {
+                desktopPickerSelection = id;
+                desktopDirty = true;
+              },
+              onOpen: (id) => launchDesktopWith(pickerName, id, false),
+              onMakeDefault: (id) =>
+                launchDesktopWith(pickerName, id, true),
+              onDismiss: () => {
+                desktopPickerName = null;
+                desktopPickerSelection = null;
+                desktopDirty = true;
+              },
+            })
+          : null,
+      ),
     );
     const painted = rasterize(desktopRoot.container, width, height);
     desktopOverlay = painted.pixels;
@@ -903,7 +1100,9 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
     onDesktopPointerButton(ev) {
       const settings = loadSettings();
       if (!settings.showDesktopIcons) return false;
-      if (ev.button !== PANEL_BTN_LEFT && ev.button !== 272) return false;
+      const left = ev.button === PANEL_BTN_LEFT || ev.button === 272;
+      const right = ev.button === PANEL_BTN_RIGHT || ev.button === 273;
+      if (!left && !right) return false;
       ensureDesktopHits();
       const pal = themePalette();
 
@@ -928,7 +1127,26 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
         y: ev.y,
         localX: ev.x - h.x,
         localY: ev.y - h.y,
+        button: right ? ("right" as const) : ("left" as const),
       });
+
+      if (right) {
+        if (ev.value !== 1) return desktopMenu != null || desktopPickerName != null;
+        const hit = findHit((h) => !!h.onContextMenu);
+        if (hit?.onContextMenu) {
+          hit.onContextMenu(args(hit));
+          desktopDirty = true;
+          return true;
+        }
+        if (desktopMenu || desktopPickerName) {
+          desktopMenu = null;
+          desktopPickerName = null;
+          desktopPickerSelection = null;
+          desktopDirty = true;
+          return true;
+        }
+        return false;
+      }
 
       if (ev.value === 1) {
         desktopDragReturn = null;
@@ -942,15 +1160,18 @@ export function createShell(spawn: ShellSpawn): ShellBridge {
           desktopDrag = null;
           return false;
         }
-        const name = hitTestDesktopIcon(
-          ev.x,
-          ev.y,
-          desktopEntries,
-          desktopLayout,
-          desktopW || 1,
-          desktopH || 1,
-          pal.panelHeight,
-        );
+        const overlayOpen = desktopMenu != null || desktopPickerName != null;
+        const name = overlayOpen
+          ? null
+          : hitTestDesktopIcon(
+              ev.x,
+              ev.y,
+              desktopEntries,
+              desktopLayout,
+              desktopW || 1,
+              desktopH || 1,
+              pal.panelHeight,
+            );
         desktopDown = { x: ev.x, y: ev.y, hit, name: name ?? undefined };
         desktopDrag = null;
         hit.onPointerDown?.(args(hit));
