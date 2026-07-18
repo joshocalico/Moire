@@ -9,8 +9,8 @@ Package: `apps/files`.
 | Area | Status |
 | --- | --- |
 | Browse directories | Grid and list views |
-| Places sidebar | Home, Desktop, Downloads, … — longest-prefix path match |
-| Open / navigate | Double-click; Up; clickable/drop-aware breadcrumbs; editable validated path |
+| Places sidebar | XDG user dirs plus persisted add/rename/remove favorites |
+| Open / navigate | Back/Forward history; Up; clickable/drop-aware breadcrumbs; editable validated path |
 | Default handler | `moire-files.desktop` for `inode/directory` |
 | Open With | MIME-filtered picker; one-time launch or write a new default |
 | Context menu | Scoped action-provider registry; distinct item and background menus |
@@ -48,9 +48,15 @@ an extension-to-app table. Candidate applications combine:
 come from `ContextActionRegistry`; core actions and optional packages use the
 same provider contract. See [Freedesktop MIME and actions](../freedesktop-mime-and-actions.md).
 
-## Places matching
+## Places and matching
 
-Sidebar entries match the **longest** prefix of the current path so nested folders under Desktop still highlight Desktop correctly (not a shorter Home match).
+Home, Desktop, and Downloads follow `user-dirs.dirs` when available. Edit mode
+can pin the current folder, rename custom favorites, and remove them. Custom
+entries are persisted in `~/.config/moire/files-places.json`.
+
+Sidebar entries match the **longest** prefix of the current path so nested
+folders under Desktop still highlight Desktop correctly (not a shorter Home
+match).
 
 ## Default directory handler
 

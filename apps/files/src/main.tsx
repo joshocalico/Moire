@@ -23,6 +23,7 @@ import {
   Surface,
   Separator,
   ListItem,
+  TextField,
   Grid,
   GridItem,
   Icon,
@@ -55,6 +56,14 @@ import {
   type DesktopEntry,
   type FileActionContext,
 } from "@moire/app-discovery";
+import {
+  addFavorite,
+  builtInPlaces,
+  loadPlaces,
+  normalizePlaceLabels,
+  savePlaces,
+  type FilePlace,
+} from "./places.js";
 
 type Entry = {
   name: string;
@@ -63,7 +72,10 @@ type Entry = {
   size: number;
 };
 
-type Place = { id: string; label: string; path: string; icon: IconName };
+type NavigationState = {
+  paths: string[];
+  index: number;
+};
 
 type ContextMenuRequest = {
   x: number;
@@ -76,23 +88,9 @@ function home(): string {
   return os.homedir();
 }
 
-function places(): Place[] {
-  const h = home();
-  return [
-    { id: "home", label: "Home", path: h, icon: "home" },
-    { id: "desktop", label: "Desktop", path: path.join(h, "Desktop"), icon: "desktop" },
-    {
-      id: "downloads",
-      label: "Downloads",
-      path: path.join(h, "Downloads"),
-      icon: "downloads",
-    },
-  ];
-}
-
 /** Longest matching place wins (Home must not stay selected under Desktop). */
-function activePlaceId(cwd: string, list: Place[]): string | null {
-  let best: Place | null = null;
+function activePlaceId(cwd: string, list: FilePlace[]): string | null {
+  let best: FilePlace | null = null;
   for (const p of list) {
     if (cwd === p.path || cwd.startsWith(p.path + path.sep)) {
       if (!best || p.path.length > best.path.length) best = p;
@@ -198,7 +196,9 @@ function pathToUri(p: string): string {
 }
 
 function initialDirectory(argv: string[]): string {
-  const fallback = path.join(home(), "Desktop");
+  const fallback =
+    builtInPlaces().find((place) => place.id === "desktop")?.path ??
+    path.join(home(), "Desktop");
   const raw = argv.find((arg) => arg.length > 0 && !arg.startsWith("-"));
   if (!raw) return fallback;
 
@@ -258,7 +258,11 @@ function FilesApp(
   const ui = getUiScaleFactor();
   const pad = Math.round(SPACE.lg * ui);
   const sideW = Math.round(204 * ui);
-  const [cwd, setCwd] = useState(props.initialPath);
+  const [navigation, setNavigation] = useState<NavigationState>(() => ({
+    paths: [props.initialPath],
+    index: 0,
+  }));
+  const cwd = navigation.paths[navigation.index] ?? props.initialPath;
   const [selected, setSelected] = useState(-1);
   const [view, setView] = useState<"grid" | "list">("grid");
   const [tick, setTick] = useState(0);
@@ -269,7 +273,8 @@ function FilesApp(
   >(null);
   const [pickerEntry, setPickerEntry] = useState<Entry | null>(null);
   const [pickerSelection, setPickerSelection] = useState<string | null>(null);
-  const placeList = useMemo(() => places(), []);
+  const [placeList, setPlaceList] = useState<FilePlace[]>(loadPlaces);
+  const [editingPlaces, setEditingPlaces] = useState(false);
   const activePlace = activePlaceId(cwd, placeList);
   const applications = useMemo(
     () => discoverApplications(process.env.XDG_CURRENT_DESKTOP ?? "Moire"),
@@ -280,10 +285,34 @@ function FilesApp(
     [applications],
   );
 
-  useEffect(() => {
-    ensureDir(path.join(home(), "Desktop"));
-    ensureDir(path.join(home(), "Downloads"));
+  const navigateTo = useCallback((destination: string) => {
+    const resolved = path.resolve(destination);
+    setNavigation((current) => {
+      if (current.paths[current.index] === resolved) return current;
+      const paths = [...current.paths.slice(0, current.index + 1), resolved];
+      return { paths, index: paths.length - 1 };
+    });
+    setSelected(-1);
+    setMenu(null);
   }, []);
+
+  const travelHistory = (offset: -1 | 1) => {
+    setNavigation((current) => ({
+      ...current,
+      index: Math.max(
+        0,
+        Math.min(current.paths.length - 1, current.index + offset),
+      ),
+    }));
+    setSelected(-1);
+    setMenu(null);
+  };
+
+  useEffect(() => {
+    for (const place of placeList) {
+      if (place.builtIn) ensureDir(place.path);
+    }
+  }, [placeList]);
 
   useEffect(() => {
     let w: fs.FSWatcher | null = null;
@@ -313,13 +342,12 @@ function FilesApp(
   const openEntry = useCallback(
     (e: Entry) => {
       if (e.isDir) {
-        setCwd(e.path);
-        setSelected(-1);
+        navigateTo(e.path);
       } else {
         openDefault(e.path);
       }
     },
-    [openDefault],
+    [navigateTo, openDefault],
   );
 
   const showOpenWith = useCallback(
@@ -384,10 +412,7 @@ function FilesApp(
             separatorBefore: true,
             run: () => {
               if (directory) openPath(filePath);
-              else {
-                setCwd(path.dirname(filePath));
-                setSelected(-1);
-              }
+              else navigateTo(path.dirname(filePath));
             },
           },
         ];
@@ -430,7 +455,7 @@ function FilesApp(
       },
     });
     return registry;
-  }, [openEntry, showOpenWith, view]);
+  }, [navigateTo, openEntry, showOpenWith, view]);
 
   const contextActions = useCallback(
     (entry: Entry): ContextMenuAction[] => {
@@ -479,10 +504,7 @@ function FilesApp(
 
   const goUp = () => {
     const parent = path.dirname(cwd);
-    if (parent !== cwd) {
-      setCwd(parent);
-      setSelected(-1);
-    }
+    if (parent !== cwd) navigateTo(parent);
   };
 
   const onDropPayload = (payload: unknown, x: number, y: number) => {
@@ -541,12 +563,41 @@ function FilesApp(
   const cellH = Math.round(132 * ui);
   const iconSz = Math.round(52 * ui);
   const btn = Math.round(36 * ui);
-  const pathBarWidth = Math.max(80, props.width - Math.round(256 * ui));
+  const pathBarWidth = Math.max(80, props.width - Math.round(272 * ui));
 
-  const navigateTo = (destination: string) => {
-    setCwd(destination);
-    setSelected(-1);
-    setMenu(null);
+  const finishEditingPlaces = () => {
+    const normalized = normalizePlaceLabels(placeList);
+    setPlaceList(normalized);
+    savePlaces(normalized);
+    setEditingPlaces(false);
+  };
+
+  const addCurrentFavorite = () => {
+    const next = addFavorite(placeList, cwd);
+    setPlaceList(next);
+    savePlaces(next);
+  };
+
+  const renameFavorite = (id: string, label: string) => {
+    setPlaceList((current) =>
+      current.map((place) => (place.id === id ? { ...place, label } : place)),
+    );
+  };
+
+  const commitFavoriteLabel = () => {
+    setPlaceList((current) => {
+      const next = normalizePlaceLabels(current);
+      savePlaces(next);
+      return next;
+    });
+  };
+
+  const removeFavorite = (id: string) => {
+    setPlaceList((current) => {
+      const next = current.filter((place) => place.builtIn || place.id !== id);
+      savePlaces(next);
+      return next;
+    });
   };
 
   const commitLocation = (value: string): string | undefined => {
@@ -573,7 +624,23 @@ function FilesApp(
           align="center"
         >
           <Button
-            width={Math.round(72 * ui)}
+            width={btn}
+            height={btn}
+            label="←"
+            variant="ghost"
+            disabled={navigation.index === 0}
+            onPress={() => travelHistory(-1)}
+          />
+          <Button
+            width={btn}
+            height={btn}
+            label="→"
+            variant="ghost"
+            disabled={navigation.index >= navigation.paths.length - 1}
+            onPress={() => travelHistory(1)}
+          />
+          <Button
+            width={Math.round(56 * ui)}
             height={btn}
             label="↑  Up"
             variant="secondary"
@@ -603,40 +670,110 @@ function FilesApp(
             padding={Math.round(SPACE.md * ui)}
             gap={Math.round(SPACE.xs * ui)}
           >
-            <Label
-              text="FAVORITES"
-              color={pal.accent}
-              fontSize={10}
-              fontWeight="medium"
+            <Row
               width={sideW - pad}
-              height={Math.round(18 * ui)}
-            />
+              height={Math.round(28 * ui)}
+              align="center"
+              gap={Math.round(SPACE.xs * ui)}
+            >
+              <Label
+                text="FAVORITES"
+                color={pal.accent}
+                fontSize={10}
+                fontWeight="medium"
+                width={sideW - pad - Math.round(56 * ui)}
+                height={Math.round(18 * ui)}
+              />
+              <Button
+                width={Math.round(52 * ui)}
+                height={Math.round(26 * ui)}
+                label={editingPlaces ? "Done" : "Edit"}
+                variant="ghost"
+                fontSize={11}
+                onPress={() => {
+                  if (editingPlaces) finishEditingPlaces();
+                  else setEditingPlaces(true);
+                }}
+              />
+            </Row>
             {placeList.map((place) => (
-              <DropZone
-                key={place.id}
-                width={sideW - Math.round(SPACE.lg * ui)}
-                height={Math.round(40 * ui)}
-                id={place.path}
-              >
-                <ListItem
+              editingPlaces && !place.builtIn ? (
+                <Row
+                  key={place.id}
                   width={sideW - Math.round(SPACE.lg * ui)}
                   height={Math.round(40 * ui)}
-                  title={place.label}
-                  leading={
-                    <Icon
-                      name={place.icon}
-                      size={Math.round(20 * ui)}
-                      color={activePlace === place.id ? pal.accent : pal.text}
-                    />
-                  }
-                  selected={activePlace === place.id}
-                  onPress={() => {
-                    ensureDir(place.path);
-                    navigateTo(place.path);
-                  }}
-                />
-              </DropZone>
+                  align="center"
+                  gap={Math.round(SPACE.xs * ui)}
+                >
+                  <Icon
+                    name="folder"
+                    size={Math.round(18 * ui)}
+                    color={pal.accent}
+                  />
+                  <TextField
+                    width={sideW - Math.round(82 * ui)}
+                    height={Math.round(30 * ui)}
+                    value={place.label}
+                    onChange={(label) => renameFavorite(place.id, label)}
+                    onSubmit={commitFavoriteLabel}
+                    onFocusChange={(focused) => {
+                      if (!focused) commitFavoriteLabel();
+                    }}
+                  />
+                  <Button
+                    width={Math.round(30 * ui)}
+                    height={Math.round(30 * ui)}
+                    label="−"
+                    variant="ghost"
+                    color={pal.danger}
+                    fontSize={16}
+                    onPress={() => removeFavorite(place.id)}
+                  />
+                </Row>
+              ) : (
+                <DropZone
+                  key={place.id}
+                  width={sideW - Math.round(SPACE.lg * ui)}
+                  height={Math.round(40 * ui)}
+                  id={place.path}
+                >
+                  <ListItem
+                    width={sideW - Math.round(SPACE.lg * ui)}
+                    height={Math.round(40 * ui)}
+                    title={place.label}
+                    leading={
+                      <Icon
+                        name={place.icon}
+                        size={Math.round(20 * ui)}
+                        color={activePlace === place.id ? pal.accent : pal.text}
+                      />
+                    }
+                    selected={activePlace === place.id}
+                    onPress={() => {
+                      if (place.builtIn) ensureDir(place.path);
+                      try {
+                        if (fs.statSync(place.path).isDirectory()) {
+                          navigateTo(place.path);
+                        }
+                      } catch {
+                        // A missing favorite remains editable and removable.
+                      }
+                    }}
+                  />
+                </DropZone>
+              )
             ))}
+            {editingPlaces ? (
+              <Button
+                width={sideW - Math.round(SPACE.lg * ui)}
+                height={Math.round(34 * ui)}
+                label="+ Add Current Folder"
+                variant="secondary"
+                fontSize={11}
+                disabled={placeList.some((place) => place.path === cwd)}
+                onPress={addCurrentFavorite}
+              />
+            ) : null}
             <Separator
               width={sideW - Math.round(SPACE.xl * ui)}
               height={1}

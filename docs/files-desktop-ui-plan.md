@@ -15,9 +15,12 @@ registry.
 
 Its largest gaps are structural:
 
-- Files now has a reusable clickable/editable path bar with breadcrumb drop
-  targets; history, completion, and keyboard location shortcuts remain.
-- Sidebar places are a hard-coded array with no editing or persistence.
+- Files now has Back/Forward history plus a reusable clickable/editable path
+  bar with breadcrumb drop targets. Completion and keyboard location shortcuts
+  remain.
+- Sidebar places now respect XDG user directories and persist custom favorites
+  with add-current-folder, rename, and remove editing. Reordering, sections,
+  devices, collapsed state, and reusable sidebar widgets remain.
 - Focus and basic single-line editing now exist, but selection, clipboard,
   composition, shortcut scopes, and full control keyboard parity remain.
 - Lists and grids have no shared selection or keyboard-navigation model.

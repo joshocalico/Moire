@@ -16,8 +16,9 @@ Bottom → top:
 2. Desktop icons (`shell.paintDesktop`)
 3. Client windows + SSD titlebars (stack order)
 4. Panel / launcher (`shell.paint`)
-5. Drag preview (client drag-icon surface, or shell-owned desktop ghost)
-6. Cursor
+5. Native client popups (`xdg_popup` menus and flyouts)
+6. Drag preview (client drag-icon surface, or shell-owned desktop ghost)
+7. Cursor
 
 Desktop context menus and pickers are promoted to the shell overlay pass after
 windows; only icons and drop feedback remain in the below-window desktop pass.
@@ -75,7 +76,9 @@ Headless check: `pnpm --filter @moire/ui smoke`.
 
 Package: `apps/files` (`@moire/files`).
 
-- Places: Home, Desktop, Downloads — **longest matching path** is selected (so Desktop does not also light up Home).
+- Places: XDG-aware Home, Desktop, and Downloads plus persisted user favorites.
+  Edit mode can pin the current folder, rename custom entries, and remove them;
+  **longest matching path** is selected so Desktop does not also light up Home.
 - Content: grid (default) or list; `fs` under `$HOME`; `fs.watch` refresh.
 - Open: directories navigate; files via `xdg-open`.
 - Launch target: accepts a filesystem path or `file://` URI; otherwise starts at `~/Desktop`.
@@ -144,6 +147,7 @@ While a DnD session is active, motion updates drag focus instead of normal hover
 | `~/.config/moire/active-theme.json` | Hot-reloaded theme (may include wallpaper override) |
 | `~/.config/moire/desktop-layout.json` | Desktop icon positions |
 | `~/.config/mimeapps.list` | Default MIME handlers (`inode/directory` → Files) |
+| `~/.config/moire/files-places.json` | Files custom sidebar favorites and labels |
 | `~/.local/share/applications/moire-files.desktop` | Installed Files desktop entry |
 | `~/.local/bin/moire-files` | Installed Files launcher symlink |
 
@@ -175,6 +179,8 @@ pnpm --filter @moire/shell typecheck
 pnpm --filter @moire/files typecheck
 pnpm --filter @moire/compositor typecheck
 pnpm --filter @moire/ui smoke
+pnpm --filter @moire/shell smoke
+pnpm --filter @moire/files smoke
 ```
 
 ### Smoke expectations

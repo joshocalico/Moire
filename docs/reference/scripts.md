@@ -49,6 +49,8 @@ prlctl capture MoireDev --file ~/Projects/moire/vm/capture.png
 pnpm --filter @moire/ui typecheck
 pnpm --filter @moire/shell typecheck
 pnpm --filter @moire/ui smoke
+pnpm --filter @moire/shell smoke
+pnpm --filter @moire/files smoke
 ```
 
 Other `guest-test-*` / `guest-egl-*` / Nautilus scripts are historical or specialized probes — prefer Files + clean-restart for day-0 work.
