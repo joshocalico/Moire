@@ -56,7 +56,21 @@ export type ContextMenuProps = {
   actions: ContextMenuAction[];
   onDismiss: () => void;
   width?: number;
+  /** Render as the contents of a native popup surface at local origin. */
+  surface?: boolean;
 };
+
+export function contextMenuSurfaceSize(
+  actions: readonly ContextMenuAction[],
+  title?: string,
+  width = 244,
+): { width: number; height: number } {
+  const separators = actions.filter((action) => action.separatorBefore).length;
+  const menuHeight =
+    (title ? 34 : 8) + actions.length * 38 + separators * 9 + 8;
+  // Shadow extends 6px right/8px down; entrance settles upward by 5px.
+  return { width: width + 6, height: menuHeight + 13 };
+}
 
 export function ContextMenu(props: ContextMenuProps): ReactNode {
   const pal = themePalette();
@@ -69,8 +83,12 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
   const titleH = props.title ? 34 : 8;
   const separators = props.actions.filter((action) => action.separatorBefore).length;
   const height = titleH + props.actions.length * rowH + separators * 9 + 8;
-  const x = Math.max(8, Math.min(props.x, props.viewportWidth - width - 8));
-  const y = Math.max(8, Math.min(props.y, props.viewportHeight - height - 8));
+  const x = props.surface
+    ? 0
+    : Math.max(8, Math.min(props.x, props.viewportWidth - width - 8));
+  const y = props.surface
+    ? 0
+    : Math.max(8, Math.min(props.y, props.viewportHeight - height - 8));
   const progress = Math.max(0, Math.min(1, reveal.get() / 100));
   const animatedY = y + Math.round((1 - progress) * 5);
   let rowY = titleH;

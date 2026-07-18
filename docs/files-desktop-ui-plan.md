@@ -33,6 +33,12 @@ Its largest gaps are structural:
   menus remain above clients without leaking interaction into them. Context
   menus use renderer-neutral opacity/clip animation with eased row feedback;
   a general overlay stack and anchored lifecycle are still due.
+- Files context menus now use native `xdg_popup` surfaces when Wayland offers
+  them, including compositor-owned placement, grabs, Escape/outside-click
+  dismissal, and stacking above every toplevel. `Window.showPopup()` keeps
+  popup creation behind the platform contract; headless and unsupported
+  platforms retain the contained overlay fallback. Other flyouts should move
+  onto the same capability as their widget contracts mature.
 
 The goal is not another visual pass over these limitations. The goal is to
 complete the interaction and rendering foundations, then prove them through

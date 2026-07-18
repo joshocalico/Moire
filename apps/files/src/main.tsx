@@ -32,6 +32,7 @@ import {
   ContextMenuTrigger,
   ScrollArea,
   ContextMenu,
+  contextMenuSurfaceSize,
   OpenWithPicker,
   PathBar,
   themePalette,
@@ -42,6 +43,7 @@ import {
   type WindowSize,
   type IconName,
   type ContextMenuAction,
+  type PopupHandle,
   type BreadcrumbSegment,
 } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
@@ -62,6 +64,13 @@ type Entry = {
 };
 
 type Place = { id: string; label: string; path: string; icon: IconName };
+
+type ContextMenuRequest = {
+  x: number;
+  y: number;
+  title: string;
+  actions: ContextMenuAction[];
+};
 
 function home(): string {
   return os.homedir();
@@ -239,7 +248,11 @@ function actionIcon(icon?: string): IconName | undefined {
 }
 
 function FilesApp(
-  props: WindowSize & { onQuit: () => void; initialPath: string },
+  props: WindowSize & {
+    onQuit: () => void;
+    initialPath: string;
+    onShowContextMenu?: (request: ContextMenuRequest) => boolean;
+  },
 ): ReactNode {
   const pal = themePalette();
   const ui = getUiScaleFactor();
@@ -675,7 +688,15 @@ function FilesApp(
               }}
               onContextMenu={(event) => {
                 setSelected(-1);
-                setMenu({ kind: "background", x: event.x, y: event.y });
+                const request: ContextMenuRequest = {
+                  x: event.x,
+                  y: event.y,
+                  title: path.basename(cwd) || cwd,
+                  actions: backgroundContextActions(),
+                };
+                if (!props.onShowContextMenu?.(request)) {
+                  setMenu({ kind: "background", x: event.x, y: event.y });
+                }
               }}
             >
               <Surface x={0} y={0} width={contentW} height={bodyH} fill={pal.bg}>
@@ -707,7 +728,20 @@ function FilesApp(
                       onDoublePress={() => openEntry(entry)}
                       onContextMenu={(event) => {
                         setSelected(index);
-                        setMenu({ kind: "entry", entry, x: event.x, y: event.y });
+                        const request: ContextMenuRequest = {
+                          x: event.x,
+                          y: event.y,
+                          title: entry.name,
+                          actions: contextActions(entry),
+                        };
+                        if (!props.onShowContextMenu?.(request)) {
+                          setMenu({
+                            kind: "entry",
+                            entry,
+                            x: event.x,
+                            y: event.y,
+                          });
+                        }
                       }}
                     >
                       <GridItem
@@ -758,7 +792,20 @@ function FilesApp(
                       onDoublePress={() => openEntry(entry)}
                       onContextMenu={(event) => {
                         setSelected(index);
-                        setMenu({ kind: "entry", entry, x: event.x, y: event.y });
+                        const request: ContextMenuRequest = {
+                          x: event.x,
+                          y: event.y,
+                          title: entry.name,
+                          actions: contextActions(entry),
+                        };
+                        if (!props.onShowContextMenu?.(request)) {
+                          setMenu({
+                            kind: "entry",
+                            entry,
+                            x: event.x,
+                            y: event.y,
+                          });
+                        }
                       }}
                     >
                       <ListItem
@@ -841,10 +888,45 @@ async function main() {
     height: Math.round(540 * settings.uiScale),
     resizable: true,
   });
+  let activePopup: PopupHandle | null = null;
+  const showContextMenu = (request: ContextMenuRequest): boolean => {
+    activePopup?.destroy();
+    activePopup = null;
+    const popupSize = contextMenuSurfaceSize(request.actions, request.title);
+    let next: PopupHandle | null = null;
+    next = win.showPopup({
+      x: request.x,
+      y: request.y,
+      width: popupSize.width,
+      height: popupSize.height,
+      content: (surface) => (
+        <ContextMenu
+          viewportWidth={surface.width}
+          viewportHeight={surface.height}
+          x={0}
+          y={0}
+          title={request.title}
+          actions={request.actions}
+          surface
+          onDismiss={() => {
+            next?.destroy();
+            if (activePopup === next) activePopup = null;
+          }}
+        />
+      ),
+      onClose: () => {
+        if (activePopup === next) activePopup = null;
+      },
+    });
+    if (!next) return false;
+    activePopup = next;
+    return true;
+  };
   win.setContent((size) => (
     <FilesApp
       {...size}
       initialPath={desktop}
+      onShowContextMenu={showContextMenu}
       onQuit={() => {
         win.destroy();
         app.quit();

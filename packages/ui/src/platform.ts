@@ -130,6 +130,17 @@ export type PlatformWindowOpts = {
   resizable?: boolean;
 };
 
+export type PlatformPopupOpts = {
+  /** Native parent surface; popup coordinates are relative to its content. */
+  parent: PlatformWindow;
+  width: number;
+  height: number;
+  anchorX: number;
+  anchorY: number;
+  /** Request an exclusive popup grab for outside-click/Escape dismissal. */
+  grab?: boolean;
+};
+
 export interface PlatformWindow {
   setTitle(title: string): void;
   setSize(w: number, h: number): void;
@@ -146,6 +157,8 @@ export interface PlatformBackend {
   readonly name: string;
   connect(): Promise<void>;
   createWindow(opts: PlatformWindowOpts): PlatformWindow;
+  /** Optional native popup surface (xdg_popup on Wayland). */
+  createPopup?(opts: PlatformPopupOpts): PlatformWindow;
   pump(): void;
   disconnect(): void;
 }

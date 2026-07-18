@@ -41,6 +41,7 @@ import {
   modifiersFromPressed,
   type DndCapable,
   type PlatformBackend,
+  type PlatformPopupOpts,
   type PlatformWindow,
   type PlatformWindowOpts,
   type UiKeyEvent,
@@ -70,6 +71,9 @@ const BTN_RIGHT = 0x111;
 const BTN_MIDDLE = 0x112;
 const KEY_PRESSED = 1;
 const XDG_DECORATION_MODE_SERVER = 2;
+const XDG_ANCHOR_TOP_LEFT = 5;
+const XDG_CONSTRAINT_SLIDE_X = 1;
+const XDG_CONSTRAINT_SLIDE_Y = 2;
 
 const OP = {
   display_sync: 0,
@@ -86,10 +90,12 @@ const OP = {
   buffer_destroy: 0,
   seat_get_pointer: 0,
   seat_get_keyboard: 1,
+  xdg_wm_base_create_positioner: 1,
   xdg_wm_base_get_xdg_surface: 2,
   xdg_wm_base_pong: 3,
   xdg_surface_destroy: 0,
   xdg_surface_get_toplevel: 1,
+  xdg_surface_get_popup: 2,
   xdg_surface_set_window_geometry: 3,
   xdg_surface_ack_configure: 4,
   xdg_toplevel_destroy: 0,
@@ -97,6 +103,14 @@ const OP = {
   xdg_toplevel_set_app_id: 3,
   xdg_toplevel_set_max_size: 7,
   xdg_toplevel_set_min_size: 8,
+  xdg_positioner_destroy: 0,
+  xdg_positioner_set_size: 1,
+  xdg_positioner_set_anchor_rect: 2,
+  xdg_positioner_set_anchor: 3,
+  xdg_positioner_set_gravity: 4,
+  xdg_positioner_set_constraint_adjustment: 5,
+  xdg_popup_destroy: 0,
+  xdg_popup_grab: 1,
   xdg_decoration_manager_get_toplevel_decoration: 1,
   xdg_toplevel_decoration_set_mode: 1,
   // wl_data_device_manager
@@ -135,6 +149,8 @@ const EV = {
   xdg_surface_configure: 0,
   xdg_toplevel_configure: 0,
   xdg_toplevel_close: 1,
+  xdg_popup_configure: 0,
+  xdg_popup_done: 1,
   // wl_data_source events (compositor → client/source)
   data_source_send: 1,
   data_source_cancelled: 2,
@@ -843,6 +859,27 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     return win;
   }
 
+  createPopup(opts: PlatformPopupOpts): PlatformWindow {
+    if (!this.conn) throw new Error("WaylandPlatform not connected");
+    if (!(opts.parent instanceof WaylandWindow)) {
+      throw new Error("Wayland popup parent belongs to another platform");
+    }
+    const win = new WaylandWindow(
+      this,
+      {
+        title: "Popup",
+        appId: "moire.popup",
+        width: opts.width,
+        height: opts.height,
+        resizable: false,
+      },
+      opts,
+    );
+    this.windows.add(win);
+    win.create();
+    return win;
+  }
+
   pump(): void {
     // WaylandClientConn polls recvmsg on its timer.
   }
@@ -880,6 +917,14 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
   getDecoManagerId(): number {
     return this.decoManagerId;
+  }
+
+  getSeatId(): number {
+    return this.seatId;
+  }
+
+  getLastPointerSerial(): number {
+    return this.lastPointerSerial;
   }
 
   send(
@@ -1033,13 +1078,14 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       r.uint();
       const key = r.uint();
       const state = r.uint();
+      const repeat = state === KEY_PRESSED && this.pressedKeys.has(key);
       if (state === KEY_PRESSED) this.pressedKeys.add(key);
       else this.pressedKeys.delete(key);
       const modifiers = modifiersFromPressed(this.pressedKeys);
       const logical = keyFromEvdev(key, modifiers);
       const win = this.pointerFocus ?? [...this.windows][0] ?? null;
       win?.emitKey({
-        type: state === KEY_PRESSED ? "down" : "up",
+        type: repeat ? "repeat" : state === KEY_PRESSED ? "down" : "up",
         code: key,
         key: logical.key,
         text: logical.text,
@@ -1062,6 +1108,9 @@ class WaylandWindow implements PlatformWindow {
   private surfaceId = 0;
   private xdgSurfaceId = 0;
   private toplevelId = 0;
+  private popupId = 0;
+  private positionerId = 0;
+  private readonly popupOpts: PlatformPopupOpts | null;
   private configured = false;
   private slots: ShmSlot[] = [];
   private configureCbs: Array<(w: number, h: number) => void> = [];
@@ -1070,7 +1119,11 @@ class WaylandWindow implements PlatformWindow {
   private keyCbs: Array<(ev: UiKeyEvent) => void> = [];
   private alive = true;
 
-  constructor(platform: WaylandPlatform, opts: PlatformWindowOpts) {
+  constructor(
+    platform: WaylandPlatform,
+    opts: PlatformWindowOpts,
+    popupOpts: PlatformPopupOpts | null = null,
+  ) {
     this.platform = platform;
     this.title = opts.title;
     this.appId = opts.appId;
@@ -1079,6 +1132,7 @@ class WaylandWindow implements PlatformWindow {
     this.width = opts.width;
     this.height = opts.height;
     this.resizable = opts.resizable !== false;
+    this.popupOpts = popupOpts;
   }
 
   create(): void {
@@ -1103,6 +1157,12 @@ class WaylandWindow implements PlatformWindow {
         for (const cb of this.configureCbs) cb(this.width, this.height);
       }
     });
+
+    if (this.popupOpts) {
+      this.createPopupRole();
+      p.send(this.surfaceId, OP.surface_commit, () => {});
+      return;
+    }
 
     this.toplevelId = p.allocId();
     p.send(this.xdgSurfaceId, OP.xdg_surface_get_toplevel, (b) =>
@@ -1172,6 +1232,65 @@ class WaylandWindow implements PlatformWindow {
       });
     }
     p.send(this.surfaceId, OP.surface_commit, () => {});
+  }
+
+  private createPopupRole(): void {
+    const opts = this.popupOpts;
+    const parent = opts?.parent;
+    if (!opts || !(parent instanceof WaylandWindow)) return;
+    const p = this.platform;
+    this.positionerId = p.allocId();
+    p.send(p.getWmBaseId(), OP.xdg_wm_base_create_positioner, (b) =>
+      b.newId(this.positionerId),
+    );
+    p.send(this.positionerId, OP.xdg_positioner_set_size, (b) =>
+      b.int(this.width).int(this.height),
+    );
+    p.send(this.positionerId, OP.xdg_positioner_set_anchor_rect, (b) =>
+      b.int(opts.anchorX).int(opts.anchorY).int(1).int(1),
+    );
+    p.send(this.positionerId, OP.xdg_positioner_set_anchor, (b) =>
+      b.uint(XDG_ANCHOR_TOP_LEFT),
+    );
+    p.send(this.positionerId, OP.xdg_positioner_set_gravity, (b) =>
+      b.uint(XDG_ANCHOR_TOP_LEFT),
+    );
+    p.send(
+      this.positionerId,
+      OP.xdg_positioner_set_constraint_adjustment,
+      (b) => b.uint(XDG_CONSTRAINT_SLIDE_X | XDG_CONSTRAINT_SLIDE_Y),
+    );
+
+    this.popupId = p.allocId();
+    p.send(this.xdgSurfaceId, OP.xdg_surface_get_popup, (b) =>
+      b
+        .newId(this.popupId)
+        .object(parent.getXdgSurfaceId())
+        .object(this.positionerId),
+    );
+    p.setHandler(this.popupId, (opcode, r) => {
+      if (opcode === EV.xdg_popup_configure) {
+        r.int();
+        r.int();
+        const w = r.int();
+        const h = r.int();
+        if (w > 0) this.width = w;
+        if (h > 0) this.height = h;
+      } else if (opcode === EV.xdg_popup_done) {
+        for (const cb of this.closeCbs) cb();
+      }
+    });
+    if (opts.grab !== false && p.getSeatId()) {
+      p.send(this.popupId, OP.xdg_popup_grab, (b) =>
+        b.object(p.getSeatId()).uint(p.getLastPointerSerial()),
+      );
+    }
+    p.send(this.positionerId, OP.xdg_positioner_destroy, () => {});
+    this.positionerId = 0;
+  }
+
+  getXdgSurfaceId(): number {
+    return this.xdgSurfaceId;
   }
 
   setTitle(title: string): void {
@@ -1247,6 +1366,11 @@ class WaylandWindow implements PlatformWindow {
     const p = this.platform;
     for (const slot of this.slots) this.freeSlot(slot);
     this.slots = [];
+    if (this.popupId) {
+      p.send(this.popupId, OP.xdg_popup_destroy, () => {});
+      p.clearHandler(this.popupId);
+      this.popupId = 0;
+    }
     if (this.toplevelId) {
       p.send(this.toplevelId, OP.xdg_toplevel_destroy, () => {});
       p.clearHandler(this.toplevelId);

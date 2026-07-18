@@ -60,6 +60,20 @@ export function requestActiveWindowRedraw(): void {
 
 export type WindowContent = ReactNode | ((size: WindowSize) => ReactNode);
 
+export type PopupOptions = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  content: WindowContent;
+  onClose?: () => void;
+};
+
+export type PopupHandle = {
+  destroy(): void;
+  requestRedraw(): void;
+};
+
 export type WindowOpts = {
   title: string;
   appId?: string;
@@ -85,6 +99,8 @@ export class Window {
   private content: WindowContent = null;
   private root: ShellRoot = createShellRoot();
   private platformWin: PlatformWindow | null = null;
+  private backend: PlatformBackend | null = null;
+  private readonly popups = new Set<Window>();
   private hits: HitRegion[] = [];
   private dirty = true;
   private closed = false;
@@ -147,6 +163,7 @@ export class Window {
 
   /** Attach to a connected PlatformBackend. */
   mount(backend: PlatformBackend): void {
+    this.backend = backend;
     const pw = backend.createWindow({
       title: this.title,
       appId: this.appId,
@@ -154,6 +171,13 @@ export class Window {
       height: this.height,
       resizable: this.resizable,
     });
+    this.attachPlatformWindow(pw, true);
+  }
+
+  private attachPlatformWindow(
+    pw: PlatformWindow,
+    makeActive: boolean,
+  ): void {
     this.platformWin = pw;
     pw.onConfigure((w, h) => {
       const nextW = w > 0 ? w : this.width;
@@ -173,7 +197,50 @@ export class Window {
     });
     pw.onPointer((ev) => this.handlePointer(ev));
     pw.onKey((ev) => this.handleKey(ev));
-    activeWindowForHitTest = this;
+    if (makeActive) activeWindowForHitTest = this;
+  }
+
+  /** Open a native child popup when supported by the current platform. */
+  showPopup(opts: PopupOptions): PopupHandle | null {
+    const backend = this.backend;
+    const parent = this.platformWin;
+    if (!backend?.createPopup || !parent || this.closed) return null;
+
+    const popup = new Window({
+      title: "Popup",
+      appId: `${this.appId}.popup`,
+      width: opts.width,
+      height: opts.height,
+      resizable: false,
+    });
+    popup.backend = backend;
+    popup.setContent(opts.content);
+    const platformPopup = backend.createPopup({
+      parent,
+      width: opts.width,
+      height: opts.height,
+      anchorX: opts.x,
+      anchorY: opts.y,
+      grab: true,
+    });
+    popup.attachPlatformWindow(platformPopup, false);
+    this.popups.add(popup);
+
+    let destroyed = false;
+    const destroy = (notify: boolean) => {
+      if (destroyed) return;
+      destroyed = true;
+      this.popups.delete(popup);
+      popup.destroy();
+      if (notify) opts.onClose?.();
+      this.requestRedraw();
+    };
+    popup.onClose(() => destroy(true));
+
+    return {
+      destroy: () => destroy(false),
+      requestRedraw: () => popup.requestRedraw(),
+    };
   }
 
   /** Topmost hit region's `data` at window-local (x, y), or null. */
@@ -218,13 +285,21 @@ export class Window {
 
   /** Rebuild + present if dirty. */
   tick(): void {
+    this.tickFrame(true);
+    for (const popup of this.popups) popup.tickFrame(false);
+  }
+
+  private tickFrame(advanceMotions: boolean): void {
     if (this.closed || !this.platformWin) return;
 
     // Advance motions; mark dirty if anything is still moving.
     const now = Date.now();
     const dt = Math.min((now - this.lastTickMs) / 1000, 0.1);
     this.lastTickMs = now;
-    if (tickAllMotions(dt)) this.dirty = true;
+    if (advanceMotions && tickAllMotions(dt)) {
+      this.dirty = true;
+      for (const popup of this.popups) popup.dirty = true;
+    }
 
     if (!this.dirty) return;
     this.dirty = false;
@@ -246,12 +321,15 @@ export class Window {
   }
 
   destroy(): void {
+    for (const popup of [...this.popups]) popup.destroy();
+    this.popups.clear();
     this.closed = true;
     this.focusedHit?.onFocusChange?.(false);
     this.focusedHit = null;
     this.focusedId = null;
     this.platformWin?.destroy();
     this.platformWin = null;
+    this.backend = null;
     if (activeWindowForHitTest === this) activeWindowForHitTest = null;
   }
 
@@ -486,6 +564,22 @@ export class Window {
     }
     const focused = this.focusedHit;
     if (!focused) return;
+    const contextMenuKey =
+      ev.type === "down" &&
+      (ev.code === 139 || (ev.code === 68 && ev.modifiers.shift));
+    if (contextMenuKey && focused.onContextMenu) {
+      const localX = Math.max(0, focused.width - 8);
+      const localY = focused.height / 2;
+      focused.onContextMenu({
+        x: focused.x + localX,
+        y: focused.y + localY,
+        localX,
+        localY,
+        button: "right",
+      });
+      this.flushAndDirty();
+      return;
+    }
     const event: HitKeyEvent = {
       code: ev.code,
       key: ev.key,

@@ -33,6 +33,10 @@ import {
   PathBar,
   CollectionItem,
   ContextMenuTrigger,
+  ContextMenu,
+  contextMenuSurfaceSize,
+  type PlatformPopupOpts,
+  type PlatformWindow,
 } from "./index.js";
 import { HeadlessPlatform } from "./platforms/headless/index.js";
 import { notifyDragEnded } from "./widgets/dnd.js";
@@ -360,31 +364,114 @@ async function interactionOwnershipSmoke(): Promise<void> {
     timeMs: 5,
   });
   assert.equal(opens, 1, "focused collection item should activate with Enter");
+  platformWindow.injectKey({
+    type: "down",
+    code: 68,
+    key: "F10",
+    modifiers: { ...NO_MODIFIERS, shift: true },
+    timeMs: 6,
+  });
+  assert.equal(itemContexts, 2, "Shift+F10 should open the focused item menu");
+  platformWindow.injectKey({
+    type: "repeat",
+    code: 68,
+    key: "F10",
+    modifiers: { ...NO_MODIFIERS, shift: true },
+    timeMs: 7,
+  });
+  assert.equal(itemContexts, 2, "held context-menu keys must not reopen menus");
 
   platformWindow.injectPointer({
     type: "down",
     x: 20,
     y: 20,
     button: "left",
-    timeMs: 6,
+    timeMs: 8,
   });
   platformWindow.injectPointer({
     type: "move",
     x: 27,
     y: 20,
     button: "left",
-    timeMs: 7,
+    timeMs: 9,
   });
   platformWindow.injectPointer({
     type: "up",
     x: 27,
     y: 20,
     button: "left",
-    timeMs: 8,
+    timeMs: 10,
   });
   assert.equal(selections, 1, "crossing the drag threshold must suppress click");
 
   notifyDragEnded();
+  win.destroy();
+  backend.disconnect();
+}
+
+class PopupHeadlessPlatform extends HeadlessPlatform {
+  createPopup(opts: PlatformPopupOpts): PlatformWindow {
+    return this.createWindow({
+      title: "Popup",
+      appId: "smoke.popup",
+      width: opts.width,
+      height: opts.height,
+      resizable: false,
+    });
+  }
+}
+
+async function nativePopupLifecycleSmoke(): Promise<void> {
+  const backend = new PopupHeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Popup smoke", width: 240, height: 160 });
+  win.setContent(<Rect x={0} y={0} width={240} height={160} fill={0xff102030} />);
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+
+  const actions = [
+    { id: "open", label: "Open", onPress: () => {} },
+    {
+      id: "delete",
+      label: "Delete",
+      separatorBefore: true,
+      onPress: () => {},
+    },
+  ];
+  const size = contextMenuSurfaceSize(actions, "Example");
+  let closed = 0;
+  const popup = win.showPopup({
+    x: 225,
+    y: 145,
+    width: size.width,
+    height: size.height,
+    content: (surface) => (
+      <ContextMenu
+        viewportWidth={surface.width}
+        viewportHeight={surface.height}
+        x={0}
+        y={0}
+        title="Example"
+        actions={actions}
+        surface
+        onDismiss={() => {}}
+      />
+    ),
+    onClose: () => {
+      closed++;
+    },
+  });
+  assert.ok(popup, "popup-capable platform should create a child surface");
+  await Promise.resolve();
+  win.tick();
+
+  const popupWindow = backend.getWindows()[1];
+  assert.ok(popupWindow, "native popup should have its own platform window");
+  assert.equal(popupWindow.lastFrame?.byteLength, size.width * size.height * 4);
+  popupWindow.requestClose();
+  assert.equal(closed, 1, "popup_done should clean up and notify its owner once");
+
   win.destroy();
   backend.disconnect();
 }
@@ -526,6 +613,7 @@ async function main() {
   await textFieldInteractionSmoke();
   await pathBarInteractionSmoke();
   await interactionOwnershipSmoke();
+  await nativePopupLifecycleSmoke();
   const app = new Application({ platform: "headless" });
   const win = new Window({ title: "Smoke", width: 460, height: 600 });
   win.setContent(<SmokeApp onQuit={() => app.quit()} />);

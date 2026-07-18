@@ -5,13 +5,22 @@
  * PlatformBackend (wayland | headless; cocoa/win32 later).
  */
 export { Application, type ApplicationOpts } from "./application.js";
-export { Window, hitTestDropData, type WindowOpts, type WindowSize, type WindowContent } from "./window.js";
+export {
+  Window,
+  hitTestDropData,
+  type WindowOpts,
+  type WindowSize,
+  type WindowContent,
+  type PopupOptions,
+  type PopupHandle,
+} from "./window.js";
 export {
   createPlatformBackend,
   resolvePlatformKind,
   type PlatformBackend,
   type PlatformWindow,
   type PlatformWindowOpts,
+  type PlatformPopupOpts,
   type PlatformKind,
   type UiPointerEvent,
   type UiKeyEvent,
@@ -81,6 +90,7 @@ export {
   Menu,
   MenuItem,
   ContextMenu,
+  contextMenuSurfaceSize,
   OpenWithPicker,
   Pressable,
   ImageWidget,

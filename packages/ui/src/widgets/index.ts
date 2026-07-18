@@ -81,7 +81,11 @@ export type {
   PathBarProps,
 } from "./breadcrumbs.js";
 
-export { ContextMenu, OpenWithPicker } from "./context-menu.js";
+export {
+  ContextMenu,
+  OpenWithPicker,
+  contextMenuSurfaceSize,
+} from "./context-menu.js";
 export type {
   ContextMenuAction,
   ContextMenuProps,
