@@ -34,7 +34,9 @@ This makes `xdg-open <folder>` launch Files with that folder. The association is
 `xdg-desktop-portal` owns the public `org.freedesktop.portal.Desktop` API.
 For Moire sessions it routes `org.freedesktop.impl.portal.AppChooser` to the
 D-Bus-activatable `apps/portal` process; unsupported interfaces fall back to
-the GTK backend.
+the GTK backend. Native Files and shell requests use
+`org.moire.FileActivation1` on that same process so Open With always has one
+chromeless, draggable top-level window and association policy.
 
 ## Scripts
 

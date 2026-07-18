@@ -12,7 +12,7 @@ Package: `apps/files`.
 | Places sidebar | XDG user dirs plus persisted add/rename/remove favorites |
 | Open / navigate | Back/Forward history; Up; clickable/drop-aware breadcrumbs; editable validated path |
 | Default handler | `moire-files.desktop` for `inode/directory` |
-| Open With | Searchable Recommended/Other picker with app icons, keyboard selection, one-time launch, and default assignment |
+| Open With | D-Bus-activated top-level chooser with app icons, keyboard selection, one-time launch, and default assignment |
 | Context menu | Scoped action-provider registry; distinct item and background menus |
 | DnD into cwd | `DropTarget` + `text/uri-list` |
 | DnD out | `CollectionItem` composes narrow `useDragSource` behavior |
@@ -26,7 +26,7 @@ Files is a reference consumer of `@moire/ui`:
 - `Row` / `Column` / `ScrollArea` / `List` / `Grid` / `GridItem`
 - `CollectionItem` / `useDragSource` / `DropTarget` with one semantic item hit target
 - `PathBar` and real controlled `TextField` editing
-- `ContextMenu` / `OpenWithPicker` overlays and right-click scene events
+- `ContextMenu` overlays and right-click scene events; Open With is a separate portal-owned window
 - Theme tokens for chrome
 
 The current visual pass gives navigation, location, favorites, selection

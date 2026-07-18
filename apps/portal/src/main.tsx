@@ -1,4 +1,5 @@
 import React, { useState, type ReactNode } from "react";
+import { spawn } from "node:child_process";
 import {
   FileActivationService,
   type OpenWithModel,
@@ -18,6 +19,7 @@ import {
 const PORTAL_NAME = "org.freedesktop.impl.portal.desktop.moire";
 const PORTAL_PATH = "/org/freedesktop/portal/desktop";
 const APP_CHOOSER = "org.freedesktop.impl.portal.AppChooser";
+const FILE_ACTIVATION = "org.moire.FileActivation1";
 const REQUEST = "org.freedesktop.impl.portal.Request";
 
 type PortalOptions = Record<string, DbusVariant>;
@@ -25,6 +27,7 @@ type PortalOptions = Record<string, DbusVariant>;
 type ChoiceResult = {
   response: 0 | 1 | 2;
   choice?: string;
+  makeDefault?: boolean;
 };
 
 type ActiveChoice = {
@@ -42,6 +45,8 @@ function Chooser(
     initialModel: OpenWithModel;
     registerUpdater: (update: (ids: string[]) => void) => void;
     modelForIds: (ids: string[], selectedId: string | null) => OpenWithModel;
+    allowMakeDefault: boolean;
+    onDrag: () => void;
     finish: (result: ChoiceResult) => void;
   },
 ): ReactNode {
@@ -64,8 +69,12 @@ function Chooser(
       selectedId={selectedId}
       onSelect={setSelectedId}
       onOpen={(choice) => props.finish({ response: 0, choice })}
-      onMakeDefault={(choice) => props.finish({ response: 0, choice })}
-      allowMakeDefault={false}
+      onMakeDefault={(choice) =>
+        props.finish({ response: 0, choice, makeDefault: true })
+      }
+      allowMakeDefault={props.allowMakeDefault}
+      standalone
+      onDrag={props.onDrag}
       onDismiss={() => props.finish({ response: 1 })}
     />
   );
@@ -75,14 +84,16 @@ async function presentChooser(
   initialModel: OpenWithModel,
   modelForIds: (ids: string[], selectedId: string | null) => OpenWithModel,
   activate: (active: Omit<ActiveChoice, "handle">) => void,
+  allowMakeDefault = true,
 ): Promise<ChoiceResult> {
   const app = new Application();
   const win = new Window({
     title: `Open ${initialModel.fileName} With`,
     appId: "org.moire.Portal",
     width: 680,
-    height: 640,
-    resizable: false,
+    height: 520,
+    resizable: true,
+    decorated: false,
   });
   let settled = false;
   let update: ((ids: string[]) => void) | null = null;
@@ -114,6 +125,8 @@ async function presentChooser(
         }
       }}
       modelForIds={modelForIds}
+      allowMakeDefault={allowMakeDefault}
+      onDrag={() => win.beginMove()}
       finish={finish}
     />
   ));
@@ -136,8 +149,11 @@ async function presentChooser(
 
 async function main(): Promise<void> {
   const bus = await SessionBus.connect();
-  const activation = new FileActivationService(() => {
-    throw new Error("The AppChooser backend selects applications; it does not launch them");
+  const activation = new FileActivationService(({ command }) => {
+    spawn("/bin/sh", ["-lc", command], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
   });
   let active: ActiveChoice | null = null;
 
@@ -189,7 +205,12 @@ async function main(): Promise<void> {
               },
             );
             const results: Record<string, DbusVariant> = {};
-            if (result.choice) results.choice = variant("s", result.choice);
+            if (result.choice) {
+              if (result.makeDefault) {
+                activation.setDefaultApplication(mimeType, result.choice);
+              }
+              results.choice = variant("s", result.choice);
+            }
             const token = option(options, "activation_token", "");
             if (token) results.activation_token = variant("s", token);
             return { body: [result.response, results] };
@@ -206,6 +227,66 @@ async function main(): Promise<void> {
           const [handle, ids] = body as [string, string[]];
           if (active?.handle === handle) active.replaceChoices(ids);
           return {};
+        },
+      },
+    },
+  });
+
+  bus.exportObject(PORTAL_PATH, {
+    name: FILE_ACTIVATION,
+    methods: {
+      OpenWith: {
+        inSignature: "so",
+        outSignature: "u",
+        handler: async ({ body }) => {
+          const [filePath, handle] = body as [string, string];
+          if (active) return { body: [2] };
+          const initialModel = activation.openWithModel(filePath);
+          const modelForIds = (
+            applicationIds: string[],
+            selectedId: string | null,
+          ) =>
+            activation.applicationChoiceModel({
+              fileName: initialModel.fileName,
+              mimeType: initialModel.mimeType,
+              applicationIds,
+              selectedId,
+            });
+          const removeRequest = bus.exportObject(handle, {
+            name: REQUEST,
+            methods: {
+              Close: {
+                inSignature: "",
+                outSignature: "",
+                handler: () => {
+                  active?.cancel();
+                  return {};
+                },
+              },
+            },
+          });
+          try {
+            const result = await presentChooser(
+              initialModel,
+              modelForIds,
+              (request) => {
+                active = { handle, ...request };
+              },
+            );
+            if (result.response === 0 && result.choice) {
+              if (result.makeDefault) {
+                activation.setDefaultApplication(
+                  initialModel.mimeType,
+                  result.choice,
+                );
+              }
+              activation.openWith(filePath, result.choice);
+            }
+            return { body: [result.response] };
+          } finally {
+            removeRequest();
+            active = null;
+          }
         },
       },
     },

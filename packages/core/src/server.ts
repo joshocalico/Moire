@@ -2325,13 +2325,19 @@ export class CompositorServer {
     }
 
     // Geometric SSD hit-test — refresh list so positions match latest moves.
+    // SSD chrome is painted in its window's stack slot, so a newer client
+    // surface can occlude it. Match that paint order for input: an obscured
+    // titlebar must never drag, close, or resize through the surface above it.
     if (ev.value === 1 && !popupHit) {
-      this.ssdWindows = this.collectSsdWindows();
-      const action = this.hitSsd(this.cursorX, this.cursorY);
-      if (action) {
-        if (this.hasGrabbedPopup()) this.dismissGrabbedPopups();
-        this.handleSsdAction(action);
-        return;
+      const coveringClient = this.hitTest(this.cursorX, this.cursorY);
+      if (!coveringClient) {
+        this.ssdWindows = this.collectSsdWindows();
+        const action = this.hitSsd(this.cursorX, this.cursorY);
+        if (action) {
+          if (this.hasGrabbedPopup()) this.dismissGrabbedPopups();
+          this.handleSsdAction(action);
+          return;
+        }
       }
     }
 

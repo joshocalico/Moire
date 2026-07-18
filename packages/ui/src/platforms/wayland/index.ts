@@ -70,6 +70,7 @@ const BTN_LEFT = 0x110;
 const BTN_RIGHT = 0x111;
 const BTN_MIDDLE = 0x112;
 const KEY_PRESSED = 1;
+const XDG_DECORATION_MODE_CLIENT = 1;
 const XDG_DECORATION_MODE_SERVER = 2;
 const XDG_ANCHOR_TOP_LEFT = 5;
 const XDG_CONSTRAINT_SLIDE_X = 1;
@@ -101,6 +102,7 @@ const OP = {
   xdg_toplevel_destroy: 0,
   xdg_toplevel_set_title: 2,
   xdg_toplevel_set_app_id: 3,
+  xdg_toplevel_move: 5,
   xdg_toplevel_set_max_size: 7,
   xdg_toplevel_set_min_size: 8,
   xdg_positioner_destroy: 0,
@@ -1118,6 +1120,7 @@ class WaylandWindow implements PlatformWindow {
   private pointerCbs: Array<(ev: UiPointerEvent) => void> = [];
   private keyCbs: Array<(ev: UiKeyEvent) => void> = [];
   private alive = true;
+  private readonly decorated: boolean;
 
   constructor(
     platform: WaylandPlatform,
@@ -1132,6 +1135,7 @@ class WaylandWindow implements PlatformWindow {
     this.width = opts.width;
     this.height = opts.height;
     this.resizable = opts.resizable !== false;
+    this.decorated = opts.decorated !== false;
     this.popupOpts = popupOpts;
   }
 
@@ -1225,7 +1229,11 @@ class WaylandWindow implements PlatformWindow {
         b.newId(decoId).object(this.toplevelId),
       );
       p.send(decoId, OP.xdg_toplevel_decoration_set_mode, (b) =>
-        b.uint(XDG_DECORATION_MODE_SERVER),
+        b.uint(
+          this.decorated
+            ? XDG_DECORATION_MODE_SERVER
+            : XDG_DECORATION_MODE_CLIENT,
+        ),
       );
       p.setHandler(decoId, () => {
         // configure — mode already requested
@@ -1338,6 +1346,16 @@ class WaylandWindow implements PlatformWindow {
 
   onConfigure(cb: (w: number, h: number) => void): void {
     this.configureCbs.push(cb);
+  }
+
+  beginMove(): void {
+    if (!this.alive || !this.toplevelId) return;
+    const seatId = this.platform.getSeatId();
+    const serial = this.platform.getLastPointerSerial();
+    if (!seatId || !serial) return;
+    this.platform.send(this.toplevelId, OP.xdg_toplevel_move, (b) =>
+      b.object(seatId).uint(serial),
+    );
   }
 
   onClose(cb: () => void): void {

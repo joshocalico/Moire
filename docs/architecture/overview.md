@@ -55,10 +55,12 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 
 Both share widgets/tokens where possible; shell re-exports or duplicates thin wrappers (`packages/shell/src/widgets.tsx`).
 
-Files and the desktop shell host `FileActivationService` directly today. The
-portal hosts the same policy behind the session bus, so sandboxed and third-party
-apps reach the canonical chooser through `org.freedesktop.portal.OpenURI` while
-native Moire surfaces do not fork MIME/default/icon logic.
+Files and the desktop shell use `FileActivationService` for default opening and
+call `org.moire.FileActivation1.OpenWith` for explicit application selection.
+The D-Bus-activated portal process owns the one top-level chooser surface,
+launches native requests, and updates MIME defaults after an explicit user
+action. Sandboxed and third-party apps reach the same UI through
+`org.freedesktop.portal.OpenURI` and the AppChooser backend adapter.
 
 ## Design rules
 

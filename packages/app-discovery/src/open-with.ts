@@ -182,12 +182,28 @@ export class FileActivationService {
     makeDefault = false,
   ): FileActivation | null {
     const mimeType = this.mimeDatabase.mimeTypeForPath(filePath);
-    const application = this.applications.find((app) => app.id === desktopId);
+    const application = this.applicationForId(desktopId);
     if (!application) return null;
     if (makeDefault) {
-      this.mimeDatabase.setDefaultApplication(mimeType, desktopId);
+      this.mimeDatabase.setDefaultApplication(mimeType, application.id);
     }
     return this.activate(filePath, mimeType, application);
+  }
+
+  setDefaultApplication(mimeType: string, applicationId: string): boolean {
+    const application = this.applicationForId(applicationId);
+    if (!application) return false;
+    this.mimeDatabase.setDefaultApplication(mimeType, application.id);
+    return true;
+  }
+
+  private applicationForId(applicationId: string): DesktopEntry | undefined {
+    const normalized = applicationId.replace(/\.desktop$/, "");
+    return this.applications.find(
+      (app) =>
+        app.id === applicationId ||
+        app.id.replace(/\.desktop$/, "") === normalized,
+    );
   }
 
   private activate(

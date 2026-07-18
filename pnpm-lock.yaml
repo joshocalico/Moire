@@ -133,6 +133,10 @@ importers:
         version: 5.9.3
 
   packages/app-discovery:
+    dependencies:
+      '@moire/dbus':
+        specifier: workspace:*
+        version: link:../dbus
     devDependencies:
       '@types/node':
         specifier: ^22.10.0

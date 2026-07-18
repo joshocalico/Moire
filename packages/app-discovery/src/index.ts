@@ -29,3 +29,7 @@ export {
   type OpenWithChoice,
   type OpenWithModel,
 } from "./open-with.js";
+export {
+  FileActivationPortalClient,
+  type FileChooserResponse,
+} from "./portal-client.js";

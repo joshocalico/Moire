@@ -66,6 +66,31 @@ try {
   const reply = await choose;
   assert.equal(reply.signature, "ua{sv}");
   assert.equal(reply.body?.[0], 2, "request cancellation did not end the chooser");
+
+  const nativeHandle =
+    "/org/freedesktop/portal/desktop/request/smoke/native_chooser";
+  const nativeChoose = bus.call({
+    destination: "org.freedesktop.impl.portal.desktop.moire",
+    path: "/org/freedesktop/portal/desktop",
+    interface: "org.moire.FileActivation1",
+    member: "OpenWith",
+    signature: "so",
+    body: [path.join(root, "README.md"), nativeHandle],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await bus.call({
+    destination: "org.freedesktop.impl.portal.desktop.moire",
+    path: nativeHandle,
+    interface: "org.freedesktop.impl.portal.Request",
+    member: "Close",
+  });
+  const nativeReply = await nativeChoose;
+  assert.equal(nativeReply.signature, "u");
+  assert.equal(
+    nativeReply.body?.[0],
+    2,
+    "native chooser cancellation did not end the top-level picker",
+  );
   console.log("[portal/smoke] ok");
 } finally {
   bus.close();

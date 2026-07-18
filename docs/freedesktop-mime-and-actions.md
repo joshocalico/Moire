@@ -3,9 +3,9 @@
 Moire's association and activation layer lives in `@moire/app-discovery`.
 `FileActivationService` is the canonical source for MIME lookup, recommended
 and other applications, default state, icon resolution, duplicate removal,
-desktop-entry command expansion, launching, and “Always Use”. Files and the
-desktop shell consume its complete `OpenWithModel`; neither constructs picker
-choices independently.
+desktop-entry command expansion, launching, and “Always Use”. The portal owns
+its complete `OpenWithModel`; Files and the desktop shell call the native
+chooser interface instead of constructing or embedding picker choices.
 
 ## Resolution inputs
 
@@ -46,7 +46,12 @@ introspection. It is deliberately independent of the compositor and renderer.
 `org.freedesktop.impl.portal.desktop.moire` and implements
 `org.freedesktop.impl.portal.AppChooser`. The backend exports cancellable
 request objects, accepts live choice updates, and renders the same
-`OpenWithPicker` and application metadata as Files and the shell. The session
+`OpenWithPicker` and application metadata for every caller. Its standalone,
+resizable top-level surface deliberately requests no server decoration. A
+client-rendered header drag region starts the compositor's native interactive
+move, while Cancel and Escape close the focused task. An explicit “Set as
+Default” updates `mimeapps.list` before the selected application is returned or
+launched. The session
 installs its `.portal`, `moire-portals.conf`, and D-Bus service files into the
 active XDG data home. `xdg-desktop-portal` remains the sandbox-facing frontend;
 interfaces Moire does not implement continue to use the GTK backend.

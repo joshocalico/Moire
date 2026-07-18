@@ -266,6 +266,10 @@ export type OpenWithPickerProps = {
   onMakeDefault: (id: string) => void;
   /** Portal choosers select an app but do not change MIME defaults directly. */
   allowMakeDefault?: boolean;
+  /** Fill a dedicated client window instead of drawing a modal overlay card. */
+  standalone?: boolean;
+  /** Start an interactive move from the standalone title area. */
+  onDrag?: () => void;
   onDismiss: () => void;
 };
 
@@ -273,10 +277,18 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
   const pal = themePalette();
   const [query, setQuery] = useState("");
   const [scrollY, setScrollY] = useState(0);
-  const width = Math.min(620, Math.max(460, props.viewportWidth - 48));
-  const height = Math.min(600, Math.max(380, props.viewportHeight - 40));
-  const x = Math.floor((props.viewportWidth - width) / 2);
-  const y = Math.max(20, Math.floor((props.viewportHeight - height) / 2));
+  const width = props.standalone
+    ? props.viewportWidth
+    : Math.min(620, Math.max(460, props.viewportWidth - 48));
+  const height = props.standalone
+    ? props.viewportHeight
+    : Math.min(600, Math.max(380, props.viewportHeight - 40));
+  const x = props.standalone
+    ? 0
+    : Math.floor((props.viewportWidth - width) / 2);
+  const y = props.standalone
+    ? 0
+    : Math.max(20, Math.floor((props.viewportHeight - height) / 2));
   const rowH = 56;
   const headingH = 28;
   const listTop = 136;
@@ -455,23 +467,38 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
       width={props.viewportWidth}
       height={props.viewportHeight}
     >
-      <Rect
-        x={0}
-        y={0}
-        width={props.viewportWidth}
-        height={props.viewportHeight}
-        fill={pal.overlay}
-        onPress={props.onDismiss}
-        onContextMenu={props.onDismiss}
-      />
-      <LayerSurface
-        x={x + 5}
-        y={y + 6}
-        width={width}
-        height={height}
-        fill={pal.rimShade}
-        radius={pal.radiusMd}
-      />
+      {props.standalone ? (
+        <Rect
+          x={0}
+          y={0}
+          width={props.viewportWidth}
+          height={props.viewportHeight}
+          fill={0x01000000}
+          onPointerDown={() => {}}
+          onContextMenu={() => {}}
+        />
+      ) : null}
+      {!props.standalone ? (
+        <Rect
+          x={0}
+          y={0}
+          width={props.viewportWidth}
+          height={props.viewportHeight}
+          fill={pal.overlay}
+          onPress={props.onDismiss}
+          onContextMenu={props.onDismiss}
+        />
+      ) : null}
+      {!props.standalone ? (
+        <LayerSurface
+          x={x + 5}
+          y={y + 6}
+          width={width}
+          height={height}
+          fill={pal.rimShade}
+          radius={pal.radiusMd}
+        />
+      ) : null}
       <LayerSurface
         x={x}
         y={y}
@@ -479,8 +506,19 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
         height={height}
         fill={pal.panel}
         radius={pal.radiusMd}
+        clip={props.standalone}
       >
         <Rect x={0} y={0} width={width} height={3} fill={pal.accentLine} />
+        {props.standalone && props.onDrag ? (
+          <Rect
+            x={0}
+            y={3}
+            width={width}
+            height={76}
+            fill={0x01000000}
+            onPointerDown={props.onDrag}
+          />
+        ) : null}
         <Icon x={24} y={22} name="app" size={48} color={pal.accent} />
         <Text
           x={88}

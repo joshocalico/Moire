@@ -66,7 +66,7 @@ try {
   assert.equal(initial.choices[1]?.recommended, false);
   assert.equal(initial.selectedId, "editor.desktop");
 
-  service.openWith(filePath, "writer.desktop", true);
+  service.openWith(filePath, "writer", true);
   assert.match(launches[0] ?? "", /^writer /);
   const updated = service.openWithModel(filePath);
   assert.equal(

@@ -85,6 +85,8 @@ export type WindowOpts = {
    * Default true.
    */
   resizable?: boolean;
+  /** When false, the client owns its chrome and no SSD titlebar is requested. */
+  decorated?: boolean;
 };
 
 /**
@@ -94,6 +96,7 @@ export class Window {
   readonly title: string;
   readonly appId: string;
   readonly resizable: boolean;
+  readonly decorated: boolean;
   private width: number;
   private height: number;
   private content: WindowContent = null;
@@ -138,6 +141,7 @@ export class Window {
     this.width = opts.width ?? 480;
     this.height = opts.height ?? 360;
     this.resizable = opts.resizable !== false;
+    this.decorated = opts.decorated !== false;
   }
 
   setContent(node: WindowContent): void {
@@ -170,8 +174,14 @@ export class Window {
       width: this.width,
       height: this.height,
       resizable: this.resizable,
+      decorated: this.decorated,
     });
     this.attachPlatformWindow(pw, true);
+  }
+
+  /** Start a compositor-owned move from a client-rendered drag region. */
+  beginMove(): void {
+    this.platformWin?.beginMove();
   }
 
   private attachPlatformWindow(

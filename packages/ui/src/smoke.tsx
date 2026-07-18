@@ -283,7 +283,12 @@ async function pathBarInteractionSmoke(): Promise<void> {
 async function openWithPickerInteractionSmoke(): Promise<void> {
   const backend = new HeadlessPlatform();
   await backend.connect();
-  const win = new Window({ title: "Open With smoke", width: 620, height: 520 });
+  const win = new Window({
+    title: "Open With smoke",
+    width: 620,
+    height: 520,
+    decorated: false,
+  });
   let selected = "editor.desktop";
   let opened = "";
   let dismissed = false;
@@ -332,6 +337,8 @@ async function openWithPickerInteractionSmoke(): Promise<void> {
           opened = id;
         }}
         onMakeDefault={() => {}}
+        standalone
+        onDrag={() => win.beginMove()}
         onDismiss={() => {
           dismissed = true;
         }}
@@ -345,6 +352,19 @@ async function openWithPickerInteractionSmoke(): Promise<void> {
   win.tick();
   const platformWindow = backend.getWindows()[0];
   assert.ok(platformWindow);
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 320,
+    y: 42,
+    button: "left",
+    timeMs: 0,
+  });
+  assert.equal(
+    platformWindow.moveRequests,
+    1,
+    "Standalone picker header should begin an interactive window move",
+  );
 
   platformWindow.injectKey({
     type: "down",

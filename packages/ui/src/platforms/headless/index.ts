@@ -51,6 +51,8 @@ export class HeadlessWindow implements PlatformWindow {
   private pointerCbs: Array<(ev: UiPointerEvent) => void> = [];
   private keyCbs: Array<(ev: UiKeyEvent) => void> = [];
   private alive = true;
+  /** Number of synthetic interactive move requests, exposed for tests. */
+  moveRequests = 0;
 
   constructor(opts: PlatformWindowOpts) {
     this.title = opts.title;
@@ -66,6 +68,10 @@ export class HeadlessWindow implements PlatformWindow {
     this.width = Math.max(1, w);
     this.height = Math.max(1, h);
     this.emitConfigure(this.width, this.height);
+  }
+
+  beginMove(): void {
+    if (this.alive) this.moveRequests++;
   }
 
   present(pixels: Uint8Array, width: number, height: number): void {

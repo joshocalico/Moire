@@ -34,7 +34,6 @@ import {
   ScrollArea,
   ContextMenu,
   contextMenuSurfaceSize,
-  OpenWithPicker,
   PathBar,
   themePalette,
   getUiScaleFactor,
@@ -50,6 +49,7 @@ import {
 import { loadSettings } from "@moire/prefs";
 import {
   ContextActionRegistry,
+  FileActivationPortalClient,
   FileActivationService,
   type FileActionContext,
 } from "@moire/app-discovery";
@@ -260,8 +260,6 @@ function FilesApp(
     | { kind: "background"; x: number; y: number }
     | null
   >(null);
-  const [pickerEntry, setPickerEntry] = useState<Entry | null>(null);
-  const [pickerSelection, setPickerSelection] = useState<string | null>(null);
   const [placeList, setPlaceList] = useState<FilePlace[]>(loadPlaces);
   const [editingPlaces, setEditingPlaces] = useState(false);
   const [renamingPlaceId, setRenamingPlaceId] = useState<string | null>(null);
@@ -277,6 +275,7 @@ function FilesApp(
       }),
     [],
   );
+  const activationPortal = useMemo(() => new FileActivationPortalClient(), []);
   const mimeDb = activation.mimeDatabase;
 
   const navigateTo = useCallback((destination: string) => {
@@ -343,12 +342,16 @@ function FilesApp(
 
   const showOpenWith = useCallback(
     (e: Entry) => {
-      const model = activation.openWithModel(e.path);
-      setPickerEntry(e);
-      setPickerSelection(model.selectedId);
       setMenu(null);
+      void activationPortal
+        .openWith(e.path)
+        .then(() => {
+          activation.refreshAssociations();
+          setTick((current) => current + 1);
+        })
+        .catch((error) => console.error("[files] Open With failed", error));
     },
-    [activation],
+    [activation, activationPortal],
   );
 
   const actionRegistry = useMemo(() => {
@@ -525,16 +528,6 @@ function FilesApp(
   };
 
   const selectedEntry = entries[selected] ?? null;
-  const pickerModel = pickerEntry
-    ? activation.openWithModel(pickerEntry.path)
-    : null;
-  const finishOpenWith = (desktopId: string, makeDefault: boolean) => {
-    if (!pickerEntry) return;
-    if (!activation.openWith(pickerEntry.path, desktopId, makeDefault)) return;
-    setPickerEntry(null);
-    setPickerSelection(null);
-  };
-
   const toolbarH = Math.round(62 * ui);
   const bodyH = Math.max(1, props.height - toolbarH - 1);
   const contentW = Math.max(1, props.width - sideW - 1);
@@ -1031,23 +1024,6 @@ function FilesApp(
               : backgroundContextActions()
           }
           onDismiss={() => setMenu(null)}
-        />
-      ) : null}
-      {pickerEntry && pickerModel ? (
-        <OpenWithPicker
-          viewportWidth={props.width}
-          viewportHeight={props.height}
-          fileName={pickerModel.fileName}
-          mimeType={pickerModel.mimeType}
-          choices={pickerModel.choices}
-          selectedId={pickerSelection}
-          onSelect={setPickerSelection}
-          onOpen={(id) => finishOpenWith(id, false)}
-          onMakeDefault={(id) => finishOpenWith(id, true)}
-          onDismiss={() => {
-            setPickerEntry(null);
-            setPickerSelection(null);
-          }}
         />
       ) : null}
     </Surface>

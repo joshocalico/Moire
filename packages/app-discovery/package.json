@@ -11,6 +11,9 @@
     "build": "tsc -p tsconfig.json",
     "smoke": "tsx src/open-with.smoke.ts"
   },
+  "dependencies": {
+    "@moire/dbus": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",

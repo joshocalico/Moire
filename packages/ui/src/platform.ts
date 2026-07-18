@@ -128,6 +128,8 @@ export type PlatformWindowOpts = {
   height: number;
   /** When false, request a fixed size (min==max) from the compositor. Default true. */
   resizable?: boolean;
+  /** Ask the compositor for server chrome. Default true. */
+  decorated?: boolean;
 };
 
 export type PlatformPopupOpts = {
@@ -144,6 +146,8 @@ export type PlatformPopupOpts = {
 export interface PlatformWindow {
   setTitle(title: string): void;
   setSize(w: number, h: number): void;
+  /** Begin an interactive compositor move using the current pointer press. */
+  beginMove(): void;
   /** Present full ARGB8888 frame (row-major, stride = width * 4). */
   present(pixels: Uint8Array, width: number, height: number): void;
   onConfigure(cb: (w: number, h: number) => void): void;
