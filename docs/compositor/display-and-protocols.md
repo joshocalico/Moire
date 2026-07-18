@@ -48,7 +48,9 @@ output framebuffer, and presents each CRTC. Runtime connector additions and
 removals add/remove `wl_output` globals; if the original primary is unplugged,
 DRM-fd ownership transfers to a surviving output before its framebuffer is
 released. Maximized and fullscreen windows target the output containing the
-window rather than spanning the combined desktop.
+window rather than spanning the combined desktop. EDID data supplies a stable
+identity (with a connector fallback), so confirmed positions, primary selection
+and modes do not depend on connector enumeration order.
 
 ## D-Bus display service
 
@@ -58,7 +60,10 @@ The compositor owns `org.moire.Display1` at `/org/moire/Display1`:
 | --- | --- | --- |
 | `GetModes` | `→ (as modes, s current, s preferred)` | Enumerate stable mode IDs |
 | `GetOutputInfo` | `→ (s name, i widthMm, i heightMm)` | Read live connector identity and physical size |
-| `ListOutputs` | `→ a(ssiiii)` | Read `(name, mode, x, y, width, height)` for every active output |
+| `ListOutputs` | `→ a(ssssssiiiiib)` | Read stable identity, labels, mode, geometry, scale and primary state |
+| `SetLayout` | `(a(siib) outputs) → b changed` | Begin a whole-desktop position/primary trial |
+| `ConfirmLayout` | `→ b confirmed` | Keep and persist the pending layout by display identity |
+| `RevertLayout` | `→ b reverted` | Restore the entire previous layout immediately |
 | `SetMode` | `(s mode) → b changed` | Begin a 15-second live mode trial |
 | `ConfirmMode` | `→ b confirmed` | Keep and persist the pending mode |
 | `RevertMode` | `→ b reverted` | Immediately restore the previous mode |
@@ -89,9 +94,11 @@ IME expectations.
 
 ## Current boundary
 
-Simultaneously active outputs on one DRM card now work as a horizontal logical
-desktop. User-editable placement, saved per-monitor profiles, rotation,
-per-output scale, mirror mode and cross-GPU handoff remain future work. The
+Simultaneously active outputs on one DRM card form an editable logical desktop.
+Settings provides a draggable monitor map and primary selection; core validates
+the complete non-overlapping layout and owns a 15-second rollback transaction.
+Rotation, effective per-output scale, mirror mode and cross-GPU handoff remain
+future work. The
 renderer remains independent: software currently crops one logical scene into
 per-output targets; a future EGL backend can consume the same layout contract.
 

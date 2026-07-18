@@ -100,19 +100,61 @@ async function main() {
         },
         ListOutputs: {
           inSignature: "",
-          outSignature: "a(ssiiii)",
+          outSignature: "a(ssssssiiiiib)",
           handler: () => ({
             body: [
-              server.getDisplayOutputs().map(({ kms, x, y }) => [
+              server.getDisplayOutputs().map(({ kms, x, y, scale120, primary }) => [
+                kms.identity.id,
                 kms.connectorName,
+                kms.identity.make,
+                kms.identity.model,
+                kms.identity.serial,
                 kms.currentModeId,
                 x,
                 y,
                 kms.width,
                 kms.height,
+                scale120,
+                primary,
               ]),
             ],
           }),
+        },
+        SetLayout: {
+          inSignature: "a(siib)",
+          outSignature: "b",
+          handler: ({ body }) => {
+            const rows = Array.isArray(body[0]) ? body[0] : [];
+            const result = server.beginDisplayLayoutChange(
+              rows.filter(Array.isArray).map((row) => ({
+                id: String(row[0] ?? ""),
+                x: Number(row[1] ?? 0),
+                y: Number(row[2] ?? 0),
+                primary: row[3] === true,
+              })),
+            );
+            return { body: [result.changed] };
+          },
+        },
+        ConfirmLayout: {
+          inSignature: "",
+          outSignature: "b",
+          handler: () => {
+            if (!server.confirmDisplayLayout()) return { body: [false] };
+            const displayOutputs = Object.fromEntries(
+              server.getDisplayOutputs().map(({ kms, x, y, scale120, primary }) => [
+                kms.identity.id,
+                { x, y, scale120, primary, mode: kms.currentModeId },
+              ]),
+            );
+            saveSettings({ ...loadSettings(), displayOutputs });
+            return { body: [true] };
+          },
+        },
+        RevertLayout: {
+          inSignature: "",
+          outSignature: "b",
+          handler: () => ({ body: [server.revertDisplayLayout()] }),
         },
         SetMode: {
           inSignature: "s",
@@ -130,9 +172,26 @@ async function main() {
           handler: () => {
             const confirmedMode = server.confirmDisplayMode();
             if (confirmedMode) {
+              const current = loadSettings();
+              const output = server
+                .getDisplayOutputs()
+                .find(({ kms }) => kms === server.getKms());
+              const displayOutputs = output
+                ? {
+                    ...current.displayOutputs,
+                    [output.kms.identity.id]: {
+                      x: output.x,
+                      y: output.y,
+                      scale120: output.scale120,
+                      primary: output.primary,
+                      mode: confirmedMode,
+                    },
+                  }
+                : current.displayOutputs;
               saveSettings({
-                ...loadSettings(),
+                ...current,
                 displayMode: confirmedMode,
+                displayOutputs,
               });
             }
             return { body: [confirmedMode != null] };

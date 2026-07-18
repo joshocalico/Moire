@@ -13,6 +13,15 @@ export type WallpaperSettings = {
   preset?: string;
 };
 
+export type DisplayOutputSettings = {
+  x: number;
+  y: number;
+  /** Fractional scale in Wayland's 120ths (120 = 100%). */
+  scale120: number;
+  primary: boolean;
+  mode: string | null;
+};
+
 export type MoireSettings = {
   /** Prefer dark tokens + GTK dark scheme. */
   dark: boolean;
@@ -22,6 +31,8 @@ export type MoireSettings = {
   uiScale: number;
   /** Confirmed DRM mode id (`WIDTHxHEIGHT@MILLIHZ`); null uses preferred. */
   displayMode: string | null;
+  /** Confirmed layout keyed by EDID identity (connector identity as fallback). */
+  displayOutputs: Record<string, DisplayOutputSettings>;
   /** Last requested sink volume 0..1 (also applied via wpctl/pactl when available). */
   volume: number;
   /** Show file icons on the desktop background. */
@@ -35,6 +46,7 @@ export const DEFAULT_SETTINGS: MoireSettings = {
   notifications: true,
   uiScale: 1,
   displayMode: null,
+  displayOutputs: {},
   volume: 0.7,
   showDesktopIcons: true,
   wallpaper: null,
@@ -83,10 +95,44 @@ export function normalizeSettings(s: MoireSettings): MoireSettings {
       /^\d+x\d+@\d+$/.test(s.displayMode)
         ? s.displayMode
         : null,
+    displayOutputs: normalizeDisplayOutputs(s.displayOutputs),
     volume: clamp(Number(s.volume) || 0, 0, 1),
     showDesktopIcons: s.showDesktopIcons !== false,
     wallpaper,
   };
+}
+
+function normalizeDisplayOutputs(
+  value: unknown,
+): Record<string, DisplayOutputSettings> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, DisplayOutputSettings> = {};
+  for (const [id, raw] of Object.entries(value)) {
+    if (!id || !raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const item = raw as Partial<DisplayOutputSettings>;
+    const mode =
+      typeof item.mode === "string" && /^\d+x\d+@\d+$/.test(item.mode)
+        ? item.mode
+        : null;
+    result[id] = {
+      x: Math.round(clamp(Number(item.x) || 0, 0, 65_535)),
+      y: Math.round(clamp(Number(item.y) || 0, 0, 65_535)),
+      scale120: Math.round(clamp(Number(item.scale120) || 120, 120, 240)),
+      primary: item.primary === true,
+      mode,
+    };
+  }
+  const entries = Object.values(result);
+  if (entries.length > 0 && !entries.some((item) => item.primary)) {
+    entries[0]!.primary = true;
+  } else if (entries.filter((item) => item.primary).length > 1) {
+    let found = false;
+    for (const item of entries) {
+      if (item.primary && found) item.primary = false;
+      found ||= item.primary;
+    }
+  }
+  return result;
 }
 
 export function saveSettings(settings: MoireSettings): void {

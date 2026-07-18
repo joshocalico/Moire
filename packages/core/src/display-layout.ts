@@ -17,6 +17,36 @@ export function horizontalLayout<T extends Omit<OutputGeometry, "x" | "y">>(
   });
 }
 
+/** Shift a user-arranged layout so its top-left extent is the desktop origin. */
+export function normalizeLayoutOrigin<T extends OutputGeometry>(
+  outputs: readonly T[],
+): T[] {
+  if (outputs.length === 0) return [];
+  const minX = Math.min(...outputs.map((output) => output.x));
+  const minY = Math.min(...outputs.map((output) => output.y));
+  return outputs.map((output) => ({
+    ...output,
+    x: Math.round(output.x - minX),
+    y: Math.round(output.y - minY),
+  }));
+}
+
+export function layoutsOverlap(outputs: readonly OutputGeometry[]): boolean {
+  for (let a = 0; a < outputs.length; a++) {
+    for (let b = a + 1; b < outputs.length; b++) {
+      const left = outputs[a]!;
+      const right = outputs[b]!;
+      if (
+        left.x < right.x + right.width &&
+        left.x + left.width > right.x &&
+        left.y < right.y + right.height &&
+        left.y + left.height > right.y
+      ) return true;
+    }
+  }
+  return false;
+}
+
 export function desktopBounds(
   outputs: readonly OutputGeometry[],
 ): { width: number; height: number } {

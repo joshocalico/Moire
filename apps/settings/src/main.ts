@@ -21,6 +21,8 @@ import {
   themePalette,
   setUiScaleFactor,
   getUiScaleFactor,
+  DisplayArrangement,
+  type DisplayArrangementItem,
   type WindowSize,
 } from "@moire/ui";
 import {
@@ -37,6 +39,9 @@ type DisplayController = DisplayState & {
   setMode: (modeId: string) => Promise<boolean>;
   confirmMode: () => Promise<boolean>;
   revertMode: () => Promise<boolean>;
+  setLayout: (outputs: ConnectedOutput[]) => Promise<boolean>;
+  confirmLayout: () => Promise<boolean>;
+  revertLayout: () => Promise<boolean>;
 };
 
 type DisplayState = {
@@ -50,12 +55,18 @@ type DisplayState = {
 };
 
 type ConnectedOutput = {
+  id: string;
   name: string;
+  make: string;
+  model: string;
+  serial: string;
   mode: string;
   x: number;
   y: number;
   width: number;
   height: number;
+  scale120: number;
+  primary: boolean;
 };
 
 type ParsedDisplayMode = {
@@ -103,6 +114,14 @@ function SettingsApp(
   const [connectedOutputs, setConnectedOutputs] = useState(
     props.display?.outputs ?? [],
   );
+  const [selectedOutputId, setSelectedOutputId] = useState(
+    props.display?.outputs.find((output) => output.primary)?.id ??
+      props.display?.outputs[0]?.id ?? "",
+  );
+  const [pendingDisplayLayout, setPendingDisplayLayout] = useState<{
+    previous: ConnectedOutput[];
+    deadlineMs: number;
+  } | null>(null);
   const [selectedResolution, setSelectedResolution] = useState(
     resolutionForMode(props.display?.current ?? ""),
   );
@@ -130,6 +149,9 @@ function SettingsApp(
       volume,
       uiScale: uiScaleFromSlider(scale),
       displayMode: displayMode || props.initial.displayMode,
+      // Display layout is persisted by the compositor after confirmation.
+      // Re-read it so an unrelated Appearance save never erases that state.
+      displayOutputs: loadSettings().displayOutputs,
       showDesktopIcons,
       wallpaper,
       ...patch,
@@ -201,6 +223,17 @@ function SettingsApp(
   }, [pendingDisplayMode]);
 
   useEffect(() => {
+    if (!pendingDisplayLayout) return;
+    const delay = Math.max(0, pendingDisplayLayout.deadlineMs - Date.now());
+    const timer = setTimeout(() => {
+      setConnectedOutputs(pendingDisplayLayout.previous);
+      setPendingDisplayLayout(null);
+      setStatus("Display arrangement reverted automatically");
+    }, delay + 100);
+    return () => clearTimeout(timer);
+  }, [pendingDisplayLayout]);
+
+  useEffect(() => {
     const display = props.display;
     if (!display) return;
     let disposed = false;
@@ -246,6 +279,17 @@ function SettingsApp(
   for (let index = 0; index < resolutions.length; index += 2) {
     resolutionRows.push(resolutions.slice(index, index + 2));
   }
+  const arrangementItems: DisplayArrangementItem[] = connectedOutputs.map(
+    (output) => ({
+      id: output.id,
+      label: output.model || output.name,
+      x: output.x,
+      y: output.y,
+      width: output.width,
+      height: output.height,
+      primary: output.primary,
+    }),
+  );
 
   const requestDisplayMode = (modeId: string) => {
     if (!props.display || modeId === displayMode) return;
@@ -288,6 +332,38 @@ function SettingsApp(
       setSelectedResolution(resolutionForMode(previous));
       setPendingDisplayMode(null);
       setStatus(`Reverted to ${displayModeLabel(previous)}`);
+    });
+  };
+
+  const requestDisplayLayout = (next: ConnectedOutput[]) => {
+    if (!props.display) return;
+    const previous = connectedOutputs;
+    setStatus("Applying display arrangement…");
+    void props.display.setLayout(next).then((changed) => {
+      if (!changed) return;
+      setConnectedOutputs(next);
+      setPendingDisplayLayout({ previous, deadlineMs: Date.now() + 15_000 });
+      setStatus("");
+    }).catch((error: unknown) => {
+      setStatus(`Arrangement rejected: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+
+  const confirmDisplayLayout = () => {
+    void props.display?.confirmLayout().then((confirmed) => {
+      if (!confirmed) return;
+      setPendingDisplayLayout(null);
+      setStatus("Display arrangement saved");
+    });
+  };
+
+  const revertDisplayLayout = () => {
+    if (!pendingDisplayLayout) return;
+    const previous = pendingDisplayLayout.previous;
+    void props.display?.revertLayout().then(() => {
+      setConnectedOutputs(previous);
+      setPendingDisplayLayout(null);
+      setStatus("Display arrangement reverted");
     });
   };
 
@@ -436,6 +512,75 @@ function SettingsApp(
               width: innerW,
               height: labelH,
             }),
+            connectedOutputs.length > 0
+              ? createElement(DisplayArrangement, {
+                  width: Math.min(Math.round(420 * ui), innerW),
+                  height: Math.round(132 * ui),
+                  items: arrangementItems,
+                  selectedId: selectedOutputId,
+                  onSelect: setSelectedOutputId,
+                  onChange: pendingDisplayLayout ? undefined : (items: DisplayArrangementItem[]) => {
+                    const positions = new Map(items.map((item) => [item.id, item]));
+                    requestDisplayLayout(connectedOutputs.map((output) => {
+                      const item = positions.get(output.id);
+                      return item ? { ...output, x: item.x, y: item.y } : output;
+                    }));
+                  },
+                })
+              : null,
+            connectedOutputs.length > 1
+              ? createElement(
+                  Row,
+                  { width: innerW, height: btnH, gap: Math.round(8 * ui) },
+                  createElement(Button, {
+                    width: Math.round(148 * ui),
+                    height: btnH,
+                    label: connectedOutputs.find((output) => output.id === selectedOutputId)?.primary
+                      ? "Primary display"
+                      : "Make primary",
+                    variant: connectedOutputs.find((output) => output.id === selectedOutputId)?.primary
+                      ? "primary"
+                      : "secondary",
+                    disabled: pendingDisplayLayout != null,
+                    onPress: () => requestDisplayLayout(connectedOutputs.map((output) => ({
+                      ...output,
+                      primary: output.id === selectedOutputId,
+                    }))),
+                  }),
+                  createElement(Label, {
+                    text: "Drag displays to match their physical arrangement",
+                    color: pal.muted,
+                    width: Math.max(1, innerW - Math.round(160 * ui)),
+                    height: labelH,
+                  }),
+                )
+              : null,
+            pendingDisplayLayout
+              ? createElement(
+                  Row,
+                  { width: innerW, height: btnH, gap: Math.round(8 * ui) },
+                  createElement(Button, {
+                    width: Math.round(104 * ui),
+                    height: btnH,
+                    label: "Keep",
+                    variant: "primary",
+                    onPress: confirmDisplayLayout,
+                  }),
+                  createElement(Button, {
+                    width: Math.round(104 * ui),
+                    height: btnH,
+                    label: "Revert",
+                    variant: "secondary",
+                    onPress: revertDisplayLayout,
+                  }),
+                  createElement(Label, {
+                    text: "Reverts automatically after 15 seconds",
+                    color: pal.accent,
+                    width: Math.max(1, innerW - Math.round(224 * ui)),
+                    height: labelH,
+                  }),
+                )
+              : null,
             createElement(Label, {
               text: "Resolution",
               fontWeight: "medium",
@@ -756,12 +901,18 @@ async function connectDisplayController(): Promise<{
         outputs: outputRows
           .filter((row): row is unknown[] => Array.isArray(row))
           .map((row) => ({
-            name: String(row[0] ?? "Display"),
-            mode: String(row[1] ?? ""),
-            x: Number(row[2] ?? 0),
-            y: Number(row[3] ?? 0),
-            width: Number(row[4] ?? 0),
-            height: Number(row[5] ?? 0),
+            id: String(row[0] ?? ""),
+            name: String(row[1] ?? "Display"),
+            make: String(row[2] ?? ""),
+            model: String(row[3] ?? "Display"),
+            serial: String(row[4] ?? ""),
+            mode: String(row[5] ?? ""),
+            x: Number(row[6] ?? 0),
+            y: Number(row[7] ?? 0),
+            width: Number(row[8] ?? 0),
+            height: Number(row[9] ?? 0),
+            scale120: Number(row[10] ?? 120),
+            primary: row[11] === true,
           })),
       };
     };
@@ -784,6 +935,19 @@ async function connectDisplayController(): Promise<{
         setMode: (modeId) => callBoolean("SetMode", [modeId]),
         confirmMode: () => callBoolean("ConfirmMode"),
         revertMode: () => callBoolean("RevertMode"),
+        setLayout: async (outputs) => {
+          const result = await bus.call({
+            destination: "org.moire.Display1",
+            path: "/org/moire/Display1",
+            interface: "org.moire.Display1",
+            member: "SetLayout",
+            signature: "a(siib)",
+            body: [outputs.map((output) => [output.id, output.x, output.y, output.primary])],
+          });
+          return result.body?.[0] === true;
+        },
+        confirmLayout: () => callBoolean("ConfirmLayout"),
+        revertLayout: () => callBoolean("RevertLayout"),
       },
     };
   } catch (error) {
@@ -806,7 +970,7 @@ async function main() {
     title: "Settings",
     appId: "org.moire.Settings",
     width: Math.round(480 * ui),
-    height: Math.round(480 * ui),
+    height: Math.round(640 * ui),
     resizable: false,
   });
   win.setContent((size) =>

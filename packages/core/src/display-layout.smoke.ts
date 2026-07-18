@@ -3,6 +3,8 @@ import {
   copySceneToOutput,
   desktopBounds,
   horizontalLayout,
+  layoutsOverlap,
+  normalizeLayoutOrigin,
   outputContainingPoint,
   outputsIntersectingRect,
   outputMembershipDelta,
@@ -24,6 +26,24 @@ assert.deepEqual(
   ],
 );
 assert.deepEqual(desktopBounds(outputs), { width: 9, height: 3 });
+assert.deepEqual(
+  normalizeLayoutOrigin([
+    { id: "left", x: -4, y: 2, width: 4, height: 3 },
+    { id: "right", x: 0, y: -1, width: 3, height: 3 },
+  ]).map(({ id, x, y }) => ({ id, x, y })),
+  [
+    { id: "left", x: 0, y: 3 },
+    { id: "right", x: 4, y: 0 },
+  ],
+);
+assert.equal(layoutsOverlap(outputs), false);
+assert.equal(
+  layoutsOverlap([
+    { id: "a", x: 0, y: 0, width: 4, height: 4 },
+    { id: "b", x: 3, y: 3, width: 2, height: 2 },
+  ]),
+  true,
+);
 assert.equal(outputContainingPoint(outputs, 4, 2)?.id, "DP-1");
 assert.equal(outputContainingPoint(outputs, 7, 2), null);
 assert.equal(replacementOwner(outputs, 0)?.id, "DP-1");

@@ -86,6 +86,11 @@ export {
   OpenWithPicker,
   contextMenuSurfaceSize,
 } from "./context-menu.js";
+export { DisplayArrangement } from "./display-arrangement.js";
+export type {
+  DisplayArrangementItem,
+  DisplayArrangementProps,
+} from "./display-arrangement.js";
 export type {
   ContextMenuAction,
   ContextMenuProps,

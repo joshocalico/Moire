@@ -44,6 +44,8 @@ import {
   copySceneToOutput,
   desktopBounds,
   horizontalLayout,
+  layoutsOverlap,
+  normalizeLayoutOrigin,
   outputContainingPoint,
   outputsIntersectingRect,
   outputMembershipDelta,
@@ -916,6 +918,15 @@ export type DisplayOutput = {
   kms: KmsOutput;
   x: number;
   y: number;
+  scale120: number;
+  primary: boolean;
+};
+
+export type DisplayLayoutRequest = {
+  id: string;
+  x: number;
+  y: number;
+  primary: boolean;
 };
 
 export class CompositorServer {
@@ -1023,6 +1034,11 @@ export class CompositorServer {
     deadlineMs: number;
     timer: NodeJS.Timeout;
   } | null = null;
+  private pendingDisplayLayout: {
+    previous: DisplayLayoutRequest[];
+    deadlineMs: number;
+    timer: NodeJS.Timeout;
+  } | null = null;
   /** Kernel DRM events plus a slow reconciliation poll for virtual GPUs. */
   private drmHotplugMonitor: DrmHotplugMonitor | null = null;
   private displayProbeTimer: NodeJS.Timeout | null = null;
@@ -1051,10 +1067,11 @@ export class CompositorServer {
 
   async start(cardPath?: string): Promise<void> {
     fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
+    const displaySettings = loadSettings();
     const requestedMode =
-      process.env.MOIRE_MODE ?? loadSettings().displayMode ?? undefined;
+      process.env.MOIRE_MODE ?? displaySettings.displayMode ?? undefined;
     this.kms = openKmsOutput(cardPath, requestedMode);
-    this.outputs = [{ kms: this.kms, x: 0, y: 0 }];
+    this.outputs = [{ kms: this.kms, x: 0, y: 0, scale120: 120, primary: true }];
     const connected = listDrmConnectors().filter(
       (connector) =>
         connector.cardPath === this.kms!.cardPath &&
@@ -1071,7 +1088,7 @@ export class CompositorServer {
           usedCrtcs,
         );
         usedCrtcs.add(output.crtcId);
-        this.outputs.push({ kms: output, x: 0, y: 0 });
+        this.outputs.push({ kms: output, x: 0, y: 0, scale120: 120, primary: false });
       } catch (error) {
         console.warn(
           `[output] could not activate connector ${connector.connectorId}:`,
@@ -1079,7 +1096,14 @@ export class CompositorServer {
         );
       }
     }
+    for (const output of this.outputs) {
+      const savedMode = displaySettings.displayOutputs[output.kms.identity.id]?.mode;
+      if (savedMode && output.kms.modes.some((mode) => mode.id === savedMode)) {
+        setKmsMode(output.kms, savedMode);
+      }
+    }
     this.rebuildOutputLayout();
+    this.applySavedOutputLayout();
     while (this.outputGlobalNames.length < this.outputs.length) {
       const name = this.nextGlobalName++;
       this.outputGlobalNames.push(name);
@@ -1265,6 +1289,10 @@ export class CompositorServer {
     if (this.pendingDisplayMode) {
       clearTimeout(this.pendingDisplayMode.timer);
       this.pendingDisplayMode = null;
+    }
+    if (this.pendingDisplayLayout) {
+      clearTimeout(this.pendingDisplayLayout.timer);
+      this.pendingDisplayLayout = null;
     }
     if (this.dragWatchdog) {
       clearInterval(this.dragWatchdog);
@@ -1576,7 +1604,7 @@ export class CompositorServer {
       (right, current) => Math.max(right, current.x + current.kms.width),
       0,
     );
-    const layout = { kms: output, x, y: 0 };
+    const layout = { kms: output, x, y: 0, scale120: 120, primary: this.outputs.length === 0 };
     this.outputs.push(layout);
     const name = this.nextGlobalName++;
     this.outputGlobalNames.push(name);
@@ -1616,6 +1644,127 @@ export class CompositorServer {
     }
     this.stage = null;
     this.outputStages.clear();
+  }
+
+  private applySavedOutputLayout(): void {
+    const saved = loadSettings().displayOutputs;
+    if (!saved || Object.keys(saved).length === 0) return;
+    let matched = 0;
+    for (const output of this.outputs) {
+      const item = saved[output.kms.identity.id];
+      if (!item) continue;
+      output.x = item.x;
+      output.y = item.y;
+      output.scale120 = 120;
+      output.primary = item.primary;
+      matched++;
+    }
+    if (!matched) return;
+    if (!this.outputs.some((output) => output.primary)) {
+      this.outputs[0]!.primary = true;
+    }
+    let foundPrimary = false;
+    for (const output of this.outputs) {
+      if (output.primary && foundPrimary) output.primary = false;
+      foundPrimary ||= output.primary;
+    }
+    const normalized = normalizeLayoutOrigin(this.outputs.map((output) => ({
+      ...output,
+      id: output.kms.identity.id,
+      width: output.kms.width,
+      height: output.kms.height,
+    })));
+    if (layoutsOverlap(normalized)) {
+      this.rebuildOutputLayout();
+      return;
+    }
+    normalized.forEach((item, index) => {
+      this.outputs[index]!.x = item.x;
+      this.outputs[index]!.y = item.y;
+    });
+  }
+
+  getDisplayLayout(): DisplayLayoutRequest[] {
+    return this.outputs.map((output) => ({
+      id: output.kms.identity.id,
+      x: output.x,
+      y: output.y,
+      primary: output.primary,
+    }));
+  }
+
+  beginDisplayLayoutChange(
+    requested: readonly DisplayLayoutRequest[],
+    timeoutMs = 15_000,
+  ): { changed: boolean; deadlineMs: number } {
+    if (this.pendingDisplayLayout) this.revertDisplayLayout();
+    const previous = this.getDisplayLayout();
+    const byId = new Map(requested.map((item) => [item.id, item]));
+    if (
+      byId.size !== this.outputs.length ||
+      this.outputs.some((output) => !byId.has(output.kms.identity.id))
+    ) {
+      throw new Error("Display layout must include every connected output");
+    }
+    const arranged = normalizeLayoutOrigin(this.outputs.map((output) => {
+      const item = byId.get(output.kms.identity.id)!;
+      return {
+        id: item.id,
+        x: Math.round(item.x),
+        y: Math.round(item.y),
+        width: output.kms.width,
+        height: output.kms.height,
+      };
+    }));
+    if (layoutsOverlap(arranged)) throw new Error("Displays cannot overlap");
+    const requestedPrimary = requested.filter((item) => item.primary);
+    if (requestedPrimary.length !== 1) {
+      throw new Error("Choose exactly one primary display");
+    }
+    let changed = false;
+    arranged.forEach((item, index) => {
+      const output = this.outputs[index]!;
+      const primary = requestedPrimary[0]!.id === item.id;
+      changed ||=
+        output.x !== item.x ||
+        output.y !== item.y ||
+        output.primary !== primary;
+      output.x = item.x;
+      output.y = item.y;
+      output.primary = primary;
+    });
+    if (!changed) return { changed: false, deadlineMs: 0 };
+    this.publishDisplayGeometry("layout trial");
+    const deadlineMs = Date.now() + timeoutMs;
+    const timer = setTimeout(() => this.revertDisplayLayout(), timeoutMs);
+    timer.unref?.();
+    this.pendingDisplayLayout = { previous, deadlineMs, timer };
+    return { changed: true, deadlineMs };
+  }
+
+  confirmDisplayLayout(): boolean {
+    const pending = this.pendingDisplayLayout;
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    this.pendingDisplayLayout = null;
+    return true;
+  }
+
+  revertDisplayLayout(): boolean {
+    const pending = this.pendingDisplayLayout;
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    this.pendingDisplayLayout = null;
+    const byId = new Map(pending.previous.map((item) => [item.id, item]));
+    for (const output of this.outputs) {
+      const item = byId.get(output.kms.identity.id);
+      if (!item) continue;
+      output.x = item.x;
+      output.y = item.y;
+      output.primary = item.primary;
+    }
+    this.publishDisplayGeometry("layout reverted");
+    return true;
   }
 
   getKmsSize(): { width: number; height: number } {
@@ -1769,7 +1918,12 @@ export class CompositorServer {
       clearTimeout(this.pendingDisplayMode.timer);
       this.pendingDisplayMode = null;
     }
+    if (this.pendingDisplayLayout) {
+      clearTimeout(this.pendingDisplayLayout.timer);
+      this.pendingDisplayLayout = null;
+    }
     this.rebuildOutputLayout();
+    this.applySavedOutputLayout();
     this.publishDisplayGeometry(
       `layout ${this.outputs.map((output) => output.kms.connectorName).join(" + ")}`,
     );
@@ -3501,7 +3655,9 @@ export class CompositorServer {
         })),
         centerX,
         centerY,
-      )?.output ?? this.outputs[0]!
+      )?.output ??
+      this.outputs.find((output) => output.primary) ??
+      this.outputs[0]!
     );
   }
 

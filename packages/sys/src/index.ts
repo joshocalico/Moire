@@ -4,6 +4,10 @@
 export { isLinux, assertLinux } from "./platform.js";
 export { listDrmConnectors, type DrmConnectorInfo } from "./drm.js";
 export {
+  readDisplayIdentity,
+  type DisplayIdentity,
+} from "./display-identity.js";
+export {
   watchDrmHotplug,
   type DrmHotplugEvent,
   type DrmHotplugMonitor,

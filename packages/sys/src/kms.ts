@@ -1,6 +1,10 @@
 import koffi from "koffi";
 import { assertLinux } from "./platform.js";
 import {
+  readDisplayIdentity,
+  type DisplayIdentity,
+} from "./display-identity.js";
+import {
   closeFd,
   MAP_SHARED,
   mmap,
@@ -131,6 +135,7 @@ export type KmsOutput = {
   cardPath: string;
   connectorId: number;
   connectorName: string;
+  identity: DisplayIdentity;
   physicalWidthMm: number;
   physicalHeightMm: number;
   crtcId: number;
@@ -478,6 +483,10 @@ export function openKmsOutput(
             conn.connector_type,
             conn.connector_type_id,
           ),
+          identity: readDisplayIdentity(
+            cardPath,
+            connectorName(conn.connector_type, conn.connector_type_id),
+          ),
           physicalWidthMm: conn.mmWidth,
           physicalHeightMm: conn.mmHeight,
           crtcId,
@@ -571,6 +580,7 @@ export function refreshKmsOutputModes(out: KmsOutput): KmsOutputRefresh {
       conn.connector_type,
       conn.connector_type_id,
     );
+    out.identity = readDisplayIdentity(out.cardPath, out.connectorName);
     out.physicalWidthMm = conn.mmWidth;
     out.physicalHeightMm = conn.mmHeight;
     out.modes = nextModeData.map(({ raw: _raw, ...mode }) => mode);
@@ -684,6 +694,7 @@ export function switchKmsConnector(
     const previous = {
       connectorId: out.connectorId,
       connectorName: out.connectorName,
+      identity: out.identity,
       physicalWidthMm: out.physicalWidthMm,
       physicalHeightMm: out.physicalHeightMm,
       crtcId: out.crtcId,
@@ -698,6 +709,7 @@ export function switchKmsConnector(
       conn.connector_type,
       conn.connector_type_id,
     );
+    out.identity = readDisplayIdentity(out.cardPath, out.connectorName);
     out.physicalWidthMm = conn.mmWidth;
     out.physicalHeightMm = conn.mmHeight;
     out.crtcId = crtcId;
@@ -715,6 +727,7 @@ export function switchKmsConnector(
     } catch (error) {
       out.connectorId = previous.connectorId;
       out.connectorName = previous.connectorName;
+      out.identity = previous.identity;
       out.physicalWidthMm = previous.physicalWidthMm;
       out.physicalHeightMm = previous.physicalHeightMm;
       out.crtcId = previous.crtcId;
@@ -972,6 +985,10 @@ export function openAdditionalKmsOutput(
       connectorName: connectorName(
         conn.connector_type,
         conn.connector_type_id,
+      ),
+      identity: readDisplayIdentity(
+        primary.cardPath,
+        connectorName(conn.connector_type, conn.connector_type_id),
       ),
       physicalWidthMm: conn.mmWidth,
       physicalHeightMm: conn.mmHeight,

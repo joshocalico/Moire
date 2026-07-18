@@ -107,6 +107,7 @@ export {
   DEFAULT_SETTINGS,
   type MoireSettings,
   type WallpaperSettings,
+  type DisplayOutputSettings,
 } from "./store.js";
 export {
   applySettings,

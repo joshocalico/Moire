@@ -11,6 +11,7 @@ Do **not** use a separate `prefs.json` for Moire UI settings — Settings, shell
 | `dark` | `boolean` | | Dark preference (GTK + theme pick) |
 | `uiScale` | `number` | `1` | Clamped 0.75–2; fonts and Moire UI |
 | `displayMode` | mode id \| `null` | `null` | Last confirmed `WIDTHxHEIGHT@MILLIHZ`; null uses DRM preferred mode |
+| `displayOutputs` | identity → output settings | `{}` | Per-monitor position, primary state, scale metadata and confirmed mode |
 | `volume` | `number` | `0.7` | Sink volume 0..1 (`wpctl` / `pactl` when available) |
 | `notifications` | `boolean` | | Prefs field; toast daemon not shipped |
 | `showDesktopIcons` | `boolean` | `true` | When false, `paintDesktop` no-ops |
@@ -35,6 +36,12 @@ When non-null:
 | `preset` | Named atmosphere / gradient preset when used |
 
 Exact union matches `WallpaperSettings` in `packages/prefs`.
+
+### Display output object
+
+Keys are stable EDID identities when available and connector identities as a
+fallback. Each value contains `x`, `y`, `scale120` (120 = 100%), `primary`, and
+the confirmed `mode`. Invalid or duplicate-primary data is normalized on load.
 
 ## Desktop layout
 

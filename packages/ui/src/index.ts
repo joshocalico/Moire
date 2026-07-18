@@ -103,6 +103,7 @@ export {
   setDndBridge,
   useDragSource,
   usePalette,
+  DisplayArrangement,
 } from "./widgets/index.js";
 export type {
   BoxProps,
@@ -148,4 +149,6 @@ export type {
   DragSourceController,
   CollectionItemProps,
   ContextMenuTriggerProps,
+  DisplayArrangementItem,
+  DisplayArrangementProps,
 } from "./widgets/index.js";
