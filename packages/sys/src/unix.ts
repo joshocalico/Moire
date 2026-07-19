@@ -150,6 +150,7 @@ export class WaylandClientConn extends EventEmitter {
   private sendControl: unknown = null;
   private sendControlCap = 0;
   private disposed = false;
+  private closeEmitted = false;
 
   constructor(sock: net.Socket) {
     super();
@@ -168,10 +169,16 @@ export class WaylandClientConn extends EventEmitter {
     sock.on("close", () => {
       clearInterval(timer);
       // Let ClientSession tear down (may still send) before freeing scratch.
-      this.emit("close");
+      this.notifyClose();
       this.freeScratch();
     });
     sock.on("error", (err) => this.emit("error", err));
+  }
+
+  private notifyClose(): void {
+    if (this.closeEmitted) return;
+    this.closeEmitted = true;
+    this.emit("close");
   }
 
   private freeScratch(): void {
@@ -218,7 +225,8 @@ export class WaylandClientConn extends EventEmitter {
         const chunk = this.recvmsgOnce();
         if (!chunk) break;
         if (chunk.data.length === 0 && chunk.fds.length === 0) {
-          this.emit("close");
+          this.notifyClose();
+          this.sock.destroy();
           break;
         }
         this.emit("message", chunk);
@@ -283,8 +291,8 @@ export class WaylandClientConn extends EventEmitter {
   }
 
   /** Send a Wayland message, optionally with SCM_RIGHTS fds. */
-  send(data: Buffer, fds: number[] = []): void {
-    if (this.disposed) throw new Error("sendmsg on closed Wayland socket");
+  send(data: Buffer, fds: number[] = []): boolean {
+    if (this.disposed || this.closeEmitted) return false;
     const dataPtr = this.ensureSendData(data.length);
     if (data.length > 0) {
       const dest = new Uint8Array(
@@ -333,8 +341,15 @@ export class WaylandClientConn extends EventEmitter {
 
     const n = Number(this.sendmsg(this.fd, this.sendMsg, 0));
     if (n < 0) {
-      throw new Error(`sendmsg failed (n=${n}, fds=${fds.length})`);
+      // A peer can disappear between the compositor choosing recipients and
+      // the syscall. Treat that as a client disconnect, never a compositor
+      // failure. notifyClose is guarded because destroy() causes a later
+      // net.Socket close event too.
+      this.notifyClose();
+      this.sock.destroy();
+      return false;
     }
+    return true;
   }
 
   close(): void {

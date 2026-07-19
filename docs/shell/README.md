@@ -34,6 +34,7 @@ createShell(spawn: ShellSpawn, onTaskAction?: (task: TaskWindowAction) => void):
 | `paintSsdWindow(…, window)` | One titlebar after that window’s buffers (preferred) |
 | `paintSsd(…, windows)` | All SSD bars (legacy / batch) |
 | `hitSsd(x, y)` | Move / close / maximize / minimize action or null |
+| `onSsdPointerMotion(event)` | Hover feedback after compositor z-order/occlusion checks |
 | `onKey` | Super → launcher; launcher keyboard; returns consumed |
 | `onPointerButton` | Panel / launcher hits |
 | `onPointerAxis` | Launcher list scrolling |
@@ -49,6 +50,16 @@ createShell(spawn: ShellSpawn, onTaskAction?: (task: TaskWindowAction) => void):
 | `desktopDragLabel?()` | Label while a desktop icon drag/return animation is active |
 
 Do not reach past this bridge into shell internals from `packages/core`.
+
+Each decorated window keeps a persistent React titlebar root. Its raster strip
+is cached while idle and rerasterized only while theme, title, focus,
+maximize/restore state, or control motion changes. This preserves eased hover
+feedback without tying SSD rendering to the software framebuffer; an EGL
+backend consumes the same scene/raster contract. Rounded top corners, the focus
+jewel, restrained inactive controls, and semantic minimize/restore/close glyphs
+all live in `TitleBar.tsx`. The compositor decides whether chrome is actually
+visible before forwarding hover, preventing feedback through an occluding
+window.
 
 Task buttons keep creation order even when window z-order changes. Pressing a
 minimized task restores it, pressing an inactive task focuses it, and pressing

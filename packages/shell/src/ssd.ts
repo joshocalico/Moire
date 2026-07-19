@@ -13,6 +13,7 @@ export type SsdWindowInfo = {
   contentH: number;
   title: string;
   focused: boolean;
+  maximized: boolean;
 };
 
 export type SsdAction =

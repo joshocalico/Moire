@@ -669,6 +669,7 @@ export type SsdWindowInfo = {
   contentH: number;
   title: string;
   focused: boolean;
+  maximized: boolean;
 };
 
 export type SsdAction =
@@ -719,6 +720,8 @@ export type CompositorShell = {
     y: number;
   }): boolean;
   onPointerMotion?(ev: { x: number; y: number }): boolean;
+  /** Hover feedback for visible SSD chrome after compositor occlusion checks. */
+  onSsdPointerMotion?(ev: { x: number; y: number; inside: boolean }): boolean;
   onPointerAxis?(ev: { x: number; y: number; deltaY: number }): boolean;
   setTasks?(tasks: TaskWindowInfo[]): void;
   /** Desktop icon clicks when no client surface is under the cursor. */
@@ -1232,7 +1235,16 @@ export class CompositorServer {
     this.socket.on("connection", (conn: WaylandClientConn) => {
       const session = new ClientSession(this, conn, this.nextClientId++);
       this.clients.add(session);
+      conn.on("error", (err: Error) => {
+        console.warn(
+          `[client] transport error id=${session.clientId}: ${err.message}`,
+        );
+      });
       conn.on("close", () => {
+        // Stop routing to this peer before clearing shared seat state. Both
+        // clipboard broadcasts below send immediately, and a disconnected
+        // selection owner must never be included in those broadcasts.
+        if (!this.clients.delete(session)) return;
         if (this.focused === session) this.focused = null;
         if (this.focusedToplevel?.session === session) this.focusedToplevel = null;
         if (this.pointerFocus?.session === session) this.pointerFocus = null;
@@ -1242,7 +1254,7 @@ export class CompositorServer {
           this.clientCursorShape = null;
         }
         if (this.selection?.sourceSession === session) {
-          this.selection = null;
+          this.clearSelection("cleared");
         }
         if (this.primarySelection?.sourceSession === session) {
           this.clearPrimarySelection("cleared");
@@ -1259,7 +1271,6 @@ export class CompositorServer {
           if (pair.session === session) this.xwayPendingBySerial.delete(serial);
         }
         session.destroy();
-        this.clients.delete(session);
       });
     });
     this.socket.start();
@@ -3101,25 +3112,38 @@ export class CompositorServer {
     this.cursorX = nx;
     this.cursorY = ny;
     if (this.drag) {
+      this.updateSsdPointerHover(false);
       this.updateDragFocus(ev.timeMs);
       return;
     }
     if (this.applyGrab()) {
+      this.updateSsdPointerHover(false);
       this.markDirty();
       return;
     }
     // Check before updatePointerFocus so a client the pointer just entered
     // never sees a stray hover enter/motion ahead of the DnD enter.
     // (startDesktopDrag already runs updateDragFocus once for this position.)
-    if (this.maybeEscalateDesktopDrag()) return;
+    if (this.maybeEscalateDesktopDrag()) {
+      this.updateSsdPointerHover(false);
+      return;
+    }
     const popupHit = this.hitTestPopup(this.cursorX, this.cursorY);
     if (popupHit || this.hasGrabbedPopup()) {
+      this.updateSsdPointerHover(false);
       this.updatePointerFocus(ev.timeMs, true, popupHit);
       return;
     }
-    if (
-      this.shell?.onPointerMotion?.({ x: this.cursorX, y: this.cursorY })
-    ) {
+    const shellHandled = this.shell?.onPointerMotion?.({
+      x: this.cursorX,
+      y: this.cursorY,
+    });
+    if (shellHandled) {
+      this.updateSsdPointerHover(false);
+      this.clearPointerFocusForShellOverlay();
+      return;
+    }
+    if (this.updateSsdPointerHover(true)) {
       this.clearPointerFocusForShellOverlay();
       return;
     }
@@ -3148,25 +3172,38 @@ export class CompositorServer {
     this.cursorX = nx;
     this.cursorY = ny;
     if (this.drag) {
+      this.updateSsdPointerHover(false);
       this.updateDragFocus(ev.timeMs);
       return;
     }
     if (this.applyGrab()) {
+      this.updateSsdPointerHover(false);
       this.markDirty();
       return;
     }
     // Check before updatePointerFocus so a client the pointer just entered
     // never sees a stray hover enter/motion ahead of the DnD enter.
     // (startDesktopDrag already runs updateDragFocus once for this position.)
-    if (this.maybeEscalateDesktopDrag()) return;
+    if (this.maybeEscalateDesktopDrag()) {
+      this.updateSsdPointerHover(false);
+      return;
+    }
     const popupHit = this.hitTestPopup(this.cursorX, this.cursorY);
     if (popupHit || this.hasGrabbedPopup()) {
+      this.updateSsdPointerHover(false);
       this.updatePointerFocus(ev.timeMs, true, popupHit);
       return;
     }
-    if (
-      this.shell?.onPointerMotion?.({ x: this.cursorX, y: this.cursorY })
-    ) {
+    const shellHandled = this.shell?.onPointerMotion?.({
+      x: this.cursorX,
+      y: this.cursorY,
+    });
+    if (shellHandled) {
+      this.updateSsdPointerHover(false);
+      this.clearPointerFocusForShellOverlay();
+      return;
+    }
+    if (this.updateSsdPointerHover(true)) {
       this.clearPointerFocusForShellOverlay();
       return;
     }
@@ -3179,6 +3216,18 @@ export class CompositorServer {
         y: this.cursorY,
       });
     }
+  }
+
+  /** Update SSD hover only after compositor z-order says the chrome is visible. */
+  private updateSsdPointerHover(allowHit: boolean): boolean {
+    if (!this.shell?.onSsdPointerMotion) return false;
+    const inside =
+      allowHit && this.hitVisibleSsd(this.cursorX, this.cursorY) != null;
+    return this.shell.onSsdPointerMotion({
+      x: this.cursorX,
+      y: this.cursorY,
+      inside,
+    });
   }
 
   /**
@@ -3269,15 +3318,11 @@ export class CompositorServer {
     // surface can occlude it. Match that paint order for input: an obscured
     // titlebar must never drag, close, or resize through the surface above it.
     if (ev.value === 1 && !popupHit) {
-      const coveringClient = this.hitTest(this.cursorX, this.cursorY);
-      if (!coveringClient) {
-        this.ssdWindows = this.collectSsdWindows();
-        const action = this.hitSsd(this.cursorX, this.cursorY);
-        if (action) {
-          if (this.hasGrabbedPopup()) this.dismissGrabbedPopups();
-          this.handleSsdAction(action);
-          return;
-        }
+      const action = this.hitVisibleSsd(this.cursorX, this.cursorY);
+      if (action) {
+        if (this.hasGrabbedPopup()) this.dismissGrabbedPopups();
+        this.handleSsdAction(action);
+        return;
       }
     }
 
@@ -3410,6 +3455,28 @@ export class CompositorServer {
     return null;
   }
 
+  /**
+   * Resolve SSD input in the same interleaved order used by composite():
+   * each window's client buffers, then its titlebar, bottom → top. A client
+   * surface only occludes titlebars in lower stack slots; content underneath
+   * the candidate titlebar must never veto it.
+   */
+  private hitVisibleSsd(x: number, y: number): SsdAction | null {
+    this.ssdWindows = this.collectSsdWindows();
+    const action = this.hitSsd(x, y);
+    if (!action) return null;
+    const candidateIndex = this.stack.findIndex(
+      (entry) =>
+        entry.surfaceId === action.surfaceId &&
+        entry.session.clientId === action.clientId,
+    );
+    if (candidateIndex < 0) return null;
+    for (let i = this.stack.length - 1; i > candidateIndex; i--) {
+      if (this.hitTestStackEntry(this.stack[i]!, x, y)) return null;
+    }
+    return action;
+  }
+
   private collectSsdWindows(): SsdWindowInfo[] {
     const windows: SsdWindowInfo[] = [];
     for (const entry of this.stack) {
@@ -3430,6 +3497,7 @@ export class CompositorServer {
         contentH: size.h,
         title: surf.title || "Window",
         focused,
+        maximized: surf.maximized,
       });
     }
     return windows;
@@ -3796,49 +3864,55 @@ export class CompositorServer {
     // Walk top → bottom so the raised window wins.
     for (let i = this.stack.length - 1; i >= 0; i--) {
       const entry = this.stack[i]!;
-      entry.session.layout();
-      const tree = entry.session.paintTree(entry.surfaceId);
-      for (let j = tree.length - 1; j >= 0; j--) {
-        const surf = tree[j]!;
-        if (!surf.mapped || !surf.pixels) continue;
-        if (surf.role === "cursor") continue;
-        if (entry.session.isHidden(surf)) continue;
-        if (surf.role === "toplevel") {
-          if (this.usesSsd(surf)) {
-            const size = this.contentSize(surf);
-            const cx = surf.x;
-            const cy = surf.y + SSD_TITLEBAR_H;
-            if (
-              x >= cx &&
-              y >= cy &&
-              x < cx + size.w &&
-              y < cy + size.h
-            ) {
-              return { session: entry.session, surface: surf };
-            }
-            continue;
-          }
-          const frame = this.frameBox(surf);
-          if (
-            x >= frame.x &&
-            y >= frame.y &&
-            x < frame.x + frame.w &&
-            y < frame.y + frame.h
-          ) {
+      const hit = this.hitTestStackEntry(entry, x, y);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  /** Hit only one toplevel stack slot, preserving its internal paint order. */
+  private hitTestStackEntry(
+    entry: { session: ClientSession; surfaceId: number },
+    x: number,
+    y: number,
+  ): { session: ClientSession; surface: SurfaceState } | null {
+    entry.session.layout();
+    const tree = entry.session.paintTree(entry.surfaceId);
+    for (let j = tree.length - 1; j >= 0; j--) {
+      const surf = tree[j]!;
+      if (!surf.mapped || !surf.pixels) continue;
+      if (surf.role === "cursor") continue;
+      if (entry.session.isHidden(surf)) continue;
+      if (surf.role === "toplevel") {
+        if (this.usesSsd(surf)) {
+          const size = this.contentSize(surf);
+          const cx = surf.x;
+          const cy = surf.y + SSD_TITLEBAR_H;
+          if (x >= cx && y >= cy && x < cx + size.w && y < cy + size.h) {
             return { session: entry.session, surface: surf };
           }
           continue;
         }
-        // Subsurfaces: full buffer bounds
+        const frame = this.frameBox(surf);
         if (
-          surf.role === "subsurface" &&
-          x >= surf.x &&
-          y >= surf.y &&
-          x < surf.x + surf.width &&
-          y < surf.y + surf.height
+          x >= frame.x &&
+          y >= frame.y &&
+          x < frame.x + frame.w &&
+          y < frame.y + frame.h
         ) {
           return { session: entry.session, surface: surf };
         }
+        continue;
+      }
+      // Subsurfaces: full buffer bounds.
+      if (
+        surf.role === "subsurface" &&
+        x >= surf.x &&
+        y >= surf.y &&
+        x < surf.x + surf.width &&
+        y < surf.y + surf.height
+      ) {
+        return { session: entry.session, surface: surf };
       }
     }
     return null;
@@ -4616,6 +4690,7 @@ export class CompositorServer {
               contentH: size.h,
               title: top.title || "Window",
               focused,
+              maximized: top.maximized,
             });
           }
         }

@@ -35,6 +35,11 @@ Desktop icons remain below windows, but their context menus and Open With
 picker are promoted into the final shell overlay. This keeps menus above every
 toplevel while preserving desktop item placement below applications.
 
+SSD clicks use the same interleaved ordering as paint: each stack slot's client
+buffers, then its titlebar. Only client surfaces in *higher* stack slots may
+occlude a titlebar. A lower window underneath exposed chrome must not veto the
+SSD hit or receive a click-through.
+
 Software-rendered overlay frames store premultiplied ARGB while scene colors
 are specified as straight ARGB. Translucent primitives must preserve frame
 alpha; forcing an initially transparent pixel opaque turns dismiss veils into
@@ -43,6 +48,9 @@ black fullscreen rectangles when composited later.
 ## Pointer motion
 
 - Normal: update cursor, focus, hover edges, optional Xwayland ghost motion.
+- Visible SSD: compositor performs the window-stack occlusion check, then
+  forwards motion to the titlebar's persistent React hit regions for animated
+  control feedback.
 - During DnD: `updateDragFocus` only (enter/leave/motion to the target client).
 - No window under cursor: `shell.onDesktopPointerMotion` for icon hover and local reposition/folder drag.
 

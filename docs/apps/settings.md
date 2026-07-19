@@ -28,6 +28,10 @@ reconciles live connector/mode changes while it is open and reports the active
 multi-output layout. Display management
 stays behind D-Bus; Settings does not access DRM directly.
 
+The active tab body is the window's scroll region. The title/tabs and bottom
+status/action bar remain fixed, including when the compositor constrains the
+window on a small or high-scale logical output.
+
 ## Guest checks
 
 ```bash

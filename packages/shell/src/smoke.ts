@@ -194,6 +194,67 @@ try {
     fs.existsSync(path.join(smokeHome, "Desktop", "New Folder")),
     "desktop background New Folder action did not run",
   );
+
+  const ssdWindow = {
+    clientId: 9,
+    surfaceId: 12,
+    x: 100,
+    y: 100,
+    contentW: 400,
+    contentH: 300,
+    title: "A considered window title",
+    focused: true,
+    maximized: false,
+  };
+  framebuffer.fill(simulatedWindow);
+  shell.beginSsdFrame();
+  shell.paintSsdWindow(framebuffer, width, width, height, ssdWindow);
+  assert.equal(
+    framebuffer[100 * width + 100],
+    simulatedWindow,
+    "SSD top corner was not rounded",
+  );
+  assert.notEqual(
+    framebuffer[117 * width + 116],
+    simulatedWindow,
+    "SSD focus jewel was not painted",
+  );
+
+  const closeX = ssdWindow.x + ssdWindow.contentW - 6 - 28;
+  const hoverSampleX = closeX + 3;
+  const hoverSampleY = ssdWindow.y + 6;
+  const idleControlPixel = framebuffer[hoverSampleY * width + hoverSampleX];
+  assert.equal(
+    shell.onSsdPointerMotion?.({
+      x: closeX + 14,
+      y: ssdWindow.y + 17,
+      inside: true,
+    }),
+    true,
+    "visible SSD did not capture hover",
+  );
+  for (let frame = 0; frame < 8; frame++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    shell.needsRepaint();
+    framebuffer.fill(simulatedWindow);
+    shell.beginSsdFrame();
+    shell.paintSsdWindow(framebuffer, width, width, height, ssdWindow);
+  }
+  assert.notEqual(
+    framebuffer[hoverSampleY * width + hoverSampleX],
+    idleControlPixel,
+    "SSD close control did not animate its hover feedback",
+  );
+  assert.deepEqual(
+    shell.hitSsd(closeX + 14, ssdWindow.y + 17),
+    { kind: "close", clientId: 9, surfaceId: 12 },
+    "restyled SSD close control lost its action",
+  );
+  assert.equal(
+    shell.onSsdPointerMotion?.({ x: 0, y: 0, inside: false }),
+    false,
+    "SSD hover remained active after leaving chrome",
+  );
 } finally {
   if (originalHome == null) delete process.env.HOME;
   else process.env.HOME = originalHome;

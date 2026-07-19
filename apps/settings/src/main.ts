@@ -7,7 +7,6 @@ import {
   Window,
   Column,
   Row,
-  Box,
   Label,
   Button,
   Toggle,
@@ -293,6 +292,41 @@ function SettingsApp(
   const selectedOutput =
     connectedOutputs.find((output) => output.id === selectedOutputId) ??
     connectedOutputs[0];
+  const resolutionListH = Math.max(
+    1,
+    resolutionRows.length * (btnH + Math.round(6 * ui)),
+  );
+  const displaySectionCount =
+    1 +
+    (connectedOutputs.length > 0 ? 1 : 0) +
+    (connectedOutputs.length > 1 ? 1 : 0) +
+    (selectedOutput ? 1 : 0) +
+    (pendingDisplayLayout ? 1 : 0) +
+    1 +
+    1 +
+    (props.display ? 2 : 0) +
+    (props.display ? 1 : 0);
+  const displayContentH =
+    labelH +
+    (connectedOutputs.length > 0 ? Math.round(132 * ui) : 0) +
+    (connectedOutputs.length > 1 ? btnH : 0) +
+    (selectedOutput ? btnH : 0) +
+    (pendingDisplayLayout ? btnH : 0) +
+    labelH +
+    (props.display ? resolutionListH : labelH) +
+    (props.display ? Math.round(18 * ui) + Math.round(32 * ui) : 0) +
+    (props.display
+      ? pendingDisplayMode
+        ? Math.round(62 * ui)
+        : Math.round(18 * ui)
+      : 0) +
+    Math.max(0, displaySectionCount - 1) * Math.round(10 * ui);
+  const scrollContentH =
+    tab === 1 ? Math.max(bodyMin, displayContentH) : bodyMin;
+  const scrollViewportH = Math.max(
+    Math.round(72 * ui),
+    bodyH - titleH - tabH - footH - 1 - Math.round(48 * ui),
+  );
 
   const requestDisplayMode = (modeId: string) => {
     if (!props.display || modeId === displayMode) return;
@@ -414,7 +448,15 @@ function SettingsApp(
         height: tabH,
       }),
       createElement(Separator, { width: innerW, height: 1 }),
-      tab === 0
+      createElement(
+        ScrollArea,
+        {
+          key: `settings-scroll-${tab}`,
+          width: innerW,
+          height: scrollViewportH,
+          contentHeight: scrollContentH,
+        },
+        tab === 0
         ? createElement(
             Column,
             {
@@ -506,7 +548,7 @@ function SettingsApp(
             }),
           )
         : null,
-      tab === 1
+        tab === 1
         ? createElement(
             Column,
             {
@@ -634,28 +676,13 @@ function SettingsApp(
             }),
             props.display
               ? createElement(
-                  ScrollArea,
+                  Column,
                   {
                     width: Math.min(Math.round(380 * ui), innerW),
-                    height: Math.round(112 * ui),
-                    contentHeight: Math.max(
-                      1,
-                      resolutionRows.length *
-                        (btnH + Math.round(6 * ui)),
-                    ),
+                    height: resolutionListH,
+                    gap: Math.round(6 * ui),
                   },
-                  createElement(
-                    Column,
-                    {
-                      width: Math.min(Math.round(368 * ui), innerW),
-                      height: Math.max(
-                        1,
-                        resolutionRows.length *
-                          (btnH + Math.round(6 * ui)),
-                      ),
-                      gap: Math.round(6 * ui),
-                    },
-                    ...resolutionRows.map((row, rowIndex) =>
+                  ...resolutionRows.map((row, rowIndex) =>
                       createElement(
                         Row,
                         {
@@ -684,7 +711,6 @@ function SettingsApp(
                         }),
                       ),
                     ),
-                  ),
                 )
               : createElement(Label, {
                   text: "Display service unavailable",
@@ -768,7 +794,7 @@ function SettingsApp(
                 }),
           )
         : null,
-      tab === 2
+        tab === 2
         ? createElement(
             Column,
             {
@@ -802,7 +828,7 @@ function SettingsApp(
             }),
           )
         : null,
-      tab === 3
+        tab === 3
         ? createElement(
             Column,
             {
@@ -830,13 +856,8 @@ function SettingsApp(
               height: labelH,
             }),
           )
-        : null,
-      createElement(Box, {
-        width: innerW,
-        height: 1,
-        flexGrow: 1,
-        minHeight: Math.round(8 * ui),
-      }),
+          : null,
+      ),
       createElement(
         Row,
         {
@@ -1022,7 +1043,9 @@ async function main() {
     appId: "org.moire.Settings",
     width: Math.round(480 * ui),
     height: Math.round(640 * ui),
-    resizable: false,
+    // Accept compositor-constrained sizes on small/high-scale outputs; the
+    // tab body scrolls while the action bar remains fixed.
+    resizable: true,
   });
   win.setContent((size) =>
     createElement(SettingsApp, {

@@ -100,6 +100,8 @@ export type ShellBridge = {
   }): boolean;
   /** Pointer motion for top shell overlays and panel hover feedback. */
   onPointerMotion?(ev: { x: number; y: number }): boolean;
+  /** Pointer motion over compositor-verified, unobscured SSD chrome. */
+  onSsdPointerMotion?(ev: { x: number; y: number; inside: boolean }): boolean;
   /** Wheel input for launcher/menu scroll regions. */
   onPointerAxis?(ev: { x: number; y: number; deltaY: number }): boolean;
   setTasks?(tasks: TaskWindowInfo[]): void;
@@ -372,14 +374,23 @@ export function createShell(
   let overlayDownHit: HitRegion | null = null;
   let shellHover: HitRegion | null = null;
 
-  let ssdHits: HitRegion[] = [];
+  type SsdHit = HitRegion & { identity: string; stripKey: string };
+  type SsdStrip = {
+    root: ShellRoot;
+    pixels: Uint8Array;
+    w: number;
+    h: number;
+    hits: HitRegion[];
+    signature: string;
+    dirty: boolean;
+  };
+  let ssdHits: SsdHit[] = [];
+  let ssdHover: SsdHit | null = null;
+  let ssdAnimationActive = false;
   let ssdPending: { current: SsdAction | null } = { current: null };
-  /** Cached titlebar strips keyed by content (not position). */
-  const ssdStripCache = new Map<
-    string,
-    { pixels: Uint8Array; w: number; h: number; hits: HitRegion[] }
-  >();
-  const ssdScratchRoot: ShellRoot = createShellRoot();
+  /** One persistent React root per window keeps control motion state local. */
+  const ssdStripCache = new Map<string, SsdStrip>();
+  const ssdSeen = new Set<string>();
 
   // ── Desktop icons state ────────────────────────────────────────────────────
   const desktopRoot: ShellRoot = createShellRoot();
@@ -923,21 +934,36 @@ export function createShell(
     height: number,
     window: SsdWindowInfo,
   ) => {
-    const stripKey = `${window.clientId}:${window.surfaceId}:${window.contentW}:${window.title}:${window.focused ? 1 : 0}`;
+    const stripKey = `${window.clientId}:${window.surfaceId}`;
+    const signature = `${window.contentW}:${window.title}:${window.focused ? 1 : 0}:${window.maximized ? 1 : 0}`;
     const titlebarH = themePalette().titlebarHeight;
+    ssdSeen.add(stripKey);
     let strip = ssdStripCache.get(stripKey);
     if (!strip) {
+      strip = {
+        root: createShellRoot(),
+        pixels: new Uint8Array(0),
+        w: 0,
+        h: titlebarH,
+        hits: [],
+        signature: "",
+        dirty: true,
+      };
+      ssdStripCache.set(stripKey, strip);
+    }
+    if (strip.dirty || strip.signature !== signature) {
       ssdPending = { current: null };
       const sid = window.surfaceId;
       const cid = window.clientId;
       renderShell(
-        ssdScratchRoot,
+        strip.root,
         createElement(TitleBar, {
           x: 0,
           y: 0,
           width: window.contentW,
           title: window.title,
           focused: window.focused,
+          maximized: window.maximized,
           onDrag: () => {
             ssdPending.current = { kind: "drag", surfaceId: sid, clientId: cid };
           },
@@ -961,22 +987,16 @@ export function createShell(
         }),
       );
       const painted = rasterize(
-        ssdScratchRoot.container,
+        strip.root.container,
         Math.max(1, window.contentW),
         titlebarH,
       );
-      strip = {
-        pixels: painted.pixels,
-        w: window.contentW,
-        h: titlebarH,
-        hits: painted.hits,
-      };
-      ssdStripCache.set(stripKey, strip);
-      for (const k of [...ssdStripCache.keys()]) {
-        if (k !== stripKey && k.startsWith(`${window.clientId}:${window.surfaceId}:`)) {
-          ssdStripCache.delete(k);
-        }
-      }
+      strip.pixels = painted.pixels;
+      strip.w = window.contentW;
+      strip.h = titlebarH;
+      strip.hits = painted.hits;
+      strip.signature = signature;
+      strip.dirty = false;
     }
 
     blitStrip(
@@ -991,15 +1011,20 @@ export function createShell(
       strip.h,
     );
 
-    for (const h of strip.hits) {
+    strip.hits.forEach((h, index) => {
       ssdHits.push({
+        identity: `${stripKey}:${index}`,
+        stripKey,
         x: window.x + h.x,
         y: window.y + h.y,
         width: h.width,
         height: h.height,
         onPress: h.onPress,
+        onPointerEnter: h.onPointerEnter,
+        onPointerLeave: h.onPointerLeave,
+        onPointerMove: h.onPointerMove,
       });
-    }
+    });
   };
 
   const desktopFolderAt = (
@@ -1149,6 +1174,14 @@ export function createShell(
     },
 
     beginSsdFrame() {
+      for (const key of ssdStripCache.keys()) {
+        if (!ssdSeen.has(key)) {
+          const stale = ssdStripCache.get(key);
+          if (stale) renderShell(stale.root, null);
+          ssdStripCache.delete(key);
+        }
+      }
+      ssdSeen.clear();
       ssdHits = [];
     },
 
@@ -1361,6 +1394,62 @@ export function createShell(
       }
 
       return open || desktopMenu != null || next != null;
+    },
+
+    onSsdPointerMotion(ev) {
+      let next: SsdHit | null = null;
+      if (ev.inside) {
+        for (let i = ssdHits.length - 1; i >= 0; i--) {
+          const hit = ssdHits[i]!;
+          if (
+            ev.x >= hit.x &&
+            ev.y >= hit.y &&
+            ev.x < hit.x + hit.width &&
+            ev.y < hit.y + hit.height &&
+            (hit.onPointerEnter || hit.onPointerLeave || hit.onPointerMove)
+          ) {
+            next = hit;
+            break;
+          }
+        }
+      }
+
+      if (next?.identity !== ssdHover?.identity) {
+        ssdHover?.onPointerLeave?.({
+          x: ev.x,
+          y: ev.y,
+          localX: ev.x - ssdHover.x,
+          localY: ev.y - ssdHover.y,
+        });
+        if (ssdHover) {
+          const previous = ssdStripCache.get(ssdHover.stripKey);
+          if (previous) previous.dirty = true;
+        }
+        ssdHover = next;
+        next?.onPointerEnter?.({
+          x: ev.x,
+          y: ev.y,
+          localX: ev.x - next.x,
+          localY: ev.y - next.y,
+        });
+        if (next) {
+          const current = ssdStripCache.get(next.stripKey);
+          if (current) current.dirty = true;
+        }
+        ssdAnimationActive = true;
+      } else if (next) {
+        // Rasterization replaces HitRegion objects; retain the current one so
+        // future leave events reach the latest persistent React instance.
+        ssdHover = next;
+        next.onPointerMove?.({
+          x: ev.x,
+          y: ev.y,
+          localX: ev.x - next.x,
+          localY: ev.y - next.y,
+        });
+      }
+
+      return ev.inside;
     },
 
     onPointerAxis(ev) {
@@ -1592,10 +1681,14 @@ export function createShell(
       const now = Date.now();
       const dt = Math.min((now - desktopMotionTick) / 1000, 0.1);
       desktopMotionTick = now;
-      if (tickAllMotions(dt)) {
+      const wasSsdAnimating = ssdAnimationActive;
+      const motionsMoving = tickAllMotions(dt);
+      if (motionsMoving || wasSsdAnimating) {
         dirty = true;
         desktopDirty = true;
+        for (const strip of ssdStripCache.values()) strip.dirty = true;
       }
+      ssdAnimationActive = motionsMoving;
       return dirty || desktopDirty || desktopDrag != null || desktopDragReturn != null;
     },
     invalidateChrome: () => {
@@ -1603,7 +1696,13 @@ export function createShell(
       overlay = null;
       ow = 0;
       oh = 0;
+      for (const strip of ssdStripCache.values()) {
+        renderShell(strip.root, null);
+      }
       ssdStripCache.clear();
+      ssdSeen.clear();
+      ssdHover = null;
+      ssdAnimationActive = false;
       desktopOverlay = null;
       desktopDirty = true;
       desktopW = 0;
