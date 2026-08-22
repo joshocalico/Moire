@@ -25,7 +25,7 @@ Out of memory: Killed process … (node) total-vm:45671280kB, anon-rss:7774460kB
 
 **Still watch:** large foot `wl_shm` pool mmaps (RSS floor).
 
-**CPU present path (updated 2026-08-22):** compositor loop is dirty-driven — skip wallpaper and presentation when idle (~50 ms poll); `markDirty()` on commits, pointer motion, shell clock, stack/focus. EGL now defaults to double-buffered direct GBM page flips when supported. Desktop and application discovery polls compare content before invalidating cached shell rasters instead of forcing periodic full-screen rebuilds. On MoireDev idle remains ~10% because the remaining floor is mostly per-client `recvmsg` polling; during a pointer-motion sample, retained scene assembly averaged 0.56 ms and output/present 1.36/0.77 ms (measure with `scripts/guest-measure-cpu.sh`).
+**CPU present path (updated 2026-08-22):** compositor loop is dirty-driven — skip wallpaper and presentation when idle (~50 ms poll); `markDirty()` on commits, pointer motion, shell clock, stack/focus. EGL defaults to double-buffered direct GBM page flips when supported. Desktop and application discovery compare content before invalidating cached shell rasters. Wayland transport uses one epoll readiness dispatcher instead of calling nonblocking `recvmsg` for every client every 5 ms; bytes remain owned by `recvmsg`, preserving SCM_RIGHTS descriptors. The Koffi `epoll_event` layout is architecture-aware because glibc uses 16 aligned bytes on aarch64 and 12 packed bytes on x86-64. On MoireDev idle measured 6.5% after this change (previous checkpoint 10.0%); pointer motion measured 29.6%, with retained rendering already near its scene/output floor (measure with `scripts/guest-measure-cpu.sh`).
 
 ## Xwayland / X11 apps (updated 2026-07-12)
 

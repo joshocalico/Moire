@@ -1252,11 +1252,9 @@ function tryPageFlip(out: KmsOutput, framebufferId: number): boolean {
     ),
   );
   if (queued !== 0) {
-    if (presenter.supported !== false) {
-      console.warn(
-        `[kms] page flips unavailable on ${out.connectorName}; retaining SetCrtc fallback (${queued})`,
-      );
-    }
+    console.warn(
+      `[kms] page flips unavailable on ${out.connectorName}; retaining SetCrtc fallback (${queued})`,
+    );
     presenter.supported = false;
     return false;
   }

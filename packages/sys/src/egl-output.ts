@@ -1611,7 +1611,9 @@ void main() {
         }
         if (addResult !== 0) {
           const format = Number(this.gbmBoGetFormat(bo));
-          const modifier = BigInt(this.gbmBoGetModifier(bo));
+          const modifier = BigInt(
+            this.gbmBoGetModifier(bo) as bigint | number,
+          );
           const planes = Number(this.gbmBoGetPlaneCount(bo));
           throw new Error(
             `DRM framebuffer registration failed (${addResult}) handle=${handle} stride=${stride} format=0x${format.toString(16)} modifier=0x${modifier.toString(16)} planes=${planes}`,
