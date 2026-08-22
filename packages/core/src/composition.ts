@@ -92,11 +92,18 @@ export type CompositionLayer = {
   destination: CompositionRect;
   clip?: CompositionRect;
   opacity?: number;
+  /** Scalar or [top-left, top-right, bottom-right, bottom-left]. */
   cornerRadius?: number | readonly [number, number, number, number];
   blendMode?: "source-over" | "copy";
   sampling?: "nearest" | "linear";
   transform?: CompositionTransform;
   mesh?: CompositionMesh;
+  /**
+   * xdg_surface window geometry in source coordinates. Opaque pixels outside
+   * this box are client padding and are discarded; translucent pixels remain
+   * available as client-rendered shadows.
+   */
+  surfaceGeometry?: CompositionRect;
   /** Source-space damage. Omit when the whole source may have changed. */
   damage?: readonly CompositionRect[];
   effects?: readonly CompositionEffect[];
@@ -114,6 +121,7 @@ export type CompositionCapabilities = {
   projectiveTransforms: boolean;
   meshDeformation: boolean;
   extensionEffects: boolean;
+  surfaceGeometryMask: boolean;
   directScanout: boolean;
   backdropBlur: boolean;
   dropShadow: boolean;
@@ -146,8 +154,21 @@ export function validateCompositionScene(scene: CompositionScene): void {
     if (layer.destination.width <= 0 || layer.destination.height <= 0) {
       throw new RangeError(`Composition layer ${layer.id} has invalid bounds`);
     }
+    if (
+      layer.surfaceGeometry &&
+      (layer.surfaceGeometry.width <= 0 || layer.surfaceGeometry.height <= 0)
+    ) {
+      throw new RangeError(`Composition layer ${layer.id} has invalid surface geometry`);
+    }
     if (layer.opacity != null && (layer.opacity < 0 || layer.opacity > 1)) {
       throw new RangeError(`Composition layer ${layer.id} opacity is outside 0..1`);
+    }
+    const radii =
+      typeof layer.cornerRadius === "number"
+        ? [layer.cornerRadius]
+        : layer.cornerRadius ?? [];
+    if (radii.some((radius) => radius < 0)) {
+      throw new RangeError(`Composition layer ${layer.id} has negative corner radius`);
     }
     if (layer.transform && layer.transform.matrix.length !== 16) {
       throw new RangeError(`Composition layer ${layer.id} transform must be 4×4`);

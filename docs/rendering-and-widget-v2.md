@@ -26,11 +26,12 @@ textures by stable layer id and content revision, composites premultiplied
 layers with opacity, sampling and projective 4×4 transforms, and reclaims stale
 textures. The live desktop now uses retained layers for wallpaper, desktop
 icons, every client surface, SSD strips interleaved in window stack order,
-shell chrome, popups, and the cursor. Drag previews and CSD buffers needing the
-legacy outside-geometry shadow mask use the flattened compatibility path until
-those operations become native layer semantics. A retained-scene failure also
-rebuilds the same frame through the compatibility path instead of looping on a
-black output.
+shell chrome, popups, client drag icons, failed-drop return animations, and the
+cursor. Xdg window geometry is a native shader mask: opaque client padding is
+discarded while translucent pixels remain available as shadows. Shell-owned
+drag chips without a Wayland icon are the remaining flattened drag case. A
+retained-scene failure also rebuilds the same frame through the compatibility
+path instead of looping on a black output.
 
 The composition vocabulary already describes stable z-order, source and
 destination rectangles, opacity, blend mode, clipping, corner radii, and an
@@ -75,9 +76,11 @@ revisions, the EGL texture cache is revision-aware, known-opaque software
 surfaces use row copies, and cached shell rasters retain per-row alpha runs for
 future regional upload/damage.
 
-### R3 — native effects
+### R3 — active: native effects
 
-- Render layers into an offscreen scene target.
+- Layers render into an offscreen scene target.
+- Per-corner rounded clipping and bounded analytic rounded-rectangle window
+  shadows execute in GLES and follow projective transforms.
 - Implement separable, downsampled backdrop blur with bounded damage.
 - Apply blur to the accumulated backdrop before drawing the requesting layer;
   blur is a stacking effect, not a widget screenshot trick.

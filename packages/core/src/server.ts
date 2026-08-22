@@ -1042,6 +1042,7 @@ export class CompositorServer {
   private retainedWallpaper: Buffer | null = null;
   private retainedWallpaperKey = "";
   private retainedWallpaperRevision = 0;
+  private readonly retainedEffectPixel = new Uint8Array(4);
   private profileFrames = 0;
   private profileSceneMs = 0;
   private profileWallpaperMs = 0;
@@ -4620,33 +4621,10 @@ export class CompositorServer {
       !this.shell?.desktopRaster ||
       !this.shell.chromeRaster ||
       !this.shell.ssdRaster ||
-      this.drag ||
-      this.dragReturn ||
-      this.shell.desktopDragLabel?.()
+      (this.drag != null && this.drag.iconId == null) ||
+      (this.drag == null && this.shell.desktopDragLabel?.() != null)
     ) {
       return false;
-    }
-    // Preserve the software path's special CSD shadow masking until that mask
-    // is a native retained-layer operation. Never trade correctness for entry
-    // into the accelerated path.
-    for (const entry of this.stack) {
-      entry.session.layout();
-      for (const surface of entry.session.paintTree(entry.surfaceId)) {
-        if (
-          surface.mapped &&
-          !entry.session.isHidden(surface) &&
-          surface.role === "toplevel" &&
-          surface.geomW > 0 &&
-          surface.geomH > 0 &&
-          !this.usesSsd(surface)
-        ) {
-          return false;
-        }
-      }
-    }
-    for (const entry of this.popupStack) {
-      const surface = entry.session.surfaceById(entry.surfaceId);
-      if (surface?.mapped && surface.geomW > 0 && surface.geomH > 0) return false;
     }
     return true;
   }
@@ -4703,6 +4681,71 @@ export class CompositorServer {
       },
       sampling: "nearest",
     };
+  }
+
+  private retainedDragLayer(z: number): CompositionLayer | null {
+    const drag = this.drag;
+    if (drag?.iconId != null) {
+      const surface = drag.sourceSession.surfaceById(drag.iconId);
+      if (surface?.pixels && surface.width > 0 && surface.height > 0) {
+        const layer: CompositionLayer = {
+          id: `drag:${drag.sourceSession instanceof ClientSession ? drag.sourceSession.clientId : "shell"}:${surface.id}`,
+          z,
+          source: {
+            pixels: surface.pixels,
+            width: surface.bufferWidth,
+            height: surface.bufferHeight,
+            stride: surface.stride,
+            revision: surface.revision,
+          },
+          destination: {
+            x: (this.cursorX | 0) + surface.bufferOffsetX,
+            y: (this.cursorY | 0) + surface.bufferOffsetY,
+            width: surface.width,
+            height: surface.height,
+          },
+          sampling: "nearest",
+        };
+        if (drag.sourceSession instanceof ClientSession) {
+          drag.sourceSession.finishSurfaceFrame(surface);
+        }
+        return layer;
+      }
+    }
+
+    if (!drag && this.dragReturn) {
+      const animation = this.dragReturn;
+      const progress = Math.min(
+        1,
+        Math.max(0, (monotonicMs() - animation.startedMs) / animation.durationMs),
+      );
+      if (progress >= 1) {
+        this.dragReturn = null;
+        return null;
+      }
+      const eased = 1 - Math.pow(1 - progress, 3);
+      this.markDirty();
+      return {
+        id: "drag:return",
+        z,
+        source: {
+          pixels: animation.pixels,
+          width: animation.width,
+          height: animation.height,
+          stride: animation.stride,
+          revision: 1,
+        },
+        destination: {
+          x: Math.round(animation.fromX + (animation.toX - animation.fromX) * eased),
+          y: Math.round(animation.fromY + (animation.toY - animation.fromY) * eased),
+          width: animation.width,
+          height: animation.height,
+        },
+        opacity: 0.92,
+        sampling: "nearest",
+      };
+    }
+    return null;
   }
 
   private compositeRetained(
@@ -4783,6 +4826,44 @@ export class CompositorServer {
     for (const entry of this.stack) {
       const client = entry.session;
       client.layout();
+      const top = client.surfaceById(entry.surfaceId);
+      if (
+        top?.mapped &&
+        !client.isHidden(top) &&
+        this.usesSsd(top)
+      ) {
+        const size = this.contentSize(top);
+        if (size.w > 0 && size.h > 0) {
+          layers.push({
+            id: `window-shadow:${client.clientId}:${top.id}`,
+            z: z++,
+            source: {
+              pixels: this.retainedEffectPixel,
+              width: 1,
+              height: 1,
+              stride: 4,
+              revision: 1,
+            },
+            destination: {
+              x: top.x,
+              y: top.y,
+              width: size.w,
+              height: size.h + SSD_TITLEBAR_H,
+            },
+            cornerRadius: this.theme.tokens.radiusWindow,
+            effects: [
+              {
+                kind: "drop-shadow",
+                offsetX: 0,
+                offsetY: 8,
+                blurRadius: 20,
+                spread: 1,
+                color: hexToArgb(this.theme.tokens.rimShade),
+              },
+            ],
+          });
+        }
+      }
       for (const surface of client.paintTree(entry.surfaceId)) {
         client.updateSurfaceOutputs(surface);
         if (surface.mapped && surface.pixels && !client.isHidden(surface)) {
@@ -4790,6 +4871,11 @@ export class CompositorServer {
             surface.role === "toplevel" && this.usesSsd(surface)
               ? SSD_TITLEBAR_H
               : 0;
+          const useGeometry =
+            surface.role === "toplevel" &&
+            surface.geomW > 0 &&
+            surface.geomH > 0 &&
+            !this.usesSsd(surface);
           layers.push({
             id: `surface:${client.clientId}:${surface.id}`,
             z: z++,
@@ -4806,6 +4892,14 @@ export class CompositorServer {
               width: surface.width,
               height: surface.height,
             },
+            surfaceGeometry: useGeometry
+              ? {
+                  x: surface.geomX,
+                  y: surface.geomY,
+                  width: surface.geomW,
+                  height: surface.geomH,
+                }
+              : undefined,
             sampling: "nearest",
           });
           painted++;
@@ -4813,7 +4907,6 @@ export class CompositorServer {
         client.finishSurfaceFrame(surface);
       }
 
-      const top = client.surfaceById(entry.surfaceId);
       if (
         top?.mapped &&
         !client.isHidden(top) &&
@@ -4880,11 +4973,22 @@ export class CompositorServer {
           width: surface.width,
           height: surface.height,
         },
+        surfaceGeometry:
+          surface.geomW > 0 && surface.geomH > 0
+            ? {
+                x: surface.geomX,
+                y: surface.geomY,
+                width: surface.geomW,
+                height: surface.geomH,
+              }
+            : undefined,
         sampling: "nearest",
       });
       client.finishSurfaceFrame(surface);
       painted++;
     }
+    const dragLayer = this.retainedDragLayer(z++);
+    if (dragLayer) layers.push(dragLayer);
     const cursor = this.retainedCursorLayer(z++);
     if (cursor) layers.push(cursor);
     const sceneFinishedMs = monotonicMs();

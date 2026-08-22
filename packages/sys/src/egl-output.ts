@@ -129,6 +129,15 @@ export type EglCompositionLayer = {
   transform?: readonly number[];
   transformOrigin?: readonly [number, number, number?];
   sampling?: "nearest" | "linear";
+  surfaceGeometry?: { x: number; y: number; width: number; height: number };
+  cornerRadius?: number | readonly [number, number, number, number];
+  dropShadow?: {
+    offsetX: number;
+    offsetY: number;
+    blurRadius: number;
+    spread?: number;
+    color: number;
+  };
 };
 
 export type EglCompositionScene = {
@@ -178,6 +187,8 @@ export class EglOutputScaler {
   private readonly glClear: NativeFunction;
   private readonly glUniform1i: NativeFunction;
   private readonly glUniform1f: NativeFunction;
+  private readonly glUniform4f: NativeFunction;
+  private readonly glUniform2f: NativeFunction;
   private readonly glEnable: NativeFunction;
   private readonly glDisable: NativeFunction;
   private readonly glBlendFunc: NativeFunction;
@@ -191,6 +202,16 @@ export class EglOutputScaler {
   private readonly texCoordLocation: number;
   private readonly samplerLocation: number;
   private readonly opacityLocation: number;
+  private readonly geometryLocation: number;
+  private readonly hasGeometryLocation: number;
+  private readonly uvRectLocation: number;
+  private readonly layerSizeLocation: number;
+  private readonly cornerRadiiLocation: number;
+  private readonly modeLocation: number;
+  private readonly shadowRectLocation: number;
+  private readonly shadowRadiusLocation: number;
+  private readonly shadowSoftnessLocation: number;
+  private readonly shadowColorLocation: number;
   private readonly sourceTexture: number;
   private readonly targetTexture: number;
   private readonly sceneTexture: number;
@@ -393,6 +414,12 @@ export class EglOutputScaler {
     this.glUniform1f = this.gl.func(
       "void glUniform1f(int location, float v0)",
     ) as NativeFunction;
+    this.glUniform4f = this.gl.func(
+      "void glUniform4f(int location, float v0, float v1, float v2, float v3)",
+    ) as NativeFunction;
+    this.glUniform2f = this.gl.func(
+      "void glUniform2f(int location, float v0, float v1)",
+    ) as NativeFunction;
     this.glEnable = this.gl.func(
       "void glEnable(unsigned int cap)",
     ) as NativeFunction;
@@ -428,6 +455,24 @@ export class EglOutputScaler {
     this.texCoordLocation = Number(glGetAttribLocation(this.program, "a_tex_coord"));
     this.samplerLocation = Number(glGetUniformLocation(this.program, "u_texture"));
     this.opacityLocation = Number(glGetUniformLocation(this.program, "u_opacity"));
+    this.geometryLocation = Number(
+      glGetUniformLocation(this.program, "u_surface_geometry"),
+    );
+    this.hasGeometryLocation = Number(
+      glGetUniformLocation(this.program, "u_has_surface_geometry"),
+    );
+    this.uvRectLocation = Number(glGetUniformLocation(this.program, "u_uv_rect"));
+    this.layerSizeLocation = Number(glGetUniformLocation(this.program, "u_layer_size"));
+    this.cornerRadiiLocation = Number(
+      glGetUniformLocation(this.program, "u_corner_radii"),
+    );
+    this.modeLocation = Number(glGetUniformLocation(this.program, "u_mode"));
+    this.shadowRectLocation = Number(glGetUniformLocation(this.program, "u_shadow_rect"));
+    this.shadowRadiusLocation = Number(glGetUniformLocation(this.program, "u_shadow_radius"));
+    this.shadowSoftnessLocation = Number(
+      glGetUniformLocation(this.program, "u_shadow_softness"),
+    );
+    this.shadowColorLocation = Number(glGetUniformLocation(this.program, "u_shadow_color"));
     if (this.positionLocation < 0 || this.texCoordLocation < 0) {
       throw new Error("GLES compositor shader attributes unavailable");
     }
@@ -491,7 +536,7 @@ export class EglOutputScaler {
     );
     const fragment = this.createShader(
       GL_FRAGMENT_SHADER,
-      "precision mediump float; uniform sampler2D u_texture; uniform float u_opacity; varying vec2 v_tex_coord; void main() { gl_FragColor = texture2D(u_texture, v_tex_coord) * u_opacity; }",
+      "precision mediump float; uniform sampler2D u_texture; uniform float u_opacity; uniform vec4 u_surface_geometry; uniform float u_has_surface_geometry; uniform vec4 u_uv_rect; uniform vec2 u_layer_size; uniform vec4 u_corner_radii; uniform float u_mode; uniform vec4 u_shadow_rect; uniform float u_shadow_radius; uniform float u_shadow_softness; uniform vec4 u_shadow_color; varying vec2 v_tex_coord; void main() { vec2 uv_span = max(u_uv_rect.zw - u_uv_rect.xy, vec2(0.00001)); vec2 local = ((v_tex_coord - u_uv_rect.xy) / uv_span) * u_layer_size; if (u_mode > 0.5) { vec2 q = abs(local - u_shadow_rect.xy) - u_shadow_rect.zw + vec2(u_shadow_radius); float distance_field = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - u_shadow_radius; float coverage = 1.0 - smoothstep(-u_shadow_softness, u_shadow_softness, distance_field); gl_FragColor = vec4(u_shadow_color.rgb * u_shadow_color.a, u_shadow_color.a) * coverage; return; } bool left = local.x < u_layer_size.x * 0.5; bool top = local.y < u_layer_size.y * 0.5; float radius = top ? (left ? u_corner_radii.x : u_corner_radii.y) : (left ? u_corner_radii.w : u_corner_radii.z); radius = min(radius, min(u_layer_size.x, u_layer_size.y) * 0.5); if (radius > 0.0) { vec2 center = vec2(left ? radius : u_layer_size.x - radius, top ? radius : u_layer_size.y - radius); bool corner = (left ? local.x < radius : local.x > u_layer_size.x - radius) && (top ? local.y < radius : local.y > u_layer_size.y - radius); if (corner && distance(local, center) > radius) discard; } vec4 color = texture2D(u_texture, v_tex_coord); if (u_has_surface_geometry > 0.5) { bool outside = v_tex_coord.x < u_surface_geometry.x || v_tex_coord.y < u_surface_geometry.y || v_tex_coord.x >= u_surface_geometry.z || v_tex_coord.y >= u_surface_geometry.w; if (outside && color.a > 0.999) discard; } gl_FragColor = color * u_opacity; }",
     );
     const glCreateProgram = this.gl.func(
       "unsigned int glCreateProgram(void)",
@@ -723,9 +768,95 @@ export class EglOutputScaler {
     this.glUniform1i(this.samplerLocation, 0);
 
     for (const layer of scene.layers) {
+      const clipX = (x: number) => (x / scene.width) * 2 - 1;
+      const clipY = (y: number) => (y / scene.height) * 2 - 1;
+      const shadow = layer.dropShadow;
+      if (shadow) {
+        const spread = shadow.spread ?? 0;
+        const padding = Math.max(1, shadow.blurRadius + Math.max(0, spread));
+        const x0 = shadow.offsetX - padding;
+        const y0 = shadow.offsetY - padding;
+        const shadowWidth = layer.destination.width + padding * 2;
+        const shadowHeight = layer.destination.height + padding * 2;
+        const sp0 = this.transformLayerPoint(layer, x0, y0);
+        const sp1 = this.transformLayerPoint(layer, x0 + shadowWidth, y0);
+        const sp2 = this.transformLayerPoint(layer, x0, y0 + shadowHeight);
+        const sp3 = this.transformLayerPoint(
+          layer,
+          x0 + shadowWidth,
+          y0 + shadowHeight,
+        );
+        const shadowPositions = new Float32Array([
+          clipX(sp0[0]), clipY(sp0[1]),
+          clipX(sp1[0]), clipY(sp1[1]),
+          clipX(sp2[0]), clipY(sp2[1]),
+          clipX(sp3[0]), clipY(sp3[1]),
+        ]);
+        const unitCoords = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
+        const halfWidth = (layer.destination.width + spread * 2) / 2;
+        const halfHeight = (layer.destination.height + spread * 2) / 2;
+        const radiusValue =
+          typeof layer.cornerRadius === "number"
+            ? layer.cornerRadius
+            : Math.max(...(layer.cornerRadius ?? [0]));
+        const shadowColor = shadow.color >>> 0;
+        this.glUniform1f(this.modeLocation, 1);
+        this.glUniform4f(this.uvRectLocation, 0, 0, 1, 1);
+        this.glUniform2f(this.layerSizeLocation, shadowWidth, shadowHeight);
+        this.glUniform4f(
+          this.shadowRectLocation,
+          shadow.blurRadius + halfWidth,
+          shadow.blurRadius + halfHeight,
+          halfWidth,
+          halfHeight,
+        );
+        this.glUniform1f(this.shadowRadiusLocation, Math.max(0, radiusValue + spread));
+        this.glUniform1f(
+          this.shadowSoftnessLocation,
+          Math.max(0.5, shadow.blurRadius * 0.5),
+        );
+        this.glUniform4f(
+          this.shadowColorLocation,
+          (shadowColor & 0xff) / 255,
+          ((shadowColor >>> 8) & 0xff) / 255,
+          ((shadowColor >>> 16) & 0xff) / 255,
+          (((shadowColor >>> 24) & 0xff) / 255) * (layer.opacity ?? 1),
+        );
+        this.glEnableVertexAttribArray(this.positionLocation);
+        this.glEnableVertexAttribArray(this.texCoordLocation);
+        this.glVertexAttribPointer(
+          this.positionLocation,
+          2,
+          GL_FLOAT,
+          0,
+          0,
+          shadowPositions,
+        );
+        this.glVertexAttribPointer(
+          this.texCoordLocation,
+          2,
+          GL_FLOAT,
+          0,
+          0,
+          unitCoords,
+        );
+        this.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+      }
       const texture = this.textureForLayer(layer);
       this.glBindTexture(GL_TEXTURE_2D, texture);
+      this.glUniform1f(this.modeLocation, 0);
       this.glUniform1f(this.opacityLocation, layer.opacity ?? 1);
+      const geometry = layer.surfaceGeometry;
+      this.glUniform1f(this.hasGeometryLocation, geometry ? 1 : 0);
+      if (geometry) {
+        this.glUniform4f(
+          this.geometryLocation,
+          geometry.x / layer.sourceWidth,
+          geometry.y / layer.sourceHeight,
+          (geometry.x + geometry.width) / layer.sourceWidth,
+          (geometry.y + geometry.height) / layer.sourceHeight,
+        );
+      }
       const p0 = this.transformLayerPoint(layer, 0, 0);
       const p1 = this.transformLayerPoint(layer, layer.destination.width, 0);
       const p2 = this.transformLayerPoint(layer, 0, layer.destination.height);
@@ -734,8 +865,6 @@ export class EglOutputScaler {
         layer.destination.width,
         layer.destination.height,
       );
-      const clipX = (x: number) => (x / scene.width) * 2 - 1;
-      const clipY = (y: number) => (y / scene.height) * 2 - 1;
       const positions = new Float32Array([
         clipX(p0[0]), clipY(p0[1]),
         clipX(p1[0]), clipY(p1[1]),
@@ -752,6 +881,28 @@ export class EglOutputScaler {
       const v0 = source.y / layer.sourceHeight;
       const u1 = (source.x + source.width) / layer.sourceWidth;
       const v1 = (source.y + source.height) / layer.sourceHeight;
+      this.glUniform4f(this.uvRectLocation, u0, v0, u1, v1);
+      this.glUniform2f(
+        this.layerSizeLocation,
+        layer.destination.width,
+        layer.destination.height,
+      );
+      const radii =
+        typeof layer.cornerRadius === "number"
+          ? [
+              layer.cornerRadius,
+              layer.cornerRadius,
+              layer.cornerRadius,
+              layer.cornerRadius,
+            ]
+          : layer.cornerRadius ?? [0, 0, 0, 0];
+      this.glUniform4f(
+        this.cornerRadiiLocation,
+        radii[0]!,
+        radii[1]!,
+        radii[2]!,
+        radii[3]!,
+      );
       const texCoords = new Float32Array([u0, v0, u1, v0, u0, v1, u1, v1]);
       this.glEnableVertexAttribArray(this.positionLocation);
       this.glEnableVertexAttribArray(this.texCoordLocation);
@@ -828,12 +979,17 @@ export class EglOutputScaler {
     this.glBindTexture(GL_TEXTURE_2D, this.outputSourceTexture);
     this.glUniform1i(this.samplerLocation, 0);
     this.glUniform1f(this.opacityLocation, 1);
+    this.glUniform1f(this.modeLocation, 0);
+    this.glUniform1f(this.hasGeometryLocation, 0);
     this.glDisable(GL_BLEND);
 
     const u0 = output.x / this.sourceWidth;
     const v0 = output.y / this.sourceHeight;
     const u1 = (output.x + output.width) / this.sourceWidth;
     const v1 = (output.y + output.height) / this.sourceHeight;
+    this.glUniform4f(this.uvRectLocation, u0, v0, u1, v1);
+    this.glUniform2f(this.layerSizeLocation, output.targetWidth, output.targetHeight);
+    this.glUniform4f(this.cornerRadiiLocation, 0, 0, 0, 0);
     const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
     const texCoords = new Float32Array([u0, v0, u1, v0, u0, v1, u1, v1]);
     this.glEnableVertexAttribArray(this.positionLocation);

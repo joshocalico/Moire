@@ -35,6 +35,7 @@ class SoftwareOutputRenderer implements CompositorOutputRenderer {
     projectiveTransforms: false,
     meshDeformation: false,
     extensionEffects: false,
+    surfaceGeometryMask: false,
     directScanout: false,
     backdropBlur: false,
     dropShadow: false,
@@ -74,14 +75,15 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
     projectiveTransforms: true,
     meshDeformation: false,
     extensionEffects: false,
+    surfaceGeometryMask: true,
     // The initial EGL path still reads into dumb scanout buffers. The scene
     // contract already exposes effects, but they become true only as their
     // GLES passes land.
     directScanout: false,
     backdropBlur: false,
-    dropShadow: false,
+    dropShadow: true,
     colorMatrix: false,
-    roundedClip: false,
+    roundedClip: true,
   };
   readonly detail: string;
 
@@ -101,8 +103,7 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
       (layer) =>
         layer.mesh ||
         layer.clip ||
-        layer.cornerRadius != null ||
-        (layer.effects?.length ?? 0) > 0,
+        layer.effects?.some((effect) => effect.kind !== "drop-shadow"),
     );
     if (unsupported) {
       throw new Error(
@@ -113,20 +114,28 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
       width: scene.width,
       height: scene.height,
       clearColor: scene.clearColor,
-      layers: orderedCompositionLayers(scene).map((layer) => ({
-        id: layer.id,
-        pixels: layer.source.pixels,
-        sourceWidth: layer.source.width,
-        sourceHeight: layer.source.height,
-        sourceStride: layer.source.stride,
-        revision: layer.source.revision,
-        sourceRect: layer.sourceRect,
-        destination: layer.destination,
-        opacity: layer.opacity,
-        transform: layer.transform?.matrix,
-        transformOrigin: layer.transform?.origin,
-        sampling: layer.sampling,
-      })),
+      layers: orderedCompositionLayers(scene).map((layer) => {
+        const dropShadow = layer.effects?.find(
+          (effect) => effect.kind === "drop-shadow",
+        );
+        return {
+          id: layer.id,
+          pixels: layer.source.pixels,
+          sourceWidth: layer.source.width,
+          sourceHeight: layer.source.height,
+          sourceStride: layer.source.stride,
+          revision: layer.source.revision,
+          sourceRect: layer.sourceRect,
+          destination: layer.destination,
+          opacity: layer.opacity,
+          transform: layer.transform?.matrix,
+          transformOrigin: layer.transform?.origin,
+          sampling: layer.sampling,
+          surfaceGeometry: layer.surfaceGeometry,
+          cornerRadius: layer.cornerRadius,
+          dropShadow,
+        };
+      }),
     };
     this.scaler.beginComposition(eglScene);
   }

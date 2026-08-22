@@ -97,6 +97,139 @@ try {
     expected,
     "retained EGL composition changed z placement, transform, or channels",
   );
+  const geometrySource = new Uint8Array([
+    0, 0, 255, 255,
+    0, 255, 0, 255,
+    0, 0, 0, 0,
+  ]);
+  scaler.beginComposition({
+    width: 3,
+    height: 1,
+    clearColor: 0xff112233,
+    layers: [
+      {
+        id: "surface-geometry",
+        pixels: geometrySource,
+        sourceWidth: 3,
+        sourceHeight: 1,
+        sourceStride: 12,
+        revision: 1,
+        destination: { x: 0, y: 0, width: 3, height: 1 },
+        surfaceGeometry: { x: 1, y: 0, width: 1, height: 1 },
+        sampling: "nearest",
+      },
+    ],
+  });
+  const geometryTarget = new Uint8Array(12);
+  scaler.renderOutput({
+    id: "surface-geometry-mask",
+    x: 0,
+    y: 0,
+    width: 3,
+    height: 1,
+    targetWidth: 3,
+    targetHeight: 1,
+    targetPitch: 12,
+    target: geometryTarget,
+  });
+  assert.deepEqual(
+    geometryTarget,
+    new Uint8Array([
+      0x33, 0x22, 0x11, 0xff,
+      0, 255, 0, 255,
+      0x33, 0x22, 0x11, 0xff,
+    ]),
+    "surface geometry mask did not discard opaque client padding",
+  );
+  const roundedSource = new Uint8Array(5 * 5 * 4);
+  for (let pixel = 0; pixel < 25; pixel++) {
+    roundedSource.set([0x10, 0xd0, 0x40, 0xff], pixel * 4);
+  }
+  scaler.beginComposition({
+    width: 5,
+    height: 5,
+    clearColor: 0xff09111b,
+    layers: [
+      {
+        id: "rounded-clip",
+        pixels: roundedSource,
+        sourceWidth: 5,
+        sourceHeight: 5,
+        sourceStride: 20,
+        revision: 1,
+        destination: { x: 0, y: 0, width: 5, height: 5 },
+        cornerRadius: [2, 2, 2, 2],
+        sampling: "nearest",
+      },
+    ],
+  });
+  const roundedTarget = new Uint8Array(5 * 5 * 4);
+  scaler.renderOutput({
+    id: "rounded-clip",
+    x: 0,
+    y: 0,
+    width: 5,
+    height: 5,
+    targetWidth: 5,
+    targetHeight: 5,
+    targetPitch: 20,
+    target: roundedTarget,
+  });
+  assert.deepEqual(
+    roundedTarget.subarray(0, 4),
+    new Uint8Array([0x1b, 0x11, 0x09, 0xff]),
+    "rounded clip did not discard the top-left corner",
+  );
+  assert.deepEqual(
+    roundedTarget.subarray(2 * 4, 3 * 4),
+    new Uint8Array([0x10, 0xd0, 0x40, 0xff]),
+    "rounded clip discarded the top edge centre",
+  );
+  scaler.beginComposition({
+    width: 9,
+    height: 9,
+    clearColor: 0xffffffff,
+    layers: [
+      {
+        id: "analytic-shadow",
+        pixels: new Uint8Array(4),
+        sourceWidth: 1,
+        sourceHeight: 1,
+        sourceStride: 4,
+        revision: 1,
+        destination: { x: 3, y: 3, width: 3, height: 3 },
+        cornerRadius: 1,
+        dropShadow: {
+          offsetX: 0,
+          offsetY: 0,
+          blurRadius: 2,
+          color: 0x80000000,
+        },
+        sampling: "nearest",
+      },
+    ],
+  });
+  const shadowTarget = new Uint8Array(9 * 9 * 4);
+  scaler.renderOutput({
+    id: "analytic-shadow",
+    x: 0,
+    y: 0,
+    width: 9,
+    height: 9,
+    targetWidth: 9,
+    targetHeight: 9,
+    targetPitch: 36,
+    target: shadowTarget,
+  });
+  assert.deepEqual(
+    shadowTarget.subarray(0, 4),
+    new Uint8Array([255, 255, 255, 255]),
+    "drop shadow leaked beyond its bounded quad",
+  );
+  assert.ok(
+    shadowTarget[(4 * 9 + 4) * 4]! < 200,
+    "drop shadow did not darken the window footprint",
+  );
   console.log(
     `[sys/egl-output-smoke] ok renderer=${scaler.info.glRenderer} version=${scaler.info.glVersion}`,
   );
