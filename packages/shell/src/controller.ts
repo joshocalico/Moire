@@ -58,6 +58,17 @@ import { Group, Rect, measureText } from "@moire/react-host";
 
 export type ShellSpawn = (opts: { exec: string }) => { unref?: () => void };
 
+export type ShellRasterSurface = {
+  id: string;
+  pixels: Uint8Array;
+  width: number;
+  height: number;
+  stride: number;
+  revision: number;
+  x: number;
+  y: number;
+};
+
 export type ShellBridge = {
   setPrimaryOutput(output: { x: number; y: number; width: number; height: number }): void;
   paint(
@@ -66,6 +77,9 @@ export type ShellBridge = {
     width: number,
     height: number,
   ): void;
+  /** Revisioned shell surfaces for retained compositor backends. */
+  chromeRaster(width: number, height: number): ShellRasterSurface | null;
+  desktopRaster(width: number, height: number): ShellRasterSurface | null;
   /** Clear per-frame SSD hit list before painting windows in stack order. */
   beginSsdFrame(): void;
   /**
@@ -80,6 +94,7 @@ export type ShellBridge = {
     height: number,
     window: SsdWindowInfo,
   ): void;
+  ssdRaster(window: SsdWindowInfo): ShellRasterSurface;
   /** Paint all SSD titlebars (bottom→top). Prefer per-window paint in composite. */
   paintSsd(
     fb: Uint32Array,
@@ -369,6 +384,7 @@ export function createShell(
   if (open) console.log("[shell] launcher start-open (MOIRE_SHELL_START_OPEN)");
   let hits: HitRegion[] = [];
   let overlay: Uint8Array | null = null;
+  let overlayRevision = 0;
   type AlphaRuns = Array<Int32Array | null>;
   let overlayRuns: AlphaRuns | null = null;
   let ow = 0;
@@ -387,6 +403,7 @@ export function createShell(
     hits: HitRegion[];
     signature: string;
     dirty: boolean;
+    revision: number;
   };
   let ssdHits: SsdHit[] = [];
   let ssdHover: SsdHit | null = null;
@@ -411,6 +428,7 @@ export function createShell(
   let desktopDragActive = false;
   let desktopHits: HitRegion[] = [];
   let desktopOverlay: Uint8Array | null = null;
+  let desktopRevision = 0;
   let desktopOverlayRuns: AlphaRuns | null = null;
   let desktopW = 0;
   let desktopH = 0;
@@ -776,6 +794,7 @@ export function createShell(
     );
     const painted = rasterize(root.container, width, height);
     overlay = painted.pixels;
+    overlayRevision++;
     overlayRuns = buildAlphaRuns(overlay, width, height);
     hits = painted.hits;
     ow = width;
@@ -956,6 +975,7 @@ export function createShell(
     );
     const painted = rasterize(desktopRoot.container, width, height);
     desktopOverlay = painted.pixels;
+    desktopRevision++;
     desktopOverlayRuns = buildAlphaRuns(desktopOverlay, width, height);
     desktopHits = painted.hits;
     desktopW = width;
@@ -970,13 +990,7 @@ export function createShell(
     }
   };
 
-  const paintSsdWindow = (
-    fb: Uint32Array,
-    pitchPx: number,
-    width: number,
-    height: number,
-    window: SsdWindowInfo,
-  ) => {
+  const prepareSsdWindow = (window: SsdWindowInfo): ShellRasterSurface => {
     const stripKey = `${window.clientId}:${window.surfaceId}`;
     const signature = `${window.contentW}:${window.title}:${window.focused ? 1 : 0}:${window.maximized ? 1 : 0}`;
     const titlebarH = themePalette().titlebarHeight;
@@ -991,6 +1005,7 @@ export function createShell(
         hits: [],
         signature: "",
         dirty: true,
+        revision: 0,
       };
       ssdStripCache.set(stripKey, strip);
     }
@@ -1040,19 +1055,8 @@ export function createShell(
       strip.hits = painted.hits;
       strip.signature = signature;
       strip.dirty = false;
+      strip.revision++;
     }
-
-    blitStrip(
-      fb,
-      pitchPx,
-      width,
-      height,
-      window.x,
-      window.y,
-      strip.pixels,
-      strip.w,
-      strip.h,
-    );
 
     strip.hits.forEach((h, index) => {
       ssdHits.push({
@@ -1068,6 +1072,37 @@ export function createShell(
         onPointerMove: h.onPointerMove,
       });
     });
+    return {
+      id: `ssd:${stripKey}`,
+      pixels: strip.pixels,
+      width: strip.w,
+      height: strip.h,
+      stride: strip.w * 4,
+      revision: strip.revision,
+      x: window.x,
+      y: window.y,
+    };
+  };
+
+  const paintSsdWindow = (
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+    window: SsdWindowInfo,
+  ) => {
+    const raster = prepareSsdWindow(window);
+    blitStrip(
+      fb,
+      pitchPx,
+      width,
+      height,
+      raster.x,
+      raster.y,
+      raster.pixels,
+      raster.width,
+      raster.height,
+    );
   };
 
   const desktopFolderAt = (
@@ -1216,6 +1251,23 @@ export function createShell(
       blendOverlay(fb, pitchPx, width, height, overlay, overlayRuns);
     },
 
+    chromeRaster(width, height) {
+      if (dirty || !overlay || ow !== width || oh !== height) {
+        rebuild(width, height);
+      }
+      if (!overlay) return null;
+      return {
+        id: "shell:chrome",
+        pixels: overlay,
+        width,
+        height,
+        stride: width * 4,
+        revision: overlayRevision,
+        x: 0,
+        y: 0,
+      };
+    },
+
     beginSsdFrame() {
       for (const key of ssdStripCache.keys()) {
         if (!ssdSeen.has(key)) {
@@ -1229,6 +1281,10 @@ export function createShell(
     },
 
     paintSsdWindow,
+
+    ssdRaster(window) {
+      return prepareSsdWindow(window);
+    },
 
     paintSsd(fb, pitchPx, width, height, windows) {
       ssdHits = [];
@@ -1778,6 +1834,28 @@ export function createShell(
         desktopOverlay,
         desktopOverlayRuns,
       );
+    },
+
+    desktopRaster(width, height) {
+      if (
+        desktopDirty ||
+        !desktopOverlay ||
+        desktopW !== width ||
+        desktopH !== height
+      ) {
+        rebuildDesktop(width, height);
+      }
+      if (!showDesktopIcons || !desktopOverlay) return null;
+      return {
+        id: "shell:desktop",
+        pixels: desktopOverlay,
+        width,
+        height,
+        stride: width * 4,
+        revision: desktopRevision,
+        x: 0,
+        y: 0,
+      };
     },
 
     acceptDesktopDrop(uris, x, y) {

@@ -54,6 +54,7 @@ import {
   createCompositorOutputRenderer,
   type CompositorOutputRenderer,
 } from "./output-renderer.js";
+import type { CompositionLayer, CompositionScene } from "./composition.js";
 import {
   closeDmabufPlanes,
   copyFromDmabuf,
@@ -694,6 +695,17 @@ export type TaskWindowInfo = {
   minimized: boolean;
 };
 
+type ShellRasterSurface = {
+  id: string;
+  pixels: Uint8Array;
+  width: number;
+  height: number;
+  stride: number;
+  revision: number;
+  x: number;
+  y: number;
+};
+
 export type CompositorShell = {
   setPrimaryOutput?(output: { x: number; y: number; width: number; height: number }): void;
   paint(
@@ -702,6 +714,8 @@ export type CompositorShell = {
     width: number,
     height: number,
   ): void;
+  chromeRaster?(width: number, height: number): ShellRasterSurface | null;
+  desktopRaster?(width: number, height: number): ShellRasterSurface | null;
   beginSsdFrame?(): void;
   paintSsdWindow?(
     fb: Uint32Array,
@@ -710,6 +724,7 @@ export type CompositorShell = {
     height: number,
     window: SsdWindowInfo,
   ): void;
+  ssdRaster?(window: SsdWindowInfo): ShellRasterSurface;
   paintSsd?(
     fb: Uint32Array,
     pitchPx: number,
@@ -1024,6 +1039,9 @@ export class CompositorServer {
   private shiftHeld = false;
   /** CPU staging buffer — paint here, then flushMmap + presentKms. */
   private stage: Buffer | null = null;
+  private retainedWallpaper: Buffer | null = null;
+  private retainedWallpaperKey = "";
+  private retainedWallpaperRevision = 0;
   private profileFrames = 0;
   private profileSceneMs = 0;
   private profileWallpaperMs = 0;
@@ -4596,11 +4614,355 @@ export class CompositorServer {
     return painted;
   }
 
+  private canUseRetainedComposition(renderer: CompositorOutputRenderer): boolean {
+    if (!renderer.capabilities.retainedLayers || !renderer.beginComposition) return false;
+    if (
+      !this.shell?.desktopRaster ||
+      !this.shell.chromeRaster ||
+      !this.shell.ssdRaster ||
+      this.drag ||
+      this.dragReturn ||
+      this.shell.desktopDragLabel?.()
+    ) {
+      return false;
+    }
+    // Preserve the software path's special CSD shadow masking until that mask
+    // is a native retained-layer operation. Never trade correctness for entry
+    // into the accelerated path.
+    for (const entry of this.stack) {
+      entry.session.layout();
+      for (const surface of entry.session.paintTree(entry.surfaceId)) {
+        if (
+          surface.mapped &&
+          !entry.session.isHidden(surface) &&
+          surface.role === "toplevel" &&
+          surface.geomW > 0 &&
+          surface.geomH > 0 &&
+          !this.usesSsd(surface)
+        ) {
+          return false;
+        }
+      }
+    }
+    for (const entry of this.popupStack) {
+      const surface = entry.session.surfaceById(entry.surfaceId);
+      if (surface?.mapped && surface.geomW > 0 && surface.geomH > 0) return false;
+    }
+    return true;
+  }
+
+  private retainedCursorLayer(z: number): CompositionLayer | null {
+    const clientCursor = this.clientCursor;
+    if (clientCursor) {
+      const surface = clientCursor.session.surfaceById(clientCursor.surfaceId);
+      if (surface?.pixels && surface.width > 0 && surface.height > 0) {
+        clientCursor.session.finishSurfaceFrame(surface);
+        return {
+          id: `cursor:${clientCursor.session.clientId}:${surface.id}`,
+          z,
+          source: {
+            pixels: surface.pixels,
+            width: surface.bufferWidth,
+            height: surface.bufferHeight,
+            stride: surface.stride,
+            revision: surface.revision,
+          },
+          destination: {
+            x: (this.cursorX | 0) - clientCursor.hotspotX,
+            y: (this.cursorY | 0) - clientCursor.hotspotY,
+            width: surface.width,
+            height: surface.height,
+          },
+          sampling: "nearest",
+        };
+      }
+      if (surface) clientCursor.session.finishSurfaceFrame(surface);
+    }
+
+    const fallback = this.fallbackCursorShape();
+    const width = Math.max(1, ...fallback.shape.map((line) => line.length));
+    const height = fallback.shape.length;
+    const pixels = new Uint8Array(width * height * 4);
+    const words = new Uint32Array(pixels.buffer);
+    for (let row = 0; row < height; row++) {
+      const line = fallback.shape[row]!;
+      for (let col = 0; col < line.length; col++) {
+        const ch = line[col]!;
+        if (ch !== " ") words[row * width + col] = ch === "X" ? 0xff000000 : 0xffffffff;
+      }
+    }
+    return {
+      id: "cursor:fallback",
+      z,
+      source: { pixels, width, height, stride: width * 4 },
+      destination: {
+        x: (this.cursorX | 0) - fallback.hotX,
+        y: (this.cursorY | 0) - fallback.hotY,
+        width,
+        height,
+      },
+      sampling: "nearest",
+    };
+  }
+
+  private compositeRetained(
+    renderer: CompositorOutputRenderer,
+    frameStartedMs: number,
+    width: number,
+    height: number,
+  ): void {
+    const layers: CompositionLayer[] = [];
+    let z = 0;
+    const wallPhase = (Date.now() / 60000) % 1;
+    const phaseBucket = Math.floor(wallPhase * 20);
+    const wallpaperKey = `${this.theme.name}:${width}x${height}:${phaseBucket}:${JSON.stringify(this.theme.wallpaper)}`;
+    if (
+      !this.retainedWallpaper ||
+      this.retainedWallpaper.byteLength !== width * height * 4 ||
+      this.retainedWallpaperKey !== wallpaperKey
+    ) {
+      this.retainedWallpaper = Buffer.alloc(width * height * 4);
+      paintWallpaper(
+        new Uint32Array(
+          this.retainedWallpaper.buffer,
+          this.retainedWallpaper.byteOffset,
+          this.retainedWallpaper.byteLength >>> 2,
+        ),
+        width,
+        width,
+        height,
+        this.theme,
+        wallPhase,
+      );
+      this.retainedWallpaperKey = wallpaperKey;
+      this.retainedWallpaperRevision++;
+    }
+    layers.push({
+      id: "wallpaper",
+      z: z++,
+      source: {
+        pixels: this.retainedWallpaper,
+        width,
+        height,
+        stride: width * 4,
+        revision: this.retainedWallpaperRevision,
+      },
+      destination: { x: 0, y: 0, width, height },
+      blendMode: "copy",
+      sampling: "nearest",
+    });
+    if (this.theme.wallpaper.mode === "atmosphere") this.markDirty();
+    const wallpaperFinishedMs = monotonicMs();
+
+    const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0]!;
+    this.shell?.setPrimaryOutput?.({
+      x: primary.x,
+      y: primary.y,
+      width: outputLogicalWidth(primary),
+      height: outputLogicalHeight(primary),
+    });
+    this.shell?.setTasks?.(this.collectTaskWindows());
+    const desktop = this.shell?.desktopRaster?.(width, height);
+    if (desktop) {
+      layers.push({
+        id: desktop.id,
+        z: z++,
+        source: desktop,
+        destination: {
+          x: desktop.x,
+          y: desktop.y,
+          width: desktop.width,
+          height: desktop.height,
+        },
+      });
+    }
+    const desktopFinishedMs = monotonicMs();
+
+    let painted = 0;
+    this.shell?.beginSsdFrame?.();
+    for (const entry of this.stack) {
+      const client = entry.session;
+      client.layout();
+      for (const surface of client.paintTree(entry.surfaceId)) {
+        client.updateSurfaceOutputs(surface);
+        if (surface.mapped && surface.pixels && !client.isHidden(surface)) {
+          const ssdY =
+            surface.role === "toplevel" && this.usesSsd(surface)
+              ? SSD_TITLEBAR_H
+              : 0;
+          layers.push({
+            id: `surface:${client.clientId}:${surface.id}`,
+            z: z++,
+            source: {
+              pixels: surface.pixels,
+              width: surface.bufferWidth,
+              height: surface.bufferHeight,
+              stride: surface.stride,
+              revision: surface.revision,
+            },
+            destination: {
+              x: surface.x,
+              y: surface.y + ssdY,
+              width: surface.width,
+              height: surface.height,
+            },
+            sampling: "nearest",
+          });
+          painted++;
+        }
+        client.finishSurfaceFrame(surface);
+      }
+
+      const top = client.surfaceById(entry.surfaceId);
+      if (
+        top?.mapped &&
+        !client.isHidden(top) &&
+        this.usesSsd(top) &&
+        this.shell?.ssdRaster
+      ) {
+        const size = this.contentSize(top);
+        if (size.w > 0 && size.h > 0) {
+          const ssd = this.shell.ssdRaster({
+            clientId: client.clientId,
+            surfaceId: top.id,
+            x: top.x,
+            y: top.y,
+            contentW: size.w,
+            contentH: size.h,
+            title: top.title || "Window",
+            focused:
+              this.focusedToplevel?.session === client &&
+              this.focusedToplevel.surfaceId === top.id,
+            maximized: top.maximized,
+          });
+          layers.push({
+            id: ssd.id,
+            z: z++,
+            source: ssd,
+            destination: { x: ssd.x, y: ssd.y, width: ssd.width, height: ssd.height },
+          });
+        }
+      }
+    }
+    const windowsFinishedMs = monotonicMs();
+
+    this.ssdWindows = this.collectSsdWindows();
+    const chrome = this.shell?.chromeRaster?.(width, height);
+    if (chrome) {
+      layers.push({
+        id: chrome.id,
+        z: z++,
+        source: chrome,
+        destination: { x: chrome.x, y: chrome.y, width: chrome.width, height: chrome.height },
+      });
+    }
+    const chromeFinishedMs = monotonicMs();
+
+    for (const entry of this.popupStack) {
+      const client = entry.session;
+      const surface = client.surfaceById(entry.surfaceId);
+      if (!surface?.mapped || !surface.pixels || client.isHidden(surface)) continue;
+      this.layoutPopup(client, surface);
+      client.updateSurfaceOutputs(surface);
+      layers.push({
+        id: `popup:${client.clientId}:${surface.id}`,
+        z: z++,
+        source: {
+          pixels: surface.pixels,
+          width: surface.bufferWidth,
+          height: surface.bufferHeight,
+          stride: surface.stride,
+          revision: surface.revision,
+        },
+        destination: {
+          x: surface.x,
+          y: surface.y,
+          width: surface.width,
+          height: surface.height,
+        },
+        sampling: "nearest",
+      });
+      client.finishSurfaceFrame(surface);
+      painted++;
+    }
+    const cursor = this.retainedCursorLayer(z++);
+    if (cursor) layers.push(cursor);
+    const sceneFinishedMs = monotonicMs();
+
+    const scene: CompositionScene = {
+      width,
+      height,
+      clearColor: hexToArgb(this.theme.tokens.bg),
+      layers,
+    };
+    const outputPhaseStartedMs = monotonicMs();
+    renderer.beginComposition!(scene);
+    let frameRenderMs = monotonicMs() - outputPhaseStartedMs;
+    let framePresentMs = 0;
+    for (const output of this.outputs) {
+      const outputStartedMs = monotonicMs();
+      const physical = output.kms;
+      let target = this.outputStages.get(physical.connectorId);
+      if (!target || target.byteLength !== physical.size) {
+        target = Buffer.alloc(physical.size);
+        this.outputStages.set(physical.connectorId, target);
+      }
+      renderer.renderOutput({
+        geometry: {
+          id: physical.connectorName,
+          x: output.x,
+          y: output.y,
+          width: outputLogicalWidth(output),
+          height: outputLogicalHeight(output),
+        },
+        pixels: target,
+        physicalWidth: physical.width,
+        physicalHeight: physical.height,
+        pitch: physical.pitch,
+      });
+      const renderedMs = monotonicMs();
+      flushMmap(physical.map, target, physical.size);
+      try {
+        presentKms(physical);
+      } catch (error) {
+        console.error(`[composite] retained present ${physical.connectorName}:`, error);
+      }
+      const presentedMs = monotonicMs();
+      frameRenderMs += renderedMs - outputStartedMs;
+      framePresentMs += presentedMs - renderedMs;
+    }
+    this.profileFrames++;
+    this.profileSceneMs += sceneFinishedMs - frameStartedMs;
+    this.profileWallpaperMs += wallpaperFinishedMs - frameStartedMs;
+    this.profileDesktopMs += desktopFinishedMs - wallpaperFinishedMs;
+    this.profileWindowsMs += windowsFinishedMs - desktopFinishedMs;
+    this.profileChromeMs += chromeFinishedMs - windowsFinishedMs;
+    this.profileTopMs += sceneFinishedMs - chromeFinishedMs;
+    this.profileRenderMs += frameRenderMs;
+    this.profilePresentMs += framePresentMs;
+    this.maybeLogRenderProfile();
+    if (painted > 0 && painted !== this.lastPainted) {
+      console.log(`[composite] retained ${painted} surfaces in ${layers.length} layers`);
+      this.lastPainted = painted;
+    }
+  }
+
   /** Paint wallpaper + all mapped surfaces into the KMS dumb buffer. */
   composite(): void {
     if (this.outputs.length === 0) return;
     const frameStartedMs = monotonicMs();
     const kms = this.getKmsSize();
+    const renderer = this.outputRenderer;
+    if (renderer && this.canUseRetainedComposition(renderer)) {
+      try {
+        this.compositeRetained(renderer, frameStartedMs, kms.width, kms.height);
+        return;
+      } catch (error) {
+        // Keep the flattened path as an in-frame compatibility fallback. An
+        // extension/effect failure must not turn into a black desktop loop.
+        console.error("[renderer] retained scene failed; rebuilding flat frame:", error);
+      }
+    }
     const stageSize = kms.width * kms.height * 4;
 
     if (!this.stage || this.stage.byteLength !== stageSize) {

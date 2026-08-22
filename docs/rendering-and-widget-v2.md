@@ -24,8 +24,13 @@ The compositor accepts `MOIRE_RENDERER=auto|software|egl`.
 The EGL backend also has a retained composition entry point. It caches source
 textures by stable layer id and content revision, composites premultiplied
 layers with opacity, sampling and projective 4×4 transforms, and reclaims stale
-textures. The live desktop still enters through the flattened compatibility
-path while shell/window stacking is migrated incrementally.
+textures. The live desktop now uses retained layers for wallpaper, desktop
+icons, every client surface, SSD strips interleaved in window stack order,
+shell chrome, popups, and the cursor. Drag previews and CSD buffers needing the
+legacy outside-geometry shadow mask use the flattened compatibility path until
+those operations become native layer semantics. A retained-scene failure also
+rebuilds the same frame through the compatibility path instead of looping on a
+black output.
 
 The composition vocabulary already describes stable z-order, source and
 destination rectangles, opacity, blend mode, clipping, corner radii, and an
@@ -48,7 +53,7 @@ making widgets or window-management policy depend on GLES.
   padded output pitch, and fallback behavior.
 - Profile real VM output at normal and high resolutions.
 
-### R2 — split the flattened scene into compositor layers
+### R2 — active: split the flattened scene into compositor layers
 
 Replace direct writes into `CompositorServer.stage` with a `CompositionScene`:
 
