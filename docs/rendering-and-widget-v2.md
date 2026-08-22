@@ -108,6 +108,38 @@ future regional upload/damage.
 - Remove `glReadPixels`, dumb-buffer upload, and repeated `drmModeSetCrtc` from
   steady-state EGL presentation.
 
+### Future — renderer and compositor effect plugins (earmarked)
+
+There are two useful plugin seams once the render-pass API is stable. First,
+the current `software` and `egl` output renderers should be registered backend
+plugins with probe, capability, context-loss, presentation, and teardown hooks;
+`auto` then selects from that registry instead of constructing concrete classes
+in core. Software remains the always-present oracle and safe fallback.
+
+Second, backdrop blur should become the first in-tree effect plugin. This is a
+trusted compositor plugin boundary, not an application protocol for uploading
+arbitrary shaders.
+
+1. Add an `EffectPluginManifest` with a namespaced id, API version, required
+   inputs (`source` / `backdrop`), damage padding, quality tiers, and backend
+   capability requirements.
+2. Add a compositor-owned registry that resolves the existing
+   `extension(namespace, name)` composition effect into a validated pass
+   factory. Unknown or unsupported effects must fail capability negotiation,
+   never silently disappear.
+3. Give backend plugins scoped render resources and lifecycle hooks for
+   compile, resize, execute, context loss, and destroy. Do not expose the raw
+   compositor context or permit unbounded target allocation.
+4. Support an optional deterministic software implementation so effect tests
+   can remain backend-independent; otherwise the manifest must explicitly
+   declare EGL-only support and its fallback policy.
+5. Move the built-in backdrop snapshot, regional downsample, separable blur,
+   saturation, tint, and rounded material composite behind that interface as
+   the conformance plugin.
+6. Only after the in-tree ABI and resource limits settle, consider trusted
+   loadable packages and development hot reload. Client-selected effects remain
+   symbolic requests mediated by compositor policy.
+
 ### R5 — damage and direct scanout
 
 - Propagate surface and widget damage through transforms and effects.

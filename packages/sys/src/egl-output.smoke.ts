@@ -230,7 +230,7 @@ try {
     shadowTarget[(4 * 9 + 4) * 4]! < 200,
     "drop shadow did not darken the window footprint",
   );
-  const blurWidth = 16;
+  const blurWidth = 24;
   const blurHeight = 8;
   const stripeSource = new Uint8Array(blurWidth * blurHeight * 4);
   for (let y = 0; y < blurHeight; y++) {
@@ -261,7 +261,7 @@ try {
         sourceHeight: 1,
         sourceStride: 4,
         revision: 1,
-        destination: { x: 4, y: 2, width: 8, height: 4 },
+        destination: { x: 8, y: 2, width: 8, height: 4 },
         backdropBlur: { radius: 4 },
         sampling: "nearest",
       },
@@ -284,8 +284,8 @@ try {
     stripeSource.subarray((1 * blurWidth + 1) * 4, (1 * blurWidth + 2) * 4),
     "backdrop blur modified pixels outside its layer bounds",
   );
-  const blurredDark = blurTarget[(3 * blurWidth + 6) * 4]!;
-  const blurredLight = blurTarget[(3 * blurWidth + 7) * 4]!;
+  const blurredDark = blurTarget[(3 * blurWidth + 10) * 4]!;
+  const blurredLight = blurTarget[(3 * blurWidth + 11) * 4]!;
   assert.ok(
     blurredDark > 10 && blurredLight < 245,
     "backdrop blur did not reduce contrast inside its layer bounds",

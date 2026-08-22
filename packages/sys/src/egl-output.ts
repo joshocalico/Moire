@@ -238,6 +238,8 @@ export class EglOutputScaler {
   private sourceHeight = 0;
   private sceneWidth = 0;
   private sceneHeight = 0;
+  private backdropWidth = 0;
+  private backdropHeight = 0;
   private blurWidth = 0;
   private blurHeight = 0;
   private targetWidth = 0;
@@ -856,24 +858,68 @@ void main() {
     const effect = layer.backdropBlur;
     if (!effect || effect.radius <= 0) return;
 
+    // An untransformed material only needs the pixels beneath its bounds plus
+    // the kernel reach. Transformed effects retain the conservative full-scene
+    // path until transformed damage/bounds are represented by the graph.
+    const padding = Math.ceil(effect.radius);
+    const regional = !layer.transform;
+    const sampleX = regional
+      ? Math.max(0, Math.floor(layer.destination.x - padding))
+      : 0;
+    const sampleY = regional
+      ? Math.max(0, Math.floor(layer.destination.y - padding))
+      : 0;
+    const sampleRight = regional
+      ? Math.min(
+          scene.width,
+          Math.ceil(layer.destination.x + layer.destination.width + padding),
+        )
+      : scene.width;
+    const sampleBottom = regional
+      ? Math.min(
+          scene.height,
+          Math.ceil(layer.destination.y + layer.destination.height + padding),
+        )
+      : scene.height;
+    const backdropWidth = Math.max(1, sampleRight - sampleX);
+    const backdropHeight = Math.max(1, sampleBottom - sampleY);
+
     // Snapshot the already-composited stack. Sampling sceneTexture while it is
     // the active render target would be undefined feedback in GLES.
     this.glActiveTexture(GL_TEXTURE0);
     this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
+    if (
+      backdropWidth !== this.backdropWidth ||
+      backdropHeight !== this.backdropHeight
+    ) {
+      this.glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        backdropWidth,
+        backdropHeight,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        null,
+      );
+      this.backdropWidth = backdropWidth;
+      this.backdropHeight = backdropHeight;
+    }
     this.glCopyTexSubImage2D(
       GL_TEXTURE_2D,
       0,
       0,
       0,
-      0,
-      0,
-      scene.width,
-      scene.height,
+      sampleX,
+      sampleY,
+      backdropWidth,
+      backdropHeight,
     );
 
     const downsample = 4;
-    const blurWidth = Math.max(1, Math.ceil(scene.width / downsample));
-    const blurHeight = Math.max(1, Math.ceil(scene.height / downsample));
+    const blurWidth = Math.max(1, Math.ceil(backdropWidth / downsample));
+    const blurHeight = Math.max(1, Math.ceil(backdropHeight / downsample));
     if (blurWidth !== this.blurWidth || blurHeight !== this.blurHeight) {
       for (const texture of [this.blurTextureA, this.blurTextureB]) {
         this.glBindTexture(GL_TEXTURE_2D, texture);
@@ -906,7 +952,7 @@ void main() {
     this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
     this.glUniform2f(
       this.blurDirectionLocation,
-      Math.max(0.5, effect.radius) / kernelReach / scene.width,
+      Math.max(0.5, effect.radius) / kernelReach / backdropWidth,
       0,
     );
     this.drawQuad(fullPositions, fullCoords);
@@ -954,10 +1000,12 @@ void main() {
       clipX(p2[0]), clipY(p2[1]),
       clipX(p3[0]), clipY(p3[1]),
     ]);
-    const x0 = layer.destination.x / scene.width;
-    const y0 = layer.destination.y / scene.height;
-    const x1 = (layer.destination.x + layer.destination.width) / scene.width;
-    const y1 = (layer.destination.y + layer.destination.height) / scene.height;
+    const x0 = (layer.destination.x - sampleX) / backdropWidth;
+    const y0 = (layer.destination.y - sampleY) / backdropHeight;
+    const x1 =
+      (layer.destination.x + layer.destination.width - sampleX) / backdropWidth;
+    const y1 =
+      (layer.destination.y + layer.destination.height - sampleY) / backdropHeight;
     this.glUniform4f(this.uvRectLocation, x0, y0, x1, y1);
     this.glUniform2f(
       this.layerSizeLocation,
@@ -990,18 +1038,6 @@ void main() {
     this.compositionFrame++;
     this.glBindTexture(GL_TEXTURE_2D, this.sceneTexture);
     if (scene.width !== this.sceneWidth || scene.height !== this.sceneHeight) {
-      this.glTexImage2D(
-        GL_TEXTURE_2D,
-        0,
-        GL_RGBA,
-        scene.width,
-        scene.height,
-        0,
-        GL_RGBA,
-        GL_UNSIGNED_BYTE,
-        null,
-      );
-      this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
       this.glTexImage2D(
         GL_TEXTURE_2D,
         0,
