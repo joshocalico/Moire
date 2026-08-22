@@ -33,6 +33,13 @@ drag chips without a Wayland icon are the remaining flattened drag case. A
 retained-scene failure also rebuilds the same frame through the compatibility
 path instead of looping on a black output.
 
+Backdrop blur is now a native stacking operation. The EGL backend snapshots
+the accumulated scene, downsamples it, applies separable horizontal and
+vertical passes through independent ping-pong targets, then composites the
+result only inside the requesting layer before its foreground is drawn. The
+bottom panel is the first live material consumer, with saturation and tint
+carried by the backend-neutral effect description.
+
 The composition vocabulary already describes stable z-order, source and
 destination rectangles, opacity, blend mode, clipping, corner radii, and an
 effect stack. Effects include backdrop blur, drop shadow, and color matrix.
@@ -81,9 +88,10 @@ future regional upload/damage.
 - Layers render into an offscreen scene target.
 - Per-corner rounded clipping and bounded analytic rounded-rectangle window
   shadows execute in GLES and follow projective transforms.
-- Implement separable, downsampled backdrop blur with bounded damage.
-- Apply blur to the accumulated backdrop before drawing the requesting layer;
-  blur is a stacking effect, not a widget screenshot trick.
+- Separable, downsampled backdrop blur executes against the accumulated
+  backdrop and is clipped to the requesting layer; it is a stacking effect,
+  not a widget screenshot trick.
+- Propagate bounded blur damage so unchanged regions do not rerun the pass.
 - Add shader color matrices, saturation/tint, rounded masks, and shadows.
 - Define effect quality tiers so software, low-power EGL, and full EGL can make
   explicit tradeoffs without changing widget APIs.

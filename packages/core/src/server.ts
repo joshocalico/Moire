@@ -4942,6 +4942,34 @@ export class CompositorServer {
     this.ssdWindows = this.collectSsdWindows();
     const chrome = this.shell?.chromeRaster?.(width, height);
     if (chrome) {
+      if (renderer.capabilities.backdropBlur) {
+        const panelHeight = Math.max(this.theme.tokens.panelHeight, 46);
+        layers.push({
+          id: "shell:panel-material",
+          z: z++,
+          source: {
+            pixels: this.retainedEffectPixel,
+            width: 1,
+            height: 1,
+            stride: 4,
+            revision: 1,
+          },
+          destination: {
+            x: primary.x,
+            y: primary.y + outputLogicalHeight(primary) - panelHeight,
+            width: outputLogicalWidth(primary),
+            height: panelHeight,
+          },
+          effects: [
+            {
+              kind: "backdrop-blur",
+              radius: 18,
+              saturation: 1.08,
+              tint: hexToArgb(this.theme.tokens.panel, 0x24),
+            },
+          ],
+        });
+      }
       layers.push({
         id: chrome.id,
         z: z++,

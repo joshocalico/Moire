@@ -80,7 +80,7 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
     // contract already exposes effects, but they become true only as their
     // GLES passes land.
     directScanout: false,
-    backdropBlur: false,
+    backdropBlur: true,
     dropShadow: true,
     colorMatrix: false,
     roundedClip: true,
@@ -103,7 +103,10 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
       (layer) =>
         layer.mesh ||
         layer.clip ||
-        layer.effects?.some((effect) => effect.kind !== "drop-shadow"),
+        layer.effects?.some(
+          (effect) =>
+            effect.kind !== "drop-shadow" && effect.kind !== "backdrop-blur",
+        ),
     );
     if (unsupported) {
       throw new Error(
@@ -117,6 +120,9 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
       layers: orderedCompositionLayers(scene).map((layer) => {
         const dropShadow = layer.effects?.find(
           (effect) => effect.kind === "drop-shadow",
+        );
+        const backdropBlur = layer.effects?.find(
+          (effect) => effect.kind === "backdrop-blur",
         );
         return {
           id: layer.id,
@@ -134,6 +140,7 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
           surfaceGeometry: layer.surfaceGeometry,
           cornerRadius: layer.cornerRadius,
           dropShadow,
+          backdropBlur,
         };
       }),
     };

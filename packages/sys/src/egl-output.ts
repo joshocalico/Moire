@@ -138,6 +138,11 @@ export type EglCompositionLayer = {
     spread?: number;
     color: number;
   };
+  backdropBlur?: {
+    radius: number;
+    saturation?: number;
+    tint?: number;
+  };
 };
 
 export type EglCompositionScene = {
@@ -178,6 +183,7 @@ export class EglOutputScaler {
   private readonly glTexParameteri: NativeFunction;
   private readonly glTexImage2D: NativeFunction;
   private readonly glTexSubImage2D: NativeFunction;
+  private readonly glCopyTexSubImage2D: NativeFunction;
   private readonly glPixelStorei: NativeFunction;
   private readonly glBindFramebuffer: NativeFunction;
   private readonly glFramebufferTexture2D: NativeFunction;
@@ -212,11 +218,19 @@ export class EglOutputScaler {
   private readonly shadowRadiusLocation: number;
   private readonly shadowSoftnessLocation: number;
   private readonly shadowColorLocation: number;
+  private readonly blurDirectionLocation: number;
+  private readonly saturationLocation: number;
+  private readonly tintColorLocation: number;
   private readonly sourceTexture: number;
   private readonly targetTexture: number;
   private readonly sceneTexture: number;
+  private readonly backdropTexture: number;
+  private readonly blurTextureA: number;
+  private readonly blurTextureB: number;
   private readonly framebuffer: number;
   private readonly sceneFramebuffer: number;
+  private readonly blurFramebufferA: number;
+  private readonly blurFramebufferB: number;
   private outputSourceTexture = 0;
   private readonly layerTextures = new Map<string, CachedTexture>();
   private compositionFrame = 0;
@@ -224,6 +238,8 @@ export class EglOutputScaler {
   private sourceHeight = 0;
   private sceneWidth = 0;
   private sceneHeight = 0;
+  private blurWidth = 0;
+  private blurHeight = 0;
   private targetWidth = 0;
   private targetHeight = 0;
   private readback: Uint8Array | null = null;
@@ -387,6 +403,9 @@ export class EglOutputScaler {
     this.glTexSubImage2D = this.gl.func(
       "void glTexSubImage2D(unsigned int target, int level, int xoffset, int yoffset, int width, int height, unsigned int format, unsigned int type, const void *pixels)",
     ) as NativeFunction;
+    this.glCopyTexSubImage2D = this.gl.func(
+      "void glCopyTexSubImage2D(unsigned int target, int level, int xoffset, int yoffset, int x, int y, int width, int height)",
+    ) as NativeFunction;
     this.glPixelStorei = this.gl.func(
       "void glPixelStorei(unsigned int pname, int param)",
     ) as NativeFunction;
@@ -473,6 +492,15 @@ export class EglOutputScaler {
       glGetUniformLocation(this.program, "u_shadow_softness"),
     );
     this.shadowColorLocation = Number(glGetUniformLocation(this.program, "u_shadow_color"));
+    this.blurDirectionLocation = Number(
+      glGetUniformLocation(this.program, "u_blur_direction"),
+    );
+    this.saturationLocation = Number(
+      glGetUniformLocation(this.program, "u_saturation"),
+    );
+    this.tintColorLocation = Number(
+      glGetUniformLocation(this.program, "u_tint_color"),
+    );
     if (this.positionLocation < 0 || this.texCoordLocation < 0) {
       throw new Error("GLES compositor shader attributes unavailable");
     }
@@ -486,11 +514,19 @@ export class EglOutputScaler {
     this.sourceTexture = uintOut((out) => void glGenTextures(1, out));
     this.targetTexture = uintOut((out) => void glGenTextures(1, out));
     this.sceneTexture = uintOut((out) => void glGenTextures(1, out));
+    this.backdropTexture = uintOut((out) => void glGenTextures(1, out));
+    this.blurTextureA = uintOut((out) => void glGenTextures(1, out));
+    this.blurTextureB = uintOut((out) => void glGenTextures(1, out));
     this.framebuffer = uintOut((out) => void glGenFramebuffers(1, out));
     this.sceneFramebuffer = uintOut((out) => void glGenFramebuffers(1, out));
+    this.blurFramebufferA = uintOut((out) => void glGenFramebuffers(1, out));
+    this.blurFramebufferB = uintOut((out) => void glGenFramebuffers(1, out));
     this.configureTexture(this.sourceTexture);
     this.configureTexture(this.targetTexture);
     this.configureTexture(this.sceneTexture);
+    this.configureTexture(this.backdropTexture);
+    this.configureTexture(this.blurTextureA);
+    this.configureTexture(this.blurTextureB);
     this.outputSourceTexture = this.sourceTexture;
     this.glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     this.glPixelStorei(GL_PACK_ALIGNMENT, 4);
@@ -536,7 +572,82 @@ export class EglOutputScaler {
     );
     const fragment = this.createShader(
       GL_FRAGMENT_SHADER,
-      "precision mediump float; uniform sampler2D u_texture; uniform float u_opacity; uniform vec4 u_surface_geometry; uniform float u_has_surface_geometry; uniform vec4 u_uv_rect; uniform vec2 u_layer_size; uniform vec4 u_corner_radii; uniform float u_mode; uniform vec4 u_shadow_rect; uniform float u_shadow_radius; uniform float u_shadow_softness; uniform vec4 u_shadow_color; varying vec2 v_tex_coord; void main() { vec2 uv_span = max(u_uv_rect.zw - u_uv_rect.xy, vec2(0.00001)); vec2 local = ((v_tex_coord - u_uv_rect.xy) / uv_span) * u_layer_size; if (u_mode > 0.5) { vec2 q = abs(local - u_shadow_rect.xy) - u_shadow_rect.zw + vec2(u_shadow_radius); float distance_field = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - u_shadow_radius; float coverage = 1.0 - smoothstep(-u_shadow_softness, u_shadow_softness, distance_field); gl_FragColor = vec4(u_shadow_color.rgb * u_shadow_color.a, u_shadow_color.a) * coverage; return; } bool left = local.x < u_layer_size.x * 0.5; bool top = local.y < u_layer_size.y * 0.5; float radius = top ? (left ? u_corner_radii.x : u_corner_radii.y) : (left ? u_corner_radii.w : u_corner_radii.z); radius = min(radius, min(u_layer_size.x, u_layer_size.y) * 0.5); if (radius > 0.0) { vec2 center = vec2(left ? radius : u_layer_size.x - radius, top ? radius : u_layer_size.y - radius); bool corner = (left ? local.x < radius : local.x > u_layer_size.x - radius) && (top ? local.y < radius : local.y > u_layer_size.y - radius); if (corner && distance(local, center) > radius) discard; } vec4 color = texture2D(u_texture, v_tex_coord); if (u_has_surface_geometry > 0.5) { bool outside = v_tex_coord.x < u_surface_geometry.x || v_tex_coord.y < u_surface_geometry.y || v_tex_coord.x >= u_surface_geometry.z || v_tex_coord.y >= u_surface_geometry.w; if (outside && color.a > 0.999) discard; } gl_FragColor = color * u_opacity; }",
+      `precision mediump float;
+uniform sampler2D u_texture;
+uniform float u_opacity;
+uniform vec4 u_surface_geometry;
+uniform float u_has_surface_geometry;
+uniform vec4 u_uv_rect;
+uniform vec2 u_layer_size;
+uniform vec4 u_corner_radii;
+uniform float u_mode;
+uniform vec4 u_shadow_rect;
+uniform float u_shadow_radius;
+uniform float u_shadow_softness;
+uniform vec4 u_shadow_color;
+uniform vec2 u_blur_direction;
+uniform float u_saturation;
+uniform vec4 u_tint_color;
+varying vec2 v_tex_coord;
+
+bool outside_rounded_rect(vec2 local) {
+  bool left = local.x < u_layer_size.x * 0.5;
+  bool top = local.y < u_layer_size.y * 0.5;
+  float radius = top
+    ? (left ? u_corner_radii.x : u_corner_radii.y)
+    : (left ? u_corner_radii.w : u_corner_radii.z);
+  radius = min(radius, min(u_layer_size.x, u_layer_size.y) * 0.5);
+  if (radius <= 0.0) return false;
+  vec2 center = vec2(
+    left ? radius : u_layer_size.x - radius,
+    top ? radius : u_layer_size.y - radius
+  );
+  bool corner =
+    (left ? local.x < radius : local.x > u_layer_size.x - radius) &&
+    (top ? local.y < radius : local.y > u_layer_size.y - radius);
+  return corner && distance(local, center) > radius;
+}
+
+void main() {
+  if (u_mode > 1.5 && u_mode < 2.5) {
+    vec4 color = texture2D(u_texture, v_tex_coord) * 0.227027;
+    color += texture2D(u_texture, v_tex_coord + u_blur_direction * 1.384615) * 0.316216;
+    color += texture2D(u_texture, v_tex_coord - u_blur_direction * 1.384615) * 0.316216;
+    color += texture2D(u_texture, v_tex_coord + u_blur_direction * 3.230769) * 0.070270;
+    color += texture2D(u_texture, v_tex_coord - u_blur_direction * 3.230769) * 0.070270;
+    gl_FragColor = color;
+    return;
+  }
+
+  vec2 uv_span = max(u_uv_rect.zw - u_uv_rect.xy, vec2(0.00001));
+  vec2 local = ((v_tex_coord - u_uv_rect.xy) / uv_span) * u_layer_size;
+  if (u_mode > 0.5 && u_mode < 1.5) {
+    vec2 q = abs(local - u_shadow_rect.xy) - u_shadow_rect.zw + vec2(u_shadow_radius);
+    float distance_field = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - u_shadow_radius;
+    float coverage = 1.0 - smoothstep(-u_shadow_softness, u_shadow_softness, distance_field);
+    gl_FragColor = vec4(u_shadow_color.rgb * u_shadow_color.a, u_shadow_color.a) * coverage;
+    return;
+  }
+  if (outside_rounded_rect(local)) discard;
+
+  vec4 color = texture2D(u_texture, v_tex_coord);
+  if (u_mode > 2.5) {
+    float luminance = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+    color.rgb = mix(vec3(luminance), color.rgb, u_saturation);
+    color.rgb = color.rgb * (1.0 - u_tint_color.a) + u_tint_color.rgb * u_tint_color.a;
+    gl_FragColor = color * u_opacity;
+    return;
+  }
+  if (u_has_surface_geometry > 0.5) {
+    bool outside =
+      v_tex_coord.x < u_surface_geometry.x ||
+      v_tex_coord.y < u_surface_geometry.y ||
+      v_tex_coord.x >= u_surface_geometry.z ||
+      v_tex_coord.y >= u_surface_geometry.w;
+    if (outside && color.a > 0.999) discard;
+  }
+  gl_FragColor = color * u_opacity;
+}`,
     );
     const glCreateProgram = this.gl.func(
       "unsigned int glCreateProgram(void)",
@@ -715,6 +826,161 @@ export class EglOutputScaler {
     ];
   }
 
+  private drawQuad(positions: Float32Array, texCoords: Float32Array): void {
+    this.glEnableVertexAttribArray(this.positionLocation);
+    this.glEnableVertexAttribArray(this.texCoordLocation);
+    this.glVertexAttribPointer(this.positionLocation, 2, GL_FLOAT, 0, 0, positions);
+    this.glVertexAttribPointer(this.texCoordLocation, 2, GL_FLOAT, 0, 0, texCoords);
+    this.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  }
+
+  private bindColorTarget(framebuffer: number, texture: number): void {
+    this.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    this.glFramebufferTexture2D(
+      GL_FRAMEBUFFER,
+      GL_COLOR_ATTACHMENT0,
+      GL_TEXTURE_2D,
+      texture,
+      0,
+    );
+    const status = Number(this.glCheckFramebufferStatus(GL_FRAMEBUFFER));
+    if (status !== GL_FRAMEBUFFER_COMPLETE) {
+      throw new Error(`GLES effect framebuffer incomplete: 0x${status.toString(16)}`);
+    }
+  }
+
+  private paintBackdropBlur(
+    scene: EglCompositionScene,
+    layer: EglCompositionLayer,
+  ): void {
+    const effect = layer.backdropBlur;
+    if (!effect || effect.radius <= 0) return;
+
+    // Snapshot the already-composited stack. Sampling sceneTexture while it is
+    // the active render target would be undefined feedback in GLES.
+    this.glActiveTexture(GL_TEXTURE0);
+    this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
+    this.glCopyTexSubImage2D(
+      GL_TEXTURE_2D,
+      0,
+      0,
+      0,
+      0,
+      0,
+      scene.width,
+      scene.height,
+    );
+
+    const downsample = 4;
+    const blurWidth = Math.max(1, Math.ceil(scene.width / downsample));
+    const blurHeight = Math.max(1, Math.ceil(scene.height / downsample));
+    if (blurWidth !== this.blurWidth || blurHeight !== this.blurHeight) {
+      for (const texture of [this.blurTextureA, this.blurTextureB]) {
+        this.glBindTexture(GL_TEXTURE_2D, texture);
+        this.glTexImage2D(
+          GL_TEXTURE_2D,
+          0,
+          GL_RGBA,
+          blurWidth,
+          blurHeight,
+          0,
+          GL_RGBA,
+          GL_UNSIGNED_BYTE,
+          null,
+        );
+      }
+      this.blurWidth = blurWidth;
+      this.blurHeight = blurHeight;
+    }
+
+    const fullPositions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+    const fullCoords = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
+    const kernelReach = 3.230769;
+    this.glDisable(GL_BLEND);
+    this.glUniform1f(this.modeLocation, 2);
+    this.glUniform1f(this.opacityLocation, 1);
+    this.glUniform4f(this.uvRectLocation, 0, 0, 1, 1);
+
+    this.bindColorTarget(this.blurFramebufferA, this.blurTextureA);
+    this.glViewport(0, 0, blurWidth, blurHeight);
+    this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
+    this.glUniform2f(
+      this.blurDirectionLocation,
+      Math.max(0.5, effect.radius) / kernelReach / scene.width,
+      0,
+    );
+    this.drawQuad(fullPositions, fullCoords);
+
+    this.bindColorTarget(this.blurFramebufferB, this.blurTextureB);
+    this.glBindTexture(GL_TEXTURE_2D, this.blurTextureA);
+    this.glUniform2f(
+      this.blurDirectionLocation,
+      0,
+      Math.max(0.5, effect.radius / downsample) / kernelReach / blurHeight,
+    );
+    this.drawQuad(fullPositions, fullCoords);
+
+    this.bindColorTarget(this.sceneFramebuffer, this.sceneTexture);
+    this.glViewport(0, 0, scene.width, scene.height);
+    this.glEnable(GL_BLEND);
+    this.glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    this.glBindTexture(GL_TEXTURE_2D, this.blurTextureB);
+    this.glUniform1f(this.modeLocation, 3);
+    this.glUniform1f(this.opacityLocation, layer.opacity ?? 1);
+    this.glUniform1f(this.hasGeometryLocation, 0);
+    this.glUniform1f(this.saturationLocation, effect.saturation ?? 1);
+    const tint = effect.tint ?? 0;
+    this.glUniform4f(
+      this.tintColorLocation,
+      (tint & 0xff) / 255,
+      ((tint >>> 8) & 0xff) / 255,
+      ((tint >>> 16) & 0xff) / 255,
+      ((tint >>> 24) & 0xff) / 255,
+    );
+
+    const clipX = (x: number) => (x / scene.width) * 2 - 1;
+    const clipY = (y: number) => (y / scene.height) * 2 - 1;
+    const p0 = this.transformLayerPoint(layer, 0, 0);
+    const p1 = this.transformLayerPoint(layer, layer.destination.width, 0);
+    const p2 = this.transformLayerPoint(layer, 0, layer.destination.height);
+    const p3 = this.transformLayerPoint(
+      layer,
+      layer.destination.width,
+      layer.destination.height,
+    );
+    const positions = new Float32Array([
+      clipX(p0[0]), clipY(p0[1]),
+      clipX(p1[0]), clipY(p1[1]),
+      clipX(p2[0]), clipY(p2[1]),
+      clipX(p3[0]), clipY(p3[1]),
+    ]);
+    const x0 = layer.destination.x / scene.width;
+    const y0 = layer.destination.y / scene.height;
+    const x1 = (layer.destination.x + layer.destination.width) / scene.width;
+    const y1 = (layer.destination.y + layer.destination.height) / scene.height;
+    this.glUniform4f(this.uvRectLocation, x0, y0, x1, y1);
+    this.glUniform2f(
+      this.layerSizeLocation,
+      layer.destination.width,
+      layer.destination.height,
+    );
+    const radii =
+      typeof layer.cornerRadius === "number"
+        ? [layer.cornerRadius, layer.cornerRadius, layer.cornerRadius, layer.cornerRadius]
+        : layer.cornerRadius ?? [0, 0, 0, 0];
+    this.glUniform4f(
+      this.cornerRadiiLocation,
+      radii[0]!,
+      radii[1]!,
+      radii[2]!,
+      radii[3]!,
+    );
+    this.drawQuad(
+      positions,
+      new Float32Array([x0, y0, x1, y0, x0, y1, x1, y1]),
+    );
+  }
+
   /** Compose retained, revisioned layers into one logical GPU scene. */
   beginComposition(scene: EglCompositionScene): void {
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
@@ -724,6 +990,18 @@ export class EglOutputScaler {
     this.compositionFrame++;
     this.glBindTexture(GL_TEXTURE_2D, this.sceneTexture);
     if (scene.width !== this.sceneWidth || scene.height !== this.sceneHeight) {
+      this.glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        scene.width,
+        scene.height,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        null,
+      );
+      this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
       this.glTexImage2D(
         GL_TEXTURE_2D,
         0,
@@ -770,6 +1048,7 @@ export class EglOutputScaler {
     for (const layer of scene.layers) {
       const clipX = (x: number) => (x / scene.width) * 2 - 1;
       const clipY = (y: number) => (y / scene.height) * 2 - 1;
+      this.paintBackdropBlur(scene, layer);
       const shadow = layer.dropShadow;
       if (shadow) {
         const spread = shadow.spread ?? 0;
@@ -1050,13 +1329,19 @@ export class EglOutputScaler {
         this.sourceTexture,
         this.targetTexture,
         this.sceneTexture,
+        this.backdropTexture,
+        this.blurTextureA,
+        this.blurTextureB,
         ...[...this.layerTextures.values()].map((entry) => entry.texture),
       ];
       this.glDeleteTextures(textures.length, Uint32Array.from(textures));
-      this.glDeleteFramebuffers(
-        2,
-        new Uint32Array([this.framebuffer, this.sceneFramebuffer]),
-      );
+      const framebuffers = [
+        this.framebuffer,
+        this.sceneFramebuffer,
+        this.blurFramebufferA,
+        this.blurFramebufferB,
+      ];
+      this.glDeleteFramebuffers(framebuffers.length, Uint32Array.from(framebuffers));
       this.layerTextures.clear();
       this.glDeleteProgram(this.program);
     } catch {

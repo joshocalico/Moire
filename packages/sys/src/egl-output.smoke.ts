@@ -230,6 +230,66 @@ try {
     shadowTarget[(4 * 9 + 4) * 4]! < 200,
     "drop shadow did not darken the window footprint",
   );
+  const blurWidth = 16;
+  const blurHeight = 8;
+  const stripeSource = new Uint8Array(blurWidth * blurHeight * 4);
+  for (let y = 0; y < blurHeight; y++) {
+    for (let x = 0; x < blurWidth; x++) {
+      const value = x % 2 === 0 ? 0 : 255;
+      stripeSource.set([value, value, value, 255], (y * blurWidth + x) * 4);
+    }
+  }
+  scaler.beginComposition({
+    width: blurWidth,
+    height: blurHeight,
+    clearColor: 0xff000000,
+    layers: [
+      {
+        id: "blur-stripes",
+        pixels: stripeSource,
+        sourceWidth: blurWidth,
+        sourceHeight: blurHeight,
+        sourceStride: blurWidth * 4,
+        revision: 1,
+        destination: { x: 0, y: 0, width: blurWidth, height: blurHeight },
+        sampling: "nearest",
+      },
+      {
+        id: "bounded-backdrop-blur",
+        pixels: new Uint8Array(4),
+        sourceWidth: 1,
+        sourceHeight: 1,
+        sourceStride: 4,
+        revision: 1,
+        destination: { x: 4, y: 2, width: 8, height: 4 },
+        backdropBlur: { radius: 4 },
+        sampling: "nearest",
+      },
+    ],
+  });
+  const blurTarget = new Uint8Array(stripeSource.length);
+  scaler.renderOutput({
+    id: "bounded-backdrop-blur",
+    x: 0,
+    y: 0,
+    width: blurWidth,
+    height: blurHeight,
+    targetWidth: blurWidth,
+    targetHeight: blurHeight,
+    targetPitch: blurWidth * 4,
+    target: blurTarget,
+  });
+  assert.deepEqual(
+    blurTarget.subarray((1 * blurWidth + 1) * 4, (1 * blurWidth + 2) * 4),
+    stripeSource.subarray((1 * blurWidth + 1) * 4, (1 * blurWidth + 2) * 4),
+    "backdrop blur modified pixels outside its layer bounds",
+  );
+  const blurredDark = blurTarget[(3 * blurWidth + 6) * 4]!;
+  const blurredLight = blurTarget[(3 * blurWidth + 7) * 4]!;
+  assert.ok(
+    blurredDark > 10 && blurredLight < 245,
+    "backdrop blur did not reduce contrast inside its layer bounds",
+  );
   console.log(
     `[sys/egl-output-smoke] ok renderer=${scaler.info.glRenderer} version=${scaler.info.glVersion}`,
   );

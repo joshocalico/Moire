@@ -48,7 +48,7 @@ export function Panel(props: PanelProps): ReactNode {
   const taskY = Math.floor((panelH - taskH) / 2);
   const taskTextH = measureTextBounds("Mg", { fontSize: 12 }).height;
   // Translucent ink panel over wallpaper
-  const panelFill = (pal.panel & 0x00ffffff) | 0xdd000000;
+  const panelFill = (pal.panel & 0x00ffffff) | 0xb0000000;
   return (
     <Group x={0} y={y} width={props.screenW} height={panelH}>
       <Rect
