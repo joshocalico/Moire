@@ -8,8 +8,9 @@ individual widgets.
 
 The compositor accepts `MOIRE_RENDERER=auto|software|egl`.
 EGL presentation is independently selectable with
-`MOIRE_EGL_PRESENT=readback|direct`; readback remains the default while direct
-presentation completes mode-change, hotplug, and fallback stress coverage.
+`MOIRE_EGL_PRESENT=auto|readback|direct`. `auto` is the default: it probes the
+direct path on the first output and retains EGL readback if scanout allocation
+is unavailable. Explicit modes remain useful for conformance and diagnosis.
 
 - `software` is the deterministic reference and fallback.
 - `egl` creates a surfaceless GBM/EGL GLES context, uploads the shared logical
@@ -115,9 +116,12 @@ future regional upload/damage.
   dma-bufs, imports EGLImages, binds them to GLES textures/FBOs, registers DRM
   FBs, and presents without `glReadPixels` or a dumb-buffer copy. AddFB2 is
   tried first; Parallels uses the proven legacy AddFB fallback.
-- `MOIRE_EGL_PRESENT=direct` activates this path for live testing. The final
-  output shader performs the required BGRA-storage to semantic-XR24 channel
-  conversion; retained composition and readback remain byte-identical.
+- Automatic EGL presentation prefers this path after successful VM coverage
+  across startup, DRM reconciliation, mode switch/rollback, shutdown, and
+  visual capture. `MOIRE_EGL_PRESENT=readback|direct` forces either path for
+  diagnosis. The final output shader performs the required BGRA-storage to
+  semantic-XR24 channel conversion; retained composition and readback remain
+  byte-identical.
 - Direct presentation now rotates two BOs per output, submits GLES work with
   `glFlush`, queues `drmModePageFlip`, and waits for the flip event before the
   old front buffer can be reused. Drivers that reject page flips retain the
@@ -126,9 +130,9 @@ future regional upload/damage.
   event loop lands.
 - Allocate targets per physical output and rebuild them transactionally across
   mode/hotplug changes.
-- After multi-output, mode-change, shutdown, and fallback stress tests, make
-  direct presentation the EGL auto default and remove repeated
-  `drmModeSetCrtc` from steady-state presentation.
+- Move the synchronous page-flip wait into the compositor event loop, add
+  explicit/native fences where available, and complete physical multi-output
+  hardware coverage beyond the current synthetic topology tests.
 
 ### Future — renderer and compositor effect plugins (earmarked)
 

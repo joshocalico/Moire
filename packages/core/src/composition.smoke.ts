@@ -67,8 +67,10 @@ assert.deepEqual(
 assert.equal(resolveOutputRenderPreference(undefined), "auto");
 assert.equal(resolveOutputRenderPreference("EGL"), "egl");
 assert.throws(() => resolveOutputRenderPreference("canvas"), /Invalid MOIRE_RENDERER/);
-assert.equal(resolveEglPresentPreference(undefined), "readback");
+assert.equal(resolveEglPresentPreference(undefined), "auto");
+assert.equal(resolveEglPresentPreference("AUTO"), "auto");
 assert.equal(resolveEglPresentPreference("DIRECT"), "direct");
+assert.equal(resolveEglPresentPreference("READBACK"), "readback");
 assert.throws(
   () => resolveEglPresentPreference("pageflip"),
   /Invalid MOIRE_EGL_PRESENT/,

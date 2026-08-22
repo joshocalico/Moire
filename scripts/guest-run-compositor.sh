@@ -10,7 +10,7 @@ UID_MOIRE=$(id -u moire)
 # keeps running. Launcher still paints; spawned apps fail to connect.
 RUNTIME=/home/moire/.moire-runtime
 RENDERER="${MOIRE_RENDERER:-auto}"
-EGL_PRESENT="${MOIRE_EGL_PRESENT:-readback}"
+EGL_PRESENT="${MOIRE_EGL_PRESENT:-auto}"
 
 # Free DRM master (gdm comes back after reboot)
 systemctl stop gdm3 2>/dev/null || true

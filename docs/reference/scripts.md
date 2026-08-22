@@ -12,7 +12,7 @@ Host and guest helpers under `scripts/`. Prefer these over ad-hoc `prlctl exec â
 | `guest-key-tap.sh code` | Inject an evdev key tap (for example `125` for Super) |
 | `guest-status.sh` | Quick session / process status |
 | `guest-tail-logs.sh` | Follow compositor / session logs |
-| `guest-run-compositor.sh` | Run compositor alone; honors `MOIRE_RENDERER` and `MOIRE_EGL_PRESENT` |
+| `guest-run-compositor.sh` | Run compositor alone; honors `MOIRE_RENDERER` and `MOIRE_EGL_PRESENT=auto|readback|direct` |
 | `guest-run-foot.sh` | Launch foot |
 | `guest-launch-files.sh` | Launch Moire Files |
 | `guest-launch-settings.sh [tab]` | Launch Settings in the active session; optional tab index aids visual checks |

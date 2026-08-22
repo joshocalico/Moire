@@ -22,7 +22,7 @@ export type OutputRenderResult = {
   framebufferId?: number;
 };
 
-export type EglPresentPreference = "readback" | "direct";
+export type EglPresentPreference = "auto" | "readback" | "direct";
 
 export interface CompositorOutputRenderer {
   readonly id: "software" | "egl";
@@ -84,22 +84,31 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
     meshDeformation: false,
     extensionEffects: false,
     surfaceGeometryMask: true,
-    // The initial EGL path still reads into dumb scanout buffers. The scene
-    // contract already exposes effects, but they become true only as their
-    // GLES passes land.
+    // This capability means bypassing composition for a fullscreen client,
+    // not the renderer's own GBM output presentation path.
     directScanout: false,
     backdropBlur: true,
     dropShadow: true,
     colorMatrix: true,
     roundedClip: true,
   };
-  readonly detail: string;
+  private activePresentation: "readback" | "direct" | null;
 
   constructor(
     private readonly scaler: EglOutputScaler,
     private readonly presentation = resolveEglPresentPreference(),
   ) {
-    this.detail = `${scaler.info.glRenderer}; ${scaler.info.glVersion}; ${presentation === "direct" ? "GBM direct presentation" : "readback scanout"}`;
+    this.activePresentation = presentation === "auto" ? null : presentation;
+  }
+
+  get detail(): string {
+    const presentation =
+      this.activePresentation === "direct"
+        ? "GBM direct presentation"
+        : this.activePresentation === "readback"
+          ? "readback scanout"
+          : "automatic presentation probe";
+    return `${this.scaler.info.glRenderer}; ${this.scaler.info.glVersion}; ${presentation}`;
   }
 
   beginFrame(scene: PixelSurface): void {
@@ -176,9 +185,22 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
       targetWidth: target.physicalWidth,
       targetHeight: target.physicalHeight,
     };
-    if (this.presentation === "direct") {
-      const direct = this.scaler.renderOutputDirect(output);
-      return { framebufferId: direct.framebufferId };
+    if (this.activePresentation !== "readback") {
+      try {
+        const direct = this.scaler.renderOutputDirect(output);
+        if (this.activePresentation == null) {
+          console.log("[renderer] automatic presentation selected direct GBM scanout");
+        }
+        this.activePresentation = "direct";
+        return { framebufferId: direct.framebufferId };
+      } catch (error) {
+        if (this.presentation === "direct") throw error;
+        console.warn(
+          "[renderer] direct GBM presentation unavailable; retaining EGL readback:",
+          error,
+        );
+        this.activePresentation = "readback";
+      }
     }
     this.scaler.renderOutput({
       ...output,
@@ -284,10 +306,10 @@ export function resolveEglPresentPreference(
   value = process.env.MOIRE_EGL_PRESENT,
 ): EglPresentPreference {
   const normalized = value?.trim().toLowerCase();
-  if (!normalized || normalized === "readback") return "readback";
-  if (normalized === "direct") return "direct";
+  if (!normalized || normalized === "auto") return "auto";
+  if (normalized === "readback" || normalized === "direct") return normalized;
   throw new Error(
-    `Invalid MOIRE_EGL_PRESENT=${JSON.stringify(value)} (expected readback or direct)`,
+    `Invalid MOIRE_EGL_PRESENT=${JSON.stringify(value)} (expected auto, readback, or direct)`,
   );
 }
 
