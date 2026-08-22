@@ -25,7 +25,7 @@ Out of memory: Killed process … (node) total-vm:45671280kB, anon-rss:7774460kB
 
 **Still watch:** large foot `wl_shm` pool mmaps (RSS floor).
 
-**CPU present path (2026-07-12):** compositor loop is dirty-driven — skip wallpaper/`flushMmap`/`presentKms` when idle (~50 ms poll); `markDirty()` on commits, pointer motion, shell clock, stack/focus. Cached `drmModeSetCrtc` on `KmsOutput` (no per-frame `loadLibdrm`). On MoireDev idle ~11% CPU vs prior ~30–40% (measure with `scripts/guest-measure-cpu.sh`). Remaining idle cost is mostly per-client `recvmsg` poll (~5 ms).
+**CPU present path (updated 2026-08-22):** compositor loop is dirty-driven — skip wallpaper and presentation when idle (~50 ms poll); `markDirty()` on commits, pointer motion, shell clock, stack/focus. EGL now defaults to double-buffered direct GBM page flips when supported. Desktop and application discovery polls compare content before invalidating cached shell rasters instead of forcing periodic full-screen rebuilds. On MoireDev idle remains ~10% because the remaining floor is mostly per-client `recvmsg` polling; during a pointer-motion sample, retained scene assembly averaged 0.56 ms and output/present 1.36/0.77 ms (measure with `scripts/guest-measure-cpu.sh`).
 
 ## Xwayland / X11 apps (updated 2026-07-12)
 
@@ -55,4 +55,3 @@ Out of memory: Killed process … (node) total-vm:45671280kB, anon-rss:7774460kB
 - Shell TitleBar/Panel/Launcher use `themePalette()`; panel brand is 2× bitmap font
 - Widget primitives: `Label`, `Button`, `Surface`, `Divider` in `@moire/shell`
 - Compositor paints wallpaper from theme (`gradient` by default) instead of fixed teal
-

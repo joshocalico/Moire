@@ -90,7 +90,9 @@ painted pixels.
 The first supporting pieces are active: client surfaces carry monotonic buffer
 revisions, the EGL texture cache is revision-aware, known-opaque software
 surfaces use row copies, and cached shell rasters retain per-row alpha runs for
-future regional upload/damage.
+future regional upload/damage. Desktop-directory and application-discovery
+polls now compare their results before invalidating those rasters, removing the
+former periodic full-screen rebuild when nothing changed.
 
 ### R3 — active: native effects
 

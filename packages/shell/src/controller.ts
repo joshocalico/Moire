@@ -475,17 +475,49 @@ export function createShell(
   const DESKTOP_DRAG_THRESHOLD = 8;
 
   const refreshApps = () => {
-    apps = mergeApps();
+    const nextApps = mergeApps();
+    const appsChanged =
+      nextApps.length !== apps.length ||
+      nextApps.some((app, index) => {
+        const current = apps[index];
+        return (
+          !current ||
+          app.id !== current.id ||
+          app.name !== current.name ||
+          app.genericName !== current.genericName ||
+          app.exec !== current.exec ||
+          app.icon !== current.icon ||
+          app.terminal !== current.terminal ||
+          app.categories.join("\0") !== current.categories.join("\0") ||
+          (app.mimeTypes ?? []).join("\0") !==
+            (current.mimeTypes ?? []).join("\0")
+        );
+      });
+    apps = nextApps;
     activation = createActivationService(apps);
     mimeDb = activation.mimeDatabase;
-    dirty = true;
-    desktopDirty = true;
+    if (appsChanged) dirty = true;
   };
   setInterval(refreshApps, 30_000).unref?.();
 
   const refreshDesktop = () => {
-    desktopEntries = listDesktopEntries();
-    desktopLayout = loadDesktopLayout();
+    const nextEntries = listDesktopEntries();
+    const nextLayout = loadDesktopLayout();
+    const entriesChanged =
+      nextEntries.length !== desktopEntries.length ||
+      nextEntries.some((entry, index) => entry !== desktopEntries[index]);
+    const layoutNames = Object.keys(desktopLayout);
+    const nextLayoutNames = Object.keys(nextLayout);
+    const layoutChanged =
+      nextLayoutNames.length !== layoutNames.length ||
+      nextLayoutNames.some((name) => {
+        const current = desktopLayout[name];
+        const next = nextLayout[name];
+        return !current || !next || current.x !== next.x || current.y !== next.y;
+      });
+    if (!entriesChanged && !layoutChanged) return;
+    desktopEntries = nextEntries;
+    desktopLayout = nextLayout;
     desktopDirty = true;
   };
   // Refresh desktop list every 2s to catch external changes
