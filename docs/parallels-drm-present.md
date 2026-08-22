@@ -20,7 +20,7 @@ This is separate from:
 - `koffi.view` element stores / `.set()` quirks (prefer `fills` or staging + `flushMmap`)
 - DRM master conflicts (`drmModeSetCrtc` failing with `-13` when another process holds the card — including a `STOP`’d compositor)
 
-## Fix (in tree)
+## Readback fix (in tree)
 
 After each composite flush:
 
@@ -28,6 +28,11 @@ After each composite flush:
 2. **`presentKms(kms)`** — re-`drmModeSetCrtc` with the same `fbId` / connector / mode  
 
 See `packages/sys/src/kms.ts` (`presentKms`) and `packages/core/src/server.ts` (`composite`).
+
+The optional direct EGL path instead rotates two renderer-owned GBM
+framebuffers and queues `drmModePageFlip`. It waits for the flip event before
+reusing the previous front buffer; if the driver rejects page flips before one
+is queued, it falls back to the same proven `drmModeSetCrtc` operation.
 
 ## Verification
 

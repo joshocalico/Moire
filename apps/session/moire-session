@@ -90,7 +90,9 @@ session_inner() {
   local comp_pid=$!
 
   cleanup() {
-    kill "$comp_pid" 2>/dev/null || true
+    if [[ -n "${comp_pid:-}" ]]; then
+      kill "$comp_pid" 2>/dev/null || true
+    fi
     jobs -p | xargs -r kill 2>/dev/null || true
   }
   trap cleanup EXIT INT TERM

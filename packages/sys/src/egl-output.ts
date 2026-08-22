@@ -3,8 +3,8 @@
  *
  * This is intentionally independent from KMS presentation: it uploads one
  * logical BGRA/XRGB scene, crops/scales it for each output on the GPU, and
- * reads the result into the caller's proven scanout buffer. A future GBM
- * scanout target can replace readPixels without changing the composition API.
+ * reads the result into the caller's proven scanout buffer, or paints into a
+ * renderer-owned pair of GBM scanout targets for direct presentation.
  */
 import koffi from "koffi";
 import { closeFd } from "./libc.js";
@@ -189,11 +189,17 @@ type CachedTexture = {
 };
 
 type DirectOutputTarget = EglDirectPresent & {
-  key: string;
   bo: unknown;
   image: unknown;
   texture: number;
   framebuffer: number;
+};
+
+type DirectOutputPool = {
+  key: string;
+  targets: readonly [DirectOutputTarget, DirectOutputTarget];
+  nextIndex: number;
+  lastRendered: DirectOutputTarget | null;
 };
 
 export class EglOutputScaler {
@@ -241,7 +247,7 @@ export class EglOutputScaler {
   private readonly glVertexAttribPointer: NativeFunction;
   private readonly glDrawArrays: NativeFunction;
   private readonly glReadPixels: NativeFunction;
-  private readonly glFinish: NativeFunction;
+  private readonly glFlush: NativeFunction;
   private readonly glEglImageTargetTexture: NativeFunction;
   private readonly gbmBoCreate: NativeFunction;
   private readonly gbmBoDestroy: NativeFunction;
@@ -291,7 +297,7 @@ export class EglOutputScaler {
   private readonly blurFramebufferB: number;
   private outputSourceTexture = 0;
   private readonly layerTextures = new Map<string, CachedTexture>();
-  private readonly directTargets = new Map<string, DirectOutputTarget>();
+  private readonly directTargets = new Map<string, DirectOutputPool>();
   private compositionFrame = 0;
   private sourceWidth = 0;
   private sourceHeight = 0;
@@ -591,7 +597,7 @@ export class EglOutputScaler {
     this.glReadPixels = this.gl.func(
       "void glReadPixels(int x, int y, int width, int height, unsigned int format, unsigned int type, _Out_ void *pixels)",
     ) as NativeFunction;
-    this.glFinish = this.gl.func("void glFinish(void)") as NativeFunction;
+    this.glFlush = this.gl.func("void glFlush(void)") as NativeFunction;
     this.program = this.createProgram();
     const glGetAttribLocation = this.gl.func(
       "int glGetAttribLocation(unsigned int program, const char *name)",
@@ -1497,10 +1503,7 @@ void main() {
     this.glDisableVertexAttribArray(this.texCoordLocation);
   }
 
-  private directTargetFor(output: EglDirectOutput): DirectOutputTarget {
-    const key = `${output.id}:${output.targetWidth}x${output.targetHeight}`;
-    const cached = this.directTargets.get(key);
-    if (cached) return cached;
+  private createDirectTarget(output: EglDirectOutput): DirectOutputTarget {
     if (!this.info.eglExtensions.includes("EGL_EXT_image_dma_buf_import")) {
       throw new Error("EGL_EXT_image_dma_buf_import is unavailable");
     }
@@ -1621,7 +1624,6 @@ void main() {
       }
 
       const target: DirectOutputTarget = {
-        key,
         bo,
         image,
         texture,
@@ -1631,7 +1633,6 @@ void main() {
         width: output.targetWidth,
         height: output.targetHeight,
       };
-      this.directTargets.set(key, target);
       return target;
     } catch (error) {
       if (framebufferId) this.drmModeRmFb(this.drmFd, framebufferId);
@@ -1649,13 +1650,64 @@ void main() {
     }
   }
 
+  private directTargetFor(
+    output: EglDirectOutput,
+    advance: boolean,
+  ): DirectOutputTarget {
+    const key = `${output.id}:${output.targetWidth}x${output.targetHeight}`;
+    let pool = this.directTargets.get(key);
+    if (!pool) {
+      // A KMS mode switch first scans out its new durable dumb framebuffer,
+      // so targets for the same connector's old dimensions are no longer in
+      // use and can be reclaimed before allocating the replacement pair.
+      const outputPrefix = `${output.id}:`;
+      for (const [staleKey, stale] of this.directTargets) {
+        if (staleKey === key || !staleKey.startsWith(outputPrefix)) continue;
+        for (const target of stale.targets) this.destroyDirectTarget(target);
+        this.directTargets.delete(staleKey);
+      }
+      const first = this.createDirectTarget(output);
+      let second: DirectOutputTarget | null = null;
+      try {
+        second = this.createDirectTarget(output);
+      } catch (error) {
+        this.destroyDirectTarget(first);
+        throw error;
+      }
+      pool = {
+        key,
+        targets: [first, second],
+        nextIndex: 0,
+        lastRendered: null,
+      };
+      this.directTargets.set(key, pool);
+    }
+    if (!advance) return pool.lastRendered ?? pool.targets[0];
+    const target = pool.targets[pool.nextIndex]!;
+    pool.nextIndex = (pool.nextIndex + 1) % pool.targets.length;
+    pool.lastRendered = target;
+    return target;
+  }
+
+  private destroyDirectTarget(target: DirectOutputTarget): void {
+    try {
+      this.drmModeRmFb(this.drmFd, target.framebufferId);
+    } catch {
+      // best effort
+    }
+    this.glDeleteFramebuffers(1, new Uint32Array([target.framebuffer]));
+    this.glDeleteTextures(1, new Uint32Array([target.texture]));
+    this.eglDestroyImage(this.display, target.image);
+    this.gbmBoDestroy(target.bo);
+  }
+
   /** Render into a DRM-registered GBM BO without CPU readback. */
   renderOutputDirect(output: EglDirectOutput): EglDirectPresent {
-    const target = this.directTargetFor(output);
+    const target = this.directTargetFor(output, true);
     this.paintOutput(output, target.texture, target.framebuffer, true);
-    // Initial modeset integration uses an explicit completion point. Page-flip
-    // fences will replace this when target lifetime becomes asynchronous.
-    this.glFinish();
+    // Submit the render without stalling the CPU. KMS consumes the dma-buf's
+    // implicit fence and the page-flip completion controls target reuse.
+    this.glFlush();
     return {
       framebufferId: target.framebufferId,
       stride: target.stride,
@@ -1669,7 +1721,7 @@ void main() {
     output: EglDirectOutput,
     pixels: Uint8Array,
   ): void {
-    const target = this.directTargetFor(output);
+    const target = this.directTargetFor(output, false);
     const required = target.width * target.height * 4;
     if (pixels.byteLength < required) {
       throw new RangeError("Direct output diagnostic buffer is too small");
@@ -1748,16 +1800,8 @@ void main() {
     this.destroyed = true;
     try {
       this.eglMakeCurrent(this.display, null, null, this.context);
-      for (const target of this.directTargets.values()) {
-        try {
-          this.drmModeRmFb(this.drmFd, target.framebufferId);
-        } catch {
-          // best effort
-        }
-        this.glDeleteFramebuffers(1, new Uint32Array([target.framebuffer]));
-        this.glDeleteTextures(1, new Uint32Array([target.texture]));
-        this.eglDestroyImage(this.display, target.image);
-        this.gbmBoDestroy(target.bo);
+      for (const pool of this.directTargets.values()) {
+        for (const target of pool.targets) this.destroyDirectTarget(target);
       }
       this.directTargets.clear();
       const textures = [

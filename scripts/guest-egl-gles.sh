@@ -15,9 +15,9 @@ EGL_RED_SIZE = 0x3024
 EGL_GREEN_SIZE = 0x3023
 EGL_BLUE_SIZE = 0x3022
 EGL_ALPHA_SIZE = 0x3021
+EGL_NATIVE_VISUAL_ID = 0x302E
 EGL_NONE = 0x3038
 EGL_CONTEXT_CLIENT_VERSION = 0x3098
-GBM_FORMAT_XRGB8888 = 0x34325258
 GBM_BO_USE_RENDERING = 4
 GBM_BO_USE_SCANOUT = 1
 
@@ -35,6 +35,7 @@ egl.eglGetPlatformDisplay.argtypes = [ctypes.c_uint, ctypes.c_void_p, ctypes.c_v
 egl.eglInitialize.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_int32)]
 egl.eglBindAPI.argtypes = [ctypes.c_uint]
 egl.eglChooseConfig.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+egl.eglGetConfigAttrib.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
 egl.eglCreateContext.restype = ctypes.c_void_p
 egl.eglCreateContext.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
 egl.eglCreatePlatformWindowSurface.restype = ctypes.c_void_p
@@ -63,10 +64,16 @@ cfg = ctypes.c_void_p()
 n = ctypes.c_int()
 ok = egl.eglChooseConfig(dpy, attribs, ctypes.byref(cfg), 1, ctypes.byref(n))
 print("chooseConfig", ok, "n=", n.value, "err", hex(egl.eglGetError()))
+native_visual = ctypes.c_int()
+ok = egl.eglGetConfigAttrib(dpy, cfg, EGL_NATIVE_VISUAL_ID, ctypes.byref(native_visual))
+fourcc = native_visual.value & 0xffffffff
+fourcc_name = bytes((fourcc >> shift) & 0xff for shift in (0, 8, 16, 24)).decode("ascii", "replace")
+print("nativeVisual", ok, hex(fourcc), repr(fourcc_name), "err", hex(egl.eglGetError()))
+assert ok and fourcc
 ctx_attribs = (ctypes.c_int * 3)(EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE)
 ctx = egl.eglCreateContext(dpy, cfg, None, ctx_attribs)
 print("createContext", hex(ctx or 0), "err", hex(egl.eglGetError()))
-surf_native = gbm.gbm_surface_create(dev, 64, 64, GBM_FORMAT_XRGB8888, GBM_BO_USE_RENDERING | GBM_BO_USE_SCANOUT)
+surf_native = gbm.gbm_surface_create(dev, 64, 64, fourcc, GBM_BO_USE_RENDERING | GBM_BO_USE_SCANOUT)
 print("gbm_surface", hex(surf_native or 0))
 win = egl.eglCreatePlatformWindowSurface(dpy, cfg, ctypes.c_void_p(surf_native), None)
 print("windowSurface", hex(win or 0), "err", hex(egl.eglGetError()))

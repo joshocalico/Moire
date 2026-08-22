@@ -102,8 +102,9 @@ Rotation, mirror mode and cross-GPU handoff remain future work. Per-output
 fractional scaling is effective end to end: clients render through buffer scale
 or viewporter, the compositor works in logical coordinates, and the selected
 software or EGL output backend scales each logical output into its physical
-target. The initial EGL backend reads back into the proven dumb-buffer scanout;
-GBM page-flip presentation is tracked in the rendering v2 queue.
+target. EGL can either read back into the proven dumb-buffer scanout or rotate
+two renderer-owned GBM framebuffers through KMS page flips. Direct presentation
+remains opt-in while mode-change, hotplug, and fallback stress coverage lands.
 
 ## Smoke testing
 

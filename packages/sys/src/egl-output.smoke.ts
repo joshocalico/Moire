@@ -65,8 +65,20 @@ try {
       "GBM/EGLImage target did not convert bottom-right BGRA storage to scanout RGB",
     );
     assert.ok(direct.framebufferId > 0, "direct target did not register a DRM FB");
+    const alternate = scaler.renderOutputDirect(directOutput);
+    assert.notEqual(
+      alternate.framebufferId,
+      direct.framebufferId,
+      "direct output did not rotate to a second scanout target",
+    );
+    const recycled = scaler.renderOutputDirect(directOutput);
+    assert.equal(
+      recycled.framebufferId,
+      direct.framebufferId,
+      "direct output did not recycle its first scanout target",
+    );
     console.log(
-      `[sys/egl-output-smoke] direct framebuffer=${direct.framebufferId} stride=${direct.stride}`,
+      `[sys/egl-output-smoke] direct framebuffers=${direct.framebufferId},${alternate.framebufferId} stride=${direct.stride}`,
     );
   }
 

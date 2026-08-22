@@ -8,8 +8,8 @@ individual widgets.
 
 The compositor accepts `MOIRE_RENDERER=auto|software|egl`.
 EGL presentation is independently selectable with
-`MOIRE_EGL_PRESENT=readback|direct`; readback remains the default until direct
-targets are double-buffered and page-flipped.
+`MOIRE_EGL_PRESENT=readback|direct`; readback remains the default while direct
+presentation completes mode-change, hotplug, and fallback stress coverage.
 
 - `software` is the deterministic reference and fallback.
 - `egl` creates a surfaceless GBM/EGL GLES context, uploads the shared logical
@@ -105,19 +105,25 @@ future regional upload/damage.
 - Define effect quality tiers so software, low-power EGL, and full EGL can make
   explicit tradeoffs without changing widget APIs.
 
-### R4 — GBM scanout and page flips
+### R4 — active: GBM scanout and page flips
 
-- The Parallels GBM window-surface path still returns `EGL_BAD_MATCH`. The
-  explicit path now works: allocate a linear XR24 GBM BO, export it as dma-buf,
-  import an EGLImage, bind it to a GLES texture/FBO, register it as a DRM FB,
-  and present it without `glReadPixels` or a dumb-buffer copy. AddFB2 is tried
-  first; Parallels uses the proven legacy AddFB fallback.
+- The former Parallels GBM window-surface `EGL_BAD_MATCH` was a probe bug, not
+  a demonstrated host/guest VirGL mismatch: EGL selected native visual `XR30`
+  while the probe hard-coded `XR24`. The probe now queries
+  `EGL_NATIVE_VISUAL_ID` and creates a matching GBM surface.
+- The explicit scanout path allocates linear XR24 GBM BOs, exports them as
+  dma-bufs, imports EGLImages, binds them to GLES textures/FBOs, registers DRM
+  FBs, and presents without `glReadPixels` or a dumb-buffer copy. AddFB2 is
+  tried first; Parallels uses the proven legacy AddFB fallback.
 - `MOIRE_EGL_PRESENT=direct` activates this path for live testing. The final
   output shader performs the required BGRA-storage to semantic-XR24 channel
   conversion; retained composition and readback remain byte-identical.
-- Replace the initial single target and `glFinish` with at least two BOs per
-  output, page-flip, retain the previous front buffer until the flip event,
-  and use explicit/native fences where available.
+- Direct presentation now rotates two BOs per output, submits GLES work with
+  `glFlush`, queues `drmModePageFlip`, and waits for the flip event before the
+  old front buffer can be reused. Drivers that reject page flips retain the
+  proven `drmModeSetCrtc` fallback. The dma-buf implicit fence orders rendering
+  and scanout; use explicit/native fences where supported as the asynchronous
+  event loop lands.
 - Allocate targets per physical output and rebuild them transactionally across
   mode/hotplug changes.
 - After multi-output, mode-change, shutdown, and fallback stress tests, make
