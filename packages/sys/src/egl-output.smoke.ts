@@ -290,6 +290,46 @@ try {
     blurredDark > 10 && blurredLight < 245,
     "backdrop blur did not reduce contrast inside its layer bounds",
   );
+  scaler.beginComposition({
+    width: 1,
+    height: 1,
+    clearColor: 0xff000000,
+    layers: [
+      {
+        id: "semantic-rgba-color-matrix",
+        pixels: new Uint8Array([10, 20, 30, 255]),
+        sourceWidth: 1,
+        sourceHeight: 1,
+        sourceStride: 4,
+        revision: 1,
+        destination: { x: 0, y: 0, width: 1, height: 1 },
+        colorMatrix: [
+          0, 0, 0, 0, 0,
+          0, 1, 0, 0, 0,
+          0, 0, 1, 0, 0,
+          0, 0, 0, 1, 0,
+        ],
+        sampling: "nearest",
+      },
+    ],
+  });
+  const colorMatrixTarget = new Uint8Array(4);
+  scaler.renderOutput({
+    id: "semantic-rgba-color-matrix",
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    targetWidth: 1,
+    targetHeight: 1,
+    targetPitch: 4,
+    target: colorMatrixTarget,
+  });
+  assert.deepEqual(
+    colorMatrixTarget,
+    new Uint8Array([10, 20, 0, 255]),
+    "color matrix did not operate in semantic RGBA channel order",
+  );
   console.log(
     `[sys/egl-output-smoke] ok renderer=${scaler.info.glRenderer} version=${scaler.info.glVersion}`,
   );

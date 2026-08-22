@@ -40,6 +40,11 @@ result only inside the requesting layer before its foreground is drawn. The
 bottom panel is the first live material consumer, with saturation and tint
 carried by the backend-neutral effect description.
 
+Native 4×5 color matrices execute on retained layer sources in semantic RGBA
+order. The shader converts from the compositor's BGRA byte storage,
+unpremultiplies before applying the matrix, and premultiplies the result before
+source-over composition, so translucent effects retain correct blend math.
+
 The composition vocabulary already describes stable z-order, source and
 destination rectangles, opacity, blend mode, clipping, corner radii, and an
 effect stack. Effects include backdrop blur, drop shadow, and color matrix.
@@ -92,7 +97,8 @@ future regional upload/damage.
   backdrop and is clipped to the requesting layer; it is a stacking effect,
   not a widget screenshot trick.
 - Propagate bounded blur damage so unchanged regions do not rerun the pass.
-- Add shader color matrices, saturation/tint, rounded masks, and shadows.
+- Saturation/tint, rounded masks, shadows, and semantic RGBA color matrices
+  execute in GLES; preserve their ordering when effects move behind plugins.
 - Define effect quality tiers so software, low-power EGL, and full EGL can make
   explicit tradeoffs without changing widget APIs.
 

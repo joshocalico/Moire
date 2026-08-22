@@ -143,6 +143,8 @@ export type EglCompositionLayer = {
     saturation?: number;
     tint?: number;
   };
+  /** Row-major 4×5 matrix over unpremultiplied semantic RGBA. */
+  colorMatrix?: readonly number[];
 };
 
 export type EglCompositionScene = {
@@ -221,6 +223,12 @@ export class EglOutputScaler {
   private readonly blurDirectionLocation: number;
   private readonly saturationLocation: number;
   private readonly tintColorLocation: number;
+  private readonly hasColorMatrixLocation: number;
+  private readonly colorRow0Location: number;
+  private readonly colorRow1Location: number;
+  private readonly colorRow2Location: number;
+  private readonly colorRow3Location: number;
+  private readonly colorOffsetLocation: number;
   private readonly sourceTexture: number;
   private readonly targetTexture: number;
   private readonly sceneTexture: number;
@@ -503,6 +511,24 @@ export class EglOutputScaler {
     this.tintColorLocation = Number(
       glGetUniformLocation(this.program, "u_tint_color"),
     );
+    this.hasColorMatrixLocation = Number(
+      glGetUniformLocation(this.program, "u_has_color_matrix"),
+    );
+    this.colorRow0Location = Number(
+      glGetUniformLocation(this.program, "u_color_row_0"),
+    );
+    this.colorRow1Location = Number(
+      glGetUniformLocation(this.program, "u_color_row_1"),
+    );
+    this.colorRow2Location = Number(
+      glGetUniformLocation(this.program, "u_color_row_2"),
+    );
+    this.colorRow3Location = Number(
+      glGetUniformLocation(this.program, "u_color_row_3"),
+    );
+    this.colorOffsetLocation = Number(
+      glGetUniformLocation(this.program, "u_color_offset"),
+    );
     if (this.positionLocation < 0 || this.texCoordLocation < 0) {
       throw new Error("GLES compositor shader attributes unavailable");
     }
@@ -590,6 +616,12 @@ uniform vec4 u_shadow_color;
 uniform vec2 u_blur_direction;
 uniform float u_saturation;
 uniform vec4 u_tint_color;
+uniform float u_has_color_matrix;
+uniform vec4 u_color_row_0;
+uniform vec4 u_color_row_1;
+uniform vec4 u_color_row_2;
+uniform vec4 u_color_row_3;
+uniform vec4 u_color_offset;
 varying vec2 v_tex_coord;
 
 bool outside_rounded_rect(vec2 local) {
@@ -647,6 +679,19 @@ void main() {
       v_tex_coord.x >= u_surface_geometry.z ||
       v_tex_coord.y >= u_surface_geometry.w;
     if (outside && color.a > 0.999) discard;
+  }
+  if (u_has_color_matrix > 0.5) {
+    float source_alpha = max(color.a, 0.00001);
+    vec4 semantic = vec4(color.bgr / source_alpha, color.a);
+    vec4 mapped = vec4(
+      dot(u_color_row_0, semantic),
+      dot(u_color_row_1, semantic),
+      dot(u_color_row_2, semantic),
+      dot(u_color_row_3, semantic)
+    ) + u_color_offset;
+    mapped = clamp(mapped, 0.0, 1.0);
+    mapped.rgb *= mapped.a;
+    color = vec4(mapped.b, mapped.g, mapped.r, mapped.a);
   }
   gl_FragColor = color * u_opacity;
 }`,
@@ -834,6 +879,34 @@ void main() {
     this.glVertexAttribPointer(this.positionLocation, 2, GL_FLOAT, 0, 0, positions);
     this.glVertexAttribPointer(this.texCoordLocation, 2, GL_FLOAT, 0, 0, texCoords);
     this.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  }
+
+  private setColorMatrix(matrix: readonly number[] | undefined): void {
+    this.glUniform1f(this.hasColorMatrixLocation, matrix ? 1 : 0);
+    if (!matrix) return;
+    if (matrix.length !== 20) {
+      throw new RangeError("GLES color matrix must contain 20 values");
+    }
+    this.glUniform4f(
+      this.colorRow0Location,
+      matrix[0]!, matrix[1]!, matrix[2]!, matrix[3]!,
+    );
+    this.glUniform4f(
+      this.colorRow1Location,
+      matrix[5]!, matrix[6]!, matrix[7]!, matrix[8]!,
+    );
+    this.glUniform4f(
+      this.colorRow2Location,
+      matrix[10]!, matrix[11]!, matrix[12]!, matrix[13]!,
+    );
+    this.glUniform4f(
+      this.colorRow3Location,
+      matrix[15]!, matrix[16]!, matrix[17]!, matrix[18]!,
+    );
+    this.glUniform4f(
+      this.colorOffsetLocation,
+      matrix[4]!, matrix[9]!, matrix[14]!, matrix[19]!,
+    );
   }
 
   private bindColorTarget(framebuffer: number, texture: number): void {
@@ -1161,6 +1234,7 @@ void main() {
       this.glBindTexture(GL_TEXTURE_2D, texture);
       this.glUniform1f(this.modeLocation, 0);
       this.glUniform1f(this.opacityLocation, layer.opacity ?? 1);
+      this.setColorMatrix(layer.colorMatrix);
       const geometry = layer.surfaceGeometry;
       this.glUniform1f(this.hasGeometryLocation, geometry ? 1 : 0);
       if (geometry) {
@@ -1296,6 +1370,7 @@ void main() {
     this.glUniform1f(this.opacityLocation, 1);
     this.glUniform1f(this.modeLocation, 0);
     this.glUniform1f(this.hasGeometryLocation, 0);
+    this.glUniform1f(this.hasColorMatrixLocation, 0);
     this.glDisable(GL_BLEND);
 
     const u0 = output.x / this.sourceWidth;

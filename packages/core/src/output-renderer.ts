@@ -82,7 +82,7 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
     directScanout: false,
     backdropBlur: true,
     dropShadow: true,
-    colorMatrix: false,
+    colorMatrix: true,
     roundedClip: true,
   };
   readonly detail: string;
@@ -105,7 +105,9 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
         layer.clip ||
         layer.effects?.some(
           (effect) =>
-            effect.kind !== "drop-shadow" && effect.kind !== "backdrop-blur",
+            effect.kind !== "drop-shadow" &&
+            effect.kind !== "backdrop-blur" &&
+            effect.kind !== "color-matrix",
         ),
     );
     if (unsupported) {
@@ -124,6 +126,9 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
         const backdropBlur = layer.effects?.find(
           (effect) => effect.kind === "backdrop-blur",
         );
+        const colorMatrix = layer.effects?.find(
+          (effect) => effect.kind === "color-matrix",
+        );
         return {
           id: layer.id,
           pixels: layer.source.pixels,
@@ -141,6 +146,7 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
           cornerRadius: layer.cornerRadius,
           dropShadow,
           backdropBlur,
+          colorMatrix: colorMatrix?.matrix,
         };
       }),
     };
