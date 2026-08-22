@@ -4,7 +4,10 @@ import {
   validateCompositionScene,
   type CompositionScene,
 } from "./composition.js";
-import { resolveOutputRenderPreference } from "./output-renderer.js";
+import {
+  resolveEglPresentPreference,
+  resolveOutputRenderPreference,
+} from "./output-renderer.js";
 
 const pixel = new Uint8Array([0, 0, 0, 255]);
 const source = { pixels: pixel, width: 1, height: 1, stride: 4 };
@@ -64,6 +67,12 @@ assert.deepEqual(
 assert.equal(resolveOutputRenderPreference(undefined), "auto");
 assert.equal(resolveOutputRenderPreference("EGL"), "egl");
 assert.throws(() => resolveOutputRenderPreference("canvas"), /Invalid MOIRE_RENDERER/);
+assert.equal(resolveEglPresentPreference(undefined), "readback");
+assert.equal(resolveEglPresentPreference("DIRECT"), "direct");
+assert.throws(
+  () => resolveEglPresentPreference("pageflip"),
+  /Invalid MOIRE_EGL_PRESENT/,
+);
 assert.throws(
   () => validateCompositionScene({ ...scene, layers: [...scene.layers, scene.layers[0]!] }),
   /duplicated/,

@@ -7,13 +7,16 @@ individual widgets.
 ## Current checkpoint
 
 The compositor accepts `MOIRE_RENDERER=auto|software|egl`.
+EGL presentation is independently selectable with
+`MOIRE_EGL_PRESENT=readback|direct`; readback remains the default until direct
+targets are double-buffered and page-flipped.
 
 - `software` is the deterministic reference and fallback.
 - `egl` creates a surfaceless GBM/EGL GLES context, uploads the shared logical
   scene, and performs per-output crop and scale on the GPU.
 - `auto` attempts EGL and reports a concrete fallback reason before selecting
   software.
-- The first EGL path reads back into the existing dumb KMS framebuffer. This
+- The compatibility EGL path reads back into the existing dumb KMS framebuffer. This
   validates context ownership, shaders, output geometry, orientation, and
   channel order without entangling rendering with page-flip lifetime.
 - `[renderer/profile]` reports average scene construction, output rendering,
@@ -104,15 +107,22 @@ future regional upload/damage.
 
 ### R4 — GBM scanout and page flips
 
-- Resolve the current Parallels GBM window-surface `EGL_BAD_MATCH` by matching
-  `EGL_NATIVE_VISUAL_ID` to the GBM format, or render through EGLImages into
-  explicitly allocated GBM BOs.
-- Register BOs with DRM, page-flip, retain the previous front buffer until the
-  flip event, then release it.
+- The Parallels GBM window-surface path still returns `EGL_BAD_MATCH`. The
+  explicit path now works: allocate a linear XR24 GBM BO, export it as dma-buf,
+  import an EGLImage, bind it to a GLES texture/FBO, register it as a DRM FB,
+  and present it without `glReadPixels` or a dumb-buffer copy. AddFB2 is tried
+  first; Parallels uses the proven legacy AddFB fallback.
+- `MOIRE_EGL_PRESENT=direct` activates this path for live testing. The final
+  output shader performs the required BGRA-storage to semantic-XR24 channel
+  conversion; retained composition and readback remain byte-identical.
+- Replace the initial single target and `glFinish` with at least two BOs per
+  output, page-flip, retain the previous front buffer until the flip event,
+  and use explicit/native fences where available.
 - Allocate targets per physical output and rebuild them transactionally across
   mode/hotplug changes.
-- Remove `glReadPixels`, dumb-buffer upload, and repeated `drmModeSetCrtc` from
-  steady-state EGL presentation.
+- After multi-output, mode-change, shutdown, and fallback stress tests, make
+  direct presentation the EGL auto default and remove repeated
+  `drmModeSetCrtc` from steady-state presentation.
 
 ### Future — renderer and compositor effect plugins (earmarked)
 

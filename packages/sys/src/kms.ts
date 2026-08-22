@@ -1143,10 +1143,18 @@ export function setKmsMode(out: KmsOutput, modeId: string): boolean {
 
 /** Re-apply the CRTC → FB mapping (forces some virtual GPUs to refresh). */
 export function presentKms(out: KmsOutput): void {
+  presentKmsFramebuffer(out, out.fbId);
+}
+
+/** Present a renderer-owned DRM framebuffer on this output's current mode. */
+export function presentKmsFramebuffer(
+  out: KmsOutput,
+  framebufferId: number,
+): void {
   const set = out.setCrtc(
     out.fd,
     out.crtcId,
-    out.fbId,
+    framebufferId,
     0,
     0,
     out.connectorsPtr,
@@ -1154,7 +1162,9 @@ export function presentKms(out: KmsOutput): void {
     out.modePtr,
   );
   if (set !== 0) {
-    throw new Error(`drmModeSetCrtc present failed (${set})`);
+    throw new Error(
+      `drmModeSetCrtc framebuffer ${framebufferId} present failed (${set})`,
+    );
   }
 }
 

@@ -20,6 +20,7 @@ export {
   refreshKmsOutputModes,
   switchKmsConnector,
   presentKms,
+  presentKmsFramebuffer,
   closeKmsOutput,
   runClearColorLoop,
   type KmsOutput,
@@ -64,6 +65,8 @@ export {
   EglOutputScaler,
   type EglOutputInfo,
   type EglScaleOutput,
+  type EglDirectOutput,
+  type EglDirectPresent,
   type EglCompositionLayer,
   type EglCompositionScene,
 } from "./egl-output.js";

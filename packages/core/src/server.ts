@@ -11,6 +11,7 @@ import {
 import {
   fillKmsColor,
   presentKms,
+  presentKmsFramebuffer,
   openKmsOutput,
   openAdditionalKmsOutput,
   refreshKmsOutputModes,
@@ -1392,6 +1393,15 @@ export class CompositorServer {
       this.keymap = null;
     }
     if (this.kms) {
+      // A direct renderer target may currently be scanned out. Restore each
+      // output's durable dumb FB before the renderer unregisters its GBM BOs.
+      for (const output of this.outputs) {
+        try {
+          presentKms(output.kms);
+        } catch {
+          // best effort during shutdown
+        }
+      }
       this.outputRenderer?.destroy();
       this.outputRenderer = null;
       this.gbm?.destroy();
@@ -5039,7 +5049,7 @@ export class CompositorServer {
         target = Buffer.alloc(physical.size);
         this.outputStages.set(physical.connectorId, target);
       }
-      renderer.renderOutput({
+      const rendered = renderer.renderOutput({
         geometry: {
           id: physical.connectorName,
           x: output.x,
@@ -5053,9 +5063,13 @@ export class CompositorServer {
         pitch: physical.pitch,
       });
       const renderedMs = monotonicMs();
-      flushMmap(physical.map, target, physical.size);
       try {
-        presentKms(physical);
+        if (rendered.framebufferId != null) {
+          presentKmsFramebuffer(physical, rendered.framebufferId);
+        } else {
+          flushMmap(physical.map, target, physical.size);
+          presentKms(physical);
+        }
       } catch (error) {
         console.error(`[composite] retained present ${physical.connectorName}:`, error);
       }
@@ -5299,7 +5313,7 @@ export class CompositorServer {
           target = Buffer.alloc(physical.size);
           this.outputStages.set(physical.connectorId, target);
         }
-        renderer.renderOutput({
+        const rendered = renderer.renderOutput({
           geometry: {
             id: physical.connectorName,
             x: output.x,
@@ -5313,11 +5327,15 @@ export class CompositorServer {
           pitch: physical.pitch,
         });
         const renderedMs = monotonicMs();
-        flushMmap(physical.map, target, physical.size);
         // Parallels VIRTUAL DRM does not pick up dumb-buffer dirties until
         // SetCrtc is re-applied (or a page flip).
         try {
-          presentKms(physical);
+          if (rendered.framebufferId != null) {
+            presentKmsFramebuffer(physical, rendered.framebufferId);
+          } else {
+            flushMmap(physical.map, target, physical.size);
+            presentKms(physical);
+          }
         } catch (err) {
           console.error(
             `[composite] presentKms ${physical.connectorName}:`,

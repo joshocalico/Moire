@@ -7,6 +7,7 @@
  * scanout target can replace readPixels without changing the composition API.
  */
 import koffi from "koffi";
+import { closeFd } from "./libc.js";
 import { assertLinux } from "./platform.js";
 
 const EGL_PLATFORM_GBM_KHR = 0x31d7;
@@ -22,6 +23,13 @@ const EGL_NONE = 0x3038;
 const EGL_VENDOR = 0x3053;
 const EGL_VERSION = 0x3054;
 const EGL_EXTENSIONS = 0x3055;
+const EGL_WIDTH = 0x3057;
+const EGL_HEIGHT = 0x3056;
+const EGL_LINUX_DMA_BUF_EXT = 0x3270;
+const EGL_LINUX_DRM_FOURCC_EXT = 0x3271;
+const EGL_DMA_BUF_PLANE0_FD_EXT = 0x3272;
+const EGL_DMA_BUF_PLANE0_OFFSET_EXT = 0x3273;
+const EGL_DMA_BUF_PLANE0_PITCH_EXT = 0x3274;
 
 const GL_VERTEX_SHADER = 0x8b31;
 const GL_FRAGMENT_SHADER = 0x8b30;
@@ -49,6 +57,11 @@ const GL_PACK_ALIGNMENT = 0x0d05;
 const GL_BLEND = 0x0be2;
 const GL_ONE = 1;
 const GL_ONE_MINUS_SRC_ALPHA = 0x0303;
+
+const DRM_FORMAT_XRGB8888 = 0x34325258;
+const GBM_BO_USE_SCANOUT = 1 << 0;
+const GBM_BO_USE_RENDERING = 1 << 2;
+const GBM_BO_USE_LINEAR = 1 << 4;
 
 type NativeFunction = (...args: unknown[]) => unknown;
 
@@ -115,6 +128,18 @@ export type EglScaleOutput = {
   target: Uint8Array;
 };
 
+export type EglDirectOutput = Omit<
+  EglScaleOutput,
+  "targetPitch" | "target"
+>;
+
+export type EglDirectPresent = {
+  framebufferId: number;
+  stride: number;
+  width: number;
+  height: number;
+};
+
 export type EglCompositionLayer = {
   id: string;
   pixels: Uint8Array;
@@ -163,10 +188,19 @@ type CachedTexture = {
   lastSeenFrame: number;
 };
 
+type DirectOutputTarget = EglDirectPresent & {
+  key: string;
+  bo: unknown;
+  image: unknown;
+  texture: number;
+  framebuffer: number;
+};
+
 export class EglOutputScaler {
   readonly info: EglOutputInfo;
 
   private readonly gbm: ReturnType<typeof koffi.load>;
+  private readonly drm: ReturnType<typeof koffi.load>;
   private readonly egl: ReturnType<typeof koffi.load>;
   private readonly gl: ReturnType<typeof koffi.load>;
   private readonly gbmDevice: unknown;
@@ -176,6 +210,8 @@ export class EglOutputScaler {
   private readonly eglDestroyContext: NativeFunction;
   private readonly eglTerminate: NativeFunction;
   private readonly eglMakeCurrent: NativeFunction;
+  private readonly eglCreateImage: NativeFunction;
+  private readonly eglDestroyImage: NativeFunction;
   private readonly glDeleteTextures: NativeFunction;
   private readonly glDeleteFramebuffers: NativeFunction;
   private readonly glDeleteProgram: NativeFunction;
@@ -205,6 +241,19 @@ export class EglOutputScaler {
   private readonly glVertexAttribPointer: NativeFunction;
   private readonly glDrawArrays: NativeFunction;
   private readonly glReadPixels: NativeFunction;
+  private readonly glFinish: NativeFunction;
+  private readonly glEglImageTargetTexture: NativeFunction;
+  private readonly gbmBoCreate: NativeFunction;
+  private readonly gbmBoDestroy: NativeFunction;
+  private readonly gbmBoGetFd: NativeFunction;
+  private readonly gbmBoGetStride: NativeFunction;
+  private readonly gbmBoGetFormat: NativeFunction;
+  private readonly gbmBoGetModifier: NativeFunction;
+  private readonly gbmBoGetPlaneCount: NativeFunction;
+  private readonly drmPrimeFdToHandle: NativeFunction;
+  private readonly drmModeAddFb2: NativeFunction;
+  private readonly drmModeAddFb: NativeFunction;
+  private readonly drmModeRmFb: NativeFunction;
   private readonly program: number;
   private readonly positionLocation: number;
   private readonly texCoordLocation: number;
@@ -229,6 +278,7 @@ export class EglOutputScaler {
   private readonly colorRow2Location: number;
   private readonly colorRow3Location: number;
   private readonly colorOffsetLocation: number;
+  private readonly outputSwizzleLocation: number;
   private readonly sourceTexture: number;
   private readonly targetTexture: number;
   private readonly sceneTexture: number;
@@ -241,6 +291,7 @@ export class EglOutputScaler {
   private readonly blurFramebufferB: number;
   private outputSourceTexture = 0;
   private readonly layerTextures = new Map<string, CachedTexture>();
+  private readonly directTargets = new Map<string, DirectOutputTarget>();
   private compositionFrame = 0;
   private sourceWidth = 0;
   private sourceHeight = 0;
@@ -255,7 +306,7 @@ export class EglOutputScaler {
   private readback: Uint8Array | null = null;
   private destroyed = false;
 
-  constructor(drmFd: number) {
+  constructor(private readonly drmFd: number) {
     assertLinux("EGL compositor output");
     this.gbm = loadFirst(["libgbm.so.1", "libgbm.so"]);
     this.egl = loadFirst(["libEGL.so.1", "libEGL.so"]);
@@ -301,6 +352,9 @@ export class EglOutputScaler {
     ) as NativeFunction;
     const eglGetError = this.egl.func(
       "unsigned int eglGetError(void)",
+    ) as NativeFunction;
+    const eglGetProcAddress = this.egl.func(
+      "void *eglGetProcAddress(const char *procname)",
     ) as NativeFunction;
 
     this.display = eglGetPlatformDisplay(
@@ -385,6 +439,70 @@ export class EglOutputScaler {
       glRenderer: nativeString(glGetString(0x1f01)),
       glVersion: nativeString(glGetString(0x1f02)),
     };
+
+    const createImagePtr = eglGetProcAddress("eglCreateImageKHR");
+    const destroyImagePtr = eglGetProcAddress("eglDestroyImageKHR");
+    const imageTexturePtr = eglGetProcAddress("glEGLImageTargetTexture2DOES");
+    if (
+      pointerAddress(createImagePtr) === 0n ||
+      pointerAddress(destroyImagePtr) === 0n ||
+      pointerAddress(imageTexturePtr) === 0n
+    ) {
+      throw new Error("EGL dma-buf image entry points unavailable");
+    }
+    this.eglCreateImage = koffi.decode(
+      createImagePtr,
+      koffi.proto(
+        "void *MoireEglCreateImage(void *display, void *context, unsigned int target, void *buffer, const int *attributes)",
+      ),
+    ) as NativeFunction;
+    this.eglDestroyImage = koffi.decode(
+      destroyImagePtr,
+      koffi.proto(
+        "unsigned int MoireEglDestroyImage(void *display, void *image)",
+      ),
+    ) as NativeFunction;
+    this.glEglImageTargetTexture = koffi.decode(
+      imageTexturePtr,
+      koffi.proto(
+        "void MoireGlEglImageTargetTexture(unsigned int target, void *image)",
+      ),
+    ) as NativeFunction;
+
+    this.gbmBoCreate = this.gbm.func(
+      "void *gbm_bo_create(void *gbm, uint32_t width, uint32_t height, uint32_t format, uint32_t flags)",
+    ) as NativeFunction;
+    this.gbmBoDestroy = this.gbm.func(
+      "void gbm_bo_destroy(void *bo)",
+    ) as NativeFunction;
+    this.gbmBoGetFd = this.gbm.func(
+      "int gbm_bo_get_fd(void *bo)",
+    ) as NativeFunction;
+    this.gbmBoGetStride = this.gbm.func(
+      "uint32_t gbm_bo_get_stride(void *bo)",
+    ) as NativeFunction;
+    this.gbmBoGetFormat = this.gbm.func(
+      "uint32_t gbm_bo_get_format(void *bo)",
+    ) as NativeFunction;
+    this.gbmBoGetModifier = this.gbm.func(
+      "uint64_t gbm_bo_get_modifier(void *bo)",
+    ) as NativeFunction;
+    this.gbmBoGetPlaneCount = this.gbm.func(
+      "int gbm_bo_get_plane_count(void *bo)",
+    ) as NativeFunction;
+    this.drm = loadFirst(["libdrm.so.2", "libdrm.so"]);
+    this.drmPrimeFdToHandle = this.drm.func(
+      "int drmPrimeFDToHandle(int fd, int prime_fd, _Out_ uint32_t *handle)",
+    ) as NativeFunction;
+    this.drmModeAddFb2 = this.drm.func(
+      "int drmModeAddFB2(int fd, uint32_t width, uint32_t height, uint32_t pixel_format, const uint32_t *bo_handles, const uint32_t *pitches, const uint32_t *offsets, _Out_ uint32_t *buf_id, uint32_t flags)",
+    ) as NativeFunction;
+    this.drmModeAddFb = this.drm.func(
+      "int drmModeAddFB(int fd, uint32_t width, uint32_t height, uint8_t depth, uint8_t bpp, uint32_t pitch, uint32_t bo_handle, _Out_ uint32_t *buf_id)",
+    ) as NativeFunction;
+    this.drmModeRmFb = this.drm.func(
+      "int drmModeRmFB(int fd, uint32_t buffer_id)",
+    ) as NativeFunction;
 
     this.glDeleteTextures = this.gl.func(
       "void glDeleteTextures(int n, const unsigned int *textures)",
@@ -473,6 +591,7 @@ export class EglOutputScaler {
     this.glReadPixels = this.gl.func(
       "void glReadPixels(int x, int y, int width, int height, unsigned int format, unsigned int type, _Out_ void *pixels)",
     ) as NativeFunction;
+    this.glFinish = this.gl.func("void glFinish(void)") as NativeFunction;
     this.program = this.createProgram();
     const glGetAttribLocation = this.gl.func(
       "int glGetAttribLocation(unsigned int program, const char *name)",
@@ -528,6 +647,9 @@ export class EglOutputScaler {
     );
     this.colorOffsetLocation = Number(
       glGetUniformLocation(this.program, "u_color_offset"),
+    );
+    this.outputSwizzleLocation = Number(
+      glGetUniformLocation(this.program, "u_output_swizzle"),
     );
     if (this.positionLocation < 0 || this.texCoordLocation < 0) {
       throw new Error("GLES compositor shader attributes unavailable");
@@ -622,6 +744,7 @@ uniform vec4 u_color_row_1;
 uniform vec4 u_color_row_2;
 uniform vec4 u_color_row_3;
 uniform vec4 u_color_offset;
+uniform float u_output_swizzle;
 varying vec2 v_tex_coord;
 
 bool outside_rounded_rect(vec2 local) {
@@ -693,6 +816,7 @@ void main() {
     mapped.rgb *= mapped.a;
     color = vec4(mapped.b, mapped.g, mapped.r, mapped.a);
   }
+  if (u_output_swizzle > 0.5) color = color.bgra;
   gl_FragColor = color * u_opacity;
 }`,
     );
@@ -1149,6 +1273,7 @@ void main() {
     );
     this.glClear(GL_COLOR_BUFFER_BIT);
     this.glUseProgram(this.program);
+    this.glUniform1f(this.outputSwizzleLocation, 0);
     this.glEnable(GL_BLEND);
     this.glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     this.glActiveTexture(GL_TEXTURE0);
@@ -1313,7 +1438,7 @@ void main() {
     }
   }
 
-  renderOutput(output: EglScaleOutput): void {
+  private validateOutputBounds(output: EglDirectOutput): void {
     if (
       output.x < 0 ||
       output.y < 0 ||
@@ -1322,6 +1447,247 @@ void main() {
     ) {
       throw new RangeError(`Output ${output.id} lies outside the EGL scene`);
     }
+  }
+
+  private paintOutput(
+    output: EglDirectOutput,
+    texture: number,
+    framebuffer: number,
+    directScanout = false,
+  ): void {
+    this.validateOutputBounds(output);
+    this.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    this.glFramebufferTexture2D(
+      GL_FRAMEBUFFER,
+      GL_COLOR_ATTACHMENT0,
+      GL_TEXTURE_2D,
+      texture,
+      0,
+    );
+    const status = Number(this.glCheckFramebufferStatus(GL_FRAMEBUFFER));
+    if (status !== GL_FRAMEBUFFER_COMPLETE) {
+      throw new Error(`GLES framebuffer incomplete: 0x${status.toString(16)}`);
+    }
+    this.glViewport(0, 0, output.targetWidth, output.targetHeight);
+    this.glClearColor(0, 0, 0, 1);
+    this.glClear(GL_COLOR_BUFFER_BIT);
+    this.glUseProgram(this.program);
+    this.glActiveTexture(GL_TEXTURE0);
+    this.glBindTexture(GL_TEXTURE_2D, this.outputSourceTexture);
+    this.glUniform1i(this.samplerLocation, 0);
+    this.glUniform1f(this.opacityLocation, 1);
+    this.glUniform1f(this.modeLocation, 0);
+    this.glUniform1f(this.hasGeometryLocation, 0);
+    this.glUniform1f(this.hasColorMatrixLocation, 0);
+    this.glUniform1f(this.outputSwizzleLocation, directScanout ? 1 : 0);
+    this.glDisable(GL_BLEND);
+
+    const u0 = output.x / this.sourceWidth;
+    const v0 = output.y / this.sourceHeight;
+    const u1 = (output.x + output.width) / this.sourceWidth;
+    const v1 = (output.y + output.height) / this.sourceHeight;
+    this.glUniform4f(this.uvRectLocation, u0, v0, u1, v1);
+    this.glUniform2f(this.layerSizeLocation, output.targetWidth, output.targetHeight);
+    this.glUniform4f(this.cornerRadiiLocation, 0, 0, 0, 0);
+    this.drawQuad(
+      new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
+      new Float32Array([u0, v0, u1, v0, u0, v1, u1, v1]),
+    );
+    this.glDisableVertexAttribArray(this.positionLocation);
+    this.glDisableVertexAttribArray(this.texCoordLocation);
+  }
+
+  private directTargetFor(output: EglDirectOutput): DirectOutputTarget {
+    const key = `${output.id}:${output.targetWidth}x${output.targetHeight}`;
+    const cached = this.directTargets.get(key);
+    if (cached) return cached;
+    if (!this.info.eglExtensions.includes("EGL_EXT_image_dma_buf_import")) {
+      throw new Error("EGL_EXT_image_dma_buf_import is unavailable");
+    }
+
+    let bo: unknown = null;
+    let image: unknown = null;
+    let texture = 0;
+    let framebuffer = 0;
+    let framebufferId = 0;
+    let primeFd = -1;
+    try {
+      bo = this.gbmBoCreate(
+        this.gbmDevice,
+        output.targetWidth,
+        output.targetHeight,
+        DRM_FORMAT_XRGB8888,
+        GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR,
+      );
+      if (pointerAddress(bo) === 0n) {
+        throw new Error("gbm_bo_create scanout target failed");
+      }
+      const stride = Number(this.gbmBoGetStride(bo));
+      primeFd = Number(this.gbmBoGetFd(bo));
+      if (stride < output.targetWidth * 4 || primeFd < 0) {
+        throw new Error("GBM scanout target has invalid stride or dma-buf fd");
+      }
+
+      const imageAttributes = new Int32Array([
+        EGL_WIDTH,
+        output.targetWidth,
+        EGL_HEIGHT,
+        output.targetHeight,
+        EGL_LINUX_DRM_FOURCC_EXT,
+        DRM_FORMAT_XRGB8888,
+        EGL_DMA_BUF_PLANE0_FD_EXT,
+        primeFd,
+        EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+        0,
+        EGL_DMA_BUF_PLANE0_PITCH_EXT,
+        stride,
+        EGL_NONE,
+      ]);
+      image = this.eglCreateImage(
+        this.display,
+        null,
+        EGL_LINUX_DMA_BUF_EXT,
+        null,
+        imageAttributes,
+      );
+      if (pointerAddress(image) === 0n) {
+        throw new Error("eglCreateImageKHR dma-buf import failed");
+      }
+
+      const glGenTextures = this.gl.func(
+        "void glGenTextures(int n, _Out_ unsigned int *textures)",
+      ) as NativeFunction;
+      const glGenFramebuffers = this.gl.func(
+        "void glGenFramebuffers(int n, _Out_ unsigned int *framebuffers)",
+      ) as NativeFunction;
+      texture = uintOut((out) => void glGenTextures(1, out));
+      framebuffer = uintOut((out) => void glGenFramebuffers(1, out));
+      this.configureTexture(texture);
+      this.glBindTexture(GL_TEXTURE_2D, texture);
+      this.glEglImageTargetTexture(GL_TEXTURE_2D, image);
+      this.bindColorTarget(framebuffer, texture);
+
+      const handleOut = koffi.alloc("uint32_t", 1);
+      const framebufferOut = koffi.alloc("uint32_t", 1);
+      try {
+        const primeResult = Number(
+          this.drmPrimeFdToHandle(this.drmFd, primeFd, handleOut),
+        );
+        if (primeResult !== 0) {
+          throw new Error(`drmPrimeFDToHandle failed (${primeResult})`);
+        }
+        const handle = koffi.decode(handleOut, "uint32_t") as number;
+        let addResult = Number(
+          this.drmModeAddFb2(
+            this.drmFd,
+            output.targetWidth,
+            output.targetHeight,
+            DRM_FORMAT_XRGB8888,
+            new Uint32Array([handle, 0, 0, 0]),
+            new Uint32Array([stride, 0, 0, 0]),
+            new Uint32Array([0, 0, 0, 0]),
+            framebufferOut,
+            0,
+          ),
+        );
+        if (addResult !== 0) {
+          // Some virtual KMS drivers reject AddFB2 for otherwise valid linear
+          // XRGB BOs but accept the legacy depth/bpp registration path.
+          addResult = Number(
+            this.drmModeAddFb(
+              this.drmFd,
+              output.targetWidth,
+              output.targetHeight,
+              24,
+              32,
+              stride,
+              handle,
+              framebufferOut,
+            ),
+          );
+        }
+        if (addResult !== 0) {
+          const format = Number(this.gbmBoGetFormat(bo));
+          const modifier = BigInt(this.gbmBoGetModifier(bo));
+          const planes = Number(this.gbmBoGetPlaneCount(bo));
+          throw new Error(
+            `DRM framebuffer registration failed (${addResult}) handle=${handle} stride=${stride} format=0x${format.toString(16)} modifier=0x${modifier.toString(16)} planes=${planes}`,
+          );
+        }
+        framebufferId = koffi.decode(framebufferOut, "uint32_t") as number;
+      } finally {
+        koffi.free(handleOut);
+        koffi.free(framebufferOut);
+      }
+
+      const target: DirectOutputTarget = {
+        key,
+        bo,
+        image,
+        texture,
+        framebuffer,
+        framebufferId,
+        stride,
+        width: output.targetWidth,
+        height: output.targetHeight,
+      };
+      this.directTargets.set(key, target);
+      return target;
+    } catch (error) {
+      if (framebufferId) this.drmModeRmFb(this.drmFd, framebufferId);
+      if (framebuffer) {
+        this.glDeleteFramebuffers(1, new Uint32Array([framebuffer]));
+      }
+      if (texture) this.glDeleteTextures(1, new Uint32Array([texture]));
+      if (pointerAddress(image) !== 0n) {
+        this.eglDestroyImage(this.display, image);
+      }
+      if (pointerAddress(bo) !== 0n) this.gbmBoDestroy(bo);
+      throw error;
+    } finally {
+      if (primeFd >= 0) closeFd(primeFd);
+    }
+  }
+
+  /** Render into a DRM-registered GBM BO without CPU readback. */
+  renderOutputDirect(output: EglDirectOutput): EglDirectPresent {
+    const target = this.directTargetFor(output);
+    this.paintOutput(output, target.texture, target.framebuffer, true);
+    // Initial modeset integration uses an explicit completion point. Page-flip
+    // fences will replace this when target lifetime becomes asynchronous.
+    this.glFinish();
+    return {
+      framebufferId: target.framebufferId,
+      stride: target.stride,
+      width: target.width,
+      height: target.height,
+    };
+  }
+
+  /** Diagnostic readback for direct-target conformance; not used to present. */
+  readDirectOutput(
+    output: EglDirectOutput,
+    pixels: Uint8Array,
+  ): void {
+    const target = this.directTargetFor(output);
+    const required = target.width * target.height * 4;
+    if (pixels.byteLength < required) {
+      throw new RangeError("Direct output diagnostic buffer is too small");
+    }
+    this.glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
+    this.glReadPixels(
+      0,
+      0,
+      target.width,
+      target.height,
+      GL_RGBA,
+      GL_UNSIGNED_BYTE,
+      pixels,
+    );
+  }
+
+  renderOutput(output: EglScaleOutput): void {
+    this.validateOutputBounds(output);
     if (
       output.targetPitch < output.targetWidth * 4 ||
       output.target.byteLength < output.targetPitch * output.targetHeight
@@ -1348,61 +1714,7 @@ void main() {
       this.targetWidth = output.targetWidth;
       this.targetHeight = output.targetHeight;
     }
-    this.glBindFramebuffer(GL_FRAMEBUFFER, this.framebuffer);
-    this.glFramebufferTexture2D(
-      GL_FRAMEBUFFER,
-      GL_COLOR_ATTACHMENT0,
-      GL_TEXTURE_2D,
-      this.targetTexture,
-      0,
-    );
-    const status = Number(this.glCheckFramebufferStatus(GL_FRAMEBUFFER));
-    if (status !== GL_FRAMEBUFFER_COMPLETE) {
-      throw new Error(`GLES framebuffer incomplete: 0x${status.toString(16)}`);
-    }
-    this.glViewport(0, 0, output.targetWidth, output.targetHeight);
-    this.glClearColor(0, 0, 0, 1);
-    this.glClear(GL_COLOR_BUFFER_BIT);
-    this.glUseProgram(this.program);
-    this.glActiveTexture(GL_TEXTURE0);
-    this.glBindTexture(GL_TEXTURE_2D, this.outputSourceTexture);
-    this.glUniform1i(this.samplerLocation, 0);
-    this.glUniform1f(this.opacityLocation, 1);
-    this.glUniform1f(this.modeLocation, 0);
-    this.glUniform1f(this.hasGeometryLocation, 0);
-    this.glUniform1f(this.hasColorMatrixLocation, 0);
-    this.glDisable(GL_BLEND);
-
-    const u0 = output.x / this.sourceWidth;
-    const v0 = output.y / this.sourceHeight;
-    const u1 = (output.x + output.width) / this.sourceWidth;
-    const v1 = (output.y + output.height) / this.sourceHeight;
-    this.glUniform4f(this.uvRectLocation, u0, v0, u1, v1);
-    this.glUniform2f(this.layerSizeLocation, output.targetWidth, output.targetHeight);
-    this.glUniform4f(this.cornerRadiiLocation, 0, 0, 0, 0);
-    const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
-    const texCoords = new Float32Array([u0, v0, u1, v0, u0, v1, u1, v1]);
-    this.glEnableVertexAttribArray(this.positionLocation);
-    this.glEnableVertexAttribArray(this.texCoordLocation);
-    this.glVertexAttribPointer(
-      this.positionLocation,
-      2,
-      GL_FLOAT,
-      0,
-      0,
-      positions,
-    );
-    this.glVertexAttribPointer(
-      this.texCoordLocation,
-      2,
-      GL_FLOAT,
-      0,
-      0,
-      texCoords,
-    );
-    this.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    this.glDisableVertexAttribArray(this.positionLocation);
-    this.glDisableVertexAttribArray(this.texCoordLocation);
+    this.paintOutput(output, this.targetTexture, this.framebuffer, false);
 
     const tightBytes = output.targetWidth * output.targetHeight * 4;
     const tight =
@@ -1436,6 +1748,18 @@ void main() {
     this.destroyed = true;
     try {
       this.eglMakeCurrent(this.display, null, null, this.context);
+      for (const target of this.directTargets.values()) {
+        try {
+          this.drmModeRmFb(this.drmFd, target.framebufferId);
+        } catch {
+          // best effort
+        }
+        this.glDeleteFramebuffers(1, new Uint32Array([target.framebuffer]));
+        this.glDeleteTextures(1, new Uint32Array([target.texture]));
+        this.eglDestroyImage(this.display, target.image);
+        this.gbmBoDestroy(target.bo);
+      }
+      this.directTargets.clear();
       const textures = [
         this.sourceTexture,
         this.targetTexture,

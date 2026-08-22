@@ -36,7 +36,10 @@ export {
 export {
   createCompositorOutputRenderer,
   resolveOutputRenderPreference,
+  resolveEglPresentPreference,
   type CompositorOutputRenderer,
   type OutputRenderPreference,
   type OutputRenderTarget,
+  type OutputRenderResult,
+  type EglPresentPreference,
 } from "./output-renderer.js";

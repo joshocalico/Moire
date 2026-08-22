@@ -37,6 +37,38 @@ try {
     source,
     "surfaceless EGL round-trip changed orientation or BGRA channels",
   );
+  if (process.env.MOIRE_TEST_DIRECT_OUTPUT === "1") {
+    const directWidth = 64;
+    const directHeight = 64;
+    const directOutput = {
+      id: "egl-direct-conformance",
+      x: 0,
+      y: 0,
+      width,
+      height,
+      targetWidth: directWidth,
+      targetHeight: directHeight,
+    };
+    const direct = scaler.renderOutputDirect(directOutput);
+    const directReadback = new Uint8Array(directWidth * directHeight * 4);
+    scaler.readDirectOutput(directOutput, directReadback);
+    const scanoutPixel = (pixel: Uint8Array) =>
+      new Uint8Array([pixel[2]!, pixel[1]!, pixel[0]!, pixel[3]!]);
+    assert.deepEqual(
+      directReadback.subarray(0, 4),
+      scanoutPixel(source.subarray(0, 4)),
+      "GBM/EGLImage target did not convert top-left BGRA storage to scanout RGB",
+    );
+    assert.deepEqual(
+      directReadback.subarray(directReadback.length - 4),
+      scanoutPixel(source.subarray(source.length - 4)),
+      "GBM/EGLImage target did not convert bottom-right BGRA storage to scanout RGB",
+    );
+    assert.ok(direct.framebufferId > 0, "direct target did not register a DRM FB");
+    console.log(
+      `[sys/egl-output-smoke] direct framebuffer=${direct.framebufferId} stride=${direct.stride}`,
+    );
+  }
 
   const sceneWidth = 6;
   const sceneHeight = 4;

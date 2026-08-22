@@ -17,6 +17,13 @@ export type OutputRenderTarget = {
   pixels: Uint8Array;
 };
 
+export type OutputRenderResult = {
+  /** Renderer-owned DRM FB; caller presents it instead of flushing `pixels`. */
+  framebufferId?: number;
+};
+
+export type EglPresentPreference = "readback" | "direct";
+
 export interface CompositorOutputRenderer {
   readonly id: "software" | "egl";
   readonly capabilities: CompositionCapabilities;
@@ -24,7 +31,7 @@ export interface CompositorOutputRenderer {
   beginFrame(scene: PixelSurface): void;
   /** Retained GPU scene path. Undefined only for the flattened software oracle. */
   beginComposition?(scene: CompositionScene): void;
-  renderOutput(target: OutputRenderTarget): void;
+  renderOutput(target: OutputRenderTarget): OutputRenderResult;
   destroy(): void;
 }
 
@@ -49,7 +56,7 @@ class SoftwareOutputRenderer implements CompositorOutputRenderer {
     this.scene = scene;
   }
 
-  renderOutput(target: OutputRenderTarget): void {
+  renderOutput(target: OutputRenderTarget): OutputRenderResult {
     if (!this.scene) throw new Error("Software output frame was not begun");
     copySceneToOutputScaled(
       this.scene.pixels,
@@ -61,6 +68,7 @@ class SoftwareOutputRenderer implements CompositorOutputRenderer {
       target.physicalHeight,
       target.pitch,
     );
+    return {};
   }
 
   destroy(): void {
@@ -87,8 +95,11 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
   };
   readonly detail: string;
 
-  constructor(private readonly scaler: EglOutputScaler) {
-    this.detail = `${scaler.info.glRenderer}; ${scaler.info.glVersion}; readback scanout`;
+  constructor(
+    private readonly scaler: EglOutputScaler,
+    private readonly presentation = resolveEglPresentPreference(),
+  ) {
+    this.detail = `${scaler.info.glRenderer}; ${scaler.info.glVersion}; ${presentation === "direct" ? "GBM direct presentation" : "readback scanout"}`;
   }
 
   beginFrame(scene: PixelSurface): void {
@@ -153,10 +164,10 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
     this.scaler.beginComposition(eglScene);
   }
 
-  renderOutput(target: OutputRenderTarget): void {
+  renderOutput(target: OutputRenderTarget): OutputRenderResult {
     // Retained composition lives in the scaler's logical scene target, while
     // flattened frames retain `scene` for fallback. Both are valid begins.
-    this.scaler.renderOutput({
+    const output = {
       id: target.geometry.id,
       x: target.geometry.x,
       y: target.geometry.y,
@@ -164,9 +175,17 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
       height: target.geometry.height,
       targetWidth: target.physicalWidth,
       targetHeight: target.physicalHeight,
+    };
+    if (this.presentation === "direct") {
+      const direct = this.scaler.renderOutputDirect(output);
+      return { framebufferId: direct.framebufferId };
+    }
+    this.scaler.renderOutput({
+      ...output,
       targetPitch: target.pitch,
       target: target.pixels,
     });
+    return {};
   }
 
   destroy(): void {
@@ -234,13 +253,13 @@ class AutoCompositorOutputRenderer implements CompositorOutputRenderer {
     }
   }
 
-  renderOutput(target: OutputRenderTarget): void {
+  renderOutput(target: OutputRenderTarget): OutputRenderResult {
     try {
-      this.active.renderOutput(target);
+      return this.active.renderOutput(target);
     } catch (error) {
       if (this.retainedFrame) throw error;
       this.fallBack(error);
-      this.active.renderOutput(target);
+      return this.active.renderOutput(target);
     }
   }
 
@@ -258,6 +277,17 @@ export function resolveOutputRenderPreference(
   if (normalized === "software" || normalized === "egl") return normalized;
   throw new Error(
     `Invalid MOIRE_RENDERER=${JSON.stringify(value)} (expected auto, software, or egl)`,
+  );
+}
+
+export function resolveEglPresentPreference(
+  value = process.env.MOIRE_EGL_PRESENT,
+): EglPresentPreference {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === "readback") return "readback";
+  if (normalized === "direct") return "direct";
+  throw new Error(
+    `Invalid MOIRE_EGL_PRESENT=${JSON.stringify(value)} (expected readback or direct)`,
   );
 }
 
