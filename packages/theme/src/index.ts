@@ -413,8 +413,12 @@ export function paintWallpaper(
     wallpaperCache.height === height
   ) {
     const src = wallpaperCache.pixels;
-    for (let y = 0; y < height; y++) {
-      fb.set(src.subarray(y * width, y * width + width), y * pitchPx);
+    if (pitchPx === width) {
+      fb.set(src);
+    } else {
+      for (let y = 0; y < height; y++) {
+        fb.set(src.subarray(y * width, y * width + width), y * pitchPx);
+      }
     }
     return;
   }

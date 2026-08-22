@@ -18,4 +18,10 @@ Core Wayland server lives in `packages/core` (driven by `apps/compositor`). This
 | `protocol` | Wire encode/decode |
 | `core` | Clients, surfaces, seat, DnD, composite |
 | `sys` | DRM/GBM/EGL/libinput FFI |
+
+Output composition is runtime-selectable with
+`MOIRE_RENDERER=auto|software|egl`. See
+[Rendering and widget v2](../rendering-and-widget-v2.md) for the current
+readback-backed EGL checkpoint, layer/effect model, direct-scanout path, and
+profiling contract.
 | `shell` | In-process DE chrome via `ShellBridge` |

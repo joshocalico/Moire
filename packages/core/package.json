@@ -9,6 +9,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "smoke:display": "tsx src/display-layout.smoke.ts",
+    "smoke:composition": "tsx src/composition.smoke.ts",
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {

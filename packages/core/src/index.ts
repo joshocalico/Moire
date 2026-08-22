@@ -20,4 +20,23 @@ export {
   type XwaylandHandle,
 } from "./xwayland.js";
 export { X11Wm, type XwmWindow, type XwmWindowType } from "./xwm.js";
-
+export {
+  validateCompositionScene,
+  orderedCompositionLayers,
+  type CompositionRect,
+  type CompositionMatrix4,
+  type CompositionTransform,
+  type CompositionMesh,
+  type PixelSurface,
+  type CompositionEffect,
+  type CompositionLayer,
+  type CompositionScene,
+  type CompositionCapabilities,
+} from "./composition.js";
+export {
+  createCompositorOutputRenderer,
+  resolveOutputRenderPreference,
+  type CompositorOutputRenderer,
+  type OutputRenderPreference,
+  type OutputRenderTarget,
+} from "./output-renderer.js";

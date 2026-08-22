@@ -22,4 +22,5 @@ if pgrep -af 'tsx src/main' >/dev/null 2>&1; then
   pgrep -af 'tsx src/main' >&2 || true
 fi
 
-exec bash /media/psf/moire/scripts/guest-run-compositor.sh
+exec env MOIRE_RENDERER="${MOIRE_RENDERER:-auto}" \
+  bash /media/psf/moire/scripts/guest-run-compositor.sh

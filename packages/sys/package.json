@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
     "probe:drm": "tsx src/probe-drm.ts",
+    "smoke:egl": "tsx src/egl-output.smoke.ts",
     "clear-color": "tsx src/clear-color.ts"
   },
   "dependencies": {

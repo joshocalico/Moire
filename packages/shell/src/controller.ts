@@ -359,7 +359,9 @@ export function createShell(
   let clock = formatClock();
   let tasks: TaskWindowInfo[] = [];
   let dirty = true;
-  setUiScaleFactor(loadSettings().uiScale);
+  const initialSettings = loadSettings();
+  let showDesktopIcons = initialSettings.showDesktopIcons;
+  setUiScaleFactor(initialSettings.uiScale);
   void installUiFonts().then(() => {
     dirty = true;
     console.log("[shell] TTF fonts ready (@moire/ui)");
@@ -367,6 +369,8 @@ export function createShell(
   if (open) console.log("[shell] launcher start-open (MOIRE_SHELL_START_OPEN)");
   let hits: HitRegion[] = [];
   let overlay: Uint8Array | null = null;
+  type AlphaRuns = Array<Int32Array | null>;
+  let overlayRuns: AlphaRuns | null = null;
   let ow = 0;
   let oh = 0;
   let metaHeld = false;
@@ -407,6 +411,7 @@ export function createShell(
   let desktopDragActive = false;
   let desktopHits: HitRegion[] = [];
   let desktopOverlay: Uint8Array | null = null;
+  let desktopOverlayRuns: AlphaRuns | null = null;
   let desktopW = 0;
   let desktopH = 0;
   let desktopDirty = true;
@@ -771,10 +776,41 @@ export function createShell(
     );
     const painted = rasterize(root.container, width, height);
     overlay = painted.pixels;
+    overlayRuns = buildAlphaRuns(overlay, width, height);
     hits = painted.hits;
     ow = width;
     oh = height;
     dirty = false;
+  };
+
+  /** Cache non-transparent runs once per raster instead of scanning every
+   * transparent screen pixel on every composite. The runs also map directly
+   * to retained-scene damage regions for the EGL path. */
+  const buildAlphaRuns = (
+    srcBytes: Uint8Array,
+    width: number,
+    height: number,
+  ): AlphaRuns => {
+    const src = new Uint32Array(
+      srcBytes.buffer,
+      srcBytes.byteOffset,
+      srcBytes.byteLength >>> 2,
+    );
+    const rows: AlphaRuns = new Array(height).fill(null);
+    for (let y = 0; y < height; y++) {
+      const pairs: number[] = [];
+      const row = y * width;
+      let x = 0;
+      while (x < width) {
+        while (x < width && (src[row + x]! >>> 24) === 0) x++;
+        if (x >= width) break;
+        const start = x;
+        while (x < width && (src[row + x]! >>> 24) !== 0) x++;
+        pairs.push(start, x);
+      }
+      if (pairs.length > 0) rows[y] = Int32Array.from(pairs);
+    }
+    return rows;
   };
 
   const blendOverlay = (
@@ -783,6 +819,7 @@ export function createShell(
     width: number,
     height: number,
     srcBytes: Uint8Array,
+    runs?: AlphaRuns | null,
   ) => {
     const src = new Uint32Array(
       srcBytes.buffer,
@@ -792,22 +829,28 @@ export function createShell(
     for (let y = 0; y < height; y++) {
       const si = y * width;
       const di = y * pitchPx;
-      for (let x = 0; x < width; x++) {
-        const pixel = src[si + x]!;
-        const a = (pixel >>> 24) & 0xff;
-        if (a === 0) continue;
-        if (a === 255) {
-          fb[di + x] = pixel;
-          continue;
+      const rowRuns = runs?.[y];
+      if (runs && !rowRuns) continue;
+      const runCount = rowRuns?.length ?? 2;
+      for (let run = 0; run < runCount; run += 2) {
+        const start = rowRuns?.[run] ?? 0;
+        const end = rowRuns?.[run + 1] ?? width;
+        for (let x = start; x < end; x++) {
+          const pixel = src[si + x]!;
+          const a = (pixel >>> 24) & 0xff;
+          if (a === 255) {
+            fb[di + x] = pixel;
+            continue;
+          }
+          const dst = fb[di + x]!;
+          const inv = 255 - a;
+          const r =
+            (((pixel >>> 16) & 0xff) + ((((dst >>> 16) & 0xff) * inv) / 255)) | 0;
+          const g =
+            (((pixel >>> 8) & 0xff) + ((((dst >>> 8) & 0xff) * inv) / 255)) | 0;
+          const b = ((pixel & 0xff) + (((dst & 0xff) * inv) / 255)) | 0;
+          fb[di + x] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
         }
-        const dst = fb[di + x]!;
-        const inv = 255 - a;
-        const r =
-          (((pixel >>> 16) & 0xff) + ((((dst >>> 16) & 0xff) * inv) / 255)) | 0;
-        const g =
-          (((pixel >>> 8) & 0xff) + ((((dst >>> 8) & 0xff) * inv) / 255)) | 0;
-        const b = ((pixel & 0xff) + (((dst & 0xff) * inv) / 255)) | 0;
-        fb[di + x] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
       }
     }
   };
@@ -857,7 +900,6 @@ export function createShell(
 
   const rebuildDesktop = (width: number, height: number) => {
     const pal = themePalette();
-    const settings = loadSettings();
     renderShell(
       desktopRoot,
       createElement(
@@ -885,7 +927,7 @@ export function createShell(
             screenW: width,
             screenH: height,
             panelH: pal.panelHeight,
-            entries: settings.showDesktopIcons ? desktopEntries : [],
+            entries: showDesktopIcons ? desktopEntries : [],
             layout: desktopLayout,
             selectedName: desktopSelectedName,
             dropHoverName: desktopDropHoverName,
@@ -914,6 +956,7 @@ export function createShell(
     );
     const painted = rasterize(desktopRoot.container, width, height);
     desktopOverlay = painted.pixels;
+    desktopOverlayRuns = buildAlphaRuns(desktopOverlay, width, height);
     desktopHits = painted.hits;
     desktopW = width;
     desktopH = height;
@@ -1170,7 +1213,7 @@ export function createShell(
         rebuild(width, height);
       }
       if (!overlay) return;
-      blendOverlay(fb, pitchPx, width, height, overlay);
+      blendOverlay(fb, pitchPx, width, height, overlay, overlayRuns);
     },
 
     beginSsdFrame() {
@@ -1694,6 +1737,7 @@ export function createShell(
     invalidateChrome: () => {
       dirty = true;
       overlay = null;
+      overlayRuns = null;
       ow = 0;
       oh = 0;
       for (const strip of ssdStripCache.values()) {
@@ -1704,17 +1748,18 @@ export function createShell(
       ssdHover = null;
       ssdAnimationActive = false;
       desktopOverlay = null;
+      desktopOverlayRuns = null;
       desktopDirty = true;
       desktopW = 0;
       desktopH = 0;
       dragChipCache = null;
       const settings = loadSettings();
+      showDesktopIcons = settings.showDesktopIcons;
       setUiScaleFactor(settings.uiScale);
       console.log("[shell] chrome invalidated (prefs/theme)");
     },
 
     paintDesktop(fb, pitchPx, width, height) {
-      const settings = loadSettings();
       if (
         desktopDirty ||
         !desktopOverlay ||
@@ -1723,9 +1768,16 @@ export function createShell(
       ) {
         rebuildDesktop(width, height);
       }
-      if (!settings.showDesktopIcons) return;
+      if (!showDesktopIcons) return;
       if (!desktopOverlay) return;
-      blendOverlay(fb, pitchPx, width, height, desktopOverlay);
+      blendOverlay(
+        fb,
+        pitchPx,
+        width,
+        height,
+        desktopOverlay,
+        desktopOverlayRuns,
+      );
     },
 
     acceptDesktopDrop(uris, x, y) {

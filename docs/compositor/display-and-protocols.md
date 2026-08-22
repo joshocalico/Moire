@@ -100,9 +100,10 @@ Settings provides a draggable monitor map and primary selection; core validates
 the complete non-overlapping layout and owns a 15-second rollback transaction.
 Rotation, mirror mode and cross-GPU handoff remain future work. Per-output
 fractional scaling is effective end to end: clients render through buffer scale
-or viewporter, the compositor works in logical coordinates, and the software
-backend scales each logical output into its physical target. A future EGL
-backend can consume the same presentation contract.
+or viewporter, the compositor works in logical coordinates, and the selected
+software or EGL output backend scales each logical output into its physical
+target. The initial EGL backend reads back into the proven dumb-buffer scanout;
+GBM page-flip presentation is tracked in the rendering v2 queue.
 
 ## Smoke testing
 

@@ -9,6 +9,7 @@ UID_MOIRE=$(id -u moire)
 # removes that directory and the Wayland socket vanishes while the compositor
 # keeps running. Launcher still paints; spawned apps fail to connect.
 RUNTIME=/home/moire/.moire-runtime
+RENDERER="${MOIRE_RENDERER:-auto}"
 
 # Free DRM master (gdm comes back after reboot)
 systemctl stop gdm3 2>/dev/null || true
@@ -50,6 +51,7 @@ setsid runuser -u moire -- env \
   LANG=C.UTF-8 \
   GSK_RENDERER=cairo \
   GDK_BACKEND=wayland \
+  MOIRE_RENDERER="$RENDERER" \
   MOIRE_COMPOSITOR="pnpm --dir $DST --filter @moire/compositor exec tsx src/main.ts" \
   bash -c "cd $DST && exec ./apps/session/moire-session" \
   </dev/null >>/tmp/moire-session.log 2>&1 &

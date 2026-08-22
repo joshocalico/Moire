@@ -12,6 +12,7 @@ This directory is meant to be browsed as a tree or fed to a Markdown site render
 | [Roadmap](./roadmap.md) | Shipped vs planned |
 | [Files & desktop (overview)](./files-and-desktop.md) | Day-0 Files, icons, DnD summary |
 | [Files, desktop & UI completeness plan](./files-desktop-ui-plan.md) | Product, widget, renderer, JSX, and delivery plan |
+| [Rendering and widget v2](./rendering-and-widget-v2.md) | Active EGL, effects, scanout, and themeable-widget queue |
 | [Freedesktop MIME & actions](./freedesktop-mime-and-actions.md) | Associations, Open With, action plugins |
 
 ## Architecture

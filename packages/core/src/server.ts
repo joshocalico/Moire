@@ -41,7 +41,6 @@ import {
 } from "@moire/sys";
 import { mmapShm, munmapShm, copyFromPool } from "./shm-map.js";
 import {
-  copySceneToOutputScaled,
   desktopBounds,
   horizontalLayout,
   layoutsOverlap,
@@ -51,6 +50,10 @@ import {
   outputMembershipDelta,
   replacementOwner,
 } from "./display-layout.js";
+import {
+  createCompositorOutputRenderer,
+  type CompositorOutputRenderer,
+} from "./output-renderer.js";
 import {
   closeDmabufPlanes,
   copyFromDmabuf,
@@ -553,6 +556,10 @@ type SurfaceState = {
   appId: string;
   /** CPU snapshot of the last committed buffer (ARGB/XRGB). */
   pixels: Uint8Array | null;
+  /** Monotonic content generation for retained renderer texture caches. */
+  revision: number;
+  /** True when the committed buffer format guarantees every pixel is opaque. */
+  opaque: boolean;
   /** Buffer ids waiting for wl_buffer.release after composite. */
   releaseBuffers: number[];
   /**
@@ -960,6 +967,8 @@ export class CompositorServer {
   /** Active outputs arranged in one logical desktop coordinate space. */
   private outputs: DisplayOutput[] = [];
   private outputStages = new Map<number, Buffer>();
+  /** Output crop/scale backend; scene construction remains renderer-neutral. */
+  private outputRenderer: CompositorOutputRenderer | null = null;
   private clients = new Set<ClientSession>();
   private running = false;
   private nextGlobalName = 1;
@@ -1015,6 +1024,16 @@ export class CompositorServer {
   private shiftHeld = false;
   /** CPU staging buffer — paint here, then flushMmap + presentKms. */
   private stage: Buffer | null = null;
+  private profileFrames = 0;
+  private profileSceneMs = 0;
+  private profileWallpaperMs = 0;
+  private profileDesktopMs = 0;
+  private profileWindowsMs = 0;
+  private profileChromeMs = 0;
+  private profileTopMs = 0;
+  private profileRenderMs = 0;
+  private profilePresentMs = 0;
+  private profileLastLogMs = 0;
   /** Optional GBM device for dmabuf CPU import (same DRM fd as KMS). */
   private gbm: GbmDevice | null = null;
   /** DRM device advertised via zwp_linux_dmabuf_feedback_v1.main_device. */
@@ -1138,6 +1157,10 @@ export class CompositorServer {
         version: CORE_GLOBALS.wl_output,
       });
     }
+    this.outputRenderer = createCompositorOutputRenderer(this.kms.fd);
+    console.log(
+      `[renderer] ${this.outputRenderer.id}: ${this.outputRenderer.detail} capabilities=${JSON.stringify(this.outputRenderer.capabilities)}`,
+    );
     const bootBg = hexToArgb(this.theme.tokens.bg);
     for (const output of this.outputs) {
       fillKmsColor(output.kms, {
@@ -1350,6 +1373,8 @@ export class CompositorServer {
       this.keymap = null;
     }
     if (this.kms) {
+      this.outputRenderer?.destroy();
+      this.outputRenderer = null;
       this.gbm?.destroy();
       this.gbm = null;
       if (this.dmabufFormatTable) {
@@ -4070,6 +4095,7 @@ export class CompositorServer {
      */
     geom?: { x: number; y: number; w: number; h: number },
     destination?: { width: number; height: number },
+    opaque = false,
   ): void {
     // Wayland wl_shm / linux-dmabuf ARGB8888 is premultiplied.
     const srcWords = new Uint32Array(
@@ -4085,6 +4111,24 @@ export class CompositorServer {
 
     const destW = destination?.width ?? srcW;
     const destH = destination?.height ?? srcH;
+    // The overwhelmingly common XRGB, unscaled window case can be copied a
+    // row at a time. Avoiding the JS per-pixel alpha loop is a substantial
+    // software-reference win and mirrors the retained EGL `copy` path.
+    if (opaque && destW === srcW && destH === srcH) {
+      const sx0 = Math.max(0, -dx, geom ? gx0 : 0);
+      const sy0 = Math.max(0, -dy, geom ? gy0 : 0);
+      const sx1 = Math.min(srcW, fbW - dx, geom ? gx1 : srcW);
+      const sy1 = Math.min(srcH, fbH - dy, geom ? gy1 : srcH);
+      if (sx1 <= sx0 || sy1 <= sy0) return;
+      for (let sourceRow = sy0; sourceRow < sy1; sourceRow++) {
+        const sourceStart = sourceRow * stridePx + sx0;
+        fb.set(
+          srcWords.subarray(sourceStart, sourceStart + sx1 - sx0),
+          (dy + sourceRow) * pitchPx + dx + sx0,
+        );
+      }
+      return;
+    }
     for (let row = 0; row < destH; row++) {
       const py = dy + row;
       if (py < 0 || py >= fbH) continue;
@@ -4095,14 +4139,18 @@ export class CompositorServer {
         const sourceCol = Math.min(srcW - 1, Math.floor((col * srcW) / destW));
         const si = sourceRow * stridePx + sourceCol;
         const pixel = srcWords[si]!;
-        const a = (pixel >>> 24) & 0xff;
-        if (a === 0) continue;
         const inGeom =
           !geom ||
           (sourceCol >= gx0 &&
             sourceCol < gx1 &&
             sourceRow >= gy0 &&
             sourceRow < gy1);
+        if (opaque) {
+          if (inGeom) fb[py * pitchPx + px] = pixel;
+          continue;
+        }
+        const a = (pixel >>> 24) & 0xff;
+        if (a === 0) continue;
         // Opaque pixels outside window geometry are almost always fake CSD
         // "shadow" fill (solid black) — skip them so soft alpha shadows show.
         if (!inGeom && a === 255) continue;
@@ -4151,6 +4199,7 @@ export class CompositorServer {
             surf.stride,
             undefined,
             { width: surf.width, height: surf.height },
+            surf.opaque,
           );
           return;
         } catch (err) {
@@ -4434,6 +4483,7 @@ export class CompositorServer {
           surf.stride,
           undefined,
           { width: surf.width, height: surf.height },
+          surf.opaque,
         );
         cc.session.finishSurfaceFrame(surf);
         return;
@@ -4523,6 +4573,7 @@ export class CompositorServer {
                 }
               : undefined,
             { width: surf.width, height: surf.height },
+            surf.opaque,
           );
           painted++;
         } catch (err) {
@@ -4548,6 +4599,7 @@ export class CompositorServer {
   /** Paint wallpaper + all mapped surfaces into the KMS dumb buffer. */
   composite(): void {
     if (this.outputs.length === 0) return;
+    const frameStartedMs = monotonicMs();
     const kms = this.getKmsSize();
     const stageSize = kms.width * kms.height * 4;
 
@@ -4564,6 +4616,7 @@ export class CompositorServer {
     const pitchPx = kms.width;
     const wallPhase = (Date.now() / 60000) % 1; // ~60s period
     paintWallpaper(fb, pitchPx, kms.width, kms.height, this.theme, wallPhase);
+    const wallpaperFinishedMs = monotonicMs();
     // Keep atmosphere drifting even when otherwise idle.
     if (this.theme.wallpaper.mode === "atmosphere") {
       this.markDirty();
@@ -4589,8 +4642,10 @@ export class CompositorServer {
     } catch (err) {
       console.error("[shell] paintDesktop:", err);
     }
+    const desktopFinishedMs = monotonicMs();
 
     let painted = 0;
+    let windowsFinishedMs = desktopFinishedMs;
     try {
       this.shell?.beginSsdFrame?.();
       // Bottom → top stack order so raised windows paint last.
@@ -4646,6 +4701,7 @@ export class CompositorServer {
                     }
                   : undefined,
                 { width: surf.width, height: surf.height },
+                surf.opaque,
               );
               painted++;
             } catch (err) {
@@ -4695,7 +4751,7 @@ export class CompositorServer {
           }
         }
       }
-
+      windowsFinishedMs = monotonicMs();
     } finally {
       try {
         this.ssdWindows = this.collectSsdWindows();
@@ -4713,6 +4769,7 @@ export class CompositorServer {
       } catch (err) {
         console.error("[shell] paint:", err);
       }
+      const chromeFinishedMs = monotonicMs();
       // Native menus/flyouts are the top interactive layer. They must remain
       // visible and clickable even when their bounds cross the bottom panel.
       try {
@@ -4722,32 +4779,46 @@ export class CompositorServer {
       }
       this.paintDragPreview(fb, pitchPx, kms.width, kms.height);
       this.drawCursor(fb, pitchPx, kms.width, kms.height);
-      // Crop the logical desktop into each physical output. This is the
-      // software backend boundary; EGL can later implement the same output
-      // layout contract with per-output render targets.
+      const sceneFinishedMs = monotonicMs();
+      const renderer = this.outputRenderer;
+      if (!renderer) throw new Error("Compositor output renderer is unavailable");
+      const outputPhaseStartedMs = monotonicMs();
+      renderer.beginFrame({
+        pixels: stage,
+        width: kms.width,
+        height: kms.height,
+        stride: kms.width * 4,
+      });
+      // Account for backend setup as well as each output. For EGL this
+      // includes the logical-scene texture upload, which is intentionally
+      // separate from per-output crop/scale/readback work.
+      let frameRenderMs = monotonicMs() - outputPhaseStartedMs;
+      let framePresentMs = 0;
+      // Crop/scale the logical desktop into each physical output through the
+      // selected backend. EGL currently reads into the stable dumb scanout;
+      // direct GBM scanout is the next presentation step, not a scene change.
       for (const output of this.outputs) {
+        const outputStartedMs = monotonicMs();
         const physical = output.kms;
         let target = this.outputStages.get(physical.connectorId);
         if (!target || target.byteLength !== physical.size) {
           target = Buffer.alloc(physical.size);
           this.outputStages.set(physical.connectorId, target);
         }
-        copySceneToOutputScaled(
-          stage,
-          kms.width,
-          kms.height,
-          {
+        renderer.renderOutput({
+          geometry: {
             id: physical.connectorName,
             x: output.x,
             y: output.y,
             width: outputLogicalWidth(output),
             height: outputLogicalHeight(output),
           },
-          target,
-          physical.width,
-          physical.height,
-          physical.pitch,
-        );
+          pixels: target,
+          physicalWidth: physical.width,
+          physicalHeight: physical.height,
+          pitch: physical.pitch,
+        });
+        const renderedMs = monotonicMs();
         flushMmap(physical.map, target, physical.size);
         // Parallels VIRTUAL DRM does not pick up dumb-buffer dirties until
         // SetCrtc is re-applied (or a page flip).
@@ -4759,13 +4830,46 @@ export class CompositorServer {
             err,
           );
         }
+        const presentedMs = monotonicMs();
+        frameRenderMs += renderedMs - outputStartedMs;
+        framePresentMs += presentedMs - renderedMs;
       }
+      this.profileFrames++;
+      this.profileSceneMs += sceneFinishedMs - frameStartedMs;
+      this.profileWallpaperMs += wallpaperFinishedMs - frameStartedMs;
+      this.profileDesktopMs += desktopFinishedMs - wallpaperFinishedMs;
+      this.profileWindowsMs += windowsFinishedMs - desktopFinishedMs;
+      this.profileChromeMs += chromeFinishedMs - windowsFinishedMs;
+      this.profileTopMs += sceneFinishedMs - chromeFinishedMs;
+      this.profileRenderMs += frameRenderMs;
+      this.profilePresentMs += framePresentMs;
+      this.maybeLogRenderProfile();
     }
 
     if (painted > 0 && painted !== this.lastPainted) {
       console.log(`[composite] painted ${painted} surfaces`);
       this.lastPainted = painted;
     }
+  }
+
+  private maybeLogRenderProfile(): void {
+    const now = monotonicMs();
+    if (this.profileLastLogMs === 0) this.profileLastLogMs = now;
+    if (this.profileFrames < 120 && now - this.profileLastLogMs < 5_000) return;
+    const frames = Math.max(1, this.profileFrames);
+    console.log(
+      `[renderer/profile] backend=${this.outputRenderer?.id ?? "none"} frames=${frames} scene=${(this.profileSceneMs / frames).toFixed(2)}ms(wall=${(this.profileWallpaperMs / frames).toFixed(2)} desktop=${(this.profileDesktopMs / frames).toFixed(2)} windows=${(this.profileWindowsMs / frames).toFixed(2)} chrome=${(this.profileChromeMs / frames).toFixed(2)} top=${(this.profileTopMs / frames).toFixed(2)}) output=${(this.profileRenderMs / frames).toFixed(2)}ms present=${(this.profilePresentMs / frames).toFixed(2)}ms`,
+    );
+    this.profileFrames = 0;
+    this.profileSceneMs = 0;
+    this.profileWallpaperMs = 0;
+    this.profileDesktopMs = 0;
+    this.profileWindowsMs = 0;
+    this.profileChromeMs = 0;
+    this.profileTopMs = 0;
+    this.profileRenderMs = 0;
+    this.profilePresentMs = 0;
+    this.profileLastLogMs = now;
   }
 }
 
@@ -6587,6 +6691,8 @@ class ClientSession {
         title: "",
         appId: "",
         pixels: null,
+        revision: 0,
+        opaque: false,
         releaseBuffers: [],
         bufferAttached: false,
         role: "none",
@@ -6853,6 +6959,7 @@ class ClientSession {
               if (buf.format === WL_SHM_FORMAT_XRGB8888) {
                 forceOpaqueAlpha(surface.pixels);
               }
+              surface.opaque = buf.format === WL_SHM_FORMAT_XRGB8888;
             } else {
               const snapped = copyFromDmabuf(
                 buf,
@@ -6865,7 +6972,9 @@ class ClientSession {
               if (buf.format === DRM_FORMAT_XRGB8888) {
                 forceOpaqueAlpha(surface.pixels);
               }
+              surface.opaque = buf.format === DRM_FORMAT_XRGB8888;
             }
+            surface.revision++;
             surface.bufferWidth = buf.width;
             surface.bufferHeight = buf.height;
             const viewport = [...this.objects.values()].find(
@@ -6929,6 +7038,8 @@ class ClientSession {
         surface.bufferAttached = false;
         surface.mapped = false;
         surface.pixels = null;
+        surface.opaque = false;
+        surface.revision++;
         this.clearSurfaceOutputs(surface);
       }
       this.updateSurfaceOutputs(surface);

@@ -60,3 +60,10 @@ export {
   type EvdevPointerAxis,
 } from "./evdev-pointer.js";
 export { GbmDevice, type GbmMappedPixels } from "./gbm.js";
+export {
+  EglOutputScaler,
+  type EglOutputInfo,
+  type EglScaleOutput,
+  type EglCompositionLayer,
+  type EglCompositionScene,
+} from "./egl-output.js";
