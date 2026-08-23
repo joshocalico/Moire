@@ -298,6 +298,9 @@ geometry through one size-aware recipe.
 
 Extend the retained scene consistently across software and EGL:
 
+- Baseline shipped: rounded fills and strokes use analytic one-pixel edge
+  coverage in software, avoiding binary stair-stepped corners while preserving
+  the backend-neutral radius/stroke scene contract.
 - per-corner radii and rounded clips
 - transforms and transform origins
 - paths and icon geometry

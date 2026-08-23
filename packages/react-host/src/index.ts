@@ -1034,6 +1034,56 @@ function blendFillColor(fb: Uint32Array, index: number, color: number): void {
   );
 }
 
+function blendCoverageColor(
+  fb: Uint32Array,
+  index: number,
+  color: number,
+  coverage: number,
+): void {
+  const clamped = Math.max(0, Math.min(1, coverage));
+  if (clamped <= 0) return;
+  if (clamped >= 1) {
+    blendFillColor(fb, index, color);
+    return;
+  }
+  const c = color >>> 0;
+  blendRgba(
+    fb,
+    index,
+    (c >>> 16) & 0xff,
+    (c >>> 8) & 0xff,
+    c & 0xff,
+    (c >>> 24) & 0xff,
+    clamped,
+  );
+}
+
+/** One-pixel analytic coverage for the curved part of a rounded rectangle. */
+function roundedRectCoverage(
+  px: number,
+  py: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+): number {
+  if (px < x || py < y || px >= x + w || py >= y + h) return 0;
+  const r = clampedRadius(w, h, radius);
+  if (r <= 0) return 1;
+  // Most pixels lie in the horizontal or vertical body and need no sqrt.
+  if (
+    (px >= x + r && px < x + w - r) ||
+    (py >= y + r && py < y + h - r)
+  ) {
+    return 1;
+  }
+  const cx = px < x + r ? x + r : x + w - r;
+  const cy = py < y + r ? y + r : y + h - r;
+  const distance = Math.hypot(px - cx, py - cy);
+  return Math.max(0, Math.min(1, r + 0.5 - distance));
+}
+
 function fillRoundedRect(
   fb: Uint32Array,
   pitchPx: number,
@@ -1052,9 +1102,16 @@ function fillRoundedRect(
   const y1 = Math.min(fbH, (y | 0) + (h | 0));
   for (let py = y0; py < y1; py++) {
     for (let px = x0; px < x1; px++) {
-      if (insideRoundedRect(px + 0.5, py + 0.5, x, y, w, h, radius)) {
-        blendFillColor(fb, py * pitchPx + px, color);
-      }
+      const coverage = roundedRectCoverage(
+        px + 0.5,
+        py + 0.5,
+        x,
+        y,
+        w,
+        h,
+        radius,
+      );
+      blendCoverageColor(fb, py * pitchPx + px, color, coverage);
     }
   }
 }
@@ -1085,11 +1142,11 @@ function fillRoundedStroke(
     for (let px = x0; px < x1; px++) {
       const sx = px + 0.5;
       const sy = py + 0.5;
-      const outer = insideRoundedRect(sx, sy, x, y, w, h, radius);
+      const outer = roundedRectCoverage(sx, sy, x, y, w, h, radius);
       const inner =
         innerW > 0 &&
         innerH > 0 &&
-        insideRoundedRect(
+        roundedRectCoverage(
           sx,
           sy,
           innerX,
@@ -1098,7 +1155,12 @@ function fillRoundedStroke(
           innerH,
           innerRadius,
         );
-      if (outer && !inner) blendFillColor(fb, py * pitchPx + px, color);
+      blendCoverageColor(
+        fb,
+        py * pitchPx + px,
+        color,
+        outer * (1 - Number(inner)),
+      );
     }
   }
 }

@@ -118,7 +118,11 @@ function rendererSmoke(): void {
   assert.equal(frame.width, 8);
   assert.equal(frame.height, 8);
   assert.equal(words[1 * 8 + 1], 0xff123456);
-  assert.equal(words[4 * 8 + 1], 0x00000000);
+  const roundedCorner = words[4 * 8 + 1]!;
+  assert.ok(
+    (roundedCorner >>> 24) > 0 && (roundedCorner >>> 24) < 0xff,
+    "rounded corners should retain fractional antialias coverage",
+  );
   assert.equal(words[4 * 8 + 4], 0xff88aacc);
   assert.equal(words[6 * 8 + 4], 0xff224466);
   assert.equal(
