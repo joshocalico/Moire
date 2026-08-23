@@ -719,8 +719,16 @@ function formControlRecipeSmoke(): void {
     height: 100,
   });
   const words = new Uint32Array(frame.pixels.buffer);
-  assert.equal(words[10 * frame.width + 3], checkboxFill);
-  assert.equal(words[10 * frame.width + 43], toggleFill);
+  assert.equal(
+    words[17 * frame.width + 3],
+    checkboxFill,
+    "sample the selected checkbox away from its rounded corner",
+  );
+  assert.equal(
+    words[18 * frame.width + 43],
+    toggleFill,
+    "sample the selected toggle away from its rounded corner",
+  );
   assert.equal(words[56 * frame.width + 16], sliderFill);
   assert.equal(words[84 * frame.width + 16], progressFill);
 }
@@ -1432,7 +1440,10 @@ async function formControlInteractionSmoke(): Promise<void> {
     modifiers: NO_MODIFIERS,
     timeMs: 5,
   });
-  assert.equal(sliderValue, 0.6, "Slider should honor its keyboard step");
+  assert.ok(
+    Math.abs(sliderValue - 0.6) < Number.EPSILON * 2,
+    "Slider should honor its keyboard step",
+  );
 
   platformWindow.injectPointer({
     type: "down",
