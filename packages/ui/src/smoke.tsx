@@ -893,6 +893,69 @@ async function searchFieldInteractionSmoke(): Promise<void> {
   backend.disconnect();
 }
 
+async function buttonKeyboardInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Button keyboard smoke", width: 240, height: 60 });
+  let buttonPresses = 0;
+  let iconPresses = 0;
+  win.setContent(
+    <Group width={240} height={60}>
+      <Button
+        x={10}
+        y={10}
+        width={100}
+        label="Continue"
+        autoFocus
+        onPress={() => {
+          buttonPresses++;
+        }}
+      />
+      <IconButton
+        x={130}
+        y={10}
+        icon="×"
+        onPress={() => {
+          iconPresses++;
+        }}
+      />
+    </Group>,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectKey({
+    type: "down",
+    code: 28,
+    key: "Enter",
+    modifiers: NO_MODIFIERS,
+    timeMs: 1,
+  });
+  assert.equal(buttonPresses, 1, "Button should activate from Enter");
+  platformWindow.injectKey({
+    type: "down",
+    code: 15,
+    key: "Tab",
+    text: "\t",
+    modifiers: NO_MODIFIERS,
+    timeMs: 2,
+  });
+  platformWindow.injectKey({
+    type: "down",
+    code: 57,
+    key: " ",
+    text: " ",
+    modifiers: NO_MODIFIERS,
+    timeMs: 3,
+  });
+  assert.equal(iconPresses, 1, "IconButton should activate from Space");
+
+  win.destroy();
+  backend.disconnect();
+}
+
 async function dialogInteractionSmoke(): Promise<void> {
   const backend = new HeadlessPlatform();
   await backend.connect();
@@ -1781,6 +1844,7 @@ async function main() {
   await formControlInteractionSmoke();
   await scrollAreaInteractionSmoke();
   await dialogInteractionSmoke();
+  await buttonKeyboardInteractionSmoke();
   await tabsInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();

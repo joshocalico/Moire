@@ -72,7 +72,8 @@ win.setContent(
 
 Button recipes cover `primary`, `secondary`, `ghost`, and `danger` variants;
 `small`, `medium`, and `large` sizes; semantic interaction states; and leading
-or trailing artwork slots. IconButton has a centered text/artwork slot rather
+or trailing artwork slots. Button and IconButton expose focus traversal plus
+Enter/Space activation, and IconButton has a centered text/artwork slot rather
 than treating its icon as a Button label. ListItem recipes separately own
 selection, interaction feedback, typography, leading artwork, metrics, and the
 selection indicator. GridItem recipes own selection/drop surfaces, interaction,

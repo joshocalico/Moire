@@ -265,6 +265,9 @@ Explicit legacy colors remain compatibility escape hatches. Headless
 conformance cases prove a subtree recipe can materially change each rendered
 control without a component fork.
 
+Button and IconButton now consume their focus recipes through actual Tab
+traversal and Enter/Space activation rather than exposing pointer-only paint.
+
 ### W2 — active: slot-based primitives
 
 - Give compound widgets named slots instead of one monolithic paint function.

@@ -51,7 +51,8 @@ Filled background. `Panel` defaults fill to `pal.surface`; `Surface` to `pal.pan
 
 | Prop | Type | Default |
 | --- | --- | --- |
-| `width`, `height` | `number` | required |
+| `width` | `number` | required |
+| `height` | `number` | required |
 | `fill` | `number` | theme |
 | `radius`, `stroke`, `strokeWidth` | `number` | optional |
 | `clip` | `boolean` | `false` |
@@ -100,19 +101,25 @@ Hit target with eased hover/press fills (`pal.hover` / `pal.pressed`).
 
 | Prop | Type | Default |
 | --- | --- | --- |
-| `width`, `height` | `number` | required |
+| `width` | `number` | required |
+| `height` | `number` | selected recipe height |
 | `label` | `string` | required |
 | `variant` | `primary` \| `secondary` \| `ghost` \| `danger` | `secondary` |
 | `fill` / `color` | `number` | override variant |
 | `fontSize` | `number` | `14` |
 | `disabled` | `boolean` | |
+| `autoFocus`, `focusId` | focus control | |
 | `onPress` | `() => void` | |
 
 Primary uses `accentLine` fill; secondary uses `surface` + rim; ghost is transparent.
+Buttons with an action participate in Tab traversal, paint the recipe focus
+state, and activate from Enter or Space.
 
 ### `IconButton`
 
-Same as `Button` but `icon: string` becomes the label (for emoji/short glyphs). Prefer `Icon` + `Pressable` for artwork.
+Compact equivalent with a centered string, node, or styled artwork callback.
+It shares Button focus traversal and Enter/Space activation; prefer a real
+`Icon` slot over emoji or font-dependent glyphs.
 
 ### `Checkbox` / `Toggle` / `Slider`
 

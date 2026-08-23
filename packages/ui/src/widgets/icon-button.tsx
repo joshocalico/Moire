@@ -1,10 +1,11 @@
 /** Compact recipe-driven control with a genuinely centered artwork slot. */
-import React, { type ReactNode } from "react";
+import React, { useId, useState, type ReactNode } from "react";
 import {
   Group,
   Text,
   measureTextBounds,
   type HitPointerEvent,
+  type HitKeyEvent,
 } from "@moire/react-host";
 import {
   resolveStatefulStyle,
@@ -33,15 +34,24 @@ export type IconButtonProps = {
   fill?: number;
   color?: number;
   disabled?: boolean;
+  autoFocus?: boolean;
+  focusId?: string;
+  onFocusChange?: (focused: boolean) => void;
   onPress?: () => void;
   onContextMenu?: (event: HitPointerEvent) => void;
 };
 
 export function IconButton(props: IconButtonProps): ReactNode {
   const theme = useWidgetTheme();
+  const generatedId = useId();
+  const [focused, setFocused] = useState(false);
   const recipe =
     theme.recipes.iconButton[props.variant ?? "standard"][props.size ?? "medium"];
-  const root = resolveStatefulStyle(recipe.root, "rest");
+  const root = resolveStatefulStyle(
+    recipe.root,
+    focused ? "focused" : "rest",
+    props.disabled ? "disabled" : "rest",
+  );
   const hovered = resolveStatefulStyle(recipe.root, "hover");
   const pressed = resolveStatefulStyle(recipe.root, "pressed");
   const disabled = resolveStatefulStyle(recipe.root, "disabled");
@@ -55,6 +65,17 @@ export function IconButton(props: IconButtonProps): ReactNode {
   const fill = props.fill ?? root.fill;
   const color = props.color ?? iconStyle.color;
   let artwork: ReactNode;
+  const handleKey = (event: HitKeyEvent) => {
+    if (event.repeat || props.disabled) return;
+    if (
+      event.code === 28 ||
+      event.code === 57 ||
+      event.key === "Enter" ||
+      event.key === " "
+    ) {
+      props.onPress?.();
+    }
+  };
 
   if (typeof props.icon === "function") {
     artwork = props.icon({ ...iconStyle, color });
@@ -105,6 +126,14 @@ export function IconButton(props: IconButtonProps): ReactNode {
               : root.strokeWidth
         }
         disabled={props.disabled}
+        focusable={!!props.onPress}
+        autoFocus={props.autoFocus}
+        focusId={props.focusId ?? `icon-button:${generatedId}`}
+        onFocusChange={(next) => {
+          setFocused(next);
+          props.onFocusChange?.(next);
+        }}
+        onKeyDown={handleKey}
         onPress={props.onPress}
         onContextMenu={props.onContextMenu}
       />

@@ -1,10 +1,11 @@
 /** Recipe-driven Button with replaceable leading and trailing artwork slots. */
-import React, { type ReactNode } from "react";
+import React, { useId, useState, type ReactNode } from "react";
 import {
   Group,
   Rect,
   Text,
   measureTextBounds,
+  type HitKeyEvent,
 } from "@moire/react-host";
 import {
   resolveStatefulStyle,
@@ -36,6 +37,9 @@ export type ButtonProps = {
   color?: number;
   fontSize?: number;
   disabled?: boolean;
+  autoFocus?: boolean;
+  focusId?: string;
+  onFocusChange?: (focused: boolean) => void;
   onPress?: () => void;
 };
 
@@ -45,10 +49,16 @@ function renderSlot(slot: ButtonSlot, style: WidgetIconStyle): ReactNode {
 
 export function Button(props: ButtonProps): ReactNode {
   const theme = useWidgetTheme();
+  const generatedId = useId();
+  const [focused, setFocused] = useState(false);
   const variant = props.variant ?? "secondary";
   const size = props.size ?? "medium";
   const recipe = theme.recipes.button[variant][size];
-  const root = resolveStatefulStyle(recipe.root, "rest");
+  const root = resolveStatefulStyle(
+    recipe.root,
+    focused ? "focused" : "rest",
+    props.disabled ? "disabled" : "rest",
+  );
   const hoveredRoot = resolveStatefulStyle(recipe.root, "hover");
   const pressedRoot = resolveStatefulStyle(recipe.root, "pressed");
   const disabledRoot = resolveStatefulStyle(recipe.root, "disabled");
@@ -101,6 +111,17 @@ export function Button(props: ButtonProps): ReactNode {
       ? disabledRoot.strokeWidth
       : root.strokeWidth;
   const radius = props.disabled ? disabledRoot.radius : root.radius;
+  const handleKey = (event: HitKeyEvent) => {
+    if (event.repeat || props.disabled) return;
+    if (
+      event.code === 28 ||
+      event.code === 57 ||
+      event.key === "Enter" ||
+      event.key === " "
+    ) {
+      props.onPress?.();
+    }
+  };
 
   return (
     <Group
@@ -122,6 +143,14 @@ export function Button(props: ButtonProps): ReactNode {
         stroke={stroke}
         strokeWidth={strokeWidth}
         disabled={props.disabled}
+        focusable={!!props.onPress}
+        autoFocus={props.autoFocus}
+        focusId={props.focusId ?? `button:${generatedId}`}
+        onFocusChange={(next) => {
+          setFocused(next);
+          props.onFocusChange?.(next);
+        }}
+        onKeyDown={handleKey}
         onPress={props.onPress}
       />
       {!explicitFill && recipe.rim ? (
