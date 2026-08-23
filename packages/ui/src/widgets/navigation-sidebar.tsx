@@ -1,5 +1,5 @@
 import React, { type ReactNode } from "react";
-import { Group } from "@moire/react-host";
+import { Group, Rect } from "@moire/react-host";
 import { CollectionItem } from "./interaction.js";
 import { Icon, type IconName } from "./icon.js";
 import { IconButton } from "./icon-button.js";
@@ -115,11 +115,28 @@ export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {
                     interactive={false}
                     leading={
                       item.icon ? (
-                        <Icon
-                          name={item.icon}
-                          size={18}
-                          color={props.selectedId === item.id ? pal.accent : pal.text}
-                        />
+                        <Group width={26} height={26}>
+                          <Rect
+                            width={26}
+                            height={26}
+                            fill={props.selectedId === item.id
+                              ? ((pal.accent & 0x00ffffff) | 0x22000000) >>> 0
+                              : 0x00000000}
+                            radius={7}
+                          />
+                          <Icon
+                            x={4}
+                            y={4}
+                            name={item.icon}
+                            size={18}
+                            symbolic
+                            color={item.disabled
+                              ? pal.muted
+                              : props.selectedId === item.id
+                                ? pal.accent
+                                : pal.text}
+                          />
+                        </Group>
                       ) : undefined
                     }
                   />
@@ -135,7 +152,7 @@ export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {
                       x={0}
                       width={24}
                       height={24}
-                      icon={<Label text="↑" fontSize={12} width={16} height={16} />}
+                      icon={<Icon name="chevron-up" size={12} symbolic />}
                       variant="ghost"
                       disabled={index === 0}
                       onPress={() => props.onMove?.(item, -1)}
@@ -144,7 +161,7 @@ export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {
                       x={26}
                       width={24}
                       height={24}
-                      icon={<Label text="↓" fontSize={12} width={16} height={16} />}
+                      icon={<Icon name="chevron-down" size={12} symbolic />}
                       variant="ghost"
                       disabled={index === section.items.length - 1}
                       onPress={() => props.onMove?.(item, 1)}
@@ -154,7 +171,7 @@ export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {
                         x={52}
                         width={24}
                         height={24}
-                        icon={<Label text="×" color={pal.danger} fontSize={14} width={16} height={16} />}
+                        icon={<Icon name="remove" size={12} color={pal.danger} symbolic />}
                         variant="ghost"
                         onPress={() => props.onRemove?.(item)}
                       />

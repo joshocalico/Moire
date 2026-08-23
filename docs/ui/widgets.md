@@ -360,7 +360,24 @@ same semantics to non-React controllers and deterministic tests.
 Sectioned navigation with stable item ids, icons, selection, disabled rows,
 scrolling, and optional edit-mode move/remove controls. Applications own the
 domain model and persistence; the widget owns consistent geometry, focus, and
-row presentation.
+row presentation. Sidebar icons use renderer-native symbolic artwork so
+selected, rest, and disabled tints remain themeable.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | required |
+| `sections` | `readonly NavigationSidebarSection[]` | required |
+| `selectedId` | `string \| null` | none |
+| `editing` | `boolean` | `false` |
+| `onSelect` | `(item) => void` | |
+| `onRemove` | `(item) => void` | |
+| `onMove` | `(item, direction: -1 \| 1) => void` | |
+| `header`, `footer` | `ReactNode` | |
+
+`NavigationSidebarSection` has `id`, optional `label`, and `items`.
+`NavigationSidebarItem` has `id`, `label`, and optional `subtitle`, `icon`,
+`disabled`, and `removable` fields.
 
 ### `ScrollArea`
 
@@ -576,12 +593,16 @@ threshold/session behavior.
 
 | Prop | Type | Default |
 | --- | --- | --- |
+| `x`, `y` | `number` | `0` |
 | `name` | `IconName` \| string | required |
 | `size` | `number` | `16` |
 | `path` | `string` | optional PNG path |
 | `color` | `number` | fallback geometry only |
+| `symbolic` | `boolean` | `false`; bypass bitmap and apply `color` |
 
-Names: `folder`, `file`, `image`, `app`, `trash`, `home`, `desktop`, `downloads`, `up`, `grid`, `list`.
+Names: `folder`, `file`, `image`, `app`, `trash`, `home`, `desktop`,
+`downloads`, `up`, `grid`, `list`, `search`, `close`, `chevron-up`,
+`chevron-down`, and `remove`.
 
 Bundled files: `packages/ui/icons/<name>.png`.
 
