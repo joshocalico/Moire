@@ -3,6 +3,7 @@
  * widgets without a display.
  */
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import React, { useState, type ReactNode } from "react";
 import {
   Group,
@@ -12,6 +13,7 @@ import {
   createShellRoot,
   renderShell,
   type RendererBackend,
+  type SceneNode,
   type SoftwareFrame,
 } from "@moire/react-host";
 import {
@@ -37,6 +39,8 @@ import {
   ListItem,
   Grid,
   GridItem,
+  ImageWidget,
+  clearImageCache,
   TextField,
   SearchField,
   Tabs,
@@ -104,6 +108,128 @@ function rendererSmoke(): void {
     "translucent rect on a clear frame must preserve premultiplied alpha",
   );
   assert.equal(collectHits(root.container).length, 1);
+}
+
+function imageWidgetRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const placeholderFill = 0xff4b365f;
+  const customTheme = {
+    ...theme,
+    name: "image-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      imageWidget: {
+        ...theme.recipes.imageWidget,
+        placeholder: {
+          ...theme.recipes.imageWidget.placeholder,
+          base: {
+            ...theme.recipes.imageWidget.placeholder.base,
+            fill: placeholderFill,
+            radius: 0,
+            stroke: undefined,
+            strokeWidth: 0,
+          },
+        },
+      },
+    },
+  };
+  const bitmap = {
+    width: 2,
+    height: 1,
+    rgba: new Uint8Array([
+      0xff, 0x00, 0x00, 0xff,
+      0x00, 0x00, 0xff, 0xff,
+    ]),
+  };
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <Group width={18} height={10}>
+        <ImageWidget
+          x={1}
+          y={1}
+          width={8}
+          height={8}
+          bitmap={bitmap}
+          fit="contain"
+        />
+        <ImageWidget
+          x={11}
+          y={1}
+          width={4}
+          height={8}
+          bitmap={bitmap}
+          fit="cover"
+          placeholder={false}
+        />
+      </Group>
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 18,
+    height: 10,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(
+    words[1 * frame.width + 1],
+    placeholderFill,
+    "contain should retain the recipe-owned letterbox frame",
+  );
+  assert.equal(words[3 * frame.width + 1], 0xffff0000);
+  assert.equal(words[3 * frame.width + 5], 0xff0000ff);
+  assert.equal(words[4 * frame.width + 11], 0xffff0000);
+  assert.equal(words[4 * frame.width + 13], 0xff0000ff);
+  assert.equal(
+    words[4 * frame.width + 15],
+    0,
+    "cover should remain clipped to the widget bounds",
+  );
+}
+
+function hasImageNode(node: SceneNode): boolean {
+  return node.kind === "image" || node.children.some(hasImageNode);
+}
+
+async function imageWidgetLoadingSmoke(): Promise<void> {
+  clearImageCache();
+  const src = fileURLToPath(new URL("../icons/file.png", import.meta.url));
+  let loaded = 0;
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <ImageWidget
+      width={32}
+      height={32}
+      src={src}
+      onLoad={() => {
+        loaded += 1;
+      }}
+    />,
+  );
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  assert.equal(loaded, 1, "an asynchronous image load should notify once");
+  assert.ok(
+    hasImageNode(root.container),
+    "an asynchronous image load should schedule a retained-tree repaint",
+  );
+
+  let cachedLoaded = 0;
+  const cachedRoot = createShellRoot();
+  renderShell(
+    cachedRoot,
+    <ImageWidget
+      width={32}
+      height={32}
+      src={src}
+      onLoad={() => {
+        cachedLoaded += 1;
+      }}
+    />,
+  );
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  assert.equal(cachedLoaded, 1, "a cached source should still notify its widget");
+  assert.ok(hasImageNode(cachedRoot.container));
 }
 
 function buttonRecipeSmoke(): void {
@@ -1828,6 +1954,12 @@ function SmokeApp(props: { onQuit: () => void }): ReactNode {
 
 async function main() {
   process.env.MOIRE_UI_PLATFORM = "headless";
+  if (process.env.MOIRE_UI_SMOKE === "image") {
+    imageWidgetRecipeSmoke();
+    await imageWidgetLoadingSmoke();
+    console.log("[ui/smoke:image] ok");
+    return;
+  }
   rendererSmoke();
   buttonRecipeSmoke();
   textFieldRecipeSmoke();
@@ -1850,6 +1982,8 @@ async function main() {
   await openWithPickerInteractionSmoke();
   await interactionOwnershipSmoke();
   await nativePopupLifecycleSmoke();
+  imageWidgetRecipeSmoke();
+  await imageWidgetLoadingSmoke();
   const app = new Application({ platform: "headless" });
   const win = new Window({ title: "Smoke", width: 460, height: 600 });
   win.setContent(<SmokeApp onQuit={() => app.quit()} />);

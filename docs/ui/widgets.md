@@ -328,7 +328,14 @@ Bundled files: `packages/ui/icons/<name>.png`.
 | `src` | `string` | async PNG path |
 | `bitmap` | `{ rgba, width, height }` | sync |
 | `opacity` | `number` | `1` |
-| `fit` | `fill` \| `contain` \| `cover` | declared; treat as fill today |
+| `fit` | `fill` \| `contain` \| `cover` | `fill` |
+| `placeholder` | `boolean` | `true` |
+| `onLoad` / `onError` | callbacks | optional |
+
+`contain` preserves the whole bitmap over the recipe-owned placeholder;
+`cover` preserves aspect ratio and clips overflow. Async sources repaint when
+loading completes and resolve their loading/error frame from
+`theme.recipes.imageWidget`.
 
 ### `Draggable` / `DropTarget`
 

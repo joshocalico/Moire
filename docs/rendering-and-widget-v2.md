@@ -286,8 +286,10 @@ ProgressBar, ScrollArea, List/ListItem, Grid/GridItem, and CollectionItem use
 JSX.
 ContextMenu delegates its rows to MenuItem while retaining popup placement and
 motion. Layout, Label, Surface/Panel, Separator, and Dialog are split into JSX
-modules, leaving `widgets/index.ts` as a pure public barrel. ImageWidget and the
-DnD presentation helpers remain in the JSX migration queue.
+modules, leaving `widgets/index.ts` as a pure public barrel. ImageWidget now
+uses JSX, recipe-owned placeholder states, repainting async loads, and complete
+fill/contain/cover fitting. DnD presentation helpers remain in the JSX
+migration queue.
 
 ### W3 — primitive completeness
 

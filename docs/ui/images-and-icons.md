@@ -18,7 +18,11 @@ clearImageCache();
 
 ## `ImageWidget`
 
-Renders a react-host `image` node. Pass `src` (async) or `bitmap` (sync). Until `src` is cached, the slot is empty.
+Renders a react-host `image` node. Pass `src` (async) or `bitmap` (sync).
+`fill`, `contain`, and clipped `cover` fitting are supported. The widget
+repaints after an asynchronous load and uses the shared `imageWidget` recipe
+for its loading, error, and letterbox frame; set `placeholder={false}` for a
+transparent slot.
 
 ## Bundled icons
 
@@ -33,8 +37,8 @@ Directory: `packages/ui/icons/`.
 | `app` | Launcher rows |
 | `trash` / `up` / `grid` / `list` | Actions / view modes |
 
-```ts
-createElement(Icon, { name: "folder", size: 48 });
+```tsx
+<Icon name="folder" size={48} />
 ```
 
 Missing files fall back to simple geometric shapes tinted with `color`.

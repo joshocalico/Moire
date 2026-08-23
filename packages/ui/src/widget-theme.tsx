@@ -14,6 +14,7 @@ import {
 
 export type WidgetState =
   | "rest"
+  | "loading"
   | "hover"
   | "pressed"
   | "focused"
@@ -221,6 +222,11 @@ export type DialogRecipe = {
   };
 };
 
+export type ImageWidgetRecipe = {
+  placeholder: StatefulStyle<WidgetBoxStyle>;
+  image: { opacity: number };
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -262,6 +268,7 @@ export type WidgetTheme = {
     progressBar: Record<ButtonSize, ProgressBarRecipe>;
     scrollArea: Record<ButtonSize, ScrollAreaRecipe>;
     dialog: Record<ButtonSize, DialogRecipe>;
+    imageWidget: ImageWidgetRecipe;
   };
 };
 
@@ -1126,6 +1133,24 @@ function dialogRecipe(size: ButtonSize, palette: ThemePalette): DialogRecipe {
   };
 }
 
+function imageWidgetRecipe(palette: ThemePalette): ImageWidgetRecipe {
+  return {
+    placeholder: {
+      base: {
+        fill: palette.surface,
+        radius: palette.radiusSm,
+        stroke: palette.borderSubtle,
+        strokeWidth: 1,
+      },
+      states: {
+        loading: { fill: palette.panel },
+        invalid: { stroke: palette.danger, strokeWidth: 1 },
+      },
+    },
+    image: { opacity: 1 },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -1220,6 +1245,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       progressBar,
       scrollArea,
       dialog,
+      imageWidget: imageWidgetRecipe(palette),
     },
   };
 }

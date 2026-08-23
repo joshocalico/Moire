@@ -54,6 +54,7 @@ export type {
   ProgressBarRecipe,
   ScrollAreaRecipe,
   DialogRecipe,
+  ImageWidgetRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";

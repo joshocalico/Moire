@@ -143,6 +143,7 @@ export type {
   ProgressBarRecipe,
   ScrollAreaRecipe,
   DialogRecipe,
+  ImageWidgetRecipe,
   SurfaceProps,
   PanelProps,
   RowProps,
