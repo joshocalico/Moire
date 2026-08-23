@@ -4,6 +4,9 @@
 widget catalog and a renderer stress test: the left-hand navigation is a real
 `NavigationSidebar`, each preview is interactive, and the Code tab renders the
 corresponding TSX through `CodeView` and the shared `RichTextView` primitive.
+Every Preview begins with an About statement and task-oriented When to use
+guidance; the gallery is meant to teach interaction choice, not merely display
+painted states.
 
 Run it inside a Moire session with:
 
@@ -29,6 +32,8 @@ the same rich-text viewport.
 The current catalog also exercises fixed-row virtualization at 10,000 items,
 sortable tables, expandable trees, resizable split panes, condensed
 pagination, sectioned property inspectors, tooltip motion, disclosures, and
-composed operation progress. Each public sample has a matching prop table in
+composed operation progress. The layout/motion sample demonstrates Yoga-backed
+`Horizontal`/`Vertical` flow, allocated-size `Measure`, overlay `Stack`, and
+duration/easing `Tween`. Each public sample has a matching prop table in
 [`ui/widgets.md`](../ui/widgets.md); the Code tab is illustrative usage rather
 than a substitute for that API reference.

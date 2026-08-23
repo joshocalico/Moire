@@ -35,6 +35,11 @@ import {
   SplitView,
   Pagination,
   PropertyList,
+  Horizontal,
+  Vertical,
+  Stack,
+  Measure,
+  Tween,
   Box,
   Row,
   Column,
@@ -118,6 +123,31 @@ const SAMPLES: Sample[] = [
   first={<Inspector />}
   second={<Canvas />}
 />`,
+  },
+  {
+    id: "layout-motion",
+    title: "Layout and motion",
+    description: "Measured Yoga flow, overlays, and duration-based tweening",
+    section: "Layout",
+    code: `<Vertical width={720} height={360} gap={12}>
+  <Box height={280}>
+    <Horizontal gap={12}>
+      <Measure width={200}>{({ width, height }) => (
+        <Inspector width={width} height={height} />
+      )}</Measure>
+      <Measure flexGrow={1}>{({ width, height }) => (
+        <Stack width={width} height={height} alignX="center" alignY="center">
+          <Canvas width={width} height={height} />
+          <Box width={240} height={120}>
+            <Tween value={open ? 1 : 0} duration={240} easing="ease-out">
+              {(progress) => <PreviewCard x={(1 - progress) * 36} />}
+            </Tween>
+          </Box>
+        </Stack>
+      )}</Measure>
+    </Horizontal>
+  </Box>
+</Vertical>`,
   },
   {
     id: "list",
@@ -318,6 +348,79 @@ const SAMPLES: Sample[] = [
   },
 ];
 
+type SampleGuidance = { about: string; when: string };
+
+const GUIDANCE: Record<string, SampleGuidance> = {
+  buttons: {
+    about: "Buttons express action hierarchy through consistent size, focus, and feedback recipes.",
+    when: "Use for explicit commands; reserve Primary for the clearest next action on a surface.",
+  },
+  inputs: {
+    about: "Editable fields and continuous controls share focus, validation, and disabled semantics.",
+    when: "Use when people must enter, filter, enable, or tune a value without leaving context.",
+  },
+  choice: {
+    about: "Exclusive controls make a small, known set of alternatives directly comparable.",
+    when: "Use segmented choices for compact peers and radio rows when options need explanation.",
+  },
+  "split-view": {
+    about: "SplitView owns a clipped two-pane composition and one accessible resize boundary.",
+    when: "Use for persistent peer regions such as a sidebar and canvas, inspector, or preview.",
+  },
+  "layout-motion": {
+    about: "Yoga handles flow; Measure exposes its allocation; Stack and Tween add overlay and time.",
+    when: "Use these primitives before calculating descendant positions or animation frames by hand.",
+  },
+  list: {
+    about: "List presents a modest scrollable collection with reusable row artwork and selection.",
+    when: "Use for short-to-medium linear collections where every row may remain mounted.",
+  },
+  "virtual-list": {
+    about: "VirtualList reconciles only visible fixed-height rows while preserving full scroll extent.",
+    when: "Use for hundreds or thousands of uniform results, logs, applications, or file records.",
+  },
+  table: {
+    about: "Table combines virtualized keyed rows with controlled, accessible sort headers.",
+    when: "Use when several comparable attributes matter and column scanning aids decisions.",
+  },
+  tree: {
+    about: "TreeView flattens an owned expansion model into a virtualized navigable hierarchy.",
+    when: "Use for folders, outlines, scene graphs, or nested resources with stable identities.",
+  },
+  navigation: {
+    about: "NavigationSidebar composes sections, persistent selection, scrolling, and edit controls.",
+    when: "Use for durable places or app destinations—not transient commands or contextual actions.",
+  },
+  "property-list": {
+    about: "PropertyList aligns metadata and live controls without inventing an inspector renderer.",
+    when: "Use for properties, diagnostics, metadata, and settings with a stable label/value rhythm.",
+  },
+  pagination: {
+    about: "Pagination condenses large ranges while keeping edges, context, and current page visible.",
+    when: "Use for discrete server-sized result pages; prefer scrolling for one continuous collection.",
+  },
+  feedback: {
+    about: "Feedback primitives communicate state without each app designing its own visual grammar.",
+    when: "Use banners for notable outcomes, badges for compact state, and empty states for next steps.",
+  },
+  "progress-row": {
+    about: "ProgressRow composes task identity, determinate or indeterminate progress, and cancellation.",
+    when: "Use for file operations and background work whose ongoing state deserves a durable row.",
+  },
+  help: {
+    about: "Tooltips add terse hover context; Disclosure keeps secondary controls available but quiet.",
+    when: "Use tooltips for unlabeled icons and disclosure for optional detail—not essential decisions.",
+  },
+  terminal: {
+    about: "TerminalView composes rich text, grid measurement, caret, focus, and keyboard semantics.",
+    when: "Use as the visual/input surface around a PTY or terminal model; it does not own a process.",
+  },
+  code: {
+    about: "CodeView is a syntax adapter over the reusable, renderer-native RichTextView surface.",
+    when: "Use for readable source, examples, and diagnostics where editing is not required.",
+  },
+};
+
 const SECTIONS: NavigationSidebarSection[] = [
   ...new Set(SAMPLES.map((sample) => sample.section)),
 ].map((section) => ({
@@ -357,6 +460,7 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
   const [splitSize, setSplitSize] = useState(230);
   const [page, setPage] = useState(7);
   const [propertySelected, setPropertySelected] = useState("name");
+  const [motionOpen, setMotionOpen] = useState(true);
   const virtualRows = useMemo(
     () => Array.from({ length: 10_000 }, (_, index) => ({ id: `row-${index}`, label: `Renderer sample ${String(index + 1).padStart(5, "0")}` })),
     [],
@@ -424,6 +528,51 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
           </Surface>
         }
       />
+    );
+  } else if (props.sample.id === "layout-motion") {
+    const layoutWidth = Math.min(720, contentW);
+    content = (
+      <Vertical width={layoutWidth} height={310} gap={12}>
+        <Box height={252}>
+          <Horizontal gap={12}>
+            <Measure width={190}>{({ width, height }) => (
+              <Surface width={width} height={height} fill={pal.panel} radius={10} stroke={pal.border} strokeWidth={1}>
+                <Label x={16} y={18} text="Measured inspector" fontSize={13} fontWeight="medium" width={width - 32} height={22} />
+                <Label x={16} y={48} text={`${Math.round(width)} × ${Math.round(height)}`} color={pal.accent} fontSize={11} fontFamily="mono" width={width - 32} height={20} />
+                <Label x={16} y={78} text="Fixed 190 px pane" color={pal.muted} fontSize={10} width={width - 32} height={18} />
+              </Surface>
+            )}</Measure>
+            <Measure flexGrow={1}>{({ width, height }) => (
+              <Stack width={width} height={height} alignX="center" alignY="center">
+                <Surface width={width} height={height} fill={pal.surface} radius={10} stroke={pal.border} strokeWidth={1} />
+                <Box width={Math.min(270, width - 32)} height={132}>
+                  <Tween value={motionOpen ? 1 : 0} duration={260} easing="ease-out">
+                    {(progress) => (
+                      <Surface
+                        x={Math.round((1 - progress) * 42)}
+                        y={Math.round((1 - progress) * 10)}
+                        width={Math.min(270, width - 32)}
+                        height={132}
+                        fill={((Math.round(0x70 + progress * 0x8f) << 24) | (pal.panel & 0x00ffffff)) >>> 0}
+                        radius={12}
+                        stroke={pal.accent}
+                        strokeWidth={1}
+                      >
+                        <Label x={18} y={18} text="Tweened overlay" fontSize={14} fontWeight="medium" width={220} height={22} />
+                        <Label x={18} y={50} text={`progress ${progress.toFixed(2)}`} color={pal.accent} fontSize={11} fontFamily="mono" width={220} height={20} />
+                        <Label x={18} y={80} text={`${Math.round(width)} × ${Math.round(height)} allocation`} color={pal.muted} fontSize={10} width={220} height={18} />
+                      </Surface>
+                    )}
+                  </Tween>
+                </Box>
+              </Stack>
+            )}</Measure>
+          </Horizontal>
+        </Box>
+        <Box height={38}>
+          <Button width={150} height={34} label={motionOpen ? "Tween out" : "Tween in"} onPress={() => setMotionOpen((value) => !value)} />
+        </Box>
+      </Vertical>
     );
   } else if (props.sample.id === "list") {
     const rows = ["Window effects", "Terminal emulator", "Widget showcase", "File operations", "Desktop React migration"];
@@ -646,11 +795,23 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
     content = <CodeView width={Math.min(700, contentW)} height={Math.min(420, props.height - 70)} code={props.sample.code} language="tsx" />;
   }
 
+  const guidance = GUIDANCE[props.sample.id] ?? {
+    about: props.sample.description,
+    when: "Use when its interaction contract matches the task rather than only its appearance.",
+  };
+
   return (
-    <ScrollArea width={props.width} height={props.height} contentHeight={Math.max(props.height, 520)}>
+    <ScrollArea width={props.width} height={props.height} contentHeight={Math.max(props.height, 700)}>
       <Column x={32} y={28} width={contentW} gap={18}>
         <Label text={props.sample.title} fontSize={20} fontWeight="bold" width={contentW} height={28} />
         <Label text={props.sample.description} color={pal.muted} fontSize={12} width={contentW} height={22} />
+        <Surface width={contentW} height={122} fill={pal.panel} radius={10} stroke={pal.borderSubtle} strokeWidth={1}>
+          <Label x={16} y={12} text="ABOUT" color={pal.accent} fontSize={9} fontWeight="medium" width={90} height={16} />
+          <Label x={16} y={30} text={guidance.about} color={pal.text} fontSize={11} width={contentW - 32} height={20} />
+          <Separator x={16} y={58} width={contentW - 32} color={pal.borderSubtle} />
+          <Label x={16} y={70} text="WHEN TO USE" color={pal.accent} fontSize={9} fontWeight="medium" width={100} height={16} />
+          <Label x={16} y={90} text={guidance.when} color={pal.muted} fontSize={11} width={contentW - 32} height={20} />
+        </Surface>
         <Separator width={contentW} />
         {content}
       </Column>
