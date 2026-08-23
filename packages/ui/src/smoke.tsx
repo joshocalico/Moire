@@ -20,6 +20,8 @@ import {
   Column,
   Label,
   Button,
+  WidgetThemeProvider,
+  createWidgetTheme,
   Checkbox,
   Toggle,
   Separator,
@@ -92,6 +94,86 @@ function rendererSmoke(): void {
     "translucent rect on a clear frame must preserve premultiplied alpha",
   );
   assert.equal(collectHits(root.container).length, 1);
+}
+
+function buttonRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const medium = theme.recipes.button.primary.medium;
+  const customFill = 0xff633ad6;
+  const customTheme = {
+    ...theme,
+    name: "button-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      button: {
+        ...theme.recipes.button,
+        primary: {
+          ...theme.recipes.button.primary,
+          medium: {
+            ...medium,
+            root: {
+              ...medium.root,
+              base: {
+                ...medium.root.base,
+                fill: customFill,
+                radius: 0,
+                stroke: undefined,
+                strokeWidth: 0,
+              },
+            },
+            rim: undefined,
+          },
+        },
+      },
+    },
+  };
+  let receivedSlotSize = 0;
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <Button
+        x={2}
+        y={2}
+        width={96}
+        label="Recipe"
+        variant="primary"
+        leadingIcon={(style) => {
+          receivedSlotSize = style.size;
+          return (
+            <Rect
+              x={0}
+              y={0}
+              width={style.size}
+              height={style.size}
+              radius={2}
+              fill={style.color}
+            />
+          );
+        }}
+      />
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 102,
+    height: 42,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(
+    words[2 * frame.width + 2],
+    customFill,
+    "Button should take its fill and square geometry from a subtree recipe",
+  );
+  assert.equal(
+    words[37 * frame.width + 4],
+    0,
+    "Button without an explicit height should use the medium recipe height",
+  );
+  assert.equal(
+    receivedSlotSize,
+    medium.leadingIcon.base.size,
+    "Button artwork slots should receive the recipe's semantic icon style",
+  );
 }
 
 async function textFieldInteractionSmoke(): Promise<void> {
@@ -727,6 +809,7 @@ function SmokeApp(props: { onQuit: () => void }): ReactNode {
 async function main() {
   process.env.MOIRE_UI_PLATFORM = "headless";
   rendererSmoke();
+  buttonRecipeSmoke();
   await textFieldInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();

@@ -1,31 +1,37 @@
-/**
- * Button — four variants with hover/press states via Pressable.
- * primary   → accent fill, white text, top-edge rimLight highlight
- * secondary → surface fill, text colour
- * ghost     → transparent, text colour
- * danger    → danger fill, white text
- */
+/** Recipe-driven Button with replaceable leading and trailing artwork slots. */
 import React, { type ReactNode } from "react";
 import {
   Group,
   Rect,
   Text,
-  measureText,
   measureTextBounds,
 } from "@moire/react-host";
-import { themePalette } from "../theme.js";
+import {
+  resolveStatefulStyle,
+  useWidgetTheme,
+  type ButtonSize,
+  type ButtonVariant,
+  type WidgetIconStyle,
+} from "../widget-theme.js";
 import { Pressable } from "./pressable.js";
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+export type { ButtonSize, ButtonVariant } from "../widget-theme.js";
+
+export type ButtonSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
 export type ButtonProps = {
   x?: number;
   y?: number;
   width: number;
-  height: number;
+  /** Uses the selected recipe's control height when omitted. */
+  height?: number;
   label: string;
   variant?: ButtonVariant;
-  /** Legacy: explicit fill color (takes precedence over variant). */
+  size?: ButtonSize;
+  /** Named artwork slots retain Button interaction and layout behavior. */
+  leadingIcon?: ButtonSlot;
+  trailingIcon?: ButtonSlot;
+  /** Legacy escape hatch; explicit fill takes precedence over the recipe. */
   fill?: number;
   color?: number;
   fontSize?: number;
@@ -33,79 +39,128 @@ export type ButtonProps = {
   onPress?: () => void;
 };
 
-const DEFAULT_FONT = 14;
+function renderSlot(slot: ButtonSlot, style: WidgetIconStyle): ReactNode {
+  return typeof slot === "function" ? slot(style) : slot;
+}
 
 export function Button(props: ButtonProps): ReactNode {
-  const pal = themePalette();
-  const variant: ButtonVariant = props.variant ?? "secondary";
-  const fontSize = props.fontSize ?? DEFAULT_FONT;
+  const theme = useWidgetTheme();
+  const variant = props.variant ?? "secondary";
+  const size = props.size ?? "medium";
+  const recipe = theme.recipes.button[variant][size];
+  const root = resolveStatefulStyle(recipe.root, "rest");
+  const hoveredRoot = resolveStatefulStyle(recipe.root, "hover");
+  const pressedRoot = resolveStatefulStyle(recipe.root, "pressed");
+  const disabledRoot = resolveStatefulStyle(recipe.root, "disabled");
+  const label = resolveStatefulStyle(
+    recipe.label,
+    props.disabled ? "disabled" : "rest",
+  );
+  const leadingIcon = resolveStatefulStyle(
+    recipe.leadingIcon,
+    props.disabled ? "disabled" : "rest",
+  );
+  const trailingIcon = resolveStatefulStyle(
+    recipe.trailingIcon,
+    props.disabled ? "disabled" : "rest",
+  );
 
-  let baseFill: number;
-  let labelColor: number;
-  const hasRim = !props.fill && (variant === "primary" || variant === "secondary");
-
-  if (props.fill != null) {
-    baseFill = props.fill;
-    labelColor = props.color ?? 0xffffffff;
-  } else {
-    switch (variant) {
-      case "primary":
-        baseFill = pal.accentLine;
-        labelColor = 0xffffffff;
-        break;
-      case "secondary":
-        baseFill = pal.surface;
-        labelColor = props.color ?? pal.text;
-        break;
-      case "ghost":
-        baseFill = 0x00000000;
-        labelColor = props.color ?? pal.text;
-        break;
-      case "danger":
-        baseFill = pal.danger;
-        labelColor = 0xffffffff;
-        break;
-    }
-  }
-
-  const tw = measureText(props.label, fontSize / 14);
-  const th = measureTextBounds("Mg", { fontSize }).height;
-  const tx = Math.max(4, Math.floor((props.width - tw) / 2));
-  const ty = Math.floor((props.height - th) / 2);
+  const height = props.height ?? recipe.metrics.height;
+  const fontSize = props.fontSize ?? label.fontSize;
+  const fontWeight = label.fontWeight;
+  const labelBounds = measureTextBounds(props.label, { fontSize, fontWeight });
+  const leadingWidth = props.leadingIcon ? leadingIcon.size : 0;
+  const trailingWidth = props.trailingIcon ? trailingIcon.size : 0;
+  const leadingGap = props.leadingIcon ? recipe.metrics.gap : 0;
+  const trailingGap = props.trailingIcon ? recipe.metrics.gap : 0;
+  const contentWidth =
+    leadingWidth +
+    leadingGap +
+    labelBounds.width +
+    trailingGap +
+    trailingWidth;
+  const contentX = Math.max(
+    recipe.metrics.paddingX,
+    Math.floor((props.width - contentWidth) / 2),
+  );
+  const labelX = contentX + leadingWidth + leadingGap;
+  const labelY = Math.floor((height - labelBounds.height) / 2);
+  const explicitFill = props.fill != null;
+  const baseFill = props.fill ?? root.fill;
+  const labelColor = props.disabled
+    ? label.color
+    : props.color ?? (explicitFill ? 0xffffffff : label.color);
+  const stroke = explicitFill
+    ? undefined
+    : props.disabled
+      ? disabledRoot.stroke
+      : root.stroke;
+  const strokeWidth = explicitFill
+    ? undefined
+    : props.disabled
+      ? disabledRoot.strokeWidth
+      : root.strokeWidth;
+  const radius = props.disabled ? disabledRoot.radius : root.radius;
 
   return (
     <Group
       x={props.x ?? 0}
       y={props.y ?? 0}
       width={props.width}
-      height={props.height}
+      height={height}
     >
       <Pressable
         x={0}
         y={0}
         width={props.width}
-        height={props.height}
+        height={height}
         fill={baseFill}
-        radius={pal.radiusSm}
+        hoverFill={explicitFill ? undefined : hoveredRoot.fill}
+        pressedFill={explicitFill ? undefined : pressedRoot.fill}
+        disabledFill={explicitFill ? baseFill : disabledRoot.fill}
+        radius={radius}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
         disabled={props.disabled}
         onPress={props.onPress}
       />
-      {hasRim ? (
+      {!explicitFill && recipe.rim ? (
         <Rect
-          x={0}
+          x={radius}
           y={0}
-          width={props.width}
-          height={1}
-          fill={pal.rimLight}
+          width={Math.max(0, props.width - radius * 2)}
+          height={recipe.rim.width}
+          fill={recipe.rim.color}
         />
       ) : null}
+      {props.leadingIcon ? (
+        <Group
+          x={contentX}
+          y={Math.floor((height - leadingIcon.size) / 2)}
+          width={leadingIcon.size}
+          height={leadingIcon.size}
+        >
+          {renderSlot(props.leadingIcon, leadingIcon)}
+        </Group>
+      ) : null}
       <Text
-        x={tx}
-        y={ty}
+        x={labelX}
+        y={labelY}
         text={props.label}
-        color={props.disabled ? pal.muted : labelColor}
+        color={labelColor}
         fontSize={fontSize}
+        fontWeight={fontWeight}
       />
+      {props.trailingIcon ? (
+        <Group
+          x={labelX + labelBounds.width + trailingGap}
+          y={Math.floor((height - trailingIcon.size) / 2)}
+          width={trailingIcon.size}
+          height={trailingIcon.size}
+        >
+          {renderSlot(props.trailingIcon, trailingIcon)}
+        </Group>
+      ) : null}
     </Group>
   );
 }

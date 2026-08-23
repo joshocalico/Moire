@@ -33,7 +33,31 @@ export { Pressable } from "./pressable.js";
 export type { PressableProps } from "./pressable.js";
 
 export { Button } from "./button.js";
-export type { ButtonProps, ButtonVariant } from "./button.js";
+export type {
+  ButtonProps,
+  ButtonVariant,
+  ButtonSize,
+  ButtonSlot,
+} from "./button.js";
+
+export {
+  WidgetThemeProvider,
+  createWidgetTheme,
+  getWidgetTheme,
+  resolveStatefulStyle,
+  useWidgetTheme,
+} from "../widget-theme.js";
+export type {
+  WidgetThemeProviderProps,
+  WidgetTheme,
+  WidgetFoundations,
+  WidgetState,
+  StatefulStyle,
+  WidgetBoxStyle,
+  WidgetTextStyle,
+  WidgetIconStyle,
+  ButtonRecipe,
+} from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";
 export type { ScrollAreaProps } from "./scroll.js";

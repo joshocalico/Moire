@@ -225,7 +225,7 @@ visual policy. `Button`, for example, decides its own radius, fills, rim,
 typography, padding, and state colors. That makes themes token substitutions,
 not actual visual systems.
 
-### W1 — semantic tokens and recipes
+### W1 — active: semantic tokens and recipes
 
 - Separate foundation tokens (color, type, space, radii, motion, elevation)
   from component recipes.
@@ -236,17 +236,26 @@ not actual visual systems.
 
 ```ts
 type ButtonRecipe = {
-  root: StatefulStyle<BoxStyle>;
-  label: StatefulStyle<TextStyle>;
-  leadingIcon: StatefulStyle<IconStyle>;
-  trailingIcon: StatefulStyle<IconStyle>;
-  focusRing: StatefulStyle<StrokeStyle>;
+  root: StatefulStyle<WidgetBoxStyle>;
+  label: StatefulStyle<WidgetTextStyle>;
+  leadingIcon: StatefulStyle<WidgetIconStyle>;
+  trailingIcon: StatefulStyle<WidgetIconStyle>;
+  metrics: { height: number; paddingX: number; gap: number };
+  rim?: { color: number; width: number };
 };
 ```
 
 States are semantic (`rest`, `hover`, `pressed`, `focused`, `disabled`,
 `selected`, `danger`) and may alter geometry, paint, typography, or motion.
 Recipes are plain data and remain renderer-neutral.
+
+The first vertical slice is active. `WidgetThemeProvider` supplies foundation
+color/type/space/radius/motion/elevation data and a complete Button recipe
+matrix across variant, size, and semantic state. Button consumes its root,
+label, metrics, rim, and named artwork-slot styles from that context; explicit
+legacy colors remain compatibility escape hatches. A headless conformance case
+proves a subtree recipe can materially change the rendered control without a
+component fork.
 
 ### W2 — slot-based primitives
 

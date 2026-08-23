@@ -3,8 +3,8 @@
  */
 import React, { useRef, type ReactNode } from "react";
 import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
-import { themePalette } from "../theme.js";
 import { easeTo, useMotionValue } from "../motion.js";
+import { useWidgetTheme } from "../widget-theme.js";
 
 export type PressableProps = {
   x?: number;
@@ -12,6 +12,9 @@ export type PressableProps = {
   width: number;
   height: number;
   fill?: number;
+  hoverFill?: number;
+  pressedFill?: number;
+  disabledFill?: number;
   radius?: number;
   stroke?: number;
   strokeWidth?: number;
@@ -49,12 +52,14 @@ function lerpArgb(from: number, to: number, t: number): number {
 }
 
 export function Pressable(props: PressableProps): ReactNode {
-  const pal = themePalette();
+  const pal = useWidgetTheme().foundations.palette;
   const hoverMv = useMotionValue(0);
   const pressMv = useMotionValue(0);
   const lastClick = useRef(0);
 
-  const base = props.fill ?? 0x00000000;
+  const base = props.disabled
+    ? props.disabledFill ?? props.fill ?? 0x00000000
+    : props.fill ?? 0x00000000;
   let fill = base;
   if (!props.disabled) {
     // Motion values use layout-sized units so the shared 0.5 settle threshold
@@ -62,8 +67,8 @@ export function Pressable(props: PressableProps): ReactNode {
     const h = hoverMv.get() / 100;
     const p = pressMv.get() / 100;
     if (h > 0.01 || p > 0.01) {
-      const hovered = lerpArgb(base, pal.hover, h);
-      fill = lerpArgb(hovered, pal.pressed, p);
+      const hovered = lerpArgb(base, props.hoverFill ?? pal.hover, h);
+      fill = lerpArgb(hovered, props.pressedFill ?? pal.pressed, p);
     }
   }
 

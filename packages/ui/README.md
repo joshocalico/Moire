@@ -29,4 +29,49 @@ app.addWindow(win);
 await app.run();
 ```
 
+## Widget themes and recipes
+
+Visual policy lives in renderer-neutral recipe data. Applications can replace
+recipes for a complete subtree while retaining widget interaction and layout:
+
+```tsx
+import {
+  Button,
+  WidgetThemeProvider,
+  createWidgetTheme,
+} from "@moire/ui";
+
+const base = createWidgetTheme();
+const primary = base.recipes.button.primary.medium;
+const violet = {
+  ...base,
+  recipes: {
+    ...base.recipes,
+    button: {
+      ...base.recipes.button,
+      primary: {
+        ...base.recipes.button.primary,
+        medium: {
+          ...primary,
+          root: {
+            ...primary.root,
+            base: { ...primary.root.base, fill: 0xff633ad6, radius: 10 },
+          },
+        },
+      },
+    },
+  },
+};
+
+win.setContent(
+  <WidgetThemeProvider theme={violet}>
+    <Button width={120} label="Continue" variant="primary" />
+  </WidgetThemeProvider>,
+);
+```
+
+Button recipes cover `primary`, `secondary`, `ghost`, and `danger` variants;
+`small`, `medium`, and `large` sizes; semantic interaction states; and leading
+or trailing artwork slots. Software and EGL consume the same resulting scene.
+
 Hard rule: `widgets/`, `font/`, `layout/` never import Wayland/koffi.
