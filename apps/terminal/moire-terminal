@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT"
-exec pnpm --filter @moire/terminal-app start "$@"
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
+cd "$ROOT/apps/terminal"
+exec ./node_modules/.bin/tsx src/main.tsx "$@"

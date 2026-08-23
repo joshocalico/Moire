@@ -23,6 +23,7 @@ import {
 } from "@moire/ui";
 import {
   PtySession,
+  TERMINAL_DEFAULT_BACKGROUND,
   TerminalBuffer,
   type TerminalCell,
   type TerminalSnapshot,
@@ -53,7 +54,10 @@ function snapshotLines(snapshot: TerminalSnapshot): RichTextLine[] {
         runs.push({
           text: cell.char,
           color: cell.foreground,
-          background: cell.background,
+          background:
+            cell.background === TERMINAL_DEFAULT_BACKGROUND
+              ? undefined
+              : cell.background,
           fontFamily: "mono",
           fontWeight: cell.bold ? "bold" : "regular",
         });
@@ -133,6 +137,7 @@ function TerminalApp(
     const pty = new PtySession({
       columns: grid.columns,
       rows: grid.rows,
+      cwd: process.env.HOME,
       command: props.command,
       onData(data) {
         terminal.write(data);

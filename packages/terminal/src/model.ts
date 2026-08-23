@@ -24,8 +24,8 @@ type Pen = {
 
 type ParserState = "text" | "escape" | "csi" | "osc" | "oscEscape" | "charset";
 
-const DEFAULT_FOREGROUND = 0xffd7e1e8;
-const DEFAULT_BACKGROUND = 0xff101419;
+export const TERMINAL_DEFAULT_FOREGROUND = 0xffd7e1e8;
+export const TERMINAL_DEFAULT_BACKGROUND = 0xff101419;
 const ANSI = [
   0xff1b2027, 0xffd35f5f, 0xff70b77e, 0xffd1ae55,
   0xff639ad6, 0xffaa7ac1, 0xff58b9c6, 0xffd7e1e8,
@@ -36,8 +36,8 @@ const ANSI = [
 function blankCell(): TerminalCell {
   return {
     char: " ",
-    foreground: DEFAULT_FOREGROUND,
-    background: DEFAULT_BACKGROUND,
+    foreground: TERMINAL_DEFAULT_FOREGROUND,
+    background: TERMINAL_DEFAULT_BACKGROUND,
     bold: false,
   };
 }
@@ -55,7 +55,7 @@ function cloneLine(line: readonly TerminalCell[], columns: number): TerminalCell
 
 function indexedColor(index: number): number {
   const value = Math.max(0, Math.min(255, Math.floor(index)));
-  if (value < 16) return ANSI[value] ?? DEFAULT_FOREGROUND;
+  if (value < 16) return ANSI[value] ?? TERMINAL_DEFAULT_FOREGROUND;
   if (value >= 232) {
     const gray = 8 + (value - 232) * 10;
     return (0xff000000 | (gray << 16) | (gray << 8) | gray) >>> 0;
@@ -85,8 +85,8 @@ export class TerminalBuffer {
   private cursorVisibleValue = true;
   private titleValue = "Terminal";
   private pen: Pen = {
-    foreground: DEFAULT_FOREGROUND,
-    background: DEFAULT_BACKGROUND,
+    foreground: TERMINAL_DEFAULT_FOREGROUND,
+    background: TERMINAL_DEFAULT_BACKGROUND,
     bold: false,
     inverse: false,
   };
@@ -409,8 +409,8 @@ export class TerminalBuffer {
       const code = parameters[index] ?? 0;
       if (code === 0) {
         this.pen = {
-          foreground: DEFAULT_FOREGROUND,
-          background: DEFAULT_BACKGROUND,
+          foreground: TERMINAL_DEFAULT_FOREGROUND,
+          background: TERMINAL_DEFAULT_BACKGROUND,
           bold: false,
           inverse: false,
         };
@@ -418,12 +418,12 @@ export class TerminalBuffer {
       else if (code === 22) this.pen.bold = false;
       else if (code === 7) this.pen.inverse = true;
       else if (code === 27) this.pen.inverse = false;
-      else if (code >= 30 && code <= 37) this.pen.foreground = ANSI[code - 30] ?? DEFAULT_FOREGROUND;
-      else if (code >= 90 && code <= 97) this.pen.foreground = ANSI[code - 90 + 8] ?? DEFAULT_FOREGROUND;
-      else if (code === 39) this.pen.foreground = DEFAULT_FOREGROUND;
-      else if (code >= 40 && code <= 47) this.pen.background = ANSI[code - 40] ?? DEFAULT_BACKGROUND;
-      else if (code >= 100 && code <= 107) this.pen.background = ANSI[code - 100 + 8] ?? DEFAULT_BACKGROUND;
-      else if (code === 49) this.pen.background = DEFAULT_BACKGROUND;
+      else if (code >= 30 && code <= 37) this.pen.foreground = ANSI[code - 30] ?? TERMINAL_DEFAULT_FOREGROUND;
+      else if (code >= 90 && code <= 97) this.pen.foreground = ANSI[code - 90 + 8] ?? TERMINAL_DEFAULT_FOREGROUND;
+      else if (code === 39) this.pen.foreground = TERMINAL_DEFAULT_FOREGROUND;
+      else if (code >= 40 && code <= 47) this.pen.background = ANSI[code - 40] ?? TERMINAL_DEFAULT_BACKGROUND;
+      else if (code >= 100 && code <= 107) this.pen.background = ANSI[code - 100 + 8] ?? TERMINAL_DEFAULT_BACKGROUND;
+      else if (code === 49) this.pen.background = TERMINAL_DEFAULT_BACKGROUND;
       else if ((code === 38 || code === 48) && parameters[index + 1] === 5) {
         const color = indexedColor(parameters[index + 2] ?? 0);
         if (code === 38) this.pen.foreground = color;
@@ -484,8 +484,8 @@ export class TerminalBuffer {
     this.cursorColumn = 0;
     this.cursorVisibleValue = true;
     this.pen = {
-      foreground: DEFAULT_FOREGROUND,
-      background: DEFAULT_BACKGROUND,
+      foreground: TERMINAL_DEFAULT_FOREGROUND,
+      background: TERMINAL_DEFAULT_BACKGROUND,
       bold: false,
       inverse: false,
     };
