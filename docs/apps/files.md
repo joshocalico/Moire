@@ -14,6 +14,7 @@ Package: `apps/files`.
 | Default handler | `moire-files.desktop` for `inode/directory` |
 | Open With | D-Bus-activated top-level chooser with app icons, keyboard selection, one-time launch, and default assignment |
 | Context menu | Scoped action-provider registry; distinct item and background menus |
+| Selection | Shared keyed grid/list model with toggle/range, keyboard navigation, Select All, group actions, and group drag payloads |
 | DnD into cwd | `DropTarget` + `text/uri-list` |
 | DnD out | `CollectionItem` composes narrow `useDragSource` behavior |
 | Icons | Bundled PNG set via `Icon` |
@@ -82,7 +83,7 @@ xdg-open ~/Downloads
 
 - Richer copy/move conflict UI
 - Thumbnails for images
-- Multi-select and rubber-band
+- Rubber-band and type-to-select
 - Trash / undo
 - MIME content sniffing and magic-rule matching (the first slice uses shared globs)
 

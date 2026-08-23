@@ -39,12 +39,15 @@ import {
   getUiScaleFactor,
   setUiScaleFactor,
   hitTestDropData,
+  useSelectionModel,
   SPACE,
   type WindowSize,
   type IconName,
   type ContextMenuAction,
   type PopupHandle,
   type BreadcrumbSegment,
+  type HitKeyEvent,
+  type HitPointerEvent,
 } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
 import {
@@ -252,7 +255,6 @@ function FilesApp(
     index: 0,
   }));
   const cwd = navigation.paths[navigation.index] ?? props.initialPath;
-  const [selected, setSelected] = useState(-1);
   const [view, setView] = useState<"grid" | "list">("grid");
   const [tick, setTick] = useState(0);
   const [menu, setMenu] = useState<
@@ -285,7 +287,6 @@ function FilesApp(
       const paths = [...current.paths.slice(0, current.index + 1), resolved];
       return { paths, index: paths.length - 1 };
     });
-    setSelected(-1);
     setMenu(null);
   }, []);
 
@@ -297,7 +298,6 @@ function FilesApp(
         Math.min(current.paths.length - 1, current.index + offset),
       ),
     }));
-    setSelected(-1);
     setMenu(null);
   };
 
@@ -321,6 +321,25 @@ function FilesApp(
     void tick;
     return listDir(cwd);
   }, [cwd, tick]);
+  const entryKeys = useMemo(() => entries.map((entry) => entry.path), [entries]);
+  const selection = useSelectionModel(entryKeys);
+  const clearSelection = selection.clear;
+  const selectedEntries = useMemo(
+    () => entries.filter((entry) => selection.selectedKeys.has(entry.path)),
+    [entries, selection.selectedKeys],
+  );
+  const selectedEntry =
+    entries.find((entry) => entry.path === selection.primaryKey) ?? null;
+  const selectedFolderCount = selectedEntries.filter(
+    (entry) => entry.isDir,
+  ).length;
+  const selectedFileCount = selectedEntries.length - selectedFolderCount;
+
+  useEffect(() => {
+    clearSelection();
+    // Navigation starts a new selection scope; item refreshes reconcile by key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cwd]);
 
   const openDefault = useCallback(
     (filePath: string) => {
@@ -359,23 +378,43 @@ function FilesApp(
     registry.register({
       id: "moire.open",
       actions(context) {
-        const filePath = context.paths[0];
-        if (!filePath) return [];
-        const directory = context.directories[0] ?? false;
-        return [
+        if (context.paths.length === 0) return [];
+        const openActions = [
           {
             id: "open",
-            label: "Open",
-            description: directory ? "Browse this folder" : "Use the default application",
-            icon: directory ? "folder" : "file",
-            run: () =>
-              openEntry({
-                name: path.basename(filePath),
-                path: filePath,
-                isDir: directory,
-                size: 0,
-              }),
+            label:
+              context.paths.length === 1
+                ? "Open"
+                : `Open ${context.paths.length} Items`,
+            description:
+              context.paths.length === 1
+                ? context.directories[0]
+                  ? "Browse this folder"
+                  : "Use the default application"
+                : "Open every selected item",
+            icon: context.directories.every(Boolean) ? "folder" : "file",
+            run: () => {
+              if (context.paths.length > 1) {
+                context.paths.forEach(openPath);
+                return;
+              }
+              context.paths.forEach((filePath, index) => {
+                openEntry({
+                  name: path.basename(filePath),
+                  path: filePath,
+                  isDir: context.directories[index] ?? false,
+                  size: 0,
+                });
+              });
+            },
           },
+        ];
+        if (context.paths.length !== 1 || context.directories[0]) {
+          return openActions;
+        }
+        const filePath = context.paths[0]!;
+        return [
+          ...openActions,
           {
             id: "open-with",
             label: "Open With…",
@@ -385,7 +424,7 @@ function FilesApp(
               showOpenWith({
                 name: path.basename(filePath),
                 path: filePath,
-                isDir: directory,
+                isDir: false,
                 size: 0,
               }),
           },
@@ -395,6 +434,7 @@ function FilesApp(
     registry.register({
       id: "moire.location",
       actions(context) {
+        if (context.paths.length !== 1) return [];
         const filePath = context.paths[0];
         if (!filePath) return [];
         const directory = context.directories[0] ?? false;
@@ -427,9 +467,16 @@ function FilesApp(
               const created = createUniqueFolder(directory);
               if (created) {
                 setTick((current) => current + 1);
-                setSelected(-1);
+                clearSelection();
               }
             },
+          },
+          {
+            id: "select-all",
+            label: "Select All",
+            icon: "grid",
+            enabled: entries.length > 0,
+            run: selection.selectAll,
           },
           {
             id: "refresh",
@@ -449,17 +496,30 @@ function FilesApp(
       },
     });
     return registry;
-  }, [navigateTo, openEntry, showOpenWith, view]);
+  }, [
+    clearSelection,
+    entries.length,
+    navigateTo,
+    openEntry,
+    selection.selectAll,
+    showOpenWith,
+    view,
+  ]);
 
   const contextActions = useCallback(
     (entry: Entry): ContextMenuAction[] => {
+      const targets = selection.isSelected(entry.path)
+        ? selectedEntries
+        : [entry];
       const context: FileActionContext = {
         source: "files",
         scope: "items",
         currentDirectory: cwd,
-        paths: [entry.path],
-        mimeTypes: [mimeDb.mimeTypeForPath(entry.path)],
-        directories: [entry.isDir],
+        paths: targets.map((target) => target.path),
+        mimeTypes: targets.map((target) =>
+          mimeDb.mimeTypeForPath(target.path),
+        ),
+        directories: targets.map((target) => target.isDir),
       };
       return actionRegistry.actionsFor(context).map((action) => ({
         id: action.id,
@@ -472,7 +532,7 @@ function FilesApp(
         onPress: action.run,
       }));
     },
-    [actionRegistry, cwd, mimeDb],
+    [actionRegistry, cwd, mimeDb, selectedEntries, selection.isSelected],
   );
 
   const backgroundContextActions = (): ContextMenuAction[] =>
@@ -527,7 +587,6 @@ function FilesApp(
     setTick((t) => t + 1);
   };
 
-  const selectedEntry = entries[selected] ?? null;
   const toolbarH = Math.round(62 * ui);
   const bodyH = Math.max(1, props.height - toolbarH - 1);
   const contentW = Math.max(1, props.width - sideW - 1);
@@ -536,6 +595,78 @@ function FilesApp(
   const iconSz = Math.round(52 * ui);
   const btn = Math.round(36 * ui);
   const pathBarWidth = Math.max(80, props.width - Math.round(272 * ui));
+  const gridGap = Math.round(SPACE.md * ui);
+  const gridPadding = Math.round(SPACE.lg * ui);
+  const gridColumns = Math.max(
+    1,
+    Math.floor((contentW - gridPadding * 2 + gridGap) / (cellW + gridGap)),
+  );
+
+  const selectEntry = (entry: Entry, event?: HitPointerEvent) => {
+    selection.select(entry.path, {
+      toggle: event?.ctrlKey || event?.metaKey,
+      range: event?.shiftKey,
+    });
+    setMenu(null);
+  };
+
+  const handleEntryKey = (entry: Entry, event: HitKeyEvent): boolean => {
+    const additive = event.ctrlKey || event.metaKey;
+    if (additive && (event.key?.toLowerCase() === "a" || event.code === 30)) {
+      selection.selectAll();
+      return true;
+    }
+    if (event.key === " " || event.code === 57) {
+      selection.select(entry.path, {
+        toggle: additive,
+        range: event.shiftKey,
+      });
+      return true;
+    }
+
+    const moveOptions = {
+      extend: event.shiftKey,
+      preserveSelection: additive && !event.shiftKey,
+    };
+    if (event.key === "Home" || event.code === 102) {
+      selection.first(moveOptions);
+      return true;
+    }
+    if (event.key === "End" || event.code === 107) {
+      selection.last(moveOptions);
+      return true;
+    }
+
+    const delta =
+      event.key === "ArrowLeft" || event.code === 105
+        ? view === "grid"
+          ? -1
+          : 0
+        : event.key === "ArrowRight" || event.code === 106
+          ? view === "grid"
+            ? 1
+            : 0
+          : event.key === "ArrowUp" || event.code === 103
+            ? view === "grid"
+              ? -gridColumns
+              : -1
+            : event.key === "ArrowDown" || event.code === 108
+              ? view === "grid"
+                ? gridColumns
+                : 1
+              : null;
+    if (delta === null) return false;
+    if (delta !== 0) selection.move(delta, moveOptions);
+    return true;
+  };
+
+  const dragEntriesFor = (entry: Entry): Entry[] =>
+    selection.isSelected(entry.path) ? selectedEntries : [entry];
+
+  const contextTitleFor = (entry: Entry): string =>
+    selection.isSelected(entry.path) && selectedEntries.length > 1
+      ? `${selectedEntries.length} Items`
+      : entry.name;
 
   const finishEditingPlaces = () => {
     setPlaceList((current) => {
@@ -824,16 +955,31 @@ function FilesApp(
               height={Math.round(18 * ui)}
             />
             <Label
-              text={selectedEntry?.name ?? "Nothing selected"}
-              color={selectedEntry ? pal.text : pal.muted}
+              text={
+                selectedEntries.length > 1
+                  ? `${selectedEntries.length} items selected`
+                  : selectedEntry?.name ?? "Nothing selected"
+              }
+              color={selectedEntries.length > 0 ? pal.text : pal.muted}
               fontSize={12}
-              fontWeight={selectedEntry ? "medium" : "regular"}
+              fontWeight={selectedEntries.length > 0 ? "medium" : "regular"}
               width={sideW - pad}
               height={Math.round(20 * ui)}
             />
             <Label
               text={
-                selectedEntry
+                selectedEntries.length > 1
+                  ? [
+                      selectedFolderCount > 0
+                        ? `${selectedFolderCount} ${selectedFolderCount === 1 ? "folder" : "folders"}`
+                        : "",
+                      selectedFileCount > 0
+                        ? `${selectedFileCount} ${selectedFileCount === 1 ? "file" : "files"}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : selectedEntry
                   ? selectedEntry.isDir
                     ? "Folder"
                     : `${mimeDb.mimeTypeForPath(selectedEntry.path)} · ${formatSize(selectedEntry.size)}`
@@ -856,11 +1002,11 @@ function FilesApp(
               width={contentW}
               height={bodyH}
               onPress={() => {
-                setSelected(-1);
+                clearSelection();
                 setMenu(null);
               }}
               onContextMenu={(event) => {
-                setSelected(-1);
+                clearSelection();
                 const request: ContextMenuRequest = {
                   x: event.x,
                   y: event.y,
@@ -880,31 +1026,40 @@ function FilesApp(
                   items={entries}
                   itemWidth={cellW}
                   itemHeight={cellH}
-                  gap={Math.round(SPACE.md * ui)}
-                  padding={Math.round(SPACE.lg * ui)}
-                  renderItem={(entry, index) => (
+                  gap={gridGap}
+                  padding={gridPadding}
+                  renderItem={(entry) => (
                     <CollectionItem
                       key={entry.path}
                       width={cellW}
                       height={cellH}
                       focusId={`file:${entry.path}`}
+                      autoFocus={selection.focusKey === entry.path}
                       dragSource={{
                         mimeTypes: ["text/uri-list"],
-                        getPayload: () => pathToUri(entry.path) + "\n",
+                        getPayload: () =>
+                          dragEntriesFor(entry)
+                            .map((target) => pathToUri(target.path))
+                            .join("\n") + "\n",
+                        label:
+                          selection.isSelected(entry.path) &&
+                          selectedEntries.length > 1
+                            ? `${selectedEntries.length} items`
+                            : entry.name,
                         previewIcon: { name: iconFor(entry) },
                       }}
                       dropData={entry.isDir ? entry.path : undefined}
-                      onPress={() => {
-                        setSelected(index);
-                        setMenu(null);
-                      }}
+                      onPress={(event) => selectEntry(entry, event)}
                       onDoublePress={() => openEntry(entry)}
+                      onKeyDown={(event) => handleEntryKey(entry, event)}
                       onContextMenu={(event) => {
-                        setSelected(index);
+                        if (!selection.isSelected(entry.path)) {
+                          selection.select(entry.path);
+                        }
                         const request: ContextMenuRequest = {
                           x: event.x,
                           y: event.y,
-                          title: entry.name,
+                          title: contextTitleFor(entry),
                           actions: contextActions(entry),
                         };
                         if (!props.onShowContextMenu?.(request)) {
@@ -922,7 +1077,7 @@ function FilesApp(
                         height={cellH}
                         label={entry.name}
                         iconSize={iconSz}
-                        selected={selected === index}
+                        selected={selection.isSelected(entry.path)}
                         interactive={false}
                         icon={
                           <Icon
@@ -952,23 +1107,32 @@ function FilesApp(
                       width={contentW - Math.round(SPACE.lg * ui)}
                       height={Math.round(40 * ui)}
                       focusId={`file:${entry.path}`}
+                      autoFocus={selection.focusKey === entry.path}
                       dragSource={{
                         mimeTypes: ["text/uri-list"],
-                        getPayload: () => pathToUri(entry.path) + "\n",
+                        getPayload: () =>
+                          dragEntriesFor(entry)
+                            .map((target) => pathToUri(target.path))
+                            .join("\n") + "\n",
+                        label:
+                          selection.isSelected(entry.path) &&
+                          selectedEntries.length > 1
+                            ? `${selectedEntries.length} items`
+                            : entry.name,
                         previewIcon: { name: iconFor(entry) },
                       }}
                       dropData={entry.isDir ? entry.path : undefined}
-                      onPress={() => {
-                        setSelected(index);
-                        setMenu(null);
-                      }}
+                      onPress={(event) => selectEntry(entry, event)}
                       onDoublePress={() => openEntry(entry)}
+                      onKeyDown={(event) => handleEntryKey(entry, event)}
                       onContextMenu={(event) => {
-                        setSelected(index);
+                        if (!selection.isSelected(entry.path)) {
+                          selection.select(entry.path);
+                        }
                         const request: ContextMenuRequest = {
                           x: event.x,
                           y: event.y,
-                          title: entry.name,
+                          title: contextTitleFor(entry),
                           actions: contextActions(entry),
                         };
                         if (!props.onShowContextMenu?.(request)) {
@@ -990,7 +1154,7 @@ function FilesApp(
                             ? "Folder"
                             : `${mimeDb.mimeTypeForPath(entry.path)} · ${formatSize(entry.size)}`
                         }
-                        selected={selected === index}
+                        selected={selection.isSelected(entry.path)}
                         interactive={false}
                         leading={
                           <Icon
@@ -1016,7 +1180,9 @@ function FilesApp(
           x={menu.x}
           y={menu.y}
           title={
-            menu.kind === "entry" ? menu.entry.name : path.basename(cwd) || cwd
+            menu.kind === "entry"
+              ? contextTitleFor(menu.entry)
+              : path.basename(cwd) || cwd
           }
           actions={
             menu.kind === "entry"

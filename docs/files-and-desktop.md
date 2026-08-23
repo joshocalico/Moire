@@ -80,11 +80,15 @@ Package: `apps/files` (`@moire/files`).
   Edit mode can pin the current folder, rename custom entries, and remove them;
   **longest matching path** is selected so Desktop does not also light up Home.
 - Content: grid (default) or list; `fs` under `$HOME`; `fs.watch` refresh.
+- Selection: one keyed model across both views; Ctrl/Command toggle, Shift
+  range, Select All, arrows, Home/End, and Space. Multi-item context actions
+  and `text/uri-list` drags carry the complete selection.
 - Open: directories navigate; files via `xdg-open`.
 - Launch target: accepts a filesystem path or `file://` URI; otherwise starts at `~/Desktop`.
 - Default folder handler: session installs `moire-files.desktop` and associates it with `inode/directory`, so `xdg-open <folder>` opens Files there.
 - DnD: `CollectionItem` composes `useDragSource` (`text/uri-list`); the view is a `DropTarget` that moves/copies into the current directory.
-- Empty-space context menu is distinct from item menus and provides New Folder, Refresh, and view switching.
+- Empty-space context menu is distinct from item menus and provides New Folder,
+  Select All, Refresh, and view switching.
 - Started by `apps/session/moire-session` and listed in the launcher.
 
 ## Desktop icons

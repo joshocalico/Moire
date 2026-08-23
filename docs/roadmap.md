@@ -28,7 +28,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | --- | --- |
 | DnD polish | Stronger drop highlights; explicit move vs copy chooser; verify GTK `text/uri-list` peers |
 | Icon set | Richer bundled PNGs or Adwaita fallback; optional SVG later |
-| Files UX | Breadcrumb path control, keyboard nav, multi-select, thumbnails, conflict UI |
+| Files UX | Keyed grid/list multi-selection and keyboard nav shipped; next rubber-band, type-to-select, thumbnails, conflict UI |
 | MIME / actions | Content magic matching, external plugin discovery, richer app icons |
 | Launcher | Icons from `.desktop`, categories, pinned apps |
 | Performance | CPU composite still hot; reduce idle dirty from atmosphere when possible |

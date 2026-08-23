@@ -60,6 +60,7 @@ export type {
   SelectionAction,
   SelectionModel,
 } from "./selection.js";
+export type { HitKeyEvent, HitPointerEvent } from "@moire/react-host";
 
 // Motion system
 export {

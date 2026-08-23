@@ -21,7 +21,7 @@ export type ContextMenuTriggerProps = {
   width: number;
   height: number;
   onContextMenu: (event: HitPointerEvent) => void;
-  onPress?: () => void;
+  onPress?: (event?: HitPointerEvent) => void;
   children?: ReactNode;
 };
 
@@ -58,10 +58,13 @@ export type CollectionItemProps = {
   height: number;
   focusId?: string;
   disabled?: boolean;
-  onPress?: () => void;
+  autoFocus?: boolean;
+  onPress?: (event?: HitPointerEvent) => void;
   onDoublePress?: () => void;
   onContextMenu?: (event: HitPointerEvent) => void;
   onFocusChange?: (focused: boolean) => void;
+  /** Return true after handling a key to suppress built-in activation. */
+  onKeyDown?: (event: HitKeyEvent) => boolean | void;
   dragSource?: Omit<DragSourceOptions, "width" | "height">;
   /** Optional destination identity when this item also accepts drops. */
   dropData?: unknown;
@@ -85,7 +88,7 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
     ...props.dragSource,
   });
 
-  const activate = () => {
+  const activate = (event?: HitPointerEvent) => {
     if (props.disabled) return;
     if (props.dragSource && drag.consumePressSuppression()) return;
     const now = Date.now();
@@ -95,11 +98,12 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
       return;
     }
     lastClick.current = now;
-    props.onPress?.();
+    props.onPress?.(event);
   };
 
   const handleKey = (event: HitKeyEvent) => {
     if (props.disabled || event.repeat) return;
+    if (props.onKeyDown?.(event) === true) return;
     if (event.key === "Enter" || event.code === 28) {
       (props.onDoublePress ?? props.onPress)?.();
     } else if (event.key === " " || event.code === 57) {
@@ -129,6 +133,7 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
         fill={0x00000000}
         focusable={!props.disabled}
         focusId={props.focusId ?? `collection-item:${generatedId}`}
+        autoFocus={props.autoFocus}
         onFocusChange={(next) => {
           setFocused(next);
           props.onFocusChange?.(next);

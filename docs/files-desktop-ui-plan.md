@@ -21,12 +21,16 @@ Its largest gaps are structural:
 - Sidebar places now respect XDG user directories and persist custom favorites
   with add-current-folder, rename, and remove editing. Reordering, sections,
   devices, collapsed state, and reusable sidebar widgets remain.
-- Focus and basic single-line editing now exist, but selection, clipboard,
-  composition, shortcut scopes, and full control keyboard parity remain.
-- Lists and grids have no shared selection or keyboard-navigation model.
+- Focus, basic single-line editing, and a keyed selection controller now exist,
+  but clipboard, composition, shortcut scopes, and full control keyboard parity
+  remain.
+- Files grid and list views now share replace/toggle/range selection plus
+  arrow, Home/End, Space, and Select All keyboard behavior. Rubber-band and
+  type-to-select remain.
 - File operations are synchronous calls embedded in the main view.
 - `CollectionItem` now owns focus, activation, and context-menu semantics while
-  `useDragSource` owns drag mechanics; broader selection models are still due.
+  `useDragSource` owns drag mechanics and `SelectionModel` remains a separate,
+  reusable keyed controller.
 - The renderer now expresses rounded geometry, strokes, clips, and opacity
   layers; declarative shadows and general transforms remain.
 - Presentation code uses deeply nested `createElement` calls even though the
@@ -132,8 +136,9 @@ CollectionItem
 ```
 
 The new `useDragSource` hook is narrowly scoped and does not own selection or
-context menus. Files and the desktop now distinguish item and background menu
-subjects; sidebar and multi-selection contexts remain to be added.
+context menus. Files and the desktop distinguish item and background menu
+subjects, and Files sends its full multi-selection to item actions and drags;
+sidebar and desktop multi-selection contexts remain to be added.
 
 ## Complete Files behavior
 
@@ -242,8 +247,8 @@ The desktop should also support:
 - `Toolbar` and proper icon buttons
 - `Breadcrumbs` and editable `PathBar`
 - `NavigationSidebar`, sections, editable/reorderable items
-- shared keyed `SelectionModel` (replace/toggle/range/keyboard reconciliation
-  foundation implemented; Files and desktop integration follows)
+- shared keyed `SelectionModel` (replace/toggle/range/keyboard reconciliation;
+  integrated into Files grid/list views, with desktop integration following)
 - virtualized list, grid, table, and tree views
 - rubber-band selection and inline rename
 - sortable column headers

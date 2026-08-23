@@ -302,19 +302,49 @@ export function useSelectionModel<Key>(
     state.focusKey !== null && state.selectedKeys.has(state.focusKey)
       ? state.focusKey
       : selectedKeysInOrder.at(-1) ?? null;
+  const isSelected = useCallback(
+    (key: Key) => state.selectedKeys.has(key),
+    [state.selectedKeys],
+  );
+  const select = useCallback(
+    (key: Key, gesture?: SelectionGesture) =>
+      dispatch({ type: "select", key, gesture }),
+    [dispatch],
+  );
+  const focus = useCallback(
+    (key: Key, shouldSelect = true) =>
+      dispatch({ type: "focus", key, select: shouldSelect }),
+    [dispatch],
+  );
+  const move = useCallback(
+    (delta: number, moveOptions?: SelectionMoveOptions) =>
+      dispatch({ type: "move", delta, options: moveOptions }),
+    [dispatch],
+  );
+  const first = useCallback(
+    (moveOptions?: SelectionMoveOptions) =>
+      dispatch({ type: "first", options: moveOptions }),
+    [dispatch],
+  );
+  const last = useCallback(
+    (moveOptions?: SelectionMoveOptions) =>
+      dispatch({ type: "last", options: moveOptions }),
+    [dispatch],
+  );
+  const selectAll = useCallback(() => dispatch({ type: "all" }), [dispatch]);
+  const clear = useCallback(() => dispatch({ type: "clear" }), [dispatch]);
 
   return {
     ...state,
     selectedKeysInOrder,
     primaryKey,
-    isSelected: (key) => state.selectedKeys.has(key),
-    select: (key, gesture) => dispatch({ type: "select", key, gesture }),
-    focus: (key, select = true) => dispatch({ type: "focus", key, select }),
-    move: (delta, moveOptions) =>
-      dispatch({ type: "move", delta, options: moveOptions }),
-    first: (moveOptions) => dispatch({ type: "first", options: moveOptions }),
-    last: (moveOptions) => dispatch({ type: "last", options: moveOptions }),
-    selectAll: () => dispatch({ type: "all" }),
-    clear: () => dispatch({ type: "clear" }),
+    isSelected,
+    select,
+    focus,
+    move,
+    first,
+    last,
+    selectAll,
+    clear,
   };
 }

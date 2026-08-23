@@ -1884,6 +1884,7 @@ async function interactionOwnershipSmoke(): Promise<void> {
   let backgroundContexts = 0;
   let selections = 0;
   let opens = 0;
+  let navigationKeys = 0;
   win.setContent(
     <ContextMenuTrigger
       width={180}
@@ -1906,6 +1907,11 @@ async function interactionOwnershipSmoke(): Promise<void> {
         }}
         onDoublePress={() => {
           opens++;
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown") return false;
+          navigationKeys++;
+          return true;
         }}
         onContextMenu={() => {
           itemContexts++;
@@ -1961,6 +1967,15 @@ async function interactionOwnershipSmoke(): Promise<void> {
     timeMs: 5,
   });
   assert.equal(opens, 1, "focused collection item should activate with Enter");
+  platformWindow.injectKey({
+    type: "down",
+    code: 108,
+    key: "ArrowDown",
+    modifiers: NO_MODIFIERS,
+    timeMs: 5.5,
+  });
+  assert.equal(navigationKeys, 1, "collection owners should handle navigation");
+  assert.equal(opens, 1, "handled navigation must not activate the item");
   platformWindow.injectKey({
     type: "down",
     code: 68,
