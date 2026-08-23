@@ -25,7 +25,18 @@ Out of memory: Killed process … (node) total-vm:45671280kB, anon-rss:7774460kB
 
 **Still watch:** large foot `wl_shm` pool mmaps (RSS floor).
 
-**CPU present path (updated 2026-08-23):** compositor loop is dirty-driven — skip wallpaper and presentation when idle (~50 ms poll); `markDirty()` on commits, pointer motion, shell clock, stack/focus. EGL defaults to double-buffered direct GBM page flips when supported. Flip completion is delivered through a CRTC-aware libdrm callback on epoll readiness, so the compositor no longer blocks in `poll()` while waiting for vblank. Desktop and application discovery compare content before invalidating cached shell rasters. Wayland transport and evdev keyboard/pointer input also use architecture-aware epoll readiness dispatchers instead of periodic nonblocking reads; bytes remain owned by `recvmsg`, preserving SCM_RIGHTS descriptors. The Koffi `epoll_event` layout uses 16 aligned bytes on aarch64 and 12 packed bytes on x86-64. On MoireDev idle measured 1.7% and pointer motion 24.6% after the readiness work (earlier checkpoints: 2.7%/27.6%, then 6.5%/29.6%, with idle originally 10.0%); retained rendering is near its scene/output floor (measure with `scripts/guest-measure-cpu.sh`).
+**CPU present path (updated 2026-08-23):** compositor work is dirty-driven
+and EGL defaults to double-buffered direct GBM page flips when supported.
+Wayland transport, evdev keyboard/pointer input, and DRM page flips share one
+compositor-owned architecture-aware epoll dispatcher instead of periodic
+nonblocking reads or separate native wait workers. Bytes remain owned by
+`recvmsg`, preserving SCM_RIGHTS descriptors. The Koffi `epoll_event` layout
+uses 16 aligned bytes on aarch64 and 12 packed bytes on x86-64. Desktop and
+application discovery compare content before invalidating cached shell rasters.
+On MoireDev idle measured 1.2% and sustained cursor motion 8.6% after the
+shared-reactor change (earlier checkpoints: 1.0%/10.3%, 1.7%/24.6%,
+2.7%/27.6%, then 6.5%/29.6%, with idle originally 10.0%; measure with
+`scripts/guest-measure-cpu.sh`).
 
 **Hardware cursor checkpoint:** Parallels accepts the legacy KMS cursor plane. Ordinary pointer motion no longer schedules retained composition after the initial software-to-hardware transition; framebuffer captures consequently omit the live overlay cursor. The CPU smoke now oscillates direction to avoid silently pinning the cursor at a display edge and measures 1.0% idle / 10.3% sustained motion at 1024×768. Input readiness, cursor ioctls, protocol dispatch, and native/FFI wakeups now dominate this synthetic 60 Hz workload. Unsupported outputs automatically retain software cursor composition.
 

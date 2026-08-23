@@ -998,7 +998,8 @@ export class CompositorServer {
   private keymap: KeymapMemfd | null = null;
   private evdev: EvdevKeyboard | null = null;
   private pointerDev: EvdevPointer | null = null;
-  private inputReadiness: LinuxReadinessDispatcher | null = null;
+  /** One native readiness worker shared by transport, input, and DRM events. */
+  private readiness: LinuxReadinessDispatcher | null = null;
   private focused: ClientSession | null = null;
   private pointerFocus: { session: ClientSession; surfaceId: number } | null =
     null;
@@ -1144,6 +1145,7 @@ export class CompositorServer {
     const requestedMode =
       process.env.MOIRE_MODE ?? displaySettings.displayMode ?? undefined;
     this.kms = openKmsOutput(cardPath, requestedMode);
+    this.readiness = new LinuxReadinessDispatcher("compositor");
     this.outputs = [{ kms: this.kms, x: 0, y: 0, scale120: 120, primary: true }];
     const connected = listDrmConnectors().filter(
       (connector) =>
@@ -1265,12 +1267,11 @@ export class CompositorServer {
       console.warn("[seat] keymap unavailable:", err);
     }
 
-    this.inputReadiness = new LinuxReadinessDispatcher("input");
-    this.evdev = new EvdevKeyboard(this.inputReadiness);
+    this.evdev = new EvdevKeyboard(this.readiness);
     this.evdev.on("key", (ev: EvdevKeyEvent) => this.onKey(ev));
     this.evdev.start();
 
-    this.pointerDev = new EvdevPointer(this.inputReadiness);
+    this.pointerDev = new EvdevPointer(this.readiness);
     this.pointerDev.on("motion", (ev: EvdevPointerMotion) => this.onPointerMotion(ev));
     this.pointerDev.on("absolute", (ev: EvdevPointerAbsolute) =>
       this.onPointerAbsolute(ev),
@@ -1284,7 +1285,7 @@ export class CompositorServer {
       this.cursorX = Math.floor(desktop.width / 2);
       this.cursorY = Math.floor(desktop.height / 2);
     }
-    this.socket = new WaylandSocketServer(this.socketPath);
+    this.socket = new WaylandSocketServer(this.socketPath, this.readiness);
     this.socket.on("connection", (conn: WaylandClientConn) => {
       const session = new ClientSession(this, conn, this.nextClientId++);
       this.clients.add(session);
@@ -1387,8 +1388,6 @@ export class CompositorServer {
     this.evdev = null;
     this.pointerDev?.stop();
     this.pointerDev = null;
-    this.inputReadiness?.stop();
-    this.inputReadiness = null;
     this.pointerFocus = null;
     for (const c of this.clients) c.destroy();
     this.clients.clear();
@@ -1433,6 +1432,8 @@ export class CompositorServer {
       closeKmsOutput(this.kms);
       this.kms = null;
     }
+    this.readiness?.stop();
+    this.readiness = null;
   }
 
   getGlobals() {
@@ -5194,7 +5195,11 @@ export class CompositorServer {
         if (rendered.framebufferId != null) {
           const presentStartedMs = monotonicMs();
           pendingPresents.push(
-            presentKmsFramebuffer(physical, rendered.framebufferId).then(
+            presentKmsFramebuffer(
+              physical,
+              rendered.framebufferId,
+              this.readiness ?? undefined,
+            ).then(
               () => monotonicMs() - presentStartedMs,
               (error) => {
                 console.error(
@@ -5476,7 +5481,11 @@ export class CompositorServer {
           if (rendered.framebufferId != null) {
             const presentStartedMs = monotonicMs();
             pendingPresents.push(
-              presentKmsFramebuffer(physical, rendered.framebufferId).then(
+              presentKmsFramebuffer(
+                physical,
+                rendered.framebufferId,
+                this.readiness ?? undefined,
+              ).then(
                 () => monotonicMs() - presentStartedMs,
                 (error) => {
                   console.error(

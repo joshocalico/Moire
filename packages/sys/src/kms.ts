@@ -43,6 +43,7 @@ type PendingPageFlip = {
 type KmsPageFlipDevicePresenter = {
   fd: number;
   readiness: LinuxReadinessDispatcher;
+  ownsReadiness: boolean;
   callback: ReturnType<typeof koffi.register>;
   context: unknown;
   pageFlip: (...args: unknown[]) => unknown;
@@ -1238,7 +1239,10 @@ function handlePageFlipEvents(presenter: KmsPageFlipDevicePresenter): void {
   }
 }
 
-function pageFlipPresenter(out: KmsOutput): KmsPageFlipDevicePresenter {
+function pageFlipPresenter(
+  out: KmsOutput,
+  readiness?: LinuxReadinessDispatcher,
+): KmsPageFlipDevicePresenter {
   const cached = pageFlipPresenters.get(out);
   if (cached) return cached;
   const shared = pageFlipDevices.get(out.fd);
@@ -1250,7 +1254,8 @@ function pageFlipPresenter(out: KmsOutput): KmsPageFlipDevicePresenter {
   const libdrm = loadLibdrm();
   const presenter = {
     fd: out.fd,
-    readiness: new LinuxReadinessDispatcher("kms"),
+    readiness: readiness ?? new LinuxReadinessDispatcher("kms"),
+    ownsReadiness: readiness == null,
     callback: null,
     context: null,
     pageFlip: libdrm.func(
@@ -1303,8 +1308,12 @@ function cancelPendingPageFlip(out: KmsOutput, reason: string): void {
   }
 }
 
-async function tryPageFlip(out: KmsOutput, framebufferId: number): Promise<boolean> {
-  const presenter = pageFlipPresenter(out);
+async function tryPageFlip(
+  out: KmsOutput,
+  framebufferId: number,
+  readiness?: LinuxReadinessDispatcher,
+): Promise<boolean> {
+  const presenter = pageFlipPresenter(out, readiness);
   if (presenter.support.get(out) === false) return false;
   if (presenter.pending.has(out.crtcId)) {
     throw new Error(`DRM page flip already pending on ${out.connectorName}`);
@@ -1353,7 +1362,7 @@ function destroyPageFlipPresenter(out: KmsOutput): void {
   if (presenter.outputs.size > 0) return;
   pageFlipDevices.delete(presenter.fd);
   presenter.readiness.remove(presenter.fd);
-  presenter.readiness.stop();
+  if (presenter.ownsReadiness) presenter.readiness.stop();
   try {
     koffi.unregister(presenter.callback);
   } catch {
@@ -1370,8 +1379,12 @@ function destroyPageFlipPresenter(out: KmsOutput): void {
 export async function presentKmsFramebuffer(
   out: KmsOutput,
   framebufferId: number,
+  readiness?: LinuxReadinessDispatcher,
 ): Promise<void> {
-  if (framebufferId !== out.fbId && (await tryPageFlip(out, framebufferId))) return;
+  if (
+    framebufferId !== out.fbId &&
+    (await tryPageFlip(out, framebufferId, readiness))
+  ) return;
   setKmsFramebuffer(out, framebufferId);
 }
 

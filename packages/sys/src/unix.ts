@@ -85,16 +85,22 @@ export type WaylandChunk = {
 export class WaylandSocketServer extends EventEmitter {
   private server: net.Server | null = null;
   private readiness: LinuxReadinessDispatcher | null = null;
+  private ownsReadiness = false;
   readonly path: string;
 
-  constructor(socketPath: string) {
+  constructor(
+    socketPath: string,
+    private readonly sharedReadiness?: LinuxReadinessDispatcher,
+  ) {
     super();
     this.path = socketPath;
   }
 
   start(): void {
     assertLinux("Wayland socket");
-    this.readiness = new LinuxReadinessDispatcher("wayland");
+    this.readiness =
+      this.sharedReadiness ?? new LinuxReadinessDispatcher("wayland");
+    this.ownsReadiness = this.sharedReadiness == null;
     try {
       fs.unlinkSync(this.path);
     } catch {
@@ -124,8 +130,9 @@ export class WaylandSocketServer extends EventEmitter {
       // ok
     }
     this.server = null;
-    this.readiness?.stop();
+    if (this.ownsReadiness) this.readiness?.stop();
     this.readiness = null;
+    this.ownsReadiness = false;
     try {
       fs.unlinkSync(this.path);
     } catch {
