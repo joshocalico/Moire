@@ -6,7 +6,6 @@ import {
 } from "./display-identity.js";
 import {
   closeFd,
-  getLibc,
   MAP_SHARED,
   mmap,
   munmap,
@@ -16,40 +15,44 @@ import {
   PROT_READ,
   PROT_WRITE,
 } from "./libc.js";
+import { LinuxReadinessDispatcher } from "./readiness.js";
 
 const DRM_MODE_CONNECTED = 1;
 const DRM_MODE_TYPE_PREFERRED = 1 << 3;
 const DRM_MODE_PAGE_FLIP_EVENT = 0x01;
-const POLLIN = 0x0001;
 
-const DrmPageFlipHandler = koffi.proto(
-  "void MoireDrmPageFlipHandler(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, void *user_data)",
+const DrmPageFlipHandler2 = koffi.proto(
+  "void MoireDrmPageFlipHandler2(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_id, void *user_data)",
 );
 
 const DrmEventContext = koffi.struct("drmEventContext_moire", {
   version: "int",
   vblank_handler: "void *",
-  page_flip_handler: koffi.pointer(DrmPageFlipHandler),
+  page_flip_handler: "void *",
+  page_flip_handler2: koffi.pointer(DrmPageFlipHandler2),
 });
 
-const PollFd = koffi.struct("pollfd_moire", {
-  fd: "int",
-  events: "int16_t",
-  revents: "int16_t",
-});
-
-type KmsPageFlipPresenter = {
-  callback: ReturnType<typeof koffi.register>;
-  context: unknown;
-  pollFd: unknown;
-  pageFlip: (...args: unknown[]) => unknown;
-  handleEvent: (...args: unknown[]) => unknown;
-  poll: (...args: unknown[]) => unknown;
-  completed: boolean;
-  supported: boolean | null;
+type PendingPageFlip = {
+  output: KmsOutput;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
 };
 
-const pageFlipPresenters = new WeakMap<KmsOutput, KmsPageFlipPresenter>();
+type KmsPageFlipDevicePresenter = {
+  fd: number;
+  readiness: LinuxReadinessDispatcher;
+  callback: ReturnType<typeof koffi.register>;
+  context: unknown;
+  pageFlip: (...args: unknown[]) => unknown;
+  handleEvent: (...args: unknown[]) => unknown;
+  outputs: Set<KmsOutput>;
+  pending: Map<number, PendingPageFlip>;
+  support: WeakMap<KmsOutput, boolean>;
+};
+
+const pageFlipPresenters = new WeakMap<KmsOutput, KmsPageFlipDevicePresenter>();
+const pageFlipDevices = new Map<number, KmsPageFlipDevicePresenter>();
 
 const DrmModeModeInfo = koffi.struct("drmModeModeInfo_kms", {
   clock: "uint32_t",
@@ -1131,6 +1134,7 @@ export function setKmsMode(out: KmsOutput, modeId: string): boolean {
       modePtr,
     };
 
+    cancelPendingPageFlip(out, "display mode changed");
     const set = out.setCrtc(
       out.fd,
       out.crtcId,
@@ -1175,73 +1179,107 @@ export function setKmsMode(out: KmsOutput, modeId: string): boolean {
 
 /** Re-apply the CRTC → FB mapping (forces some virtual GPUs to refresh). */
 export function presentKms(out: KmsOutput): void {
-  presentKmsFramebuffer(out, out.fbId);
+  cancelPendingPageFlip(out, "framebuffer replaced by SetCrtc");
+  setKmsFramebuffer(out, out.fbId);
 }
 
-function pageFlipPresenter(out: KmsOutput): KmsPageFlipPresenter {
+function rejectPendingPageFlips(
+  presenter: KmsPageFlipDevicePresenter,
+  error: Error,
+  output?: KmsOutput,
+): void {
+  for (const [crtcId, pending] of presenter.pending) {
+    if (output && pending.output !== output) continue;
+    presenter.pending.delete(crtcId);
+    clearTimeout(pending.timeout);
+    pending.reject(error);
+  }
+}
+
+function handlePageFlipEvents(presenter: KmsPageFlipDevicePresenter): void {
+  try {
+    const handled = Number(presenter.handleEvent(presenter.fd, presenter.context));
+    if (handled !== 0) {
+      throw new Error(`drmHandleEvent failed (${handled}) on fd=${presenter.fd}`);
+    }
+  } catch (error) {
+    const failure =
+      error instanceof Error ? error : new Error(`drmHandleEvent failed: ${error}`);
+    rejectPendingPageFlips(presenter, failure);
+  }
+}
+
+function pageFlipPresenter(out: KmsOutput): KmsPageFlipDevicePresenter {
   const cached = pageFlipPresenters.get(out);
   if (cached) return cached;
+  const shared = pageFlipDevices.get(out.fd);
+  if (shared) {
+    shared.outputs.add(out);
+    pageFlipPresenters.set(out, shared);
+    return shared;
+  }
   const libdrm = loadLibdrm();
   const presenter = {
+    fd: out.fd,
+    readiness: new LinuxReadinessDispatcher("kms"),
     callback: null,
     context: null,
-    pollFd: koffi.alloc(PollFd, 1),
     pageFlip: libdrm.func(
       "int drmModePageFlip(int fd, uint32_t crtc_id, uint32_t fb_id, uint32_t flags, void *user_data)",
     ),
     handleEvent: libdrm.func(
       "int drmHandleEvent(int fd, void *evctx)",
     ),
-    poll: getLibc().func("int poll(void *fds, unsigned long nfds, int timeout)"),
-    completed: false,
-    supported: null,
-  } as unknown as KmsPageFlipPresenter;
+    outputs: new Set<KmsOutput>([out]),
+    pending: new Map<number, PendingPageFlip>(),
+    support: new WeakMap<KmsOutput, boolean>(),
+  } as unknown as KmsPageFlipDevicePresenter;
   presenter.callback = koffi.register(
-    () => {
-      presenter.completed = true;
+    (
+      _fd: number,
+      _sequence: number,
+      _seconds: number,
+      _microseconds: number,
+      crtcId: number,
+    ) => {
+      const pending = presenter.pending.get(crtcId);
+      if (!pending) return;
+      presenter.pending.delete(crtcId);
+      clearTimeout(pending.timeout);
+      pending.resolve();
     },
-    koffi.pointer(DrmPageFlipHandler),
+    koffi.pointer(DrmPageFlipHandler2),
   );
   presenter.context = koffi.alloc(DrmEventContext, 1);
   koffi.encode(presenter.context, DrmEventContext, {
-    version: 2,
+    version: 3,
     vblank_handler: null,
-    page_flip_handler: presenter.callback,
+    page_flip_handler: null,
+    page_flip_handler2: presenter.callback,
   });
+  presenter.readiness.add(out.fd, () => handlePageFlipEvents(presenter));
   pageFlipPresenters.set(out, presenter);
+  pageFlipDevices.set(out.fd, presenter);
   return presenter;
 }
 
-function waitForPageFlip(out: KmsOutput, presenter: KmsPageFlipPresenter): void {
-  const deadline = Date.now() + 1_000;
-  while (!presenter.completed) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      throw new Error(`DRM page flip timed out on ${out.connectorName}`);
-    }
-    koffi.encode(presenter.pollFd, PollFd, {
-      fd: out.fd,
-      events: POLLIN,
-      revents: 0,
-    });
-    const ready = Number(presenter.poll(presenter.pollFd, 1, remaining));
-    if (ready < 0) {
-      throw new Error(`poll for DRM page flip failed on ${out.connectorName}`);
-    }
-    if (ready === 0) continue;
-    const handled = Number(presenter.handleEvent(out.fd, presenter.context));
-    if (handled !== 0) {
-      throw new Error(
-        `drmHandleEvent failed (${handled}) on ${out.connectorName}`,
-      );
-    }
+function cancelPendingPageFlip(out: KmsOutput, reason: string): void {
+  const presenter = pageFlipPresenters.get(out);
+  if (!presenter) return;
+  const pending = presenter.pending.get(out.crtcId);
+  if (pending?.output === out) {
+    presenter.pending.delete(out.crtcId);
+    clearTimeout(pending.timeout);
+    pending.reject(new Error(`DRM page flip cancelled on ${out.connectorName}: ${reason}`));
   }
 }
 
-function tryPageFlip(out: KmsOutput, framebufferId: number): boolean {
+async function tryPageFlip(out: KmsOutput, framebufferId: number): Promise<boolean> {
   const presenter = pageFlipPresenter(out);
-  if (presenter.supported === false) return false;
-  presenter.completed = false;
+  if (presenter.support.get(out) === false) return false;
+  if (presenter.pending.has(out.crtcId)) {
+    throw new Error(`DRM page flip already pending on ${out.connectorName}`);
+  }
   const queued = Number(
     presenter.pageFlip(
       out.fd,
@@ -1255,14 +1293,21 @@ function tryPageFlip(out: KmsOutput, framebufferId: number): boolean {
     console.warn(
       `[kms] page flips unavailable on ${out.connectorName}; retaining SetCrtc fallback (${queued})`,
     );
-    presenter.supported = false;
+    presenter.support.set(out, false);
     return false;
   }
-  waitForPageFlip(out, presenter);
-  if (presenter.supported == null) {
+  const wasSupported = presenter.support.get(out) === true;
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      presenter.pending.delete(out.crtcId);
+      reject(new Error(`DRM page flip timed out on ${out.connectorName}`));
+    }, 1_000);
+    presenter.pending.set(out.crtcId, { output: out, resolve, reject, timeout });
+  });
+  if (!wasSupported) {
     console.log(`[kms] page-flip presentation ready on ${out.connectorName}`);
   }
-  presenter.supported = true;
+  presenter.support.set(out, true);
   return true;
 }
 
@@ -1270,6 +1315,16 @@ function destroyPageFlipPresenter(out: KmsOutput): void {
   const presenter = pageFlipPresenters.get(out);
   if (!presenter) return;
   pageFlipPresenters.delete(out);
+  presenter.outputs.delete(out);
+  rejectPendingPageFlips(
+    presenter,
+    new Error(`DRM output ${out.connectorName} closed during page flip`),
+    out,
+  );
+  if (presenter.outputs.size > 0) return;
+  pageFlipDevices.delete(presenter.fd);
+  presenter.readiness.remove(presenter.fd);
+  presenter.readiness.stop();
   try {
     koffi.unregister(presenter.callback);
   } catch {
@@ -1280,19 +1335,18 @@ function destroyPageFlipPresenter(out: KmsOutput): void {
   } catch {
     // best effort
   }
-  try {
-    koffi.free(presenter.pollFd);
-  } catch {
-    // best effort
-  }
 }
 
 /** Present a renderer-owned DRM framebuffer on this output's current mode. */
-export function presentKmsFramebuffer(
+export async function presentKmsFramebuffer(
   out: KmsOutput,
   framebufferId: number,
-): void {
-  if (framebufferId !== out.fbId && tryPageFlip(out, framebufferId)) return;
+): Promise<void> {
+  if (framebufferId !== out.fbId && (await tryPageFlip(out, framebufferId))) return;
+  setKmsFramebuffer(out, framebufferId);
+}
+
+function setKmsFramebuffer(out: KmsOutput, framebufferId: number): void {
   const set = out.setCrtc(
     out.fd,
     out.crtcId,

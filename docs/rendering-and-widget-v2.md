@@ -125,16 +125,17 @@ former periodic full-screen rebuild when nothing changed.
   semantic-XR24 channel conversion; retained composition and readback remain
   byte-identical.
 - Direct presentation now rotates two BOs per output, submits GLES work with
-  `glFlush`, queues `drmModePageFlip`, and waits for the flip event before the
-  old front buffer can be reused. Drivers that reject page flips retain the
-  proven `drmModeSetCrtc` fallback. The dma-buf implicit fence orders rendering
-  and scanout; use explicit/native fences where supported as the asynchronous
-  event loop lands.
+  `glFlush`, queues `drmModePageFlip`, and awaits a CRTC-aware libdrm callback
+  from the shared epoll readiness queue before the old front buffer can be
+  reused. Outputs on the same DRM fd submit concurrently and are matched by
+  CRTC id. Drivers that reject page flips retain the proven `drmModeSetCrtc`
+  fallback. Mode changes and teardown cancel pending promises before replacing
+  scanout resources. The dma-buf implicit fence orders rendering and scanout;
+  use explicit/native fences where supported.
 - Allocate targets per physical output and rebuild them transactionally across
   mode/hotplug changes.
-- Move the synchronous page-flip wait into the compositor event loop, add
-  explicit/native fences where available, and complete physical multi-output
-  hardware coverage beyond the current synthetic topology tests.
+- Add explicit/native fences where available, and complete physical
+  multi-output hardware coverage beyond the current synthetic topology tests.
 
 ### Future — renderer and compositor effect plugins (earmarked)
 

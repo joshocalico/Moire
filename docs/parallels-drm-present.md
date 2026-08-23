@@ -31,8 +31,10 @@ See `packages/sys/src/kms.ts` (`presentKms`) and `packages/core/src/server.ts` (
 
 The optional direct EGL path instead rotates two renderer-owned GBM
 framebuffers and queues `drmModePageFlip`. It waits for the flip event before
-reusing the previous front buffer; if the driver rejects page flips before one
-is queued, it falls back to the same proven `drmModeSetCrtc` operation.
+reusing the previous front buffer, but the wait is readiness-driven and does
+not block the JavaScript compositor loop. If the driver rejects page flips
+before one is queued, it falls back to the same proven `drmModeSetCrtc`
+operation.
 
 ## Verification
 

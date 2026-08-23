@@ -4548,7 +4548,7 @@ export class CompositorServer {
       if (this.needsComposite) {
         this.needsComposite = false;
         try {
-          this.composite();
+          await this.composite();
         } catch (err) {
           console.error("[composite]", err);
           this.markDirty();
@@ -4763,12 +4763,12 @@ export class CompositorServer {
     return null;
   }
 
-  private compositeRetained(
+  private async compositeRetained(
     renderer: CompositorOutputRenderer,
     frameStartedMs: number,
     width: number,
     height: number,
-  ): void {
+  ): Promise<void> {
     const layers: CompositionLayer[] = [];
     let z = 0;
     const wallPhase = (Date.now() / 60000) % 1;
@@ -5046,6 +5046,7 @@ export class CompositorServer {
     renderer.beginComposition!(scene);
     let frameRenderMs = monotonicMs() - outputPhaseStartedMs;
     let framePresentMs = 0;
+    const pendingPresents: Promise<number>[] = [];
     for (const output of this.outputs) {
       const outputStartedMs = monotonicMs();
       const physical = output.kms;
@@ -5070,18 +5071,33 @@ export class CompositorServer {
       const renderedMs = monotonicMs();
       try {
         if (rendered.framebufferId != null) {
-          presentKmsFramebuffer(physical, rendered.framebufferId);
+          const presentStartedMs = monotonicMs();
+          pendingPresents.push(
+            presentKmsFramebuffer(physical, rendered.framebufferId).then(
+              () => monotonicMs() - presentStartedMs,
+              (error) => {
+                console.error(
+                  `[composite] retained present ${physical.connectorName}:`,
+                  error,
+                );
+                return monotonicMs() - presentStartedMs;
+              },
+            ),
+          );
         } else {
           flushMmap(physical.map, target, physical.size);
           presentKms(physical);
+          framePresentMs += monotonicMs() - renderedMs;
         }
       } catch (error) {
         console.error(`[composite] retained present ${physical.connectorName}:`, error);
       }
-      const presentedMs = monotonicMs();
       frameRenderMs += renderedMs - outputStartedMs;
-      framePresentMs += presentedMs - renderedMs;
     }
+    framePresentMs += (await Promise.all(pendingPresents)).reduce(
+      (total, duration) => total + duration,
+      0,
+    );
     this.profileFrames++;
     this.profileSceneMs += sceneFinishedMs - frameStartedMs;
     this.profileWallpaperMs += wallpaperFinishedMs - frameStartedMs;
@@ -5099,14 +5115,14 @@ export class CompositorServer {
   }
 
   /** Paint wallpaper + all mapped surfaces into the KMS dumb buffer. */
-  composite(): void {
+  async composite(): Promise<void> {
     if (this.outputs.length === 0) return;
     const frameStartedMs = monotonicMs();
     const kms = this.getKmsSize();
     const renderer = this.outputRenderer;
     if (renderer && this.canUseRetainedComposition(renderer)) {
       try {
-        this.compositeRetained(renderer, frameStartedMs, kms.width, kms.height);
+        await this.compositeRetained(renderer, frameStartedMs, kms.width, kms.height);
         return;
       } catch (error) {
         // Keep the flattened path as an in-frame compatibility fallback. An
@@ -5307,6 +5323,7 @@ export class CompositorServer {
       // separate from per-output crop/scale/readback work.
       let frameRenderMs = monotonicMs() - outputPhaseStartedMs;
       let framePresentMs = 0;
+      const pendingPresents: Promise<number>[] = [];
       // Crop/scale the logical desktop into each physical output through the
       // selected backend. EGL currently reads into the stable dumb scanout;
       // direct GBM scanout is the next presentation step, not a scene change.
@@ -5336,10 +5353,23 @@ export class CompositorServer {
         // SetCrtc is re-applied (or a page flip).
         try {
           if (rendered.framebufferId != null) {
-            presentKmsFramebuffer(physical, rendered.framebufferId);
+            const presentStartedMs = monotonicMs();
+            pendingPresents.push(
+              presentKmsFramebuffer(physical, rendered.framebufferId).then(
+                () => monotonicMs() - presentStartedMs,
+                (error) => {
+                  console.error(
+                    `[composite] presentKms ${physical.connectorName}:`,
+                    error,
+                  );
+                  return monotonicMs() - presentStartedMs;
+                },
+              ),
+            );
           } else {
             flushMmap(physical.map, target, physical.size);
             presentKms(physical);
+            framePresentMs += monotonicMs() - renderedMs;
           }
         } catch (err) {
           console.error(
@@ -5347,10 +5377,12 @@ export class CompositorServer {
             err,
           );
         }
-        const presentedMs = monotonicMs();
         frameRenderMs += renderedMs - outputStartedMs;
-        framePresentMs += presentedMs - renderedMs;
       }
+      framePresentMs += (await Promise.all(pendingPresents)).reduce(
+        (total, duration) => total + duration,
+        0,
+      );
       this.profileFrames++;
       this.profileSceneMs += sceneFinishedMs - frameStartedMs;
       this.profileWallpaperMs += wallpaperFinishedMs - frameStartedMs;
