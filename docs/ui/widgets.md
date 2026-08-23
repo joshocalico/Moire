@@ -332,6 +332,8 @@ provides focus, Enter/Space activation, click/double-click, item context menus,
 optional drop identity, and optional drag behavior without making drag code
 own selection policy. `ContextMenuTrigger` supplies a background hit region
 behind its children, so item menus win over background menus geometrically.
+`focused` can control the recipe focus ring in compositor-owned hosts; regular
+`Window` content uses the internal focus manager and optional `autoFocus`.
 
 Use `dragSource={{ mimeTypes, getPayload, previewIcon }}` on `CollectionItem`.
 For lower-level composition, `useDragSource()` exposes the same narrow drag

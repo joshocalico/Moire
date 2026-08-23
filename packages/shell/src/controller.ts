@@ -23,8 +23,13 @@ import {
   ContextMenuTrigger,
   Icon,
   GridItem,
+  createSelectionState,
+  reduceSelection,
+  reconcileSelection,
   type ContextMenuAction,
   type IconName,
+  type SelectionAction,
+  type SelectionState,
 } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
 import { themePalette } from "@moire/theme";
@@ -43,6 +48,7 @@ import {
   saveDesktopLayout,
   desktopDir,
   hitTestDesktopIcon,
+  desktopIconPosition,
   DESKTOP_ITEM_W,
   DESKTOP_ITEM_H,
   ICON_SIZE,
@@ -204,6 +210,17 @@ export type ShellBridge = {
 const KEY_ESC = 1;
 const KEY_BACKSPACE = 14;
 const KEY_ENTER = 28;
+const KEY_LEFTCTRL = 29;
+const KEY_LEFTSHIFT = 42;
+const KEY_SPACE = 57;
+const KEY_HOME = 102;
+const KEY_UP = 103;
+const KEY_LEFT = 105;
+const KEY_RIGHT = 106;
+const KEY_END = 107;
+const KEY_DOWN = 108;
+const KEY_RIGHTCTRL = 97;
+const KEY_RIGHTSHIFT = 54;
 const KEY_LEFTMETA = 125;
 const KEY_RIGHTMETA = 126;
 
@@ -390,6 +407,8 @@ export function createShell(
   let ow = 0;
   let oh = 0;
   let metaHeld = false;
+  let ctrlHeld = false;
+  let shiftHeld = false;
   let overlayPointerGrab = false;
   let overlayDownHit: HitRegion | null = null;
   let shellHover: HitRegion | null = null;
@@ -417,7 +436,9 @@ export function createShell(
   const desktopRoot: ShellRoot = createShellRoot();
   let desktopEntries: string[] = listDesktopEntries();
   let desktopLayout: DesktopLayout = loadDesktopLayout();
-  let desktopSelectedName: string | undefined;
+  let desktopSelection: SelectionState<string> =
+    createSelectionState(desktopEntries);
+  let desktopKeyboardActive = false;
   let desktopMenu:
     | { kind: "item"; name: string; x: number; y: number }
     | { kind: "background"; x: number; y: number }
@@ -438,6 +459,9 @@ export function createShell(
     null;
   let desktopDrag: {
     name: string;
+    names: string[];
+    label: string;
+    origins: DesktopLayout;
     grabX: number;
     grabY: number;
     originX: number;
@@ -447,6 +471,7 @@ export function createShell(
   } | null = null;
   let desktopDragReturn: {
     name: string;
+    label: string;
     originX: number;
     originY: number;
     fromX: number;
@@ -473,6 +498,86 @@ export function createShell(
     h: number;
   } | null = null;
   const DESKTOP_DRAG_THRESHOLD = 8;
+
+  const updateDesktopSelection = (
+    action: SelectionAction<string>,
+  ): void => {
+    const next = reduceSelection(desktopSelection, desktopEntries, action);
+    if (next === desktopSelection) return;
+    desktopSelection = next;
+    desktopDirty = true;
+    dirty = true;
+  };
+
+  const selectedDesktopNames = (): string[] =>
+    desktopEntries.filter((name) => desktopSelection.selectedKeys.has(name));
+
+  const selectDesktopName = (
+    name: string,
+    modifiers: { toggle?: boolean; range?: boolean } = {},
+  ): void => {
+    updateDesktopSelection({ type: "select", key: name, gesture: modifiers });
+  };
+
+  const desktopNeighbor = (
+    fromName: string,
+    direction: "left" | "right" | "up" | "down",
+  ): string | null => {
+    const fromIndex = desktopEntries.indexOf(fromName);
+    if (fromIndex < 0) return desktopEntries[0] ?? null;
+    const from = desktopIconPosition(
+      fromName,
+      fromIndex,
+      desktopLayout,
+      desktopW || 1,
+      desktopH || 1,
+      themePalette().panelHeight,
+    );
+    let best: { name: string; score: number } | null = null;
+    for (let index = 0; index < desktopEntries.length; index++) {
+      const name = desktopEntries[index]!;
+      if (name === fromName) continue;
+      const candidate = desktopIconPosition(
+        name,
+        index,
+        desktopLayout,
+        desktopW || 1,
+        desktopH || 1,
+        themePalette().panelHeight,
+      );
+      const dx = candidate.x - from.x;
+      const dy = candidate.y - from.y;
+      const primary =
+        direction === "left"
+          ? -dx
+          : direction === "right"
+            ? dx
+            : direction === "up"
+              ? -dy
+              : dy;
+      if (primary <= 0) continue;
+      const cross = direction === "left" || direction === "right"
+        ? Math.abs(dy)
+        : Math.abs(dx);
+      const score = primary + cross * 2;
+      if (!best || score < best.score) best = { name, score };
+    }
+    return best?.name ?? fromName;
+  };
+
+  const moveDesktopSelection = (
+    direction: "left" | "right" | "up" | "down",
+  ): void => {
+    const from = desktopSelection.focusKey ?? desktopEntries[0] ?? null;
+    if (!from) return;
+    const target = desktopNeighbor(from, direction);
+    if (!target) return;
+    if (ctrlHeld && !shiftHeld) {
+      updateDesktopSelection({ type: "focus", key: target, select: false });
+    } else {
+      selectDesktopName(target, { range: shiftHeld });
+    }
+  };
 
   const refreshApps = () => {
     const nextApps = mergeApps();
@@ -518,6 +623,7 @@ export function createShell(
     if (!entriesChanged && !layoutChanged) return;
     desktopEntries = nextEntries;
     desktopLayout = nextLayout;
+    desktopSelection = reconcileSelection(desktopSelection, desktopEntries);
     desktopDirty = true;
   };
   // Refresh desktop list every 2s to catch external changes
@@ -554,17 +660,28 @@ export function createShell(
   desktopActionRegistry.register({
     id: "moire.open",
     actions(context) {
-      const filePath = context.paths[0];
-      if (!filePath) return [];
-      const name = path.basename(filePath);
-      const directory = context.directories[0] ?? false;
-      return [
+      if (context.paths.length === 0) return [];
+      const openActions = [
         {
           id: "open",
-          label: "Open",
-          icon: directory ? "folder" : "file",
-          run: () => openDesktopEntry(name),
+          label:
+            context.paths.length === 1
+              ? "Open"
+              : `Open ${context.paths.length} Items`,
+          icon: context.directories.every(Boolean) ? "folder" : "file",
+          run: () => {
+            context.paths.forEach((filePath) =>
+              openDesktopEntry(path.basename(filePath)),
+            );
+          },
         },
+      ];
+      if (context.paths.length !== 1 || context.directories[0]) {
+        return openActions;
+      }
+      const name = path.basename(context.paths[0]!);
+      return [
+        ...openActions,
         {
           id: "open-with",
           label: "Open With…",
@@ -578,6 +695,7 @@ export function createShell(
   desktopActionRegistry.register({
     id: "moire.location",
     actions(context) {
+      if (context.paths.length !== 1) return [];
       const filePath = context.paths[0];
       if (!filePath) return [];
       return [
@@ -596,20 +714,23 @@ export function createShell(
   });
 
   const desktopContextActions = (name: string): ContextMenuAction[] => {
-    const filePath = path.join(desktopDir(), name);
-    let directory = false;
-    try {
-      directory = fs.statSync(filePath).isDirectory();
-    } catch {
-      // keep false
-    }
+    const targetNames = desktopSelection.selectedKeys.has(name)
+      ? selectedDesktopNames()
+      : [name];
+    const paths = targetNames.map((target) => path.join(desktopDir(), target));
     const context: FileActionContext = {
       source: "desktop",
       scope: "items",
       currentDirectory: desktopDir(),
-      paths: [filePath],
-      mimeTypes: [mimeDb.mimeTypeForPath(filePath)],
-      directories: [directory],
+      paths,
+      mimeTypes: paths.map((filePath) => mimeDb.mimeTypeForPath(filePath)),
+      directories: paths.map((filePath) => {
+        try {
+          return fs.statSync(filePath).isDirectory();
+        } catch {
+          return false;
+        }
+      }),
     };
     return desktopActionRegistry.actionsFor(context).map((action) => ({
       id: action.id,
@@ -633,8 +754,9 @@ export function createShell(
       const name = index === 1 ? "New Folder" : `New Folder ${index}`;
       try {
         fs.mkdirSync(path.join(root, name), { recursive: false });
-        desktopSelectedName = name;
         refreshDesktop();
+        selectDesktopName(name);
+        desktopKeyboardActive = true;
         return;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
@@ -655,6 +777,13 @@ export function createShell(
           label: "New Folder",
           icon: "folder",
           run: createDesktopFolder,
+        },
+        {
+          id: "select-all",
+          label: "Select All",
+          icon: "grid",
+          enabled: desktopEntries.length > 0,
+          run: () => updateDesktopSelection({ type: "all" }),
         },
         {
           id: "open-in-files",
@@ -811,7 +940,12 @@ export function createShell(
               x: desktopMenu.x,
               y: desktopMenu.y,
               title:
-                desktopMenu.kind === "item" ? desktopMenu.name : "Desktop",
+                desktopMenu.kind === "item"
+                  ? desktopSelection.selectedKeys.has(desktopMenu.name) &&
+                    desktopSelection.selectedKeys.size > 1
+                    ? `${desktopSelection.selectedKeys.size} Items`
+                    : desktopMenu.name
+                  : "Desktop",
               actions:
                 desktopMenu.kind === "item"
                   ? desktopContextActions(desktopMenu.name)
@@ -962,14 +1096,16 @@ export function createShell(
             width,
             height: height - pal.panelHeight,
             onPress: () => {
-              desktopSelectedName = undefined;
+              updateDesktopSelection({ type: "clear" });
               desktopMenu = null;
+              desktopKeyboardActive = true;
               desktopDirty = true;
               dirty = true;
             },
             onContextMenu: (event) => {
-              desktopSelectedName = undefined;
+              updateDesktopSelection({ type: "clear" });
               desktopMenu = { kind: "background", x: event.x, y: event.y };
+              desktopKeyboardActive = true;
               desktopDirty = true;
               dirty = true;
             },
@@ -980,24 +1116,32 @@ export function createShell(
             panelH: pal.panelHeight,
             entries: showDesktopIcons ? desktopEntries : [],
             layout: desktopLayout,
-            selectedName: desktopSelectedName,
+            selectedNames: desktopSelection.selectedKeys,
+            focusedName: desktopSelection.focusKey,
             dropHoverName: desktopDropHoverName,
             dragActive: desktopDragActive,
-            onSelect: (name) => {
-              desktopSelectedName = name;
+            onSelect: (name, event) => {
+              selectDesktopName(name, {
+                toggle: event?.ctrlKey || event?.metaKey,
+                range: event?.shiftKey,
+              });
               desktopMenu = null;
+              desktopKeyboardActive = true;
               desktopDirty = true;
               dirty = true;
             },
             onOpen: openDesktopEntry,
             onContextMenu: (name, event) => {
-              desktopSelectedName = name;
+              if (!desktopSelection.selectedKeys.has(name)) {
+                selectDesktopName(name);
+              }
               desktopMenu = {
                 kind: "item",
                 name,
                 x: event.x,
                 y: event.y,
               };
+              desktopKeyboardActive = true;
               desktopDirty = true;
               dirty = true;
             },
@@ -1140,7 +1284,7 @@ export function createShell(
   const desktopFolderAt = (
     x: number,
     y: number,
-    sourceName: string,
+    sourceNames: readonly string[],
   ): string | null => {
     const pal = themePalette();
     const targetName = hitTestDesktopIcon(
@@ -1152,7 +1296,7 @@ export function createShell(
       desktopH || 1,
       pal.panelHeight,
     );
-    if (!targetName || targetName === sourceName) return null;
+    if (!targetName || sourceNames.includes(targetName)) return null;
     try {
       return fs.statSync(path.join(desktopDir(), targetName)).isDirectory()
         ? targetName
@@ -1169,6 +1313,7 @@ export function createShell(
   ): void => {
     desktopDragReturn = {
       name: drag.name,
+      label: drag.label,
       originX: drag.originX,
       originY: drag.originY,
       fromX: cursorX - drag.grabX,
@@ -1183,40 +1328,58 @@ export function createShell(
     desktopDirty = true;
   };
 
-  /**
-   * Finish a local desktop drag. Dropping over another folder moves the
-   * entry into it; every other desktop drop persists a new icon position.
-   */
+  /** Move a local single/group drag into a folder or persist translated positions. */
   const finalizeDesktopDrop = (x: number, y: number): void => {
     if (!desktopDrag) return;
     const drag = desktopDrag;
     const pal = themePalette();
     const availH = (desktopH || 1) - pal.panelHeight;
 
-    const targetName = desktopFolderAt(x, y, drag.name);
+    const targetName = desktopFolderAt(x, y, drag.names);
     if (targetName) {
-      const src = path.join(desktopDir(), drag.name);
-      const dest = path.join(desktopDir(), targetName, drag.name);
+      const moves = drag.names.map((name) => ({
+        name,
+        src: path.join(desktopDir(), name),
+        dest: path.join(desktopDir(), targetName, name),
+      }));
+      const moved: typeof moves = [];
       try {
-        if (fs.existsSync(dest)) {
-          throw new Error(`destination already exists: ${dest}`);
+        for (const move of moves) {
+          if (fs.existsSync(move.dest)) {
+            throw new Error(`destination already exists: ${move.dest}`);
+          }
         }
-        fs.renameSync(src, dest);
+        for (const move of moves) {
+          fs.renameSync(move.src, move.dest);
+          moved.push(move);
+        }
         const nextLayout = { ...desktopLayout };
-        delete nextLayout[drag.name];
+        drag.names.forEach((name) => delete nextLayout[name]);
+        saveDesktopLayout(nextLayout);
         desktopLayout = nextLayout;
-        saveDesktopLayout(desktopLayout);
-        desktopSelectedName = undefined;
+        updateDesktopSelection({ type: "clear" });
         desktopDrag = null;
         desktopDown = null;
         desktopDropHoverName = null;
         desktopDragActive = false;
         refreshDesktop();
-        console.log(`[shell] desktop local drop: ${src} → ${dest}`);
+        console.log(
+          `[shell] desktop local drop: ${drag.names.join(", ")} → ${targetName}`,
+        );
         return;
       } catch (err) {
+        for (const move of moved.reverse()) {
+          try {
+            fs.renameSync(move.dest, move.src);
+          } catch (rollbackError) {
+            console.error(
+              "[shell] desktop group-drop rollback failed:",
+              rollbackError,
+            );
+          }
+        }
         console.error(
-          `[shell] desktop local drop failed for ${drag.name} onto ${targetName}:`,
+          `[shell] desktop local drop failed for ${drag.label} onto ${targetName}:`,
           err,
         );
         beginDesktopDragReturn(drag, x, y);
@@ -1224,20 +1387,46 @@ export function createShell(
       }
     }
 
-    const nx = Math.max(
-      0,
-      Math.min(x - drag.grabX, (desktopW || 1) - DESKTOP_ITEM_W),
+    const origins = drag.names
+      .map((name) => drag.origins[name])
+      .filter((origin): origin is { x: number; y: number } => !!origin);
+    if (origins.length === 0) {
+      beginDesktopDragReturn(drag, x, y);
+      return;
+    }
+    const maxX = (desktopW || 1) - DESKTOP_ITEM_W;
+    const maxY = availH - DESKTOP_ITEM_H;
+    const dx = Math.max(
+      Math.max(...origins.map((origin) => -origin.x)),
+      Math.min(
+        x - drag.grabX - drag.originX,
+        Math.min(...origins.map((origin) => maxX - origin.x)),
+      ),
     );
-    const ny = Math.max(
-      0,
-      Math.min(y - drag.grabY, availH - DESKTOP_ITEM_H),
+    const dy = Math.max(
+      Math.max(...origins.map((origin) => -origin.y)),
+      Math.min(
+        y - drag.grabY - drag.originY,
+        Math.min(...origins.map((origin) => maxY - origin.y)),
+      ),
     );
-    desktopLayout = {
-      ...desktopLayout,
-      [drag.name]: { x: nx, y: ny },
-    };
-    saveDesktopLayout(desktopLayout);
-    desktopSelectedName = drag.name;
+    const nextLayout = { ...desktopLayout };
+    drag.names.forEach((name) => {
+      const origin = drag.origins[name];
+      if (!origin) return;
+      nextLayout[name] = {
+        x: origin.x + dx,
+        y: origin.y + dy,
+      };
+    });
+    try {
+      saveDesktopLayout(nextLayout);
+      desktopLayout = nextLayout;
+    } catch (error) {
+      console.error("[shell] desktop layout save failed:", error);
+      beginDesktopDragReturn(drag, x, y);
+      return;
+    }
     desktopDrag = null;
     desktopDown = null;
     desktopDropHoverName = null;
@@ -1348,6 +1537,12 @@ export function createShell(
     },
 
     onKey(ev) {
+      if (ev.code === KEY_LEFTCTRL || ev.code === KEY_RIGHTCTRL) {
+        ctrlHeld = ev.value !== 0;
+      }
+      if (ev.code === KEY_LEFTSHIFT || ev.code === KEY_RIGHTSHIFT) {
+        shiftHeld = ev.value !== 0;
+      }
       if (desktopMenu) {
         if (ev.value !== 1 && ev.value !== 2) return true;
         if (ev.code === KEY_ESC) {
@@ -1367,6 +1562,55 @@ export function createShell(
           dirty = true;
           return true;
         }
+        return true;
+      }
+
+      if (!open && desktopKeyboardActive) {
+        const modifier =
+          ev.code === KEY_LEFTCTRL ||
+          ev.code === KEY_RIGHTCTRL ||
+          ev.code === KEY_LEFTSHIFT ||
+          ev.code === KEY_RIGHTSHIFT;
+        // A client may have received the modifier-down before focus moved to
+        // the desktop. Forward both edges so it cannot retain a stuck key.
+        if (modifier) return false;
+        if (ev.value !== 1 && ev.value !== 2) return true;
+        if (ev.code === KEY_ESC) {
+          updateDesktopSelection({ type: "clear" });
+          return true;
+        }
+        if (ctrlHeld && ev.code === 30) {
+          updateDesktopSelection({ type: "all" });
+          return true;
+        }
+        if (ev.code === KEY_ENTER) {
+          selectedDesktopNames().forEach(openDesktopEntry);
+          return true;
+        }
+        if (ev.code === KEY_SPACE) {
+          const focused = desktopSelection.focusKey;
+          if (focused) {
+            selectDesktopName(focused, {
+              toggle: ctrlHeld,
+              range: shiftHeld,
+            });
+          }
+          return true;
+        }
+        if (ev.code === KEY_HOME || ev.code === KEY_END) {
+          updateDesktopSelection({
+            type: ev.code === KEY_HOME ? "first" : "last",
+            options: {
+              extend: shiftHeld,
+              preserveSelection: ctrlHeld && !shiftHeld,
+            },
+          });
+          return true;
+        }
+        if (ev.code === KEY_LEFT) moveDesktopSelection("left");
+        else if (ev.code === KEY_RIGHT) moveDesktopSelection("right");
+        else if (ev.code === KEY_UP) moveDesktopSelection("up");
+        else if (ev.code === KEY_DOWN) moveDesktopSelection("down");
         return true;
       }
 
@@ -1401,7 +1645,7 @@ export function createShell(
         return true;
       }
       const ch = US_MAP[ev.code];
-      if (ch && !metaHeld) {
+      if (ch && !metaHeld && !ctrlHeld) {
         query += ch;
         selected = 0;
         dirty = true;
@@ -1411,6 +1655,7 @@ export function createShell(
     },
 
     onPointerButton(ev) {
+      if (ev.value === 1) desktopKeyboardActive = false;
       if (ev.value === 0 && overlayPointerGrab) {
         const hit = overlayDownHit;
         if (hit) {
@@ -1639,10 +1884,14 @@ export function createShell(
         localX: ev.x - h.x,
         localY: ev.y - h.y,
         button: right ? ("right" as const) : ("left" as const),
+        shiftKey: shiftHeld,
+        ctrlKey: ctrlHeld,
+        metaKey: false,
       });
 
       if (right) {
         if (ev.value !== 1) return desktopMenu != null;
+        desktopKeyboardActive = true;
         const hit = findHit((h) => !!h.onContextMenu);
         if (hit?.onContextMenu) {
           hit.onContextMenu(args(hit));
@@ -1659,13 +1908,11 @@ export function createShell(
       }
 
       if (ev.value === 1) {
+        desktopKeyboardActive = true;
         desktopDragReturn = null;
         const hit = findHit((h) => !!(h.onPointerDown || h.onPress));
         if (!hit) {
-          if (desktopSelectedName) {
-            desktopSelectedName = undefined;
-            desktopDirty = true;
-          }
+          updateDesktopSelection({ type: "clear" });
           desktopDown = null;
           desktopDrag = null;
           return false;
@@ -1726,20 +1973,40 @@ export function createShell(
         const dy = ev.y - desktopDown.y;
         if (dx * dx + dy * dy >= DESKTOP_DRAG_THRESHOLD * DESKTOP_DRAG_THRESHOLD) {
           const name = desktopDown.name;
-          const saved = desktopLayout[name];
-          const ix = saved?.x ?? desktopDown.hit.x;
-          const iy = saved?.y ?? desktopDown.hit.y;
+          if (!desktopSelection.selectedKeys.has(name)) selectDesktopName(name);
+          const names = desktopSelection.selectedKeys.has(name)
+            ? selectedDesktopNames()
+            : [name];
+          const origins: DesktopLayout = {};
+          names.forEach((selectedName) => {
+            const index = desktopEntries.indexOf(selectedName);
+            if (index < 0) return;
+            origins[selectedName] = desktopIconPosition(
+              selectedName,
+              index,
+              desktopLayout,
+              desktopW || 1,
+              desktopH || 1,
+              themePalette().panelHeight,
+            );
+          });
+          const origin = origins[name] ?? {
+            x: desktopDown.hit.x,
+            y: desktopDown.hit.y,
+          };
           desktopDrag = {
             name,
-            grabX: desktopDown.x - ix,
-            grabY: desktopDown.y - iy,
-            originX: ix,
-            originY: iy,
+            names,
+            label: names.length > 1 ? `${names.length} items` : name,
+            origins,
+            grabX: desktopDown.x - origin.x,
+            grabY: desktopDown.y - origin.y,
+            originX: origin.x,
+            originY: origin.y,
             lastX: ev.x,
             lastY: ev.y,
           };
           desktopDragStartMs = Date.now();
-          desktopSelectedName = name;
           desktopDirty = true;
         }
       }
@@ -1751,7 +2018,11 @@ export function createShell(
         // untouched) while a translucent ghost tracks the cursor via
         // paintDragPreview; the real position only commits on drop, in
         // finalizeDesktopDrop. No desktop-layer rebuild needed here.
-        const nextDropHover = desktopFolderAt(ev.x, ev.y, desktopDrag.name);
+        const nextDropHover = desktopFolderAt(
+          ev.x,
+          ev.y,
+          desktopDrag.names,
+        );
         if (
           nextDropHover !== desktopDropHoverName ||
           !desktopDragActive
@@ -1964,11 +2235,13 @@ export function createShell(
       // a live-moving icon. Other sources (rare: a real client drag with no
       // icon surface of its own) fall back to a plain text chip.
       const desktopPreview = desktopDrag ?? desktopDragReturn;
-      const isDesktopDrag = desktopPreview?.name === label;
+      const isDesktopDrag = desktopPreview?.label === label;
       let dirEntry = false;
       if (isDesktopDrag) {
         try {
-          dirEntry = fs.statSync(path.join(desktopDir(), label)).isDirectory();
+          dirEntry = fs
+            .statSync(path.join(desktopDir(), desktopPreview.name))
+            .isDirectory();
         } catch {
           // ignore
         }
@@ -2073,12 +2346,15 @@ export function createShell(
       blitStrip(fb, pitchPx, _width, _height, dx, dy, chip.pixels, chip.w, chip.h);
     },
 
-    desktopDragLabel: () => desktopDrag?.name ?? desktopDragReturn?.name ?? null,
+    desktopDragLabel: () =>
+      desktopDrag?.label ?? desktopDragReturn?.label ?? null,
 
     desktopDragUri: () => {
       if (!desktopDrag) return null;
-      const filePath = path.join(desktopDir(), desktopDrag.name);
-      return { uri: `file://${encodeURI(filePath)}\n`, label: desktopDrag.name };
+      const uri = desktopDrag.names
+        .map((name) => pathToFileURL(path.join(desktopDir(), name)).href)
+        .join("\n");
+      return { uri: `${uri}\n`, label: desktopDrag.label };
     },
 
     finishDesktopDrag: (commit, x, y) => {
@@ -2143,7 +2419,7 @@ export function createShell(
 
     cancelDesktopDrag: (x, y) => {
       if (!desktopDrag) return;
-      console.warn(`[shell] desktop-drag cancelled (was dragging "${desktopDrag.name}")`);
+      console.warn(`[shell] desktop-drag cancelled (was dragging "${desktopDrag.label}")`);
       beginDesktopDragReturn(desktopDrag, x, y);
     },
 
@@ -2152,7 +2428,7 @@ export function createShell(
       const idleMs = Date.now() - desktopDragStartMs;
       if (idleMs > DESKTOP_DRAG_WATCHDOG_TIMEOUT_MS) {
         console.warn(
-          `[shell] desktop-drag watchdog: clearing stuck drag "${desktopDrag.name}" idle for ${idleMs}ms`,
+          `[shell] desktop-drag watchdog: clearing stuck drag "${desktopDrag.label}" idle for ${idleMs}ms`,
         );
         beginDesktopDragReturn(desktopDrag);
       }

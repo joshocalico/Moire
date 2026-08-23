@@ -138,7 +138,8 @@ CollectionItem
 The new `useDragSource` hook is narrowly scoped and does not own selection or
 context menus. Files and the desktop distinguish item and background menu
 subjects, and Files sends its full multi-selection to item actions and drags;
-sidebar and desktop multi-selection contexts remain to be added.
+the desktop now does the same through the pure reducer API. Sidebar selection
+contexts remain to be added.
 
 ## Complete Files behavior
 
@@ -222,11 +223,12 @@ Arrange, icon size, Show Desktop Icons, and Change Background. Change
 Background should open Settings directly on Appearance rather than duplicating
 wallpaper controls in the shell.
 
-The desktop should also support:
+The desktop now supports empty-click clearing, keyed Ctrl/Shift
+multi-selection, Select All, spatial keyboard traversal, and group
+actions/drags. It should additionally support:
 
-- empty-click selection clearing
-- multi-selection and rubber-band selection
-- keyboard traversal and inline rename
+- rubber-band selection
+- inline rename
 - shared file-operation feedback and errors
 - consistent arrange/sort and persisted layout behavior
 - background right-click owned by the desktop surface, including when there
@@ -248,7 +250,7 @@ The desktop should also support:
 - `Breadcrumbs` and editable `PathBar`
 - `NavigationSidebar`, sections, editable/reorderable items
 - shared keyed `SelectionModel` (replace/toggle/range/keyboard reconciliation;
-  integrated into Files grid/list views, with desktop integration following)
+  integrated into Files grid/list views and desktop icons)
 - virtualized list, grid, table, and tree views
 - rubber-band selection and inline rename
 - sortable column headers
@@ -371,10 +373,10 @@ view components. A single component should not own the whole application.
 
 ### Phase 6: desktop completeness
 
-- Extend the initial background menu (New Folder, arrange, refresh, Files, and
-  Settings routing) with paste, sort modes, icon sizing, and selection actions.
-- Share selection and file-operation behavior with Files where appropriate.
-- Add multi-select, rubber-band, rename, arrange/sort, and complete feedback.
+- Extend the background menu (New Folder, Select All, arrange, refresh, Files,
+  and Settings routing) with paste, sort modes, and icon sizing.
+- Build on the shared Files/desktop keyed selection and group-drag behavior.
+- Add rubber-band, rename, arrange/sort, and complete feedback.
 
 ### Phase 7: chrome and motion
 

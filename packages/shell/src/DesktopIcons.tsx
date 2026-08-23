@@ -44,7 +44,10 @@ export function listDesktopEntries(): string[] {
     // ignore
   }
   try {
-    return fs.readdirSync(dir).filter((n) => !n.startsWith("."));
+    return fs
+      .readdirSync(dir)
+      .filter((name) => !name.startsWith("."))
+      .sort((left, right) => left.localeCompare(right));
   } catch {
     return [];
   }
@@ -83,6 +86,30 @@ function defaultIconPos(
   };
 }
 
+/** Canonical clamped icon position shared by paint, hit-test, and input. */
+export function desktopIconPosition(
+  name: string,
+  index: number,
+  layout: DesktopLayout,
+  screenW: number,
+  screenH: number,
+  panelH: number,
+): { x: number; y: number } {
+  const availH = screenH - panelH;
+  const saved = layout[name];
+  const fallback = defaultIconPos(index, screenW, availH);
+  return {
+    x: Math.max(
+      0,
+      Math.min(saved?.x ?? fallback.x, screenW - DESKTOP_ITEM_W),
+    ),
+    y: Math.max(
+      0,
+      Math.min(saved?.y ?? fallback.y, availH - DESKTOP_ITEM_H),
+    ),
+  };
+}
+
 /** Resolve which desktop entry is under (x,y), or null. */
 export function hitTestDesktopIcon(
   x: number,
@@ -93,18 +120,15 @@ export function hitTestDesktopIcon(
   screenH: number,
   panelH: number,
 ): string | null {
-  const availH = screenH - panelH;
   for (let i = entries.length - 1; i >= 0; i--) {
     const name = entries[i]!;
-    const saved = layout[name];
-    const fallback = defaultIconPos(i, screenW, availH);
-    const ix = Math.max(
-      0,
-      Math.min(saved?.x ?? fallback.x, screenW - DESKTOP_ITEM_W),
-    );
-    const iy = Math.max(
-      0,
-      Math.min(saved?.y ?? fallback.y, availH - DESKTOP_ITEM_H),
+    const { x: ix, y: iy } = desktopIconPosition(
+      name,
+      i,
+      layout,
+      screenW,
+      screenH,
+      panelH,
     );
     if (
       x >= ix &&
@@ -125,7 +149,8 @@ export type DesktopIconsProps = {
   panelH: number;
   entries: string[];
   layout: DesktopLayout;
-  selectedName?: string;
+  selectedNames?: ReadonlySet<string>;
+  focusedName?: string | null;
   /** Icon currently hovered by an active drag that would move into it. */
   dropHoverName?: string | null;
   /**
@@ -134,7 +159,7 @@ export type DesktopIconsProps = {
    * the desktop" has the same dragenter feedback as a specific folder.
    */
   dragActive?: boolean;
-  onSelect?: (name: string) => void;
+  onSelect?: (name: string, event?: HitPointerEvent) => void;
   onOpen?: (name: string) => void;
   onContextMenu?: (name: string, event: HitPointerEvent) => void;
 };
@@ -151,12 +176,14 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
   const dir = desktopDir();
 
   const icons = entries.map((name, i) => {
-    const saved = layout[name];
-    const fallback = defaultIconPos(i, screenW, availH);
-    const rawX = saved?.x ?? fallback.x;
-    const rawY = saved?.y ?? fallback.y;
-    const ix = Math.max(0, Math.min(rawX, screenW - DESKTOP_ITEM_W));
-    const iy = Math.max(0, Math.min(rawY, availH - DESKTOP_ITEM_H));
+    const { x: ix, y: iy } = desktopIconPosition(
+      name,
+      i,
+      layout,
+      screenW,
+      screenH,
+      panelH,
+    );
 
     const filePath = path.join(dir, name);
     const dirEntry = isDirectory(filePath);
@@ -170,7 +197,8 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
         width={DESKTOP_ITEM_W}
         height={DESKTOP_ITEM_H}
         focusId={`desktop:${filePath}`}
-        onPress={() => props.onSelect?.(name)}
+        focused={props.focusedName === name}
+        onPress={(event) => props.onSelect?.(name, event)}
         onDoublePress={() => props.onOpen?.(name)}
         onContextMenu={(event) => props.onContextMenu?.(name, event)}
       >
@@ -180,7 +208,7 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
           label={name}
           iconSize={ICON_SIZE}
           labelScrim
-          selected={props.selectedName === name}
+          selected={props.selectedNames?.has(name) === true}
           dropHover={dirEntry && props.dropHoverName === name}
           interactive={false}
           icon={

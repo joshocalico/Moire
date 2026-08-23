@@ -98,9 +98,14 @@ Implementation: `packages/shell/src/DesktopIcons.tsx`, wired from `packages/shel
 - Contents of `~/Desktop`; positions in `~/.config/moire/desktop-layout.json`.
 - Prefs: `showDesktopIcons` (default `true`).
 - **Pointer:** compositor calls `onDesktopPointerButton` / `onDesktopPointerMotion` only when no client surface is under the cursor (after panel and SSD).
-- Click selects; double-click opens with `xdg-open`.
+- Click selects; Ctrl toggles, Shift selects a range, and arrows move
+  spatially. Home/End, Space, Select All, and group-aware context actions use
+  the same keyed selection semantics as Files. Double-click opens.
 - Drag past a small threshold starts a local shell drag (ghost preview). Release on empty desktop persists a new position; release over another desktop folder moves the item into it.
-- Drag onto a client window (e.g. Files) instead escalates to a real Wayland DnD source — the target gets a normal `text/uri-list` drop and the file moves there; see [Wayland DnD](./compositor/dnd.md).
+- Drag onto a client window (e.g. Files) instead escalates to a real Wayland
+  DnD source — the target gets a normal `text/uri-list` containing the complete
+  selection; local group moves retain relative icon positions. See
+  [Wayland DnD](./compositor/dnd.md).
 - Empty desktop is a drop sink for `text/uri-list` (`acceptDesktopDrop`).
 - Empty desktop has its own context menu: New Folder, open in Files, arrange,
   refresh, and Change Background (routes to Settings → Appearance).

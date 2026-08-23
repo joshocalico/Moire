@@ -7,12 +7,13 @@ Desktop = wallpaper + shell icon layer + Files as the day-0 file manager. Icons 
 | Interaction | Result |
 | --- | --- |
 | Click empty desktop | Clears selection (when no window under cursor) |
-| Click icon | Select |
+| Click icon | Replace selection; Ctrl toggles; Shift extends a range |
+| Keyboard | Spatial arrows, Home/End, Space, Enter, Escape, and Ctrl+A |
 | Double-click folder | Open through `xdg-open` → default Files handler |
-| Right-click icon | Shared context menu with Open, Open With, and Show in Files |
-| Drag icon onto empty desktop | Reposition; persist layout |
-| Drag icon onto desktop folder | Move the item into that folder |
-| Drag icon onto a client window | Escalates to a real Wayland DnD source — target receives a normal `text/uri-list` drop |
+| Right-click icon | Preserve an existing group selection and provide group-aware actions |
+| Drag icon onto empty desktop | Reposition the selection as a group; persist relative layout |
+| Drag icon onto desktop folder | Move the selected items into that folder with rollback on failure |
+| Drag icon onto a client window | Escalate the complete selection as a normal `text/uri-list` Wayland source |
 | Drop files on desktop | Place / copy semantics via DnD |
 | Click through | If a window is under the pointer, shell does not steal the click |
 
@@ -40,7 +41,7 @@ registers Files as the initial `inode/directory` handler; see
 
 ## Dragging onto a client (Files)
 
-A desktop-icon drag starts purely local (no compositor DnD session). If the pointer moves onto a client surface while dragging, the compositor promotes it into a real `wl_data_device` session via `CompositorServer.startDesktopDrag`, backed by a synthetic in-process source (`ShellDragSource` in `packages/core/src/server.ts`) rather than a real `wl_client`. The target (e.g. Files' `DropTarget`) sees a normal `text/uri-list` offer and drop — no awareness that the source is shell-local. See [Wayland DnD](../compositor/dnd.md) for the full flow.
+A desktop-icon drag starts purely local (no compositor DnD session). If the pointer moves onto a client surface while dragging, the compositor promotes it into a real `wl_data_device` session via `CompositorServer.startDesktopDrag`, backed by a synthetic in-process source (`ShellDragSource` in `packages/core/src/server.ts`) rather than a real `wl_client`. The target (e.g. Files' `DropTarget`) sees a normal `text/uri-list` offer containing every selected item — no awareness that the source is shell-local. See [Wayland DnD](../compositor/dnd.md) for the full flow.
 
 ## Implementation map
 

@@ -59,6 +59,8 @@ export type CollectionItemProps = {
   focusId?: string;
   disabled?: boolean;
   autoFocus?: boolean;
+  /** Controlled focus-ring state for non-Window hosts such as shell chrome. */
+  focused?: boolean;
   onPress?: (event?: HitPointerEvent) => void;
   onDoublePress?: () => void;
   onContextMenu?: (event: HitPointerEvent) => void;
@@ -79,7 +81,7 @@ export type CollectionItemProps = {
 export function CollectionItem(props: CollectionItemProps): ReactNode {
   const theme = useWidgetTheme();
   const generatedId = useId();
-  const [focused, setFocused] = useState(false);
+  const [internallyFocused, setInternallyFocused] = useState(false);
   const [dropHover, setDropHover] = useState(false);
   const lastClick = useRef(0);
   const drag = useDragSource({
@@ -111,7 +113,7 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
     }
   };
 
-  const showOutline = focused;
+  const showOutline = props.focused ?? internallyFocused;
   const outline = resolveStatefulStyle(
     theme.recipes.collectionItem.outline,
     "focused",
@@ -135,7 +137,7 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
         focusId={props.focusId ?? `collection-item:${generatedId}`}
         autoFocus={props.autoFocus}
         onFocusChange={(next) => {
-          setFocused(next);
+          setInternallyFocused(next);
           props.onFocusChange?.(next);
         }}
         onKeyDown={handleKey}

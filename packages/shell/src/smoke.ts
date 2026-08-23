@@ -12,6 +12,7 @@ import {
 import { Panel } from "./Panel.js";
 import { Launcher } from "./Launcher.js";
 import { createShell } from "./controller.js";
+import { loadDesktopLayout } from "./DesktopIcons.js";
 
 const width = 1024;
 const height = 768;
@@ -118,6 +119,9 @@ const smokeHome = fs.mkdtempSync(path.join(os.tmpdir(), "moire-shell-smoke-"));
 try {
   process.env.HOME = smokeHome;
   process.env.XDG_CONFIG_HOME = path.join(smokeHome, ".config");
+  fs.mkdirSync(path.join(smokeHome, "Desktop"), { recursive: true });
+  fs.writeFileSync(path.join(smokeHome, "Desktop", "Alpha.txt"), "alpha\n");
+  fs.writeFileSync(path.join(smokeHome, "Desktop", "Beta.txt"), "beta\n");
   const shell = createShell(() => ({ unref() {} }));
   const framebuffer = new Uint32Array(width * height);
   shell.setPrimaryOutput({ x: width / 2, y: 0, width: width / 2, height });
@@ -193,6 +197,78 @@ try {
   assert.ok(
     fs.existsSync(path.join(smokeHome, "Desktop", "New Folder")),
     "desktop background New Folder action did not run",
+  );
+
+  framebuffer.fill(0);
+  shell.paintDesktop(framebuffer, width, width, height);
+  const clickDesktop = (x: number, y: number, timeMs: number) => {
+    assert.equal(
+      shell.onDesktopPointerButton?.({
+        timeMs,
+        button: 272,
+        value: 1,
+        x,
+        y,
+      }),
+      true,
+    );
+    assert.equal(
+      shell.onDesktopPointerButton?.({
+        timeMs: timeMs + 1,
+        button: 272,
+        value: 0,
+        x,
+        y,
+      }),
+      true,
+    );
+  };
+  clickDesktop(40, 40, 20);
+  assert.equal(shell.onKey({ code: 29, value: 1 }), false);
+  clickDesktop(40, 156, 22);
+  assert.equal(shell.onKey({ code: 29, value: 0 }), false);
+
+  shell.onDesktopPointerButton?.({
+    timeMs: 24,
+    button: 272,
+    value: 1,
+    x: 40,
+    y: 40,
+  });
+  shell.onDesktopPointerMotion?.({ x: 100, y: 40 });
+  const groupDrag = shell.desktopDragUri?.();
+  assert.equal(groupDrag?.label, "2 items");
+  assert.match(groupDrag?.uri ?? "", /Alpha\.txt/);
+  assert.match(groupDrag?.uri ?? "", /Beta\.txt/);
+  shell.finishDesktopDrag?.(true, 200, 40);
+  const movedLayout = loadDesktopLayout();
+  assert.equal(movedLayout["Alpha.txt"]?.x, 188);
+  assert.equal(movedLayout["Beta.txt"]?.x, 188);
+
+  shell.onDesktopPointerButton?.({
+    timeMs: 26,
+    button: 272,
+    value: 1,
+    x: 200,
+    y: 40,
+  });
+  shell.onDesktopPointerMotion?.({ x: 160, y: 40 });
+  shell.finishDesktopDrag?.(true, 40, 272);
+  assert.equal(
+    fs.existsSync(path.join(smokeHome, "Desktop", "Alpha.txt")),
+    false,
+  );
+  assert.equal(
+    fs.existsSync(path.join(smokeHome, "Desktop", "Beta.txt")),
+    false,
+  );
+  assert.equal(
+    fs.existsSync(path.join(smokeHome, "Desktop", "New Folder", "Alpha.txt")),
+    true,
+  );
+  assert.equal(
+    fs.existsSync(path.join(smokeHome, "Desktop", "New Folder", "Beta.txt")),
+    true,
   );
 
   const ssdWindow = {
