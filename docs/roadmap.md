@@ -33,7 +33,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Launcher | Icons from `.desktop`, categories, pinned apps |
 | Performance | CPU composite still hot; reduce idle dirty from atmosphere when possible |
 | Flexible compositor rendering | In progress — selectable software/EGL output, composition effects contract, timings; next layered GLES + GBM scanout |
-| Widget styling v2 | Queued — semantic recipes, slots, subtree themes, renderer conformance showcase |
+| Widget styling v2 | In progress — semantic recipes, slots, subtree themes, rich text, and a live renderer conformance showcase |
 | Text input / IME | Implement `zwp_text_input_v3` with a real input-method broker; do not advertise a no-op global |
 
 ## Medium term

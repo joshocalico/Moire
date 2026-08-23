@@ -57,6 +57,15 @@ import {
   ContextMenu,
   OpenWithPicker,
   contextMenuSurfaceSize,
+  Toolbar,
+  NavigationSidebar,
+  SegmentedControl,
+  RadioGroup,
+  Badge,
+  Banner,
+  Spinner,
+  EmptyState,
+  CodeView,
   type PlatformPopupOpts,
   type PlatformWindow,
 } from "./index.js";
@@ -1053,6 +1062,86 @@ function collectionRecipeSmoke(): void {
   assert.equal(words[52 * frame.width + 8], selectionFill);
   assert.equal(words[90 * frame.width + 4], gridSelectionFill);
   assert.equal(iconSlotSize, icon.icon.base.size);
+}
+
+function showcaseWidgetSmoke(): void {
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <Group width={820} height={720}>
+      <Toolbar width={820} height={52}>
+        <Label text="Widget Showcase" width={300} height={24} />
+      </Toolbar>
+      <NavigationSidebar
+        y={52}
+        width={240}
+        height={668}
+        sections={[
+          {
+            id: "controls",
+            label: "Controls",
+            items: [
+              { id: "buttons", label: "Buttons", icon: "app" },
+              { id: "inputs", label: "Inputs", icon: "list" },
+            ],
+          },
+        ]}
+        selectedId="buttons"
+        onSelect={() => {}}
+      />
+      <SegmentedControl
+        x={270}
+        y={72}
+        width={360}
+        options={[
+          { id: "preview", label: "Preview" },
+          { id: "code", label: "Code" },
+        ]}
+        value="preview"
+      />
+      <RadioGroup
+        x={270}
+        y={122}
+        width={360}
+        options={[
+          { id: "one", label: "One" },
+          { id: "two", label: "Two" },
+        ]}
+        value="one"
+      />
+      <Banner
+        x={270}
+        y={222}
+        width={500}
+        title="Theme updated"
+        message="Recipes are live."
+      />
+      <Badge x={270} y={300} text="Live" tone="accent" />
+      <Spinner x={340} y={300} active={false} />
+      <EmptyState
+        x={270}
+        y={340}
+        width={500}
+        height={140}
+        title="No results"
+      />
+      <CodeView
+        x={270}
+        y={500}
+        width={500}
+        height={180}
+        code={'const taste = <Button label="Details" />;'}
+        language="tsx"
+      />
+    </Group>,
+  );
+  const hits = collectHits(root.container);
+  assert.ok(hits.length >= 6, "showcase widgets lost interactive hit regions");
+  assert.ok(
+    root.container.children.length > 0,
+    "showcase widgets did not produce a scene",
+  );
+  renderShell(root, null);
 }
 
 async function collectionFocusRecipeSmoke(): Promise<void> {
@@ -2257,6 +2346,7 @@ async function main() {
   scrollAreaRecipeSmoke();
   primitiveAndDialogRecipeSmoke();
   collectionRecipeSmoke();
+  showcaseWidgetSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
   await searchFieldInteractionSmoke();

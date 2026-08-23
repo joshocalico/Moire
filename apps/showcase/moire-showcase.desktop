@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Widget Showcase
+Comment=Explore Moire's native React widget library
+Exec=moire-showcase
+Icon=applications-development
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=false

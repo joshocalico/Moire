@@ -236,6 +236,12 @@ actions/drags. It should additionally support:
 
 ## Widget library roadmap
 
+Once this widget list is exhausted, migrate the compositor-owned desktop icon
+presentation into standard persistent React state/components. The compositor
+should retain authoritative stacking, hit-testing, and DnD escalation, while
+selection, menus, layout, and visual feedback move out of the imperative shell
+controller and across a narrow event/state bridge.
+
 ### Foundation and interaction
 
 - `FocusScope`, focus traversal, shortcut manager, and focus ring
@@ -262,6 +268,12 @@ actions/drags. It should additionally support:
 - robust dialogs, confirmation dialogs, and sheets
 - toast, banner, progress row, spinner, and empty state
 - badges and status indicators
+
+The first showcase tranche now includes `Toolbar`, configurable
+`NavigationSidebar`, `SegmentedControl`, `RadioGroup`, `Banner`, `Badge`,
+`Spinner`, `EmptyState`, and syntax-highlighted `CodeView`. Remaining work in
+this list should deepen overlay-backed controls, collection virtualization,
+and file-operation feedback rather than adding app-local substitutes.
 
 ### Visual primitives
 

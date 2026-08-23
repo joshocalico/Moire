@@ -225,6 +225,15 @@ Determinate, recipe-driven progress with `width`, `value` 0..1, `size?`, and an
 optional explicit `height`. Values are clamped and the track clips the rounded
 fill.
 
+### `RichTextView` / `CodeView`
+
+`RichTextView` is the renderer-native styled-text surface. It lays out ordered
+runs with per-run foreground, background, weight, and font family inside a
+shared scrolling viewport, with optional line numbers. `CodeView` is a thin
+syntax-highlighting adapter over that primitive rather than a separate text
+renderer. The same rich-text model is intended to back terminal output,
+diagnostics, logs, and future selectable or linked text.
+
 ---
 
 ## Collections
@@ -252,6 +261,13 @@ const selection = useSelectionModel(items.map((item) => item.id));
 
 `createSelectionState`, `reduceSelection`, and `reconcileSelection` expose the
 same semantics to non-React controllers and deterministic tests.
+
+### `NavigationSidebar`
+
+Sectioned navigation with stable item ids, icons, selection, disabled rows,
+scrolling, and optional edit-mode move/remove controls. Applications own the
+domain model and persistence; the widget owns consistent geometry, focus, and
+row presentation.
 
 ### `ScrollArea`
 
@@ -334,6 +350,17 @@ own selection policy. `ContextMenuTrigger` supplies a background hit region
 behind its children, so item menus win over background menus geometrically.
 `focused` can control the recipe focus ring in compositor-owned hosts; regular
 `Window` content uses the internal focus manager and optional `autoFocus`.
+
+### Showcase and feedback
+
+- `Toolbar`: consistent application chrome and horizontal spacing.
+- `SegmentedControl` and `RadioGroup`: keyboard-capable exclusive choice.
+- `Badge`, `Banner`, `Spinner`, and `EmptyState`: reusable status and feedback.
+- `CodeView`: scrollable line-numbered TSX/TypeScript/JavaScript/shell source
+  with renderer-native syntax highlighting.
+
+`apps/showcase` pairs a catalog list with Preview and Code tabs so every sample
+can be inspected as both live widgets and readable JSX.
 
 Use `dragSource={{ mimeTypes, getPayload, previewIcon }}` on `CollectionItem`.
 For lower-level composition, `useDragSource()` exposes the same narrow drag

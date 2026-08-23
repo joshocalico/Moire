@@ -173,3 +173,40 @@ export type {
 
 export { Dialog } from "./dialog.js";
 export type { DialogProps } from "./dialog.js";
+
+export { Toolbar } from "./toolbar.js";
+export type { ToolbarProps } from "./toolbar.js";
+
+export { NavigationSidebar } from "./navigation-sidebar.js";
+export type {
+  NavigationSidebarProps,
+  NavigationSidebarSection,
+  NavigationSidebarItem,
+} from "./navigation-sidebar.js";
+
+export { SegmentedControl, RadioGroup } from "./controls.js";
+export type {
+  SegmentedControlProps,
+  SegmentedControlOption,
+  RadioGroupProps,
+  RadioOption,
+} from "./controls.js";
+
+export { Badge, Banner, Spinner, EmptyState } from "./feedback.js";
+export type {
+  BadgeProps,
+  BadgeTone,
+  BannerProps,
+  SpinnerProps,
+  EmptyStateProps,
+} from "./feedback.js";
+
+export { CodeView } from "./code-view.js";
+export type { CodeViewProps, CodeLanguage } from "./code-view.js";
+
+export { RichTextView } from "./rich-text.js";
+export type {
+  RichTextViewProps,
+  RichTextLine,
+  RichTextRun,
+} from "./rich-text.js";

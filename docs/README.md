@@ -50,6 +50,7 @@ This directory is meant to be browsed as a tree or fed to a Markdown site render
 | [Desktop icons](./shell/desktop.md) | Layout, hits, reposition and folder drops |
 | [Files](./apps/files.md) | Places, grid/list, default folder handler, DnD |
 | [Settings](./apps/settings.md) | Appearance, live apply |
+| [Widget Showcase](./apps/showcase.md) | Interactive widget catalog, previews, and highlighted TSX |
 | [Session](./apps/session.md) | `moire-session` day-0 boot |
 
 ## Compositor
@@ -76,6 +77,7 @@ apps/
   session/        moire-session (dbus + day-0 clients)
   files/          Moire Files
   settings/       Settings
+  showcase/       Interactive @moire/ui widget catalog
   portal/         native xdg-desktop-portal AppChooser backend
 packages/
   dbus/           pure-TypeScript session D-Bus wire/client/server
