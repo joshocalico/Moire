@@ -160,9 +160,14 @@ export function Column(props: ColumnProps): ReactNode {
   return <FlexLayout {...props} direction="column" />;
 }
 
-/** Readable flow aliases; both remain Yoga-backed. */
-export const Horizontal = Row;
-export const Vertical = Column;
+/** Application-layout flows remain Yoga-backed and stretch across by default. */
+export function Horizontal(props: RowProps): ReactNode {
+  return <FlexLayout {...props} align={props.align ?? "stretch"} direction="row" />;
+}
+
+export function Vertical(props: ColumnProps): ReactNode {
+  return <FlexLayout {...props} align={props.align ?? "stretch"} direction="column" />;
+}
 
 export type StackAlignment = "start" | "center" | "end" | "stretch";
 

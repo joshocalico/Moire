@@ -174,6 +174,11 @@ function declarativeLayoutAndTweenSmoke(): void {
   );
   assert.equal(fixedWidth, 100);
   assert.equal(growingWidth, 290, "Measure did not receive Yoga's remaining allocation");
+  assert.equal(
+    root.container.children[0]?.children[0]?.children[0]?.height,
+    60,
+    "Horizontal did not stretch children across its allocated height",
+  );
   const frame = new SoftwareRenderer().render(root.container, { width: 400, height: 180 });
   const words = new Uint32Array(frame.pixels.buffer);
   assert.equal(words[120 * frame.width + 100], 0xffd59b52, "Stack did not center its measured child");

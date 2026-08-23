@@ -32,7 +32,9 @@ defaults: flex layout can only inspect props declared on its direct children.
 
 ### `Row` / `Column` (`Horizontal` / `Vertical` aliases)
 
-Flex containers (`ColumnProps` extends the same shape as `Row`).
+Flex containers (`ColumnProps` extends the same shape as `Row`). `Row` keeps a
+control-friendly centered cross axis; `Horizontal` defaults to stretch for
+pane/application layout. `Column` and `Vertical` both default to stretch.
 They remain backed by Yoga. Each allocated child box is published through
 layout context, so nested components can consume it with `Measure` or
 `useLayoutMetrics()` instead of repeating parent arithmetic.
