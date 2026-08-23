@@ -59,6 +59,19 @@ const GL_SCISSOR_TEST = 0x0c11;
 const GL_ONE = 1;
 const GL_ONE_MINUS_SRC_ALPHA = 0x0303;
 
+const FULL_QUAD_POSITIONS = new Float32Array([
+  -1, -1,
+  1, -1,
+  -1, 1,
+  1, 1,
+]);
+const UNIT_QUAD_TEX_COORDS = new Float32Array([
+  0, 0,
+  1, 0,
+  0, 1,
+  1, 1,
+]);
+
 const DRM_FORMAT_XRGB8888 = 0x34325258;
 const GBM_BO_USE_SCANOUT = 1 << 0;
 const GBM_BO_USE_RENDERING = 1 << 2;
@@ -186,6 +199,17 @@ type CachedTexture = {
   height: number;
   revision: number | undefined;
   pixels: Uint8Array;
+  sampling: "nearest" | "linear";
+  lastSeenFrame: number;
+};
+
+type CachedLayerGeometry = {
+  signature: string;
+  sceneWidth: number;
+  sceneHeight: number;
+  positions: Float32Array;
+  texCoords: Float32Array;
+  shadowPositions: Float32Array;
   lastSeenFrame: number;
 };
 
@@ -332,7 +356,6 @@ export class EglOutputScaler {
   private readonly glDisable: NativeFunction;
   private readonly glBlendFunc: NativeFunction;
   private readonly glEnableVertexAttribArray: NativeFunction;
-  private readonly glDisableVertexAttribArray: NativeFunction;
   private readonly glVertexAttribPointer: NativeFunction;
   private readonly glDrawArrays: NativeFunction;
   private readonly glReadPixels: NativeFunction;
@@ -386,9 +409,13 @@ export class EglOutputScaler {
   private readonly blurFramebufferB: number;
   private outputSourceTexture = 0;
   private readonly layerTextures = new Map<string, CachedTexture>();
+  private readonly layerGeometry = new Map<string, CachedLayerGeometry>();
   private readonly backdropCaches = new Map<string, BackdropCache>();
   private readonly pixelIds = new WeakMap<Uint8Array, number>();
   private nextPixelId = 1;
+  private readonly effectPositions = new Float32Array(8);
+  private readonly effectTexCoords = new Float32Array(8);
+  private readonly outputTexCoords = new Float32Array(8);
   private layerSnapshots = new Map<string, LayerSnapshot>();
   private layerOrder: string[] = [];
   private sceneClearColor: number | null = null;
@@ -684,9 +711,6 @@ export class EglOutputScaler {
     this.glEnableVertexAttribArray = this.gl.func(
       "void glEnableVertexAttribArray(unsigned int index)",
     ) as NativeFunction;
-    this.glDisableVertexAttribArray = this.gl.func(
-      "void glDisableVertexAttribArray(unsigned int index)",
-    ) as NativeFunction;
     this.glVertexAttribPointer = this.gl.func(
       "void glVertexAttribPointer(unsigned int index, int size, unsigned int type, unsigned char normalized, int stride, const void *pointer)",
     ) as NativeFunction;
@@ -759,6 +783,10 @@ export class EglOutputScaler {
     if (this.positionLocation < 0 || this.texCoordLocation < 0) {
       throw new Error("GLES compositor shader attributes unavailable");
     }
+    // Every compositor command is a quad. Keep the two client-array inputs
+    // enabled for the lifetime of this context and only replace their pointers.
+    this.glEnableVertexAttribArray(this.positionLocation);
+    this.glEnableVertexAttribArray(this.texCoordLocation);
 
     const glGenTextures = this.gl.func(
       "void glGenTextures(int n, _Out_ unsigned int *textures)",
@@ -1025,15 +1053,20 @@ void main() {
         height: 0,
         revision: undefined,
         pixels: layer.pixels,
+        sampling: "linear",
         lastSeenFrame: this.compositionFrame,
       };
       this.layerTextures.set(layer.id, cached);
     }
     cached.lastSeenFrame = this.compositionFrame;
     this.glBindTexture(GL_TEXTURE_2D, cached.texture);
-    const filter = layer.sampling === "nearest" ? GL_NEAREST : GL_LINEAR;
-    this.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-    this.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+    const sampling = layer.sampling ?? "linear";
+    if (cached.sampling !== sampling) {
+      const filter = sampling === "nearest" ? GL_NEAREST : GL_LINEAR;
+      this.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+      this.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+      cached.sampling = sampling;
+    }
 
     const changed =
       cached.width !== layer.sourceWidth ||
@@ -1153,36 +1186,159 @@ void main() {
     return cached;
   }
 
-  private transformLayerPoint(
+  private writeLayerPoint(
     layer: EglCompositionLayer,
     x: number,
     y: number,
-  ): readonly [number, number] {
+    sceneWidth: number,
+    sceneHeight: number,
+    target: Float32Array,
+    index: number,
+  ): void {
     const matrix = layer.transform;
+    let px: number;
+    let py: number;
     if (!matrix) {
-      return [layer.destination.x + x, layer.destination.y + y];
+      px = layer.destination.x + x;
+      py = layer.destination.y + y;
+    } else {
+      const origin = layer.transformOrigin ?? [
+        layer.destination.width / 2,
+        layer.destination.height / 2,
+        0,
+      ];
+      const lx = x - origin[0];
+      const ly = y - origin[1];
+      const lz = -(origin[2] ?? 0);
+      const tx = matrix[0]! * lx + matrix[4]! * ly + matrix[8]! * lz + matrix[12]!;
+      const ty = matrix[1]! * lx + matrix[5]! * ly + matrix[9]! * lz + matrix[13]!;
+      const tw = matrix[3]! * lx + matrix[7]! * ly + matrix[11]! * lz + matrix[15]!;
+      const invW = tw === 0 ? 1 : 1 / tw;
+      px = layer.destination.x + origin[0] + tx * invW;
+      py = layer.destination.y + origin[1] + ty * invW;
     }
-    const origin = layer.transformOrigin ?? [
-      layer.destination.width / 2,
-      layer.destination.height / 2,
+    target[index] = (px / sceneWidth) * 2 - 1;
+    target[index + 1] = (py / sceneHeight) * 2 - 1;
+  }
+
+  private writeLayerQuad(
+    layer: EglCompositionLayer,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    sceneWidth: number,
+    sceneHeight: number,
+    target: Float32Array,
+  ): void {
+    this.writeLayerPoint(layer, x, y, sceneWidth, sceneHeight, target, 0);
+    this.writeLayerPoint(layer, x + width, y, sceneWidth, sceneHeight, target, 2);
+    this.writeLayerPoint(layer, x, y + height, sceneWidth, sceneHeight, target, 4);
+    this.writeLayerPoint(
+      layer,
+      x + width,
+      y + height,
+      sceneWidth,
+      sceneHeight,
+      target,
+      6,
+    );
+  }
+
+  private writeTexQuad(
+    target: Float32Array,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+  ): void {
+    target[0] = x0;
+    target[1] = y0;
+    target[2] = x1;
+    target[3] = y0;
+    target[4] = x0;
+    target[5] = y1;
+    target[6] = x1;
+    target[7] = y1;
+  }
+
+  private geometryForLayer(
+    scene: EglCompositionScene,
+    layer: EglCompositionLayer,
+  ): CachedLayerGeometry {
+    // compositionDamage already produced this structural signature for the
+    // retained snapshot. Reuse it instead of serialising geometry a second time.
+    const signature =
+      this.layerSnapshots.get(layer.id)?.signature ?? layerSignature(layer);
+    let geometry = this.layerGeometry.get(layer.id);
+    if (!geometry) {
+      geometry = {
+        signature: "",
+        sceneWidth: 0,
+        sceneHeight: 0,
+        positions: new Float32Array(8),
+        texCoords: new Float32Array(8),
+        shadowPositions: new Float32Array(8),
+        lastSeenFrame: this.compositionFrame,
+      };
+      this.layerGeometry.set(layer.id, geometry);
+    }
+    geometry.lastSeenFrame = this.compositionFrame;
+    if (
+      geometry.signature === signature &&
+      geometry.sceneWidth === scene.width &&
+      geometry.sceneHeight === scene.height
+    ) {
+      return geometry;
+    }
+
+    this.writeLayerQuad(
+      layer,
       0,
-    ];
-    const lx = x - origin[0];
-    const ly = y - origin[1];
-    const lz = -(origin[2] ?? 0);
-    const tx = matrix[0]! * lx + matrix[4]! * ly + matrix[8]! * lz + matrix[12]!;
-    const ty = matrix[1]! * lx + matrix[5]! * ly + matrix[9]! * lz + matrix[13]!;
-    const tw = matrix[3]! * lx + matrix[7]! * ly + matrix[11]! * lz + matrix[15]!;
-    const invW = tw === 0 ? 1 : 1 / tw;
-    return [
-      layer.destination.x + origin[0] + tx * invW,
-      layer.destination.y + origin[1] + ty * invW,
-    ];
+      0,
+      layer.destination.width,
+      layer.destination.height,
+      scene.width,
+      scene.height,
+      geometry.positions,
+    );
+    const source = layer.sourceRect ?? {
+      x: 0,
+      y: 0,
+      width: layer.sourceWidth,
+      height: layer.sourceHeight,
+    };
+    this.writeTexQuad(
+      geometry.texCoords,
+      source.x / layer.sourceWidth,
+      source.y / layer.sourceHeight,
+      (source.x + source.width) / layer.sourceWidth,
+      (source.y + source.height) / layer.sourceHeight,
+    );
+    const shadow = layer.dropShadow;
+    if (shadow) {
+      const padding = Math.max(
+        1,
+        shadow.blurRadius + Math.max(0, shadow.spread ?? 0),
+      );
+      this.writeLayerQuad(
+        layer,
+        shadow.offsetX - padding,
+        shadow.offsetY - padding,
+        layer.destination.width + padding * 2,
+        layer.destination.height + padding * 2,
+        scene.width,
+        scene.height,
+        geometry.shadowPositions,
+      );
+    }
+    geometry.signature = signature;
+    geometry.sceneWidth = scene.width;
+    geometry.sceneHeight = scene.height;
+    return geometry;
   }
 
   private drawQuad(positions: Float32Array, texCoords: Float32Array): void {
-    this.glEnableVertexAttribArray(this.positionLocation);
-    this.glEnableVertexAttribArray(this.texCoordLocation);
     this.glVertexAttribPointer(this.positionLocation, 2, GL_FLOAT, 0, 0, positions);
     this.glVertexAttribPointer(this.texCoordLocation, 2, GL_FLOAT, 0, 0, texCoords);
     this.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -1332,8 +1488,6 @@ void main() {
         this.blurHeight = blurHeight;
       }
 
-      const fullPositions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
-      const fullCoords = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
       const kernelReach = 3.230769;
       this.glDisable(GL_BLEND);
       this.glUniform1f(this.modeLocation, 2);
@@ -1348,7 +1502,7 @@ void main() {
         Math.max(0.5, effect.radius) / kernelReach / backdropWidth,
         0,
       );
-      this.drawQuad(fullPositions, fullCoords);
+      this.drawQuad(FULL_QUAD_POSITIONS, UNIT_QUAD_TEX_COORDS);
 
       this.bindColorTarget(this.blurFramebufferB, this.blurTextureB);
       this.glBindTexture(GL_TEXTURE_2D, this.blurTextureA);
@@ -1357,7 +1511,7 @@ void main() {
         0,
         Math.max(0.5, effect.radius / downsample) / kernelReach / blurHeight,
       );
-      this.drawQuad(fullPositions, fullCoords);
+      this.drawQuad(FULL_QUAD_POSITIONS, UNIT_QUAD_TEX_COORDS);
 
       // Preserve the finished blur in a material-owned texture. The shared
       // intermediate pair is reused by every effect in the scene.
@@ -1394,22 +1548,16 @@ void main() {
       ((tint >>> 24) & 0xff) / 255,
     );
 
-    const clipX = (x: number) => (x / scene.width) * 2 - 1;
-    const clipY = (y: number) => (y / scene.height) * 2 - 1;
-    const p0 = this.transformLayerPoint(layer, 0, 0);
-    const p1 = this.transformLayerPoint(layer, layer.destination.width, 0);
-    const p2 = this.transformLayerPoint(layer, 0, layer.destination.height);
-    const p3 = this.transformLayerPoint(
+    this.writeLayerQuad(
       layer,
+      0,
+      0,
       layer.destination.width,
       layer.destination.height,
+      scene.width,
+      scene.height,
+      this.effectPositions,
     );
-    const positions = new Float32Array([
-      clipX(p0[0]), clipY(p0[1]),
-      clipX(p1[0]), clipY(p1[1]),
-      clipX(p2[0]), clipY(p2[1]),
-      clipX(p3[0]), clipY(p3[1]),
-    ]);
     const x0 = (layer.destination.x - sampleX) / backdropWidth;
     const y0 = (layer.destination.y - sampleY) / backdropHeight;
     const x1 =
@@ -1433,10 +1581,8 @@ void main() {
       radii[2]!,
       radii[3]!,
     );
-    this.drawQuad(
-      positions,
-      new Float32Array([x0, y0, x1, y0, x0, y1, x1, y1]),
-    );
+    this.writeTexQuad(this.effectTexCoords, x0, y0, x1, y1);
+    this.drawQuad(this.effectPositions, this.effectTexCoords);
   }
 
   private compositionDamage(scene: EglCompositionScene): DamageRect | null {
@@ -1595,32 +1741,14 @@ void main() {
       if (!rectsIntersect(layerBounds(layer, scene.width, scene.height), damage)) {
         continue;
       }
-      const clipX = (x: number) => (x / scene.width) * 2 - 1;
-      const clipY = (y: number) => (y / scene.height) * 2 - 1;
+      const cachedGeometry = this.geometryForLayer(scene, layer);
       this.paintBackdropBlur(scene, layer, layerIndex);
       const shadow = layer.dropShadow;
       if (shadow) {
         const spread = shadow.spread ?? 0;
         const padding = Math.max(1, shadow.blurRadius + Math.max(0, spread));
-        const x0 = shadow.offsetX - padding;
-        const y0 = shadow.offsetY - padding;
         const shadowWidth = layer.destination.width + padding * 2;
         const shadowHeight = layer.destination.height + padding * 2;
-        const sp0 = this.transformLayerPoint(layer, x0, y0);
-        const sp1 = this.transformLayerPoint(layer, x0 + shadowWidth, y0);
-        const sp2 = this.transformLayerPoint(layer, x0, y0 + shadowHeight);
-        const sp3 = this.transformLayerPoint(
-          layer,
-          x0 + shadowWidth,
-          y0 + shadowHeight,
-        );
-        const shadowPositions = new Float32Array([
-          clipX(sp0[0]), clipY(sp0[1]),
-          clipX(sp1[0]), clipY(sp1[1]),
-          clipX(sp2[0]), clipY(sp2[1]),
-          clipX(sp3[0]), clipY(sp3[1]),
-        ]);
-        const unitCoords = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
         const halfWidth = (layer.destination.width + spread * 2) / 2;
         const halfHeight = (layer.destination.height + spread * 2) / 2;
         const radiusValue =
@@ -1650,25 +1778,7 @@ void main() {
           ((shadowColor >>> 16) & 0xff) / 255,
           (((shadowColor >>> 24) & 0xff) / 255) * (layer.opacity ?? 1),
         );
-        this.glEnableVertexAttribArray(this.positionLocation);
-        this.glEnableVertexAttribArray(this.texCoordLocation);
-        this.glVertexAttribPointer(
-          this.positionLocation,
-          2,
-          GL_FLOAT,
-          0,
-          0,
-          shadowPositions,
-        );
-        this.glVertexAttribPointer(
-          this.texCoordLocation,
-          2,
-          GL_FLOAT,
-          0,
-          0,
-          unitCoords,
-        );
-        this.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        this.drawQuad(cachedGeometry.shadowPositions, UNIT_QUAD_TEX_COORDS);
       }
       const texture = this.textureForLayer(layer);
       this.glBindTexture(GL_TEXTURE_2D, texture);
@@ -1686,30 +1796,10 @@ void main() {
           (geometry.y + geometry.height) / layer.sourceHeight,
         );
       }
-      const p0 = this.transformLayerPoint(layer, 0, 0);
-      const p1 = this.transformLayerPoint(layer, layer.destination.width, 0);
-      const p2 = this.transformLayerPoint(layer, 0, layer.destination.height);
-      const p3 = this.transformLayerPoint(
-        layer,
-        layer.destination.width,
-        layer.destination.height,
-      );
-      const positions = new Float32Array([
-        clipX(p0[0]), clipY(p0[1]),
-        clipX(p1[0]), clipY(p1[1]),
-        clipX(p2[0]), clipY(p2[1]),
-        clipX(p3[0]), clipY(p3[1]),
-      ]);
-      const source = layer.sourceRect ?? {
-        x: 0,
-        y: 0,
-        width: layer.sourceWidth,
-        height: layer.sourceHeight,
-      };
-      const u0 = source.x / layer.sourceWidth;
-      const v0 = source.y / layer.sourceHeight;
-      const u1 = (source.x + source.width) / layer.sourceWidth;
-      const v1 = (source.y + source.height) / layer.sourceHeight;
+      const u0 = cachedGeometry.texCoords[0]!;
+      const v0 = cachedGeometry.texCoords[1]!;
+      const u1 = cachedGeometry.texCoords[2]!;
+      const v1 = cachedGeometry.texCoords[5]!;
       this.glUniform4f(this.uvRectLocation, u0, v0, u1, v1);
       this.glUniform2f(
         this.layerSizeLocation,
@@ -1732,15 +1822,8 @@ void main() {
         radii[2]!,
         radii[3]!,
       );
-      const texCoords = new Float32Array([u0, v0, u1, v0, u0, v1, u1, v1]);
-      this.glEnableVertexAttribArray(this.positionLocation);
-      this.glEnableVertexAttribArray(this.texCoordLocation);
-      this.glVertexAttribPointer(this.positionLocation, 2, GL_FLOAT, 0, 0, positions);
-      this.glVertexAttribPointer(this.texCoordLocation, 2, GL_FLOAT, 0, 0, texCoords);
-      this.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+      this.drawQuad(cachedGeometry.positions, cachedGeometry.texCoords);
     }
-    this.glDisableVertexAttribArray(this.positionLocation);
-    this.glDisableVertexAttribArray(this.texCoordLocation);
     this.glDisable(GL_BLEND);
     this.glDisable(GL_SCISSOR_TEST);
     this.activeDamage = null;
@@ -1756,6 +1839,10 @@ void main() {
         if (this.compositionFrame - cached.lastSeenFrame < 120) continue;
         this.glDeleteTextures(1, new Uint32Array([cached.texture]));
         this.backdropCaches.delete(id);
+      }
+      for (const [id, geometry] of this.layerGeometry) {
+        if (this.compositionFrame - geometry.lastSeenFrame < 120) continue;
+        this.layerGeometry.delete(id);
       }
     }
   }
@@ -1811,12 +1898,8 @@ void main() {
     this.glUniform4f(this.uvRectLocation, u0, v0, u1, v1);
     this.glUniform2f(this.layerSizeLocation, output.targetWidth, output.targetHeight);
     this.glUniform4f(this.cornerRadiiLocation, 0, 0, 0, 0);
-    this.drawQuad(
-      new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
-      new Float32Array([u0, v0, u1, v0, u0, v1, u1, v1]),
-    );
-    this.glDisableVertexAttribArray(this.positionLocation);
-    this.glDisableVertexAttribArray(this.texCoordLocation);
+    this.writeTexQuad(this.outputTexCoords, u0, v0, u1, v1);
+    this.drawQuad(FULL_QUAD_POSITIONS, this.outputTexCoords);
   }
 
   private createDirectTarget(output: EglDirectOutput): DirectOutputTarget {
@@ -2141,6 +2224,7 @@ void main() {
       ];
       this.glDeleteFramebuffers(framebuffers.length, Uint32Array.from(framebuffers));
       this.layerTextures.clear();
+      this.layerGeometry.clear();
       this.backdropCaches.clear();
       this.glDeleteProgram(this.program);
     } catch {

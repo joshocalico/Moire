@@ -103,6 +103,11 @@ bounds, and blur temporarily suspends the scene-space scissor while using its
 smaller intermediate targets. Each retained material also owns a downsampled
 blur cache keyed to the lower layers which intersect its sample region, so
 damage above a panel can repaint its tint and mask without re-running the blur.
+The GLES executor reuses retained position/UV arrays for unchanged layers,
+keeps its quad attributes enabled across the command stream, reuses scratch
+arrays for effect and output passes, and only changes texture sampling state
+when a layer requests a different mode. These are backend-local optimizations;
+the scene and effect contracts remain equally usable by software or EGL.
 
 ### R3 — active: native effects
 
