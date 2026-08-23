@@ -25,6 +25,8 @@ import {
   createWidgetTheme,
   Checkbox,
   Toggle,
+  Slider,
+  ProgressBar,
   Separator,
   Pressable,
   ScrollArea,
@@ -369,6 +371,89 @@ function menuRecipeSmoke(): void {
   assert.equal(slotSize, medium.leadingIcon.base.size);
 }
 
+function formControlRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const checkbox = theme.recipes.checkbox.medium;
+  const toggle = theme.recipes.toggle.medium;
+  const slider = theme.recipes.slider.medium;
+  const progress = theme.recipes.progressBar.medium;
+  const checkboxFill = 0xff6e4aa1;
+  const toggleFill = 0xffd3783f;
+  const sliderFill = 0xff41a872;
+  const progressFill = 0xffd34f68;
+  const customTheme = {
+    ...theme,
+    name: "form-control-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      checkbox: {
+        ...theme.recipes.checkbox,
+        medium: {
+          ...checkbox,
+          control: {
+            ...checkbox.control,
+            states: {
+              ...checkbox.control.states,
+              selected: { fill: checkboxFill, stroke: checkboxFill },
+            },
+          },
+        },
+      },
+      toggle: {
+        ...theme.recipes.toggle,
+        medium: {
+          ...toggle,
+          track: {
+            ...toggle.track,
+            states: {
+              ...toggle.track.states,
+              selected: { fill: toggleFill, stroke: toggleFill },
+            },
+          },
+        },
+      },
+      slider: {
+        ...theme.recipes.slider,
+        medium: {
+          ...slider,
+          fill: {
+            ...slider.fill,
+            base: { ...slider.fill.base, fill: sliderFill },
+          },
+        },
+      },
+      progressBar: {
+        ...theme.recipes.progressBar,
+        medium: {
+          ...progress,
+          fill: { ...progress.fill, fill: progressFill },
+        },
+      },
+    },
+  };
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <Group width={120} height={100}>
+        <Checkbox x={2} y={2} checked />
+        <Toggle x={42} y={2} on />
+        <Slider x={2} y={42} width={100} value={0.5} />
+        <ProgressBar x={2} y={82} width={100} value={0.5} />
+      </Group>
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 120,
+    height: 100,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[10 * frame.width + 3], checkboxFill);
+  assert.equal(words[10 * frame.width + 43], toggleFill);
+  assert.equal(words[56 * frame.width + 16], sliderFill);
+  assert.equal(words[84 * frame.width + 16], progressFill);
+}
+
 function collectionRecipeSmoke(): void {
   const theme = createWidgetTheme();
   const icon = theme.recipes.iconButton.standard.medium;
@@ -690,6 +775,132 @@ async function searchFieldInteractionSmoke(): Promise<void> {
   });
   assert.equal(query, "", "SearchField clear affordance should clear its value");
   assert.equal(cleared, 1);
+
+  win.destroy();
+  backend.disconnect();
+}
+
+async function formControlInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Form controls smoke", width: 240, height: 150 });
+  let checked = false;
+  let toggled = false;
+  let sliderValue = 0.5;
+
+  function Harness(): ReactNode {
+    const [checkboxValue, setCheckboxValue] = useState(false);
+    const [toggleValue, setToggleValue] = useState(false);
+    const [rangeValue, setRangeValue] = useState(0.5);
+    return (
+      <Group width={240} height={150}>
+        <Checkbox
+          x={10}
+          y={10}
+          checked={checkboxValue}
+          label="Checkbox"
+          autoFocus
+          onChange={(value) => {
+            checked = value;
+            setCheckboxValue(value);
+          }}
+        />
+        <Toggle
+          x={10}
+          y={52}
+          on={toggleValue}
+          label="Toggle"
+          onChange={(value) => {
+            toggled = value;
+            setToggleValue(value);
+          }}
+        />
+        <Slider
+          x={10}
+          y={100}
+          width={200}
+          value={rangeValue}
+          step={0.1}
+          onChange={(value) => {
+            sliderValue = value;
+            setRangeValue(value);
+          }}
+        />
+      </Group>
+    );
+  }
+
+  win.setContent(<Harness />);
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+
+  platformWindow.injectKey({
+    type: "down",
+    code: 57,
+    key: " ",
+    text: " ",
+    modifiers: NO_MODIFIERS,
+    timeMs: 1,
+  });
+  assert.equal(checked, true, "Checkbox should toggle from the keyboard");
+  platformWindow.injectKey({
+    type: "down",
+    code: 15,
+    key: "Tab",
+    text: "\t",
+    modifiers: NO_MODIFIERS,
+    timeMs: 2,
+  });
+  platformWindow.injectKey({
+    type: "down",
+    code: 28,
+    key: "Enter",
+    modifiers: NO_MODIFIERS,
+    timeMs: 3,
+  });
+  assert.equal(toggled, true, "Toggle should participate in focus traversal");
+  platformWindow.injectKey({
+    type: "down",
+    code: 15,
+    key: "Tab",
+    text: "\t",
+    modifiers: NO_MODIFIERS,
+    timeMs: 4,
+  });
+  platformWindow.injectKey({
+    type: "down",
+    code: 106,
+    key: "ArrowRight",
+    modifiers: NO_MODIFIERS,
+    timeMs: 5,
+  });
+  assert.equal(sliderValue, 0.6, "Slider should honor its keyboard step");
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 30,
+    y: 114,
+    button: "left",
+    timeMs: 6,
+  });
+  platformWindow.injectPointer({
+    type: "move",
+    x: 190,
+    y: 114,
+    button: "left",
+    timeMs: 7,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 190,
+    y: 114,
+    button: "left",
+    timeMs: 8,
+  });
+  assert.ok(sliderValue >= 0.9, "Slider should update throughout a captured drag");
 
   win.destroy();
   backend.disconnect();
@@ -1335,11 +1546,13 @@ async function main() {
   textFieldRecipeSmoke();
   tabsRecipeSmoke();
   menuRecipeSmoke();
+  formControlRecipeSmoke();
   collectionRecipeSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
   await searchFieldInteractionSmoke();
   await menuItemInteractionSmoke();
+  await formControlInteractionSmoke();
   await tabsInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();

@@ -251,9 +251,10 @@ Recipes are plain data and remain renderer-neutral.
 
 The first vertical slices are active. `WidgetThemeProvider` supplies foundation
 color/type/space/radius/motion/elevation data plus recipe matrices for Button,
-IconButton, ListItem, GridItem, TextField, Tabs, Menu, and semantic
-CollectionItem outlines. Buttons consume root, label/icon, metrics, rim, and
-named artwork-slot styles from that context. List and grid cells keep
+IconButton, ListItem, GridItem, TextField, Tabs, Menu, Checkbox, Toggle, Slider,
+ProgressBar, and semantic CollectionItem outlines. Buttons consume root,
+label/icon, metrics, rim, and named artwork-slot styles from that context. List
+and grid cells keep
 persistent selection/drop layers separate
 from animated hover/press feedback; focus/drag outlines remain owned by the
 headless CollectionItem behavior but resolve their paint through the theme.
@@ -277,10 +278,11 @@ Button exposes leading/trailing artwork slots, IconButton exposes one centered
 artwork slot, and ListItem exposes a recipe-sized leading slot. Slot callbacks
 receive semantic icon style data while callers remain free to replace the
 renderer-neutral subtree. Button, IconButton, Pressable, Icon,
-TextField/SearchField, Tabs, Menu/MenuItem, List/ListItem, Grid/GridItem, and
-CollectionItem use JSX. ContextMenu delegates its rows to MenuItem while
-retaining popup placement and motion; the remaining monolithic widget module is
-next in the presentation migration.
+TextField/SearchField, Tabs, Menu/MenuItem, Checkbox, Toggle, Slider,
+ProgressBar, List/ListItem, Grid/GridItem, and CollectionItem use JSX.
+ContextMenu delegates its rows to MenuItem while retaining popup placement and
+motion; the remaining monolithic widget module is next in the presentation
+migration.
 
 ### W3 — primitive completeness
 

@@ -159,6 +159,40 @@ export type MenuRecipe = {
   };
 };
 
+export type CheckboxRecipe = {
+  control: StatefulStyle<WidgetBoxStyle>;
+  mark: StatefulStyle<WidgetTextStyle>;
+  label: StatefulStyle<WidgetTextStyle>;
+  metrics: { height: number; controlSize: number; gap: number };
+};
+
+export type ToggleRecipe = {
+  track: StatefulStyle<WidgetBoxStyle>;
+  thumb: StatefulStyle<WidgetBoxStyle>;
+  label: StatefulStyle<WidgetTextStyle>;
+  metrics: {
+    height: number;
+    trackWidth: number;
+    trackHeight: number;
+    thumbSize: number;
+    thumbInset: number;
+    gap: number;
+  };
+};
+
+export type SliderRecipe = {
+  track: StatefulStyle<WidgetBoxStyle>;
+  fill: StatefulStyle<WidgetBoxStyle>;
+  thumb: StatefulStyle<WidgetBoxStyle>;
+  metrics: { height: number; trackHeight: number; thumbSize: number };
+};
+
+export type ProgressBarRecipe = {
+  track: WidgetBoxStyle;
+  fill: WidgetBoxStyle;
+  metrics: { height: number };
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -194,6 +228,10 @@ export type WidgetTheme = {
     textField: Record<ButtonSize, TextFieldRecipe>;
     tabs: Record<ButtonSize, TabsRecipe>;
     menu: Record<ButtonSize, MenuRecipe>;
+    checkbox: Record<ButtonSize, CheckboxRecipe>;
+    toggle: Record<ButtonSize, ToggleRecipe>;
+    slider: Record<ButtonSize, SliderRecipe>;
+    progressBar: Record<ButtonSize, ProgressBarRecipe>;
   };
 };
 
@@ -761,6 +799,194 @@ function menuRecipe(size: ButtonSize, palette: ThemePalette): MenuRecipe {
   };
 }
 
+function checkboxRecipe(
+  size: ButtonSize,
+  palette: ThemePalette,
+): CheckboxRecipe {
+  const metrics = {
+    small: { height: 28, controlSize: 16, gap: 7, fontSize: 12, markSize: 12 },
+    medium: { height: 32, controlSize: 18, gap: 8, fontSize: 13, markSize: 14 },
+    large: { height: 40, controlSize: 22, gap: 10, fontSize: 14, markSize: 17 },
+  }[size];
+  return {
+    control: {
+      base: {
+        fill: palette.surface,
+        radius: Math.max(3, Math.round(metrics.controlSize * 0.22)),
+        stroke: palette.border,
+        strokeWidth: 1,
+      },
+      states: {
+        hover: { fill: palette.hover },
+        pressed: { fill: palette.pressed },
+        selected: { fill: palette.accentLine, stroke: palette.accentLine },
+        focused: { stroke: palette.focusRing, strokeWidth: 2 },
+        invalid: { stroke: palette.danger, strokeWidth: 2 },
+        disabled: {
+          fill: withAlpha(palette.surface, 0x70),
+          stroke: withAlpha(palette.border, 0x70),
+        },
+      },
+    },
+    mark: {
+      base: {
+        color: 0xffffffff,
+        fontSize: metrics.markSize,
+        fontWeight: "bold",
+      },
+      states: { disabled: { color: withAlpha(0xffffffff, 0x80) } },
+    },
+    label: {
+      base: {
+        color: palette.text,
+        fontSize: metrics.fontSize,
+        fontWeight: "regular",
+      },
+      states: { disabled: { color: palette.muted } },
+    },
+    metrics: {
+      height: metrics.height,
+      controlSize: metrics.controlSize,
+      gap: metrics.gap,
+    },
+  };
+}
+
+function toggleRecipe(size: ButtonSize, palette: ThemePalette): ToggleRecipe {
+  const metrics = {
+    small: {
+      height: 28,
+      trackWidth: 32,
+      trackHeight: 18,
+      thumbSize: 14,
+      thumbInset: 2,
+      gap: 8,
+      fontSize: 12,
+    },
+    medium: {
+      height: 32,
+      trackWidth: 36,
+      trackHeight: 20,
+      thumbSize: 16,
+      thumbInset: 2,
+      gap: 8,
+      fontSize: 13,
+    },
+    large: {
+      height: 40,
+      trackWidth: 44,
+      trackHeight: 24,
+      thumbSize: 20,
+      thumbInset: 2,
+      gap: 10,
+      fontSize: 14,
+    },
+  }[size];
+  return {
+    track: {
+      base: {
+        fill: palette.surface,
+        radius: Math.floor(metrics.trackHeight / 2),
+        stroke: palette.border,
+        strokeWidth: 1,
+      },
+      states: {
+        hover: { fill: palette.hover },
+        pressed: { fill: palette.pressed },
+        selected: { fill: palette.accentLine, stroke: palette.accentLine },
+        focused: { stroke: palette.focusRing, strokeWidth: 2 },
+        disabled: {
+          fill: withAlpha(palette.surface, 0x70),
+          stroke: withAlpha(palette.border, 0x70),
+        },
+      },
+    },
+    thumb: {
+      base: {
+        fill: 0xffffffff,
+        radius: Math.floor(metrics.thumbSize / 2),
+        stroke: palette.rimShade,
+        strokeWidth: 1,
+      },
+      states: { disabled: { fill: 0x80ffffff, stroke: undefined } },
+    },
+    label: {
+      base: {
+        color: palette.text,
+        fontSize: metrics.fontSize,
+        fontWeight: "regular",
+      },
+      states: { disabled: { color: palette.muted } },
+    },
+    metrics: {
+      height: metrics.height,
+      trackWidth: metrics.trackWidth,
+      trackHeight: metrics.trackHeight,
+      thumbSize: metrics.thumbSize,
+      thumbInset: metrics.thumbInset,
+      gap: metrics.gap,
+    },
+  };
+}
+
+function sliderRecipe(size: ButtonSize, palette: ThemePalette): SliderRecipe {
+  const metrics = {
+    small: { height: 24, trackHeight: 3, thumbSize: 12 },
+    medium: { height: 28, trackHeight: 4, thumbSize: 14 },
+    large: { height: 36, trackHeight: 6, thumbSize: 18 },
+  }[size];
+  return {
+    track: {
+      base: {
+        fill: palette.surface,
+        radius: Math.ceil(metrics.trackHeight / 2),
+        stroke: palette.borderSubtle,
+        strokeWidth: 1,
+      },
+      states: { disabled: { fill: withAlpha(palette.surface, 0x70) } },
+    },
+    fill: {
+      base: {
+        fill: palette.accentLine,
+        radius: Math.ceil(metrics.trackHeight / 2),
+      },
+      states: { disabled: { fill: withAlpha(palette.accentLine, 0x70) } },
+    },
+    thumb: {
+      base: {
+        fill: 0xffffffff,
+        radius: Math.floor(metrics.thumbSize / 2),
+        stroke: palette.rimShade,
+        strokeWidth: 1,
+      },
+      states: {
+        hover: { stroke: palette.accent, strokeWidth: 2 },
+        pressed: { fill: palette.accent, stroke: palette.focusRing, strokeWidth: 2 },
+        focused: { stroke: palette.focusRing, strokeWidth: 2 },
+        disabled: { fill: 0x80ffffff, stroke: undefined, strokeWidth: 0 },
+      },
+    },
+    metrics,
+  };
+}
+
+function progressBarRecipe(
+  size: ButtonSize,
+  palette: ThemePalette,
+): ProgressBarRecipe {
+  const height = { small: 4, medium: 8, large: 12 }[size];
+  return {
+    track: {
+      fill: palette.surface,
+      radius: Math.ceil(height / 2),
+      stroke: palette.borderSubtle,
+      strokeWidth: 1,
+    },
+    fill: { fill: palette.accentLine, radius: Math.ceil(height / 2) },
+    metrics: { height },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -785,6 +1011,10 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   const textField = {} as WidgetTheme["recipes"]["textField"];
   const tabs = {} as WidgetTheme["recipes"]["tabs"];
   const menu = {} as WidgetTheme["recipes"]["menu"];
+  const checkbox = {} as WidgetTheme["recipes"]["checkbox"];
+  const toggle = {} as WidgetTheme["recipes"]["toggle"];
+  const slider = {} as WidgetTheme["recipes"]["slider"];
+  const progressBar = {} as WidgetTheme["recipes"]["progressBar"];
   for (const variant of variants) {
     button[variant] = {} as Record<ButtonSize, ButtonRecipe>;
     for (const size of sizes) {
@@ -803,6 +1033,10 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
     textField[size] = textFieldRecipe(size, palette);
     tabs[size] = tabsRecipe(size, palette);
     menu[size] = menuRecipe(size, palette);
+    checkbox[size] = checkboxRecipe(size, palette);
+    toggle[size] = toggleRecipe(size, palette);
+    slider[size] = sliderRecipe(size, palette);
+    progressBar[size] = progressBarRecipe(size, palette);
   }
   return {
     name: `${theme.name}-widgets`,
@@ -837,6 +1071,10 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       textField,
       tabs,
       menu,
+      checkbox,
+      toggle,
+      slider,
+      progressBar,
     },
   };
 }

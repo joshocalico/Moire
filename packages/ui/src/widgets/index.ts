@@ -15,7 +15,6 @@ import {
   Group,
   Rect,
   Text,
-  measureText,
   measureTextBounds,
   type HitPressEvent,
 } from "@moire/react-host";
@@ -23,9 +22,8 @@ import { themePalette } from "../theme.js";
 import { layoutFlex, type FlexChildSpec } from "../layout/yoga.js";
 import { getUiScaleFactor } from "../font/index.js";
 
-// Import Button for use in Dialog/IconButton below, also re-exported.
+// Import Button for use in Dialog below, also re-exported.
 import { Button } from "./button.js";
-import { Pressable } from "./pressable.js";
 
 /* ---------- Re-exports from split modules ---------- */
 
@@ -71,6 +69,10 @@ export type {
   TextFieldRecipe,
   TabsRecipe,
   MenuRecipe,
+  CheckboxRecipe,
+  ToggleRecipe,
+  SliderRecipe,
+  ProgressBarRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";
@@ -117,6 +119,18 @@ export type {
   MenuItemSlot,
   MenuTrailingSlot,
 } from "./menu.js";
+
+export { Checkbox } from "./checkbox.js";
+export type { CheckboxProps } from "./checkbox.js";
+
+export { Toggle } from "./toggle.js";
+export type { ToggleProps } from "./toggle.js";
+
+export { Slider } from "./slider.js";
+export type { SliderProps } from "./slider.js";
+
+export { ProgressBar } from "./progress-bar.js";
+export type { ProgressBarProps } from "./progress-bar.js";
 
 export { TextField } from "./text-field.js";
 export type { TextFieldProps, TextFieldSlot } from "./text-field.js";
@@ -418,189 +432,6 @@ export function Separator(props: SeparatorProps): ReactNode {
 
 /** @deprecated use Separator */
 export const Divider = Separator;
-
-/* ---------- Checkbox ---------- */
-
-export type CheckboxProps = {
-  x?: number;
-  y?: number;
-  checked: boolean;
-  label?: string;
-  onChange?: (checked: boolean) => void;
-  width?: number;
-  height?: number;
-};
-
-export function Checkbox(props: CheckboxProps): ReactNode {
-  const pal = themePalette();
-  const box = 18;
-  const label = props.label ?? "";
-  const labelLineH = textLineHeight();
-  const markLineH = textLineHeight(12);
-  const w = props.width ?? box + (label ? measureText(label) + 10 : 0);
-  const h = props.height ?? Math.max(box, labelLineH + 4);
-  return createElement(
-    Group,
-    { x: props.x ?? 0, y: props.y ?? 0, width: w, height: h },
-    createElement(Rect, {
-      x: 0,
-      y: Math.floor((h - box) / 2),
-      width: box,
-      height: box,
-      fill: props.checked ? pal.accentLine : pal.surface,
-      onPress: () => props.onChange?.(!props.checked),
-    }),
-    props.checked
-      ? createElement(Text, {
-          x: 4,
-          y: Math.floor((h - markLineH) / 2),
-          text: "x",
-          color: 0xffffffff,
-          fontSize: 12,
-        })
-      : null,
-    label
-      ? createElement(Text, {
-          x: box + 8,
-          y: Math.floor((h - labelLineH) / 2),
-          text: label,
-          color: pal.text,
-        })
-      : null,
-  );
-}
-
-/* ---------- Toggle ---------- */
-
-export type ToggleProps = {
-  x?: number;
-  y?: number;
-  on: boolean;
-  label?: string;
-  onChange?: (on: boolean) => void;
-  width?: number;
-  height?: number;
-};
-
-export function Toggle(props: ToggleProps): ReactNode {
-  const pal = themePalette();
-  const trackW = 36;
-  const trackH = 20;
-  const knob = 16;
-  const label = props.label ?? "";
-  const labelLineH = textLineHeight();
-  const w = props.width ?? trackW + (label ? measureText(label) + 10 : 0);
-  const h = props.height ?? Math.max(trackH, labelLineH + 4);
-  const ty = Math.floor((h - trackH) / 2);
-  return createElement(
-    Group,
-    { x: props.x ?? 0, y: props.y ?? 0, width: w, height: h },
-    createElement(Rect, {
-      x: 0,
-      y: ty,
-      width: trackW,
-      height: trackH,
-      fill: props.on ? pal.accentLine : pal.surface,
-      onPress: () => props.onChange?.(!props.on),
-    }),
-    createElement(Rect, {
-      x: props.on ? trackW - knob - 2 : 2,
-      y: ty + 2,
-      width: knob,
-      height: knob,
-      fill: 0xffffffff,
-      onPress: () => props.onChange?.(!props.on),
-    }),
-    label
-      ? createElement(Text, {
-          x: trackW + 8,
-          y: Math.floor((h - labelLineH) / 2),
-          text: label,
-          color: pal.text,
-        })
-      : null,
-  );
-}
-
-/* ---------- Slider ---------- */
-
-export type SliderProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  value: number; // 0..1
-  onChange?: (v: number) => void;
-  height?: number;
-};
-
-export function Slider(props: SliderProps): ReactNode {
-  const pal = themePalette();
-  const h = props.height ?? 24;
-  const trackH = 4;
-  const thumb = 14;
-  const v = Math.max(0, Math.min(1, props.value));
-  const usable = Math.max(1, props.width - thumb);
-  const fillW = Math.floor(usable * v);
-  const setFromLocalX = (localX: number) => {
-    const next = Math.max(0, Math.min(1, (localX - thumb / 2) / usable));
-    props.onChange?.(next);
-  };
-  return createElement(
-    Group,
-    { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h },
-    createElement(Rect, {
-      x: 0,
-      y: Math.floor((h - trackH) / 2),
-      width: props.width,
-      height: trackH,
-      fill: pal.surface,
-    }),
-    createElement(Rect, {
-      x: 0,
-      y: Math.floor((h - trackH) / 2),
-      width: fillW + thumb / 2,
-      height: trackH,
-      fill: pal.accentLine,
-    }),
-    createElement(Rect, {
-      x: fillW,
-      y: Math.floor((h - thumb) / 2),
-      width: thumb,
-      height: thumb,
-      fill: 0xffffffff,
-    }),
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: h,
-      fill: 0x00000000,
-      onPress: (ev: HitPressEvent) => setFromLocalX(ev.localX),
-    }),
-  );
-}
-
-/* ---------- ProgressBar ---------- */
-
-export type ProgressBarProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  height?: number;
-  value: number; // 0..1
-};
-
-export function ProgressBar(props: ProgressBarProps): ReactNode {
-  const pal = themePalette();
-  const h = props.height ?? 8;
-  const v = Math.max(0, Math.min(1, props.value));
-  return createElement(
-    Group,
-    { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h },
-    createElement(Rect, { x: 0, y: 0, width: props.width, height: h, fill: pal.surface }),
-    createElement(Rect, { x: 0, y: 0, width: Math.floor(props.width * v), height: h, fill: pal.accentLine }),
-  );
-}
 
 /* ---------- Dialog ---------- */
 

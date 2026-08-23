@@ -115,9 +115,15 @@ Same as `Button` but `icon: string` becomes the label (for emoji/short glyphs). 
 
 | Widget | Key props |
 | --- | --- |
-| `Checkbox` | `checked`, `onChange?(boolean)`, `label?` |
+| `Checkbox` | `checked`, `onChange?(boolean)`, `label?`, `invalid?` |
 | `Toggle` | `on`, `onChange?(boolean)`, `label?` |
-| `Slider` | `width`, `value` 0..1, `onChange?(number)`, `height?` (24) |
+| `Slider` | `width`, `value` 0..1, `onChange?(number)`, `step?` |
+
+All three accept `small`, `medium`, and `large` sizes plus `disabled` and
+`autoFocus`. Checkbox and Toggle expose the whole labelled row as one focusable
+target and activate with Enter or Space. Slider updates continuously under
+captured pointer drags and supports arrows, Home, and End; Shift multiplies its
+keyboard step by ten.
 
 ### `TextField`
 
@@ -195,7 +201,9 @@ not row behavior.
 
 ### `ProgressBar`
 
-`width`, `value` 0..1, `height?` (8).
+Determinate, recipe-driven progress with `width`, `value` 0..1, `size?`, and an
+optional explicit `height`. Values are clamped and the track clips the rounded
+fill.
 
 ---
 
