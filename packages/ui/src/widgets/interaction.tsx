@@ -5,7 +5,10 @@ import {
   type HitKeyEvent,
   type HitPointerEvent,
 } from "@moire/react-host";
-import { themePalette } from "../theme.js";
+import {
+  resolveStatefulStyle,
+  useWidgetTheme,
+} from "../widget-theme.js";
 import {
   useDragSource,
   type DragSourceOptions,
@@ -70,7 +73,7 @@ export type CollectionItemProps = {
  * about selection or menus.
  */
 export function CollectionItem(props: CollectionItemProps): ReactNode {
-  const pal = themePalette();
+  const theme = useWidgetTheme();
   const generatedId = useId();
   const [focused, setFocused] = useState(false);
   const [dropHover, setDropHover] = useState(false);
@@ -104,6 +107,10 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
   };
 
   const showOutline = focused || drag.dragging || dropHover;
+  const outline = resolveStatefulStyle(
+    theme.recipes.collectionItem.outline,
+    focused ? "focused" : props.disabled ? "disabled" : "selected",
+  );
 
   return (
     <Group
@@ -152,9 +159,9 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
           width={Math.max(1, props.width - 2)}
           height={Math.max(1, props.height - 2)}
           fill={0x00000000}
-          radius={pal.radiusSm}
-          stroke={focused ? pal.focusRing : pal.accent}
-          strokeWidth={focused ? 2 : 1}
+          radius={outline.radius}
+          stroke={outline.stroke}
+          strokeWidth={outline.strokeWidth}
         />
       ) : null}
     </Group>

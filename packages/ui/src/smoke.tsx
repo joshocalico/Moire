@@ -181,9 +181,11 @@ function collectionRecipeSmoke(): void {
   const theme = createWidgetTheme();
   const icon = theme.recipes.iconButton.standard.medium;
   const list = theme.recipes.listItem.medium;
+  const grid = theme.recipes.gridItem.medium;
   const iconFill = 0xff315f8f;
   const selectionFill = 0xff56356f;
   const indicatorFill = 0xffffc857;
+  const gridSelectionFill = 0xff8a4b2f;
   const customTheme = {
     ...theme,
     name: "collection-recipe-smoke",
@@ -220,6 +222,19 @@ function collectionRecipeSmoke(): void {
           indicator: { fill: indicatorFill, width: 5 },
         },
       },
+      gridItem: {
+        ...theme.recipes.gridItem,
+        medium: {
+          ...grid,
+          selection: {
+            ...grid.selection,
+            fill: gridSelectionFill,
+            radius: 0,
+            stroke: undefined,
+            strokeWidth: 0,
+          },
+        },
+      },
     },
   };
   let iconSlotSize = 0;
@@ -227,7 +242,7 @@ function collectionRecipeSmoke(): void {
   renderShell(
     root,
     <WidgetThemeProvider theme={customTheme}>
-      <Group x={0} y={0} width={128} height={84}>
+      <Group x={0} y={0} width={128} height={164}>
         <IconButton
           x={2}
           y={2}
@@ -251,18 +266,90 @@ function collectionRecipeSmoke(): void {
           selected
           interactive={false}
         />
+        <GridItem
+          x={2}
+          y={86}
+          width={76}
+          height={74}
+          label="Grid recipe"
+          selected
+          interactive={false}
+        />
       </Group>
     </WidgetThemeProvider>,
   );
   const frame = new SoftwareRenderer().render(root.container, {
     width: 128,
-    height: 84,
+    height: 164,
   });
   const words = new Uint32Array(frame.pixels.buffer);
   assert.equal(words[2 * frame.width + 2], iconFill);
   assert.equal(words[52 * frame.width + 2], indicatorFill);
   assert.equal(words[52 * frame.width + 8], selectionFill);
+  assert.equal(words[90 * frame.width + 4], gridSelectionFill);
   assert.equal(iconSlotSize, icon.icon.base.size);
+}
+
+async function collectionFocusRecipeSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const theme = createWidgetTheme();
+  const outline = theme.recipes.collectionItem.outline;
+  const focusColor = 0xffff5f87;
+  const customTheme = {
+    ...theme,
+    recipes: {
+      ...theme.recipes,
+      collectionItem: {
+        outline: {
+          ...outline,
+          base: { ...outline.base, radius: 0 },
+          states: {
+            ...outline.states,
+            focused: { stroke: focusColor, strokeWidth: 2 },
+          },
+        },
+      },
+    },
+  };
+  const win = new Window({ title: "Collection recipe", width: 80, height: 54 });
+  win.setContent(
+    <WidgetThemeProvider theme={customTheme}>
+      <CollectionItem x={10} y={10} width={40} height={30}>
+        <Rect width={40} height={30} fill={0xff223344} />
+      </CollectionItem>
+    </WidgetThemeProvider>,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectPointer({
+    type: "down",
+    x: 20,
+    y: 20,
+    button: "left",
+    timeMs: 1,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 20,
+    y: 20,
+    button: "left",
+    timeMs: 2,
+  });
+  await Promise.resolve();
+  win.tick();
+  assert.ok(platformWindow.lastFrame);
+  const words = new Uint32Array(platformWindow.lastFrame.buffer);
+  assert.equal(
+    words[11 * 80 + 11],
+    focusColor,
+    "CollectionItem focus outline should resolve through its subtree recipe",
+  );
+  win.destroy();
+  backend.disconnect();
 }
 
 async function textFieldInteractionSmoke(): Promise<void> {
@@ -900,6 +987,7 @@ async function main() {
   rendererSmoke();
   buttonRecipeSmoke();
   collectionRecipeSmoke();
+  await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();

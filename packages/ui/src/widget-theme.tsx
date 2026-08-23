@@ -86,6 +86,25 @@ export type ListItemRecipe = {
   };
 };
 
+export type GridItemRecipe = {
+  selection: WidgetBoxStyle;
+  dropTarget: WidgetBoxStyle;
+  interaction: StatefulStyle<WidgetBoxStyle>;
+  label: StatefulStyle<WidgetTextStyle>;
+  labelScrim: WidgetBoxStyle;
+  metrics: {
+    labelPadding: number;
+    labelHeightPadding: number;
+    iconMin: number;
+    iconMax: number;
+    iconGap: number;
+  };
+};
+
+export type CollectionItemRecipe = {
+  outline: StatefulStyle<WidgetBoxStyle>;
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -116,6 +135,8 @@ export type WidgetTheme = {
     button: Record<ButtonVariant, Record<ButtonSize, ButtonRecipe>>;
     iconButton: Record<IconButtonVariant, Record<ButtonSize, IconButtonRecipe>>;
     listItem: Record<ButtonSize, ListItemRecipe>;
+    gridItem: Record<ButtonSize, GridItemRecipe>;
+    collectionItem: CollectionItemRecipe;
   };
 };
 
@@ -328,6 +349,101 @@ function listItemRecipe(
   };
 }
 
+function gridItemRecipe(
+  size: ButtonSize,
+  palette: ThemePalette,
+): GridItemRecipe {
+  const metrics = {
+    small: {
+      fontSize: 11,
+      labelPadding: 3,
+      labelHeightPadding: 5,
+      iconMin: 20,
+      iconMax: 42,
+      iconGap: 10,
+    },
+    medium: {
+      fontSize: 12,
+      labelPadding: 4,
+      labelHeightPadding: 6,
+      iconMin: 24,
+      iconMax: 56,
+      iconGap: 14,
+    },
+    large: {
+      fontSize: 14,
+      labelPadding: 6,
+      labelHeightPadding: 8,
+      iconMin: 32,
+      iconMax: 72,
+      iconGap: 18,
+    },
+  }[size];
+  return {
+    selection: {
+      fill: palette.selection,
+      radius: palette.radiusMd,
+      stroke: palette.accent,
+      strokeWidth: 1,
+    },
+    dropTarget: {
+      fill: withAlpha(palette.selection, 0xb0),
+      radius: palette.radiusMd,
+      stroke: palette.focusRing,
+      strokeWidth: 2,
+    },
+    interaction: {
+      base: { fill: 0x00000000, radius: palette.radiusMd },
+      states: {
+        hover: { fill: withAlpha(palette.hover, 0x90) },
+        pressed: { fill: withAlpha(palette.pressed, 0xc0) },
+        disabled: { fill: 0x00000000 },
+      },
+    },
+    label: {
+      base: {
+        color: palette.text,
+        fontSize: metrics.fontSize,
+        fontWeight: "regular",
+      },
+      states: { disabled: { color: palette.muted } },
+    },
+    labelScrim: {
+      fill: 0xaa0a0c0e,
+      radius: palette.radiusSm,
+    },
+    metrics: {
+      labelPadding: metrics.labelPadding,
+      labelHeightPadding: metrics.labelHeightPadding,
+      iconMin: metrics.iconMin,
+      iconMax: metrics.iconMax,
+      iconGap: metrics.iconGap,
+    },
+  };
+}
+
+function collectionItemRecipe(palette: ThemePalette): CollectionItemRecipe {
+  return {
+    outline: {
+      base: { fill: 0x00000000, radius: palette.radiusSm },
+      states: {
+        focused: {
+          stroke: palette.focusRing,
+          strokeWidth: 2,
+        },
+        selected: {
+          stroke: palette.accent,
+          strokeWidth: 1,
+        },
+        disabled: {
+          stroke: palette.muted,
+          strokeWidth: 1,
+        },
+      },
+    },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -348,6 +464,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   const button = {} as WidgetTheme["recipes"]["button"];
   const iconButton = {} as WidgetTheme["recipes"]["iconButton"];
   const listItem = {} as WidgetTheme["recipes"]["listItem"];
+  const gridItem = {} as WidgetTheme["recipes"]["gridItem"];
   for (const variant of variants) {
     button[variant] = {} as Record<ButtonSize, ButtonRecipe>;
     for (const size of sizes) {
@@ -360,7 +477,10 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       iconButton[variant][size] = iconButtonRecipe(variant, size, palette);
     }
   }
-  for (const size of sizes) listItem[size] = listItemRecipe(size, palette);
+  for (const size of sizes) {
+    listItem[size] = listItemRecipe(size, palette);
+    gridItem[size] = gridItemRecipe(size, palette);
+  }
   return {
     name: `${theme.name}-widgets`,
     foundations: {
@@ -385,7 +505,13 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
         high: { blur: 32, offsetY: 12, opacity: 0.32 },
       },
     },
-    recipes: { button, iconButton, listItem },
+    recipes: {
+      button,
+      iconButton,
+      listItem,
+      gridItem,
+      collectionItem: collectionItemRecipe(palette),
+    },
   };
 }
 

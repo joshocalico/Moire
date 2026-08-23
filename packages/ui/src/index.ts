@@ -131,6 +131,8 @@ export type {
   ButtonRecipe,
   IconButtonRecipe,
   ListItemRecipe,
+  GridItemRecipe,
+  CollectionItemRecipe,
   SurfaceProps,
   PanelProps,
   RowProps,

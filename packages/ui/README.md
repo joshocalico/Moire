@@ -75,6 +75,9 @@ Button recipes cover `primary`, `secondary`, `ghost`, and `danger` variants;
 or trailing artwork slots. IconButton has a centered text/artwork slot rather
 than treating its icon as a Button label. ListItem recipes separately own
 selection, interaction feedback, typography, leading artwork, metrics, and the
-selection indicator. Software and EGL consume the same resulting scene.
+selection indicator. GridItem recipes own selection/drop surfaces, interaction,
+label/scrim treatment, and icon metrics. CollectionItem keeps focus, activation,
+context-menu, and drag semantics headless while its focus/drop outline is
+recipe-painted. Software and EGL consume the same resulting scene.
 
 Hard rule: `widgets/`, `font/`, `layout/` never import Wayland/koffi.

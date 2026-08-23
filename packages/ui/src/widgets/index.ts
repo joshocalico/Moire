@@ -66,6 +66,8 @@ export type {
   ButtonRecipe,
   IconButtonRecipe,
   ListItemRecipe,
+  GridItemRecipe,
+  CollectionItemRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";
