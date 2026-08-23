@@ -8,7 +8,8 @@ Moire currently uses the classic React JSX transform for compatibility with
 the custom reconciler, so `.tsx` presentation modules import `React` as a
 runtime value.
 
-Import from `@moire/ui`. Colors are ARGB numbers from `themePalette()` unless noted.
+Import from `@moire/ui`. Defaults resolve through the nearest
+`WidgetThemeProvider`; explicit colors remain ARGB compatibility overrides.
 
 ---
 
@@ -52,6 +53,8 @@ Filled background. `Panel` defaults fill to `pal.surface`; `Surface` to `pal.pan
 | --- | --- | --- |
 | `width`, `height` | `number` | required |
 | `fill` | `number` | theme |
+| `radius`, `stroke`, `strokeWidth` | `number` | optional |
+| `clip` | `boolean` | `false` |
 | `onPress` | `() => void` | |
 | `children` | `ReactNode` | |
 
@@ -187,7 +190,8 @@ Enter/Space activation.
 
 ### `Dialog` / `Menu` / `MenuItem`
 
-- `Dialog`: `title`, `width`, `height`, `onClose?`, `children` — title bar with danger close.
+- `Dialog`: `title`, `width`, `height`, `size?`, `onClose?`, `children` —
+  recipe-driven surface, title bar, typography, close artwork, and body insets.
 - `Menu`: `width`, `size?`, `title?`, and `items`. Entries accept stable `id`,
   separators, leading/trailing slots, descriptions, selection, danger, and
   disabled state.
@@ -198,6 +202,9 @@ Menu recipes own the popup surface/shadow, row interaction and focus states,
 text/icon roles, indicator, separators, and all three size metrics. Popup
 placement, dismissal, stacking, and entrance/exit motion remain overlay policy,
 not row behavior.
+
+Dialog recipes provide small/medium/large chrome density without changing body
+content. The close action uses the shared IconButton and geometric close icon.
 
 ### `ProgressBar`
 

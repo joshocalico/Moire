@@ -205,6 +205,22 @@ export type ScrollAreaRecipe = {
   };
 };
 
+export type DialogRecipe = {
+  surface: WidgetBoxStyle;
+  titlebar: WidgetBoxStyle;
+  title: WidgetTextStyle;
+  closeIcon: WidgetIconStyle;
+  metrics: {
+    titlebarHeight: number;
+    titlePaddingX: number;
+    closeSize: number;
+    closeInset: number;
+    bodyPaddingX: number;
+    bodyPaddingTop: number;
+    bodyPaddingBottom: number;
+  };
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -245,6 +261,7 @@ export type WidgetTheme = {
     slider: Record<ButtonSize, SliderRecipe>;
     progressBar: Record<ButtonSize, ProgressBarRecipe>;
     scrollArea: Record<ButtonSize, ScrollAreaRecipe>;
+    dialog: Record<ButtonSize, DialogRecipe>;
   };
 };
 
@@ -1047,6 +1064,68 @@ function scrollAreaRecipe(
   };
 }
 
+function dialogRecipe(size: ButtonSize, palette: ThemePalette): DialogRecipe {
+  const metrics = {
+    small: {
+      titlebarHeight: 34,
+      titlePaddingX: 10,
+      closeSize: 26,
+      closeInset: 4,
+      bodyPaddingX: 10,
+      bodyPaddingTop: 8,
+      bodyPaddingBottom: 10,
+      fontSize: 13,
+      iconSize: 13,
+    },
+    medium: {
+      titlebarHeight: 40,
+      titlePaddingX: 12,
+      closeSize: 28,
+      closeInset: 6,
+      bodyPaddingX: 12,
+      bodyPaddingTop: 10,
+      bodyPaddingBottom: 12,
+      fontSize: 14,
+      iconSize: 14,
+    },
+    large: {
+      titlebarHeight: 48,
+      titlePaddingX: 16,
+      closeSize: 32,
+      closeInset: 8,
+      bodyPaddingX: 16,
+      bodyPaddingTop: 12,
+      bodyPaddingBottom: 16,
+      fontSize: 16,
+      iconSize: 16,
+    },
+  }[size];
+  return {
+    surface: {
+      fill: palette.panel,
+      radius: palette.radiusMd,
+      stroke: palette.borderSubtle,
+      strokeWidth: 1,
+    },
+    titlebar: { fill: palette.titlebar, radius: palette.radiusMd },
+    title: {
+      color: palette.text,
+      fontSize: metrics.fontSize,
+      fontWeight: "medium",
+    },
+    closeIcon: { color: palette.danger, size: metrics.iconSize },
+    metrics: {
+      titlebarHeight: metrics.titlebarHeight,
+      titlePaddingX: metrics.titlePaddingX,
+      closeSize: metrics.closeSize,
+      closeInset: metrics.closeInset,
+      bodyPaddingX: metrics.bodyPaddingX,
+      bodyPaddingTop: metrics.bodyPaddingTop,
+      bodyPaddingBottom: metrics.bodyPaddingBottom,
+    },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -1076,6 +1155,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   const slider = {} as WidgetTheme["recipes"]["slider"];
   const progressBar = {} as WidgetTheme["recipes"]["progressBar"];
   const scrollArea = {} as WidgetTheme["recipes"]["scrollArea"];
+  const dialog = {} as WidgetTheme["recipes"]["dialog"];
   for (const variant of variants) {
     button[variant] = {} as Record<ButtonSize, ButtonRecipe>;
     for (const size of sizes) {
@@ -1099,6 +1179,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
     slider[size] = sliderRecipe(size, palette);
     progressBar[size] = progressBarRecipe(size, palette);
     scrollArea[size] = scrollAreaRecipe(size, palette);
+    dialog[size] = dialogRecipe(size, palette);
   }
   return {
     name: `${theme.name}-widgets`,
@@ -1138,6 +1219,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       slider,
       progressBar,
       scrollArea,
+      dialog,
     },
   };
 }

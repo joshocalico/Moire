@@ -252,8 +252,9 @@ Recipes are plain data and remain renderer-neutral.
 The first vertical slices are active. `WidgetThemeProvider` supplies foundation
 color/type/space/radius/motion/elevation data plus recipe matrices for Button,
 IconButton, ListItem, GridItem, TextField, Tabs, Menu, Checkbox, Toggle, Slider,
-ProgressBar, ScrollArea, and semantic CollectionItem outlines. Buttons consume
-root, label/icon, metrics, rim, and named artwork-slot styles from that context.
+ProgressBar, ScrollArea, Dialog, and semantic CollectionItem outlines. Buttons
+consume root, label/icon, metrics, rim, and named artwork-slot styles from that
+context.
 List and grid cells keep persistent selection/drop layers separate from
 animated hover/press feedback; focus/drag outlines remain owned by the headless
 CollectionItem behavior but resolve their paint through the theme.
@@ -281,8 +282,9 @@ TextField/SearchField, Tabs, Menu/MenuItem, Checkbox, Toggle, Slider,
 ProgressBar, ScrollArea, List/ListItem, Grid/GridItem, and CollectionItem use
 JSX.
 ContextMenu delegates its rows to MenuItem while retaining popup placement and
-motion; the remaining monolithic widget module is next in the presentation
-migration.
+motion. Layout, Label, Surface/Panel, Separator, and Dialog are split into JSX
+modules, leaving `widgets/index.ts` as a pure public barrel. ImageWidget and the
+DnD presentation helpers remain in the JSX migration queue.
 
 ### W3 — primitive completeness
 

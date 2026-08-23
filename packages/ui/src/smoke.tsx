@@ -28,6 +28,9 @@ import {
   Slider,
   ProgressBar,
   Separator,
+  Surface,
+  Panel,
+  Dialog,
   Pressable,
   ScrollArea,
   List,
@@ -504,6 +507,66 @@ function scrollAreaRecipeSmoke(): void {
   assert.equal(words[20 * frame.width + 73], thumbFill);
 }
 
+function primitiveAndDialogRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const dialog = theme.recipes.dialog.medium;
+  const surfaceFill = 0xff29263d;
+  const panelFill = 0xff35304f;
+  const separatorFill = 0xffd3955d;
+  const dialogFill = 0xff202c42;
+  const titlebarFill = 0xff4e3764;
+  const childFill = 0xff65b6a7;
+  const customTheme = {
+    ...theme,
+    name: "primitive-dialog-recipe-smoke",
+    foundations: {
+      ...theme.foundations,
+      palette: {
+        ...theme.foundations.palette,
+        panel: surfaceFill,
+        surface: panelFill,
+        border: separatorFill,
+      },
+    },
+    recipes: {
+      ...theme.recipes,
+      dialog: {
+        ...theme.recipes.dialog,
+        medium: {
+          ...dialog,
+          surface: { ...dialog.surface, fill: dialogFill, radius: 0 },
+          titlebar: { ...dialog.titlebar, fill: titlebarFill, radius: 0 },
+        },
+      },
+    },
+  };
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <Group width={130} height={132}>
+        <Surface x={2} y={2} width={40} height={28} />
+        <Panel x={46} y={2} width={40} height={28} />
+        <Separator x={2} y={32} width={84} />
+        <Dialog x={2} y={38} width={120} height={90} title="Recipe dialog">
+          <Rect width={10} height={10} fill={childFill} />
+        </Dialog>
+      </Group>
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 130,
+    height: 132,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[4 * frame.width + 4], surfaceFill);
+  assert.equal(words[4 * frame.width + 48], panelFill);
+  assert.equal(words[32 * frame.width + 4], separatorFill);
+  assert.equal(words[42 * frame.width + 6], titlebarFill);
+  assert.equal(words[82 * frame.width + 6], dialogFill);
+  assert.equal(words[90 * frame.width + 16], childFill);
+}
+
 function collectionRecipeSmoke(): void {
   const theme = createWidgetTheme();
   const icon = theme.recipes.iconButton.standard.medium;
@@ -825,6 +888,48 @@ async function searchFieldInteractionSmoke(): Promise<void> {
   });
   assert.equal(query, "", "SearchField clear affordance should clear its value");
   assert.equal(cleared, 1);
+
+  win.destroy();
+  backend.disconnect();
+}
+
+async function dialogInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Dialog smoke", width: 200, height: 130 });
+  let closes = 0;
+  win.setContent(
+    <Dialog
+      x={10}
+      y={10}
+      width={180}
+      height={110}
+      title="Keyboard and pointer dialog"
+      onClose={() => {
+        closes++;
+      }}
+    />,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectPointer({
+    type: "down",
+    x: 174,
+    y: 30,
+    button: "left",
+    timeMs: 1,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 174,
+    y: 30,
+    button: "left",
+    timeMs: 2,
+  });
+  assert.equal(closes, 1, "Dialog should preserve its close intent after recipe migration");
 
   win.destroy();
   backend.disconnect();
@@ -1667,6 +1772,7 @@ async function main() {
   menuRecipeSmoke();
   formControlRecipeSmoke();
   scrollAreaRecipeSmoke();
+  primitiveAndDialogRecipeSmoke();
   collectionRecipeSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
@@ -1674,6 +1780,7 @@ async function main() {
   await menuItemInteractionSmoke();
   await formControlInteractionSmoke();
   await scrollAreaInteractionSmoke();
+  await dialogInteractionSmoke();
   await tabsInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();
