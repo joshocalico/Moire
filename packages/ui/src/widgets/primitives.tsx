@@ -181,6 +181,8 @@ export type SurfaceProps = {
   radius?: number;
   stroke?: number;
   strokeWidth?: number;
+  elevation?: "none" | "low" | "medium" | "high";
+  opacity?: number;
   clip?: boolean;
   children?: ReactNode;
   onPress?: () => void;
@@ -188,27 +190,75 @@ export type SurfaceProps = {
 };
 
 export function Surface(props: SurfaceProps): ReactNode {
-  const palette = useWidgetTheme().foundations.palette;
+  const theme = useWidgetTheme();
+  const palette = theme.foundations.palette;
+  const elevation = props.elevation && props.elevation !== "none"
+    ? theme.foundations.elevation[props.elevation]
+    : null;
+  const shadowSpread = elevation ? Math.max(1, Math.round(elevation.blur / 4)) : 0;
+  const shadowAlpha = elevation ? Math.round(elevation.opacity * 255) : 0;
   return (
     <Group
       x={props.x ?? 0}
       y={props.y ?? 0}
       width={props.width}
       height={props.height}
-      clip={props.clip}
+      opacity={props.opacity}
     >
-      <Rect
-        width={props.width}
-        height={props.height}
-        fill={props.fill ?? palette.panel}
-        radius={props.radius}
-        stroke={props.stroke}
-        strokeWidth={props.strokeWidth}
-        onPress={props.onPress}
-        onContextMenu={props.onContextMenu}
-      />
-      {props.children}
+      {elevation ? (
+        <Rect
+          x={-shadowSpread}
+          y={elevation.offsetY - shadowSpread}
+          width={props.width + shadowSpread * 2}
+          height={props.height + shadowSpread * 2}
+          fill={(shadowAlpha << 24) >>> 0}
+          radius={(props.radius ?? palette.radiusMd) + shadowSpread}
+        />
+      ) : null}
+      <Group width={props.width} height={props.height} clip={props.clip}>
+        <Rect
+          width={props.width}
+          height={props.height}
+          fill={props.fill ?? palette.panel}
+          radius={props.radius}
+          stroke={props.stroke}
+          strokeWidth={props.strokeWidth}
+          onPress={props.onPress}
+          onContextMenu={props.onContextMenu}
+        />
+        {props.children}
+      </Group>
     </Group>
+  );
+}
+
+export type FocusRingProps = {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  visible?: boolean;
+  radius?: number;
+  color?: number;
+  inset?: number;
+};
+
+/** Theme-owned focus outline shared by composite interaction surfaces. */
+export function FocusRing(props: FocusRingProps): ReactNode {
+  const theme = useWidgetTheme();
+  if (props.visible === false) return null;
+  const inset = props.inset ?? theme.foundations.focusRing.inset;
+  return (
+    <Rect
+      x={(props.x ?? 0) + inset}
+      y={(props.y ?? 0) + inset}
+      width={Math.max(1, props.width - inset * 2)}
+      height={Math.max(1, props.height - inset * 2)}
+      fill={0x00000000}
+      radius={props.radius ?? theme.foundations.radii.small + theme.foundations.focusRing.radiusOffset}
+      stroke={props.color ?? theme.foundations.palette.focusRing}
+      strokeWidth={theme.foundations.focusRing.width}
+    />
   );
 }
 

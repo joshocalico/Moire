@@ -15,6 +15,7 @@ import {
   type WidgetIconStyle,
 } from "../widget-theme.js";
 import { Pressable } from "./pressable.js";
+import { registerIntrinsicSize } from "./layout.js";
 
 export type { IconButtonVariant } from "../widget-theme.js";
 
@@ -37,7 +38,7 @@ export type IconButtonProps = {
   autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
-  onPress?: () => void;
+  onPress?: (event?: HitPointerEvent) => void;
   onContextMenu?: (event: HitPointerEvent) => void;
 };
 
@@ -73,7 +74,14 @@ export function IconButton(props: IconButtonProps): ReactNode {
       event.key === "Enter" ||
       event.key === " "
     ) {
-      props.onPress?.();
+      const bounds = event.targetBounds;
+      props.onPress?.(bounds ? {
+        x: bounds.x + bounds.width / 2,
+        y: bounds.y + bounds.height / 2,
+        localX: bounds.width / 2,
+        localY: bounds.height / 2,
+        button: "left",
+      } : undefined);
     }
   };
 
@@ -141,3 +149,11 @@ export function IconButton(props: IconButtonProps): ReactNode {
     </Group>
   );
 }
+
+registerIntrinsicSize(IconButton, (props, theme) => {
+  const size = theme.recipes.iconButton[props.variant ?? "standard"][props.size ?? "medium"].metrics.size;
+  return {
+    width: props.width ?? size,
+    height: props.height ?? size,
+  };
+});

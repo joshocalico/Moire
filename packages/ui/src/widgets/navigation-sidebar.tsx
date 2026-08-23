@@ -6,7 +6,7 @@ import { IconButton } from "./icon-button.js";
 import { ListItem } from "./list.js";
 import { Separator, Surface, TextBlock } from "./primitives.js";
 import { ScrollArea } from "./scroll.js";
-import { Align, Box, Horizontal, Inset, Measure, Stack, Vertical } from "./layout.js";
+import { Align, Box, Horizontal, Inset, Measure, Stack, Vertical, registerIntrinsicSize } from "./layout.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
 export type NavigationSidebarItem = {
@@ -131,6 +131,11 @@ function SidebarRow(props: SidebarRowProps): ReactNode {
     </Stack>
   );
 }
+
+registerIntrinsicSize(SidebarRow, (props) => ({
+  width: props.width,
+  height: ROW_H,
+}));
 
 /** Configurable, sectioned navigation sidebar with optional edit controls. */
 export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {

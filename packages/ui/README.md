@@ -1,6 +1,8 @@
 # `@moire/ui`
 
-Portable app toolkit for Moire (Qt/GTK-like). Widgets, TTF fonts (IBM Plex), and Yoga layout are OS-agnostic. Window I/O goes through a small `PlatformBackend`.
+Portable app toolkit for Moire (Qt/GTK-like). Widgets, TTF fonts (IBM Plex),
+and the measured layout model are OS-agnostic. Window I/O goes through a small
+`PlatformBackend`.
 
 ## Platforms
 

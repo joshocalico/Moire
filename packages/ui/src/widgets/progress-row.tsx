@@ -3,7 +3,7 @@ import { measureTextBounds } from "@moire/react-host";
 import { ProgressBar } from "./progress-bar.js";
 import { Spinner } from "./feedback.js";
 import { TextBlock, Surface } from "./primitives.js";
-import { Align, Box, Horizontal, Inset, Measure, Vertical } from "./layout.js";
+import { Align, Box, Horizontal, Inset, Measure, Vertical, registerIntrinsicSize } from "./layout.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
 export type ProgressRowProps = {
@@ -115,3 +115,8 @@ export function ProgressRow(props: ProgressRowProps): ReactNode {
     </Surface>
   );
 }
+
+registerIntrinsicSize(ProgressRow, (props) => ({
+  width: props.width,
+  height: props.height ?? 78,
+}));

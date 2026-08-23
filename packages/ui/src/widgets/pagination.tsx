@@ -3,7 +3,8 @@ import { Group, Rect } from "@moire/react-host";
 import { Button } from "./button.js";
 import { Icon } from "./icon.js";
 import { IconButton } from "./icon-button.js";
-import { Label } from "./primitives.js";
+import { TextBlock } from "./primitives.js";
+import { Horizontal } from "./layout.js";
 import { useWidgetTheme, type ButtonSize } from "../widget-theme.js";
 
 export type PaginationProps = {
@@ -53,7 +54,6 @@ export function Pagination(props: PaginationProps): ReactNode {
   const intrinsicWidth = (tokens.length + edgeButtons) * metrics.button +
     Math.max(0, tokens.length + edgeButtons - 1) * metrics.gap;
   const width = Math.max(props.width ?? 0, intrinsicWidth);
-  let cursorX = 0;
   const commit = (next: number) => {
     if (props.disabled || count === 0) return;
     props.onPageChange?.(Math.max(1, Math.min(count, next)));
@@ -63,7 +63,6 @@ export function Pagination(props: PaginationProps): ReactNode {
     const node = (
       <IconButton
         key={key}
-        x={cursorX}
         width={metrics.button}
         height={metrics.height}
         size={size}
@@ -78,7 +77,6 @@ export function Pagination(props: PaginationProps): ReactNode {
         onPress={() => commit(target)}
       />
     );
-    cursorX += metrics.button + metrics.gap;
     return node;
   };
 
@@ -90,7 +88,6 @@ export function Pagination(props: PaginationProps): ReactNode {
       children.push(
         <Button
           key={token}
-          x={cursorX}
           width={metrics.button}
           height={metrics.height}
           size={size}
@@ -102,26 +99,25 @@ export function Pagination(props: PaginationProps): ReactNode {
       );
     } else {
       children.push(
-        <Label
+        <TextBlock
           key={token}
-          x={cursorX}
-          y={Math.floor((metrics.height - metrics.fontSize * 1.4) / 2)}
           width={metrics.button}
           height={metrics.height}
           text="…"
           color={pal.muted}
           fontSize={metrics.fontSize}
+          horizontalAlign="center"
+          verticalAlign="center"
         />,
       );
     }
-    cursorX += metrics.button + metrics.gap;
   }
   children.push(iconButton("next", "chevron-right", page + 1, page >= count));
   if (props.showFirstLast) children.push(iconButton("last", "chevron-right", count, page >= count, true));
 
   return (
-    <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={metrics.height}>
+    <Horizontal x={props.x ?? 0} y={props.y ?? 0} width={width} height={metrics.height} gap={metrics.gap} align="center">
       {children}
-    </Group>
+    </Horizontal>
   );
 }

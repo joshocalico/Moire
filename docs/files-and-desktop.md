@@ -134,7 +134,7 @@ semantic interaction owner rather than competing transparent hit layers.
 ### Limits
 
 - No X11 XDND (Xwayland clients participate only via Wayland DnD).
-- No trash / gvfs network places / file thumbnails in this pass.
+- No Trash, removable-volume provider, network provider, or file thumbnails in this pass.
 - No explicit move-vs-copy chooser UI; move is preferred everywhere (matches Files↔Files, desktop↔Files).
 
 ## Pointer routing (compositor)

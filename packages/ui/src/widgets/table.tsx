@@ -1,8 +1,9 @@
 import React, { type ReactNode } from "react";
-import { Group, Rect, Text, measureTextBounds } from "@moire/react-host";
+import { Group, Rect } from "@moire/react-host";
 import { CollectionItem } from "./interaction.js";
 import { Pressable } from "./pressable.js";
-import { Separator, Surface } from "./primitives.js";
+import { Separator, Surface, TextBlock } from "./primitives.js";
+import { Inset } from "./layout.js";
 import { VirtualList } from "./virtual-list.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
@@ -130,14 +131,17 @@ export function Table<T,>(props: TableProps<T>): ReactNode {
                   });
                 }}
               />
-              <Text
-                x={10}
-                y={Math.floor((headerHeight - measureTextBounds("Mg", { fontSize: 11 }).height) / 2)}
-                text={`${column.label}${arrow ? `  ${arrow}` : ""}`}
-                color={active ? pal.accent : pal.muted}
-                fontSize={11}
-                fontWeight="medium"
-              />
+              <Inset width={column.resolvedWidth} height={headerHeight} padding={{ horizontal: 10 }}>
+                <TextBlock
+                  text={`${column.label}${arrow ? `  ${arrow}` : ""}`}
+                  color={active ? pal.accent : pal.muted}
+                  fontSize={11}
+                  fontWeight="medium"
+                  verticalAlign="center"
+                  overflow="ellipsis"
+                  maxLines={1}
+                />
+              </Inset>
               {column.x > 0 ? (
                 <Separator x={0} width={1} height={headerHeight} color={pal.borderSubtle} />
               ) : null}
@@ -179,10 +183,6 @@ export function Table<T,>(props: TableProps<T>): ReactNode {
                 {columns.map((column) => {
                   const value = column.getValue?.(row);
                   const text = value == null ? "" : String(value);
-                  const bounds = measureTextBounds(text, { fontSize: 12 });
-                  const textX = column.align === "right"
-                    ? Math.max(8, column.resolvedWidth - bounds.width - 10)
-                    : 10;
                   return (
                     <Group
                       key={column.id}
@@ -192,13 +192,17 @@ export function Table<T,>(props: TableProps<T>): ReactNode {
                       clip
                     >
                       {column.renderCell?.(row, index, column.resolvedWidth) ?? (
-                        <Text
-                          x={textX}
-                          y={Math.floor((rowHeight - bounds.height) / 2)}
-                          text={text}
-                          color={pal.text}
-                          fontSize={12}
-                        />
+                        <Inset width={column.resolvedWidth} height={rowHeight} padding={{ horizontal: 10 }}>
+                          <TextBlock
+                            text={text}
+                            color={pal.text}
+                            fontSize={12}
+                            horizontalAlign={column.align === "right" ? "end" : "start"}
+                            verticalAlign="center"
+                            overflow="ellipsis"
+                            maxLines={1}
+                          />
+                        </Inset>
                       )}
                     </Group>
                   );

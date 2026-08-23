@@ -34,7 +34,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Launcher | Icons from `.desktop`, categories, pinned apps |
 | Performance | CPU composite still hot; reduce idle dirty from atmosphere when possible |
 | Flexible compositor rendering | In progress — selectable software/EGL output, composition effects contract, timings; next layered GLES + GBM scanout |
-| Widget styling v2 | In progress — semantic recipes, slots, subtree themes, rich text, virtualized table/tree collections, composed feedback, and a live renderer conformance showcase |
+| Widget styling v2 | In progress — semantic recipes and foundations now cover radius, borders, density, focus, opacity, motion, and elevation; shared overlay/focus/select/dialog/toast primitives and their live showcase tranche are shipped; next state/theme matrices and remaining chrome migration |
 | Text input / IME | Implement `zwp_text_input_v3` with a real input-method broker; do not advertise a no-op global |
 
 ## Medium term
@@ -42,7 +42,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Item | Notes |
 | --- | --- |
 | File thumbnails | Image widget ready; generators not shipped |
-| Trash / gvfs places | Network and trash backends |
+| Trash / storage providers | Native freedesktop Trash, UDisks2-backed volumes, and optional protocol providers; no GVFS dependency |
 | Notifications | Prefs field exists; no toast daemon |
 | Portal expansion | FileChooser, Settings, Screenshot, Wallpaper, and other Moire-native backend interfaces |
 | Multi-monitor | Per-output wallpapers, rotation, mirror mode, cross-GPU handoff, atomic KMS commits |

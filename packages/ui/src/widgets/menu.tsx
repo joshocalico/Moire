@@ -2,8 +2,6 @@
 import React, { useId, useState, type ReactNode } from "react";
 import {
   Group,
-  Rect,
-  Text,
   measureTextBounds,
   type HitKeyEvent,
 } from "@moire/react-host";
@@ -16,6 +14,8 @@ import {
   type WidgetTextStyle,
 } from "../widget-theme.js";
 import { Pressable } from "./pressable.js";
+import { Align, Box, Horizontal, Inset, Measure, Vertical } from "./layout.js";
+import { Separator, Surface, TextBlock } from "./primitives.js";
 
 export type MenuItemSlot =
   | ReactNode
@@ -74,12 +74,12 @@ export function MenuItem(props: MenuItemProps): ReactNode {
   const leading = resolveStatefulStyle(recipe.leadingIcon, ...states);
   const trailing = resolveStatefulStyle(recipe.trailingText, ...states);
   const indicator = resolveStatefulStyle(recipe.indicator, ...states);
-  const labelBounds = measureTextBounds(props.label, {
+  const labelBounds = measureTextBounds("Mg", {
     fontSize: label.fontSize,
     fontWeight: label.fontWeight,
   });
   const descriptionBounds = props.description
-    ? measureTextBounds(props.description, {
+    ? measureTextBounds("Mg", {
         fontSize: description.fontSize,
         fontWeight: description.fontWeight,
       })
@@ -89,11 +89,6 @@ export function MenuItem(props: MenuItemProps): ReactNode {
     (descriptionBounds
       ? recipe.metrics.descriptionGap + descriptionBounds.height
       : 0);
-  const contentY = Math.floor((height - blockHeight) / 2);
-  const leadingWidth = props.leading
-    ? leading.size + recipe.metrics.contentGap
-    : 0;
-  const textX = recipe.metrics.paddingX + leadingWidth;
   const trailingBounds = typeof props.trailing === "string"
     ? measureTextBounds(props.trailing, {
         fontSize: trailing.fontSize,
@@ -141,59 +136,54 @@ export function MenuItem(props: MenuItemProps): ReactNode {
         onKeyDown={handleKey}
         onPress={props.onPress}
       />
-      {props.leading ? (
-        <Group
-          x={recipe.metrics.paddingX}
-          y={Math.floor((height - leading.size) / 2)}
-          width={leading.size}
-          height={leading.size}
-        >
-          {renderLeading(props.leading, leading)}
-        </Group>
-      ) : null}
-      <Text
-        x={textX}
-        y={contentY}
-        text={props.label}
-        color={label.color}
-        fontSize={label.fontSize}
-        fontWeight={label.fontWeight}
-      />
-      {props.description ? (
-        <Text
-          x={textX}
-          y={contentY + labelBounds.height + recipe.metrics.descriptionGap}
-          text={props.description}
-          color={description.color}
-          fontSize={description.fontSize}
-          fontWeight={description.fontWeight}
-        />
-      ) : null}
-      {props.trailing ? (
-        <Group
-          x={
-            props.width -
-            recipe.metrics.paddingX -
-            (trailingBounds?.width ?? leading.size)
-          }
-          y={Math.floor(
-            (height - (trailingBounds?.height ?? leading.size)) / 2,
-          )}
-          width={trailingBounds?.width ?? leading.size}
-          height={trailingBounds?.height ?? leading.size}
-        >
-          {typeof props.trailing === "string" ? (
-            <Text
-              text={props.trailing}
-              color={trailing.color}
-              fontSize={trailing.fontSize}
-              fontWeight={trailing.fontWeight}
+      <Inset width={props.width} height={height} padding={{ horizontal: recipe.metrics.paddingX }}>
+        <Horizontal gap={recipe.metrics.contentGap} align="center">
+          {props.leading ? (
+            <Box width={leading.size} height={leading.size}>
+              {renderLeading(props.leading, leading)}
+            </Box>
+          ) : null}
+          <Vertical flexGrow={1} height={blockHeight} gap={props.description ? recipe.metrics.descriptionGap : 0}>
+            <TextBlock
+              height={labelBounds.height}
+              text={props.label}
+              color={label.color}
+              fontSize={label.fontSize}
+              fontWeight={label.fontWeight}
+              overflow="ellipsis"
+              maxLines={1}
             />
-          ) : (
-            renderTrailing(props.trailing, trailing)
-          )}
-        </Group>
-      ) : null}
+            {props.description && descriptionBounds ? (
+              <TextBlock
+                height={descriptionBounds.height}
+                text={props.description}
+                color={description.color}
+                fontSize={description.fontSize}
+                fontWeight={description.fontWeight}
+                overflow="ellipsis"
+                maxLines={1}
+              />
+            ) : null}
+          </Vertical>
+          {props.trailing ? (
+            typeof props.trailing === "string" && trailingBounds ? (
+              <TextBlock
+                width={trailingBounds.width}
+                height={trailingBounds.height}
+                text={props.trailing}
+                color={trailing.color}
+                fontSize={trailing.fontSize}
+                fontWeight={trailing.fontWeight}
+                verticalAlign="center"
+              />
+            ) : (
+              <Box width={leading.size} height={leading.size}>
+                {renderTrailing(props.trailing, trailing)}
+              </Box>
+            )
+          ) : null}
+        </Horizontal>
+      </Inset>
     </Group>
   );
 }
@@ -224,62 +214,72 @@ export function Menu(props: MenuProps): ReactNode {
     titleHeight +
     props.items.length * recipe.metrics.rowHeight +
     separators * recipe.metrics.separatorGap;
-  let rowY = recipe.metrics.surfacePadding + titleHeight;
+  const contentWidth = Math.max(1, props.width - recipe.metrics.surfacePadding * 2);
+  const itemWidth = Math.max(1, contentWidth - recipe.metrics.itemInset * 2);
+  const rows: ReactNode[] = [];
+  props.items.forEach((item, index) => {
+    if (item.separatorBefore) {
+      rows.push(
+        <Inset
+          key={`${item.id ?? index}:separator`}
+          height={recipe.metrics.separatorGap}
+          padding={{ horizontal: recipe.metrics.paddingX }}
+        >
+          <Align alignY="center">
+            <Measure height={recipe.separator.height}>{({ width }) => (
+              <Separator width={width} height={recipe.separator.height} color={recipe.separator.fill} />
+            )}</Measure>
+          </Align>
+        </Inset>,
+      );
+    }
+    rows.push(
+      <Inset
+        key={item.id ?? index}
+        height={recipe.metrics.rowHeight}
+        padding={{ horizontal: recipe.metrics.itemInset }}
+      >
+        <MenuItem
+          {...item}
+          width={itemWidth}
+          height={recipe.metrics.rowHeight}
+          size={props.size}
+        />
+      </Inset>,
+    );
+  });
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
+    <Surface
+      x={props.x}
+      y={props.y}
       width={props.width}
       height={height}
+      fill={recipe.surface.fill}
+      radius={recipe.surface.radius}
+      stroke={recipe.surface.stroke}
+      strokeWidth={recipe.surface.strokeWidth}
+      elevation="medium"
       clip
     >
-      <Rect
-        width={props.width}
-        height={height}
-        fill={recipe.surface.fill}
-        radius={recipe.surface.radius}
-        stroke={recipe.surface.stroke}
-        strokeWidth={recipe.surface.strokeWidth}
-      />
-      {props.title ? (
-        <Text
-          x={recipe.metrics.paddingX + recipe.metrics.itemInset}
-          y={recipe.metrics.surfacePadding + 8}
-          text={props.title}
-          color={recipe.header.color}
-          fontSize={recipe.header.fontSize}
-          fontWeight={recipe.header.fontWeight}
-        />
-      ) : null}
-      {props.items.map((item, index) => {
-        const nodes: ReactNode[] = [];
-        if (item.separatorBefore) {
-          nodes.push(
-            <Rect
-              key={`${item.id ?? index}:separator`}
-              x={recipe.metrics.paddingX}
-              y={rowY + Math.floor(recipe.metrics.separatorGap / 2)}
-              width={props.width - recipe.metrics.paddingX * 2}
-              height={recipe.separator.height}
-              fill={recipe.separator.fill}
-            />,
-          );
-          rowY += recipe.metrics.separatorGap;
-        }
-        nodes.push(
-          <MenuItem
-            key={item.id ?? index}
-            {...item}
-            x={recipe.metrics.itemInset}
-            y={rowY}
-            width={props.width - recipe.metrics.itemInset * 2}
-            size={props.size}
-          />,
-        );
-        rowY += recipe.metrics.rowHeight;
-        return nodes;
-      })}
-    </Group>
+      <Inset width={props.width} height={height} padding={recipe.metrics.surfacePadding}>
+        <Vertical gap={0}>
+          {props.title ? (
+            <Inset height={titleHeight} padding={{ horizontal: recipe.metrics.itemInset }}>
+              <TextBlock
+                text={props.title}
+                color={recipe.header.color}
+                fontSize={recipe.header.fontSize}
+                fontWeight={recipe.header.fontWeight}
+                verticalAlign="center"
+                overflow="ellipsis"
+                maxLines={1}
+              />
+            </Inset>
+          ) : null}
+          {rows}
+        </Vertical>
+      </Inset>
+    </Surface>
   );
 }

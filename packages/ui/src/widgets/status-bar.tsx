@@ -1,5 +1,5 @@
 import React, { type ReactNode } from "react";
-import { Row } from "./layout.js";
+import { Row, registerIntrinsicSize } from "./layout.js";
 import { Separator, Surface } from "./primitives.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
@@ -39,3 +39,8 @@ export function StatusBar(props: StatusBarProps): ReactNode {
     </Surface>
   );
 }
+
+registerIntrinsicSize(StatusBar, (props) => ({
+  width: props.width,
+  height: props.height ?? 28,
+}));

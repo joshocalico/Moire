@@ -58,9 +58,12 @@ export type HitKeyEvent = {
   ctrlKey: boolean;
   altKey: boolean;
   metaKey: boolean;
+  /** Absolute geometry of the focused hit receiving this key, when present. */
+  targetBounds?: { x: number; y: number; width: number; height: number };
 };
 
 export type HitKeyHandler = (ev: HitKeyEvent) => void;
+export type HitGlobalKeyHandler = (ev: HitKeyEvent) => boolean | void;
 
 type HostPointerProps = {
   onPress?: HitHandler;
@@ -81,6 +84,12 @@ type HostPointerProps = {
   onFocusChange?: (focused: boolean) => void;
   onKeyDown?: HitKeyHandler;
   onKeyUp?: HitKeyHandler;
+  /** Key handler evaluated before focused-widget dispatch. Return true to consume. */
+  onGlobalKeyDown?: HitGlobalKeyHandler;
+  /** Nearest declarative focus traversal boundary. */
+  focusScopeId?: string;
+  focusScopeTrap?: boolean;
+  focusScopeActive?: boolean;
 };
 
 export type GroupProps = HostPointerProps & {
@@ -164,6 +173,10 @@ export type SceneNode = {
   onFocusChange?: (focused: boolean) => void;
   onKeyDown?: HitKeyHandler;
   onKeyUp?: HitKeyHandler;
+  onGlobalKeyDown?: HitGlobalKeyHandler;
+  focusScopeId?: string;
+  focusScopeTrap?: boolean;
+  focusScopeActive?: boolean;
   /** Opaque payload for position-aware lookups (e.g. DnD drop-target resolution). */
   data?: unknown;
   /**
@@ -198,6 +211,10 @@ export type HitRegion = {
   onFocusChange?: (focused: boolean) => void;
   onKeyDown?: HitKeyHandler;
   onKeyUp?: HitKeyHandler;
+  onGlobalKeyDown?: HitGlobalKeyHandler;
+  focusScopeId?: string;
+  focusScopeTrap?: boolean;
+  focusScopeActive?: boolean;
   /** Opaque payload for position-aware lookups (e.g. DnD drop-target resolution). */
   data?: unknown;
   /** See `SceneNode.onDropHoverChange`. */
@@ -251,6 +268,10 @@ function makeNode(
       | undefined,
     onKeyDown: props.onKeyDown as HitKeyHandler | undefined,
     onKeyUp: props.onKeyUp as HitKeyHandler | undefined,
+    onGlobalKeyDown: props.onGlobalKeyDown as HitGlobalKeyHandler | undefined,
+    focusScopeId: props.focusScopeId as string | undefined,
+    focusScopeTrap: props.focusScopeTrap as boolean | undefined,
+    focusScopeActive: props.focusScopeActive as boolean | undefined,
     children: [],
     parent: null,
   };
@@ -348,6 +369,18 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   }
   if ("onKeyUp" in props) {
     node.onKeyUp = props.onKeyUp as HitKeyHandler | undefined;
+  }
+  if ("onGlobalKeyDown" in props) {
+    node.onGlobalKeyDown = props.onGlobalKeyDown as HitGlobalKeyHandler | undefined;
+  }
+  if ("focusScopeId" in props) {
+    node.focusScopeId = props.focusScopeId as string | undefined;
+  }
+  if ("focusScopeTrap" in props) {
+    node.focusScopeTrap = props.focusScopeTrap as boolean | undefined;
+  }
+  if ("focusScopeActive" in props) {
+    node.focusScopeActive = props.focusScopeActive as boolean | undefined;
   }
   if ("data" in props) node.data = props.data;
   if ("onDropHoverChange" in props) {
@@ -587,8 +620,25 @@ function absPos(node: SceneNode): { x: number; y: number } {
   return { x, y };
 }
 
-export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[] {
+type CollectedFocusScope = {
+  id: string;
+  trap: boolean;
+  active: boolean;
+};
+
+export function collectHits(
+  node: SceneNode,
+  out: HitRegion[] = [],
+  inheritedScope?: CollectedFocusScope,
+): HitRegion[] {
   const { x, y } = absPos(node);
+  const scope = node.focusScopeId
+    ? {
+        id: node.focusScopeId,
+        trap: node.focusScopeTrap !== false,
+        active: node.focusScopeActive !== false,
+      }
+    : inheritedScope;
   if (
     (node.onPress ||
       node.onPointerEnter ||
@@ -598,6 +648,7 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       node.onPointerUp ||
       node.onContextMenu ||
       node.onWheel ||
+      node.onGlobalKeyDown ||
       node.focusable ||
       // A pure position lookup tag (e.g. DropZone) with no pointer handlers
       // still needs to be findable by hitTestDropData.
@@ -626,11 +677,15 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       onFocusChange: node.onFocusChange,
       onKeyDown: node.onKeyDown,
       onKeyUp: node.onKeyUp,
+      onGlobalKeyDown: node.onGlobalKeyDown,
+      focusScopeId: scope?.id,
+      focusScopeTrap: scope?.trap,
+      focusScopeActive: scope?.active,
       data: node.data,
       onDropHoverChange: node.onDropHoverChange,
     });
   }
-  for (const c of node.children) collectHits(c, out);
+  for (const c of node.children) collectHits(c, out, scope);
   return out;
 }
 

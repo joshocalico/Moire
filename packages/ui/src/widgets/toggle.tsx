@@ -3,7 +3,6 @@ import React, { useEffect, useId, useState, type ReactNode } from "react";
 import {
   Group,
   Rect,
-  Text,
   measureTextBounds,
   type HitKeyEvent,
 } from "@moire/react-host";
@@ -14,6 +13,8 @@ import {
   type WidgetState,
 } from "../widget-theme.js";
 import { easeTo, useMotionValue } from "../motion.js";
+import { Box, Horizontal, registerIntrinsicSize } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 
 export type ToggleProps = {
   x?: number;
@@ -58,7 +59,6 @@ export function Toggle(props: ToggleProps): ReactNode {
     props.width ??
     recipe.metrics.trackWidth +
       (labelBounds ? recipe.metrics.gap + labelBounds.width : 0);
-  const trackY = Math.floor((height - recipe.metrics.trackHeight) / 2);
   const travel =
     recipe.metrics.trackWidth -
     recipe.metrics.thumbInset * 2 -
@@ -89,36 +89,40 @@ export function Toggle(props: ToggleProps): ReactNode {
       width={width}
       height={height}
     >
-      <Rect
-        x={0}
-        y={trackY}
-        width={recipe.metrics.trackWidth}
-        height={recipe.metrics.trackHeight}
-        fill={track.fill}
-        radius={track.radius}
-        stroke={track.stroke}
-        strokeWidth={track.strokeWidth}
-      />
-      <Rect
-        x={thumbX}
-        y={trackY + recipe.metrics.thumbInset}
-        width={recipe.metrics.thumbSize}
-        height={recipe.metrics.thumbSize}
-        fill={thumb.fill}
-        radius={thumb.radius}
-        stroke={thumb.stroke}
-        strokeWidth={thumb.strokeWidth}
-      />
-      {props.label && labelBounds ? (
-        <Text
-          x={recipe.metrics.trackWidth + recipe.metrics.gap}
-          y={Math.floor((height - labelBounds.height) / 2)}
-          text={props.label}
-          color={label.color}
-          fontSize={label.fontSize}
-          fontWeight={label.fontWeight}
-        />
-      ) : null}
+      <Horizontal width={width} height={height} gap={recipe.metrics.gap} align="center">
+        <Box width={recipe.metrics.trackWidth} height={recipe.metrics.trackHeight}>
+          <Rect
+            width={recipe.metrics.trackWidth}
+            height={recipe.metrics.trackHeight}
+            fill={track.fill}
+            radius={track.radius}
+            stroke={track.stroke}
+            strokeWidth={track.strokeWidth}
+          />
+          <Rect
+            x={thumbX}
+            y={recipe.metrics.thumbInset}
+            width={recipe.metrics.thumbSize}
+            height={recipe.metrics.thumbSize}
+            fill={thumb.fill}
+            radius={thumb.radius}
+            stroke={thumb.stroke}
+            strokeWidth={thumb.strokeWidth}
+          />
+        </Box>
+        {props.label && labelBounds ? (
+          <TextBlock
+            flexGrow={1}
+            text={props.label}
+            color={label.color}
+            fontSize={label.fontSize}
+            fontWeight={label.fontWeight}
+            verticalAlign="center"
+            overflow="ellipsis"
+            maxLines={1}
+          />
+        ) : null}
+      </Horizontal>
       <Rect
         width={width}
         height={height}
@@ -144,3 +148,21 @@ export function Toggle(props: ToggleProps): ReactNode {
     </Group>
   );
 }
+
+registerIntrinsicSize(Toggle, (props, theme) => {
+  const recipe = theme.recipes.toggle[props.size ?? "medium"];
+  const labelStyle = resolveStatefulStyle(
+    recipe.label,
+    props.disabled ? "disabled" : "rest",
+  );
+  const labelWidth = props.label
+    ? measureTextBounds(props.label, {
+        fontSize: labelStyle.fontSize,
+        fontWeight: labelStyle.fontWeight,
+      }).width
+    : 0;
+  return {
+    width: props.width ?? recipe.metrics.trackWidth + (props.label ? recipe.metrics.gap + labelWidth : 0),
+    height: props.height ?? recipe.metrics.height,
+  };
+});

@@ -370,6 +370,7 @@ export class Window {
 
   private refreshHits(): void {
     this.hits = collectHits(this.root.container);
+    const activeScopeId = this.activeTrappedScopeId();
     const presentAutoFocusIds = new Set(
       this.hits
         .filter((hit) => hit.autoFocus && hit.focusId)
@@ -382,6 +383,7 @@ export class Window {
       (hit) =>
         hit.focusable &&
         hit.autoFocus &&
+        (!activeScopeId || hit.focusScopeId === activeScopeId) &&
         !!hit.focusId &&
         !this.consumedAutoFocusIds.has(hit.focusId),
     );
@@ -390,6 +392,16 @@ export class Window {
       this.changeFocus(autoFocusCandidate);
       this.dirty = true;
       return;
+    }
+    if (activeScopeId && this.focusedHit?.focusScopeId !== activeScopeId) {
+      const firstInScope = this.hits.find(
+        (hit) => hit.focusable && hit.focusScopeId === activeScopeId,
+      );
+      if (firstInScope) {
+        this.changeFocus(firstInScope);
+        this.dirty = true;
+        return;
+      }
     }
     if (!this.focusedId) {
       this.focusedHit = null;
@@ -400,6 +412,16 @@ export class Window {
         (hit) => hit.focusable && hit.focusId === this.focusedId,
       ) ?? null;
     if (!this.focusedHit) this.focusedId = null;
+  }
+
+  private activeTrappedScopeId(): string | null {
+    for (let index = this.hits.length - 1; index >= 0; index--) {
+      const hit = this.hits[index]!;
+      if (hit.focusScopeId && hit.focusScopeTrap && hit.focusScopeActive !== false) {
+        return hit.focusScopeId;
+      }
+    }
+    return null;
   }
 
   private changeFocus(next: HitRegion | null): boolean {
@@ -417,7 +439,10 @@ export class Window {
   }
 
   private moveFocus(reverse: boolean): void {
-    const focusable = this.hits.filter((hit) => hit.focusable);
+    const activeScopeId = this.activeTrappedScopeId();
+    const focusable = this.hits.filter(
+      (hit) => hit.focusable && (!activeScopeId || hit.focusScopeId === activeScopeId),
+    );
     if (focusable.length === 0) {
       if (this.changeFocus(null)) this.flushAndDirty();
       return;
@@ -578,6 +603,39 @@ export class Window {
 
   private handleKey(ev: UiKeyEvent): void {
     if (this.closed) return;
+    const event: HitKeyEvent = {
+      code: ev.code,
+      key: ev.key,
+      text: ev.text,
+      repeat: ev.type === "repeat",
+      shiftKey: ev.modifiers.shift,
+      ctrlKey: ev.modifiers.ctrl,
+      altKey: ev.modifiers.alt,
+      metaKey: ev.modifiers.meta,
+      targetBounds: this.focusedHit ? {
+        x: this.focusedHit.x,
+        y: this.focusedHit.y,
+        width: this.focusedHit.width,
+        height: this.focusedHit.height,
+      } : undefined,
+    };
+    if (ev.type === "down" || ev.type === "repeat") {
+      const activeScopeId = this.activeTrappedScopeId();
+      for (let index = this.hits.length - 1; index >= 0; index--) {
+        const hit = this.hits[index]!;
+        if (
+          !hit.onGlobalKeyDown ||
+          hit.focusScopeActive === false ||
+          (activeScopeId && hit.focusScopeId !== activeScopeId)
+        ) {
+          continue;
+        }
+        if (hit.onGlobalKeyDown(event) === true) {
+          this.flushAndDirty();
+          return;
+        }
+      }
+    }
     if (
       (ev.type === "down" || ev.type === "repeat") &&
       ev.code === 15 &&
@@ -604,16 +662,6 @@ export class Window {
       this.flushAndDirty();
       return;
     }
-    const event: HitKeyEvent = {
-      code: ev.code,
-      key: ev.key,
-      text: ev.text,
-      repeat: ev.type === "repeat",
-      shiftKey: ev.modifiers.shift,
-      ctrlKey: ev.modifiers.ctrl,
-      altKey: ev.modifiers.alt,
-      metaKey: ev.modifiers.meta,
-    };
     if (ev.type === "up") focused.onKeyUp?.(event);
     else focused.onKeyDown?.(event);
     this.flushAndDirty();

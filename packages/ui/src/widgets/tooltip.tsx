@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, type ReactNode } from "react";
-import { Group, Rect, Text, measureTextBounds } from "@moire/react-host";
+import { Group, Rect, measureTextBounds } from "@moire/react-host";
 import { easeTo, useMotionValue } from "../motion.js";
 import { useWidgetTheme } from "../widget-theme.js";
+import { Surface, TextBlock } from "./primitives.js";
 
 export type TooltipPlacement = "top" | "bottom" | "left" | "right";
 
@@ -21,7 +22,8 @@ export type TooltipProps = {
 
 /** Non-interactive hover help composed around any fixed-size trigger. */
 export function Tooltip(props: TooltipProps): ReactNode {
-  const pal = useWidgetTheme().foundations.palette;
+  const theme = useWidgetTheme();
+  const pal = theme.foundations.palette;
   const opacity = useMotionValue(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bounds = measureTextBounds(props.label, { fontSize: 10 });
@@ -72,30 +74,30 @@ export function Tooltip(props: TooltipProps): ReactNode {
         onPointerEnter={props.disabled ? undefined : reveal}
         onPointerLeave={props.disabled ? undefined : conceal}
       />
-      <Group
+      <Surface
         x={tipX}
         y={tipY}
         width={tipWidth}
         height={tipHeight}
-        clip
+        fill={pal.overlay}
+        radius={theme.foundations.radii.small}
+        stroke={pal.border}
+        strokeWidth={theme.foundations.borders.hairline}
+        elevation="low"
         opacity={opacity.get() / 100}
       >
-        <Rect
+        <TextBlock
           width={tipWidth}
           height={tipHeight}
-          fill={pal.overlay}
-          radius={pal.radiusSm}
-          stroke={pal.border}
-          strokeWidth={1}
-        />
-        <Text
-          x={Math.round((tipWidth - bounds.width) / 2)}
-          y={Math.round((tipHeight - bounds.height) / 2)}
           text={props.label}
           color={pal.text}
           fontSize={10}
+          horizontalAlign="center"
+          verticalAlign="center"
+          overflow="ellipsis"
+          maxLines={1}
         />
-      </Group>
+      </Surface>
     </Group>
   );
 }

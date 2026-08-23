@@ -256,6 +256,27 @@ export type WidgetFoundations = {
     large: number;
     window: number;
   };
+  borders: {
+    hairline: number;
+    control: number;
+    strong: number;
+  };
+  controlHeights: Record<ButtonSize, number>;
+  density: {
+    compact: number;
+    comfortable: number;
+    touch: number;
+  };
+  focusRing: {
+    width: number;
+    inset: number;
+    radiusOffset: number;
+  };
+  opacity: {
+    disabled: number;
+    inactive: number;
+    scrim: number;
+  };
   motion: {
     fastMs: number;
     normalMs: number;
@@ -1324,6 +1345,31 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
         medium: palette.radiusMd,
         large: palette.radiusLg,
         window: palette.radiusWindow,
+      },
+      borders: {
+        hairline: 1,
+        control: 1,
+        strong: 2,
+      },
+      controlHeights: {
+        small: 28,
+        medium: 34,
+        large: 40,
+      },
+      density: {
+        compact: 0.86,
+        comfortable: 1,
+        touch: 1.2,
+      },
+      focusRing: {
+        width: 2,
+        inset: 1,
+        radiusOffset: 2,
+      },
+      opacity: {
+        disabled: 0.44,
+        inactive: 0.72,
+        scrim: 0.58,
       },
       motion: {
         fastMs: 90,

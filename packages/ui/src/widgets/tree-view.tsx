@@ -1,10 +1,12 @@
 import React, { type ReactNode } from "react";
-import { Group, Rect, Text, measureTextBounds, type HitKeyEvent } from "@moire/react-host";
+import { Group, Rect, type HitKeyEvent } from "@moire/react-host";
 import { CollectionItem } from "./interaction.js";
 import { Icon, type IconName } from "./icon.js";
 import { Pressable } from "./pressable.js";
 import { VirtualList } from "./virtual-list.js";
 import { useWidgetTheme } from "../widget-theme.js";
+import { Box, Horizontal, Inset } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 
 export type TreeNode<T = unknown> = {
   id: string;
@@ -73,8 +75,6 @@ export function TreeView<T,>(props: TreeViewProps<T>): ReactNode {
       renderItem={({ node, depth }) => {
         const branch = !!node.children?.length;
         const expanded = props.expandedIds.has(node.id);
-        const contentX = 8 + depth * indent;
-        const textBounds = measureTextBounds(node.label, { fontSize: 12 });
         const handleKey = (event: HitKeyEvent): boolean => {
           if ((event.key === "ArrowRight" || event.code === 106) && branch && !expanded) {
             toggle(node);
@@ -100,40 +100,52 @@ export function TreeView<T,>(props: TreeViewProps<T>): ReactNode {
               onDoublePress={() => branch ? toggle(node) : props.onActivate?.(node)}
               onKeyDown={handleKey}
             />
-            {branch ? (
-              <Pressable
-                x={contentX}
-                y={5}
-                width={24}
-                height={24}
-                radius={pal.radiusSm}
-                onPress={() => toggle(node)}
-              >
-                <Text
-                  x={8}
-                  y={4}
-                  text={expanded ? "▾" : "›"}
-                  color={pal.muted}
+            <Inset
+              width={props.width}
+              height={rowHeight}
+              padding={{ left: 8 + depth * indent, right: 8 }}
+            >
+              <Horizontal gap={4} align="center">
+                <Box width={24} height={24}>
+                  {branch ? (
+                    <Pressable
+                      width={24}
+                      height={24}
+                      radius={pal.radiusSm}
+                      onPress={() => toggle(node)}
+                    >
+                      <TextBlock
+                        width={24}
+                        height={24}
+                        text={expanded ? "▾" : "›"}
+                        color={pal.muted}
+                        fontSize={12}
+                        horizontalAlign="center"
+                        verticalAlign="center"
+                      />
+                    </Pressable>
+                  ) : null}
+                </Box>
+                {node.icon ? (
+                  <Box width={18} height={18}>
+                    <Icon
+                      name={node.icon}
+                      size={18}
+                      color={props.selectedId === node.id ? pal.accent : pal.text}
+                    />
+                  </Box>
+                ) : null}
+                <TextBlock
+                  flexGrow={1}
+                  text={node.label}
+                  color={node.disabled ? pal.muted : pal.text}
                   fontSize={12}
+                  verticalAlign="center"
+                  overflow="ellipsis"
+                  maxLines={1}
                 />
-              </Pressable>
-            ) : null}
-            {node.icon ? (
-              <Icon
-                x={contentX + 28}
-                y={Math.floor((rowHeight - 18) / 2)}
-                name={node.icon}
-                size={18}
-                color={props.selectedId === node.id ? pal.accent : pal.text}
-              />
-            ) : null}
-            <Text
-              x={contentX + (node.icon ? 52 : 30)}
-              y={Math.floor((rowHeight - textBounds.height) / 2)}
-              text={node.label}
-              color={node.disabled ? pal.muted : pal.text}
-              fontSize={12}
-            />
+              </Horizontal>
+            </Inset>
           </Group>
         );
       }}

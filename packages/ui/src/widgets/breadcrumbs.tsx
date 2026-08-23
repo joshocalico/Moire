@@ -1,5 +1,5 @@
 import React, { useMemo, useState, type ReactNode } from "react";
-import { Group, Text, measureText, measureTextBounds } from "@moire/react-host";
+import { Group, measureText } from "@moire/react-host";
 import {
   resolveStatefulStyle,
   useWidgetTheme,
@@ -9,6 +9,8 @@ import { Button } from "./button.js";
 import { DropZone } from "./dnd.js";
 import { Pressable } from "./pressable.js";
 import { TextField } from "./text-field.js";
+import { Horizontal, Inset, Measure } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 
 export type BreadcrumbSegment = {
   id: string;
@@ -34,14 +36,6 @@ export function Breadcrumbs(props: BreadcrumbsProps): ReactNode {
   const segmentStyle = resolveStatefulStyle(recipe.segment, "rest");
   const hoveredSegment = resolveStatefulStyle(recipe.segment, "hover");
   const pressedSegment = resolveStatefulStyle(recipe.segment, "pressed");
-  const labelHeight = measureTextBounds("Mg", {
-    fontSize: label.fontSize,
-    fontWeight: label.fontWeight,
-  }).height;
-  const separatorHeight = measureTextBounds("›", {
-    fontSize: recipe.separator.fontSize,
-    fontWeight: recipe.separator.fontWeight,
-  }).height;
   const visible = useMemo(() => {
     const widths = props.segments.map(
       (item) =>
@@ -59,26 +53,24 @@ export function Breadcrumbs(props: BreadcrumbsProps): ReactNode {
     return props.segments.slice(start);
   }, [label.fontSize, metrics, props.segments, props.width]);
 
-  let cursorX = 0;
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={h} clip>
+      <Horizontal width={props.width} height={h} gap={0} align="center">
       {visible.map((segment, index) => {
         const itemWidth = Math.min(
-          props.width - cursorX,
+          props.width,
           Math.ceil(measureText(segment.label, label.fontSize / 14)) +
             metrics.paddingX * 2,
         );
-        const x = cursorX;
-        cursorX += itemWidth + metrics.separatorWidth + metrics.gap;
         const isCurrent = index === visible.length - 1;
         const labelStyle = isCurrent ? currentLabel : label;
         return (
-          <Group
+          <Horizontal
             key={segment.id}
-            x={x}
-            y={0}
-            width={itemWidth + metrics.separatorWidth}
+            width={itemWidth + (isCurrent ? 0 : metrics.separatorWidth + metrics.gap)}
             height={h}
+            gap={metrics.gap}
+            align="center"
           >
             <DropZone width={itemWidth} height={h} id={segment.id}>
               <Pressable
@@ -92,29 +84,35 @@ export function Breadcrumbs(props: BreadcrumbsProps): ReactNode {
                 strokeWidth={segmentStyle.strokeWidth}
                 onPress={() => props.onNavigate(segment.id)}
               >
-                <Text
-                  x={metrics.paddingX}
-                  y={Math.floor((h - labelHeight) / 2)}
-                  text={segment.label}
-                  color={labelStyle.color}
-                  fontSize={labelStyle.fontSize}
-                  fontWeight={labelStyle.fontWeight}
-                />
+                <Inset width={itemWidth} height={h} padding={{ horizontal: metrics.paddingX }}>
+                  <TextBlock
+                    text={segment.label}
+                    color={labelStyle.color}
+                    fontSize={labelStyle.fontSize}
+                    fontWeight={labelStyle.fontWeight}
+                    verticalAlign="center"
+                    overflow="ellipsis"
+                    maxLines={1}
+                  />
+                </Inset>
               </Pressable>
             </DropZone>
             {!isCurrent ? (
-              <Text
-                x={itemWidth + metrics.gap}
-                y={Math.floor((h - separatorHeight) / 2)}
+              <TextBlock
+                width={metrics.separatorWidth}
+                height={h}
                 text="›"
                 color={recipe.separator.color}
                 fontSize={recipe.separator.fontSize}
                 fontWeight={recipe.separator.fontWeight}
+                horizontalAlign="center"
+                verticalAlign="center"
               />
             ) : null}
-          </Group>
+          </Horizontal>
         );
       })}
+      </Horizontal>
     </Group>
   );
 }
@@ -146,10 +144,10 @@ export function PathBar(props: PathBarProps): ReactNode {
   };
 
   return (
-    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={h}>
-      {editing ? (
+    <Horizontal x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={h} gap={gap} align="center">
+      <Measure flexGrow={1} minWidth={1}>{({ width }) => editing ? (
         <TextField
-          width={Math.max(1, props.width - buttonWidth - gap)}
+          width={width}
           height={h}
           size={props.size}
           value={draft}
@@ -167,16 +165,14 @@ export function PathBar(props: PathBarProps): ReactNode {
         />
       ) : (
         <Breadcrumbs
-          width={Math.max(1, props.width - buttonWidth - gap)}
+          width={width}
           height={h}
           size={props.size}
           segments={props.segments}
           onNavigate={props.onNavigate}
         />
-      )}
+      )}</Measure>
       <Button
-        x={props.width - buttonWidth}
-        y={0}
         width={buttonWidth}
         height={h}
         size={props.size}
@@ -184,6 +180,6 @@ export function PathBar(props: PathBarProps): ReactNode {
         variant={error ? "danger" : "ghost"}
         onPress={editing ? commit : beginEditing}
       />
-    </Group>
+    </Horizontal>
   );
 }

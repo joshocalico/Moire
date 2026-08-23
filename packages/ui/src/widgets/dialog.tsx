@@ -1,9 +1,10 @@
 /** Recipe-driven application dialog surface. */
 import React, { type ReactNode } from "react";
-import { Group, Rect, Text, measureTextBounds } from "@moire/react-host";
 import { useWidgetTheme, type ButtonSize } from "../widget-theme.js";
 import { Icon } from "./icon.js";
 import { IconButton } from "./icon-button.js";
+import { Box, Horizontal, Inset, Vertical, registerIntrinsicSize } from "./layout.js";
+import { Surface, TextBlock } from "./primitives.js";
 
 export type DialogProps = {
   x?: number;
@@ -17,77 +18,74 @@ export type DialogProps = {
 };
 
 export function Dialog(props: DialogProps): ReactNode {
-  const recipe = useWidgetTheme().recipes.dialog[props.size ?? "medium"];
-  const titleBounds = measureTextBounds(props.title, {
-    fontSize: recipe.title.fontSize,
-    fontWeight: recipe.title.fontWeight,
-  });
-  const bodyY = recipe.metrics.titlebarHeight + recipe.metrics.bodyPaddingTop;
-  const closeIconOffset = Math.floor(
-    (recipe.metrics.closeSize - recipe.closeIcon.size) / 2,
-  );
-  const bodyHeight = Math.max(
-    0,
-    props.height - bodyY - recipe.metrics.bodyPaddingBottom,
-  );
+  const theme = useWidgetTheme();
+  const recipe = theme.recipes.dialog[props.size ?? "medium"];
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
+    <Surface
+      x={props.x}
+      y={props.y}
       width={props.width}
       height={props.height}
+      fill={recipe.surface.fill}
+      radius={recipe.surface.radius}
+      stroke={recipe.surface.stroke}
+      strokeWidth={recipe.surface.strokeWidth}
+      elevation="high"
       clip
     >
-      <Rect
-        width={props.width}
-        height={props.height}
-        fill={recipe.surface.fill}
-        radius={recipe.surface.radius}
-        stroke={recipe.surface.stroke}
-        strokeWidth={recipe.surface.strokeWidth}
-      />
-      <Rect
-        width={props.width}
-        height={recipe.metrics.titlebarHeight}
-        fill={recipe.titlebar.fill}
-        radius={recipe.titlebar.radius}
-      />
-      <Text
-        x={recipe.metrics.titlePaddingX}
-        y={Math.floor((recipe.metrics.titlebarHeight - titleBounds.height) / 2)}
-        text={props.title}
-        color={recipe.title.color}
-        fontSize={recipe.title.fontSize}
-        fontWeight={recipe.title.fontWeight}
-      />
-      {props.onClose ? (
-        <IconButton
-          x={props.width - recipe.metrics.closeInset - recipe.metrics.closeSize}
-          y={Math.floor((recipe.metrics.titlebarHeight - recipe.metrics.closeSize) / 2)}
-          width={recipe.metrics.closeSize}
-          height={recipe.metrics.closeSize}
-          size={props.size}
-          variant="ghost"
-          icon={() => (
-            <Icon
-              name="close"
-              x={closeIconOffset}
-              y={closeIconOffset}
-              size={recipe.closeIcon.size}
-              color={recipe.closeIcon.color}
-            />
-          )}
-          onPress={props.onClose}
-        />
-      ) : null}
-      <Group
-        x={recipe.metrics.bodyPaddingX}
-        y={bodyY}
-        width={Math.max(0, props.width - recipe.metrics.bodyPaddingX * 2)}
-        height={bodyHeight}
-      >
-        {props.children}
-      </Group>
-    </Group>
+      <Vertical width={props.width} height={props.height} gap={0}>
+        <Surface
+          width={props.width}
+          height={recipe.metrics.titlebarHeight}
+          fill={recipe.titlebar.fill}
+          radius={recipe.titlebar.radius}
+        >
+          <Inset
+            width={props.width}
+            height={recipe.metrics.titlebarHeight}
+            padding={{ horizontal: recipe.metrics.titlePaddingX }}
+          >
+            <Horizontal gap={theme.foundations.space.sm} align="center">
+              <TextBlock
+                flexGrow={1}
+                text={props.title}
+                color={recipe.title.color}
+                fontSize={recipe.title.fontSize}
+                fontWeight={recipe.title.fontWeight}
+                verticalAlign="center"
+                overflow="ellipsis"
+                maxLines={1}
+              />
+              {props.onClose ? (
+                <IconButton
+                  width={recipe.metrics.closeSize}
+                  height={recipe.metrics.closeSize}
+                  size={props.size}
+                  variant="ghost"
+                  icon={<Icon name="close" size={recipe.closeIcon.size} color={recipe.closeIcon.color} symbolic />}
+                  onPress={props.onClose}
+                />
+              ) : <Box width={0} height={recipe.metrics.closeSize} />}
+            </Horizontal>
+          </Inset>
+        </Surface>
+        <Inset
+          flexGrow={1}
+          padding={{
+            top: recipe.metrics.bodyPaddingTop,
+            right: recipe.metrics.bodyPaddingX,
+            bottom: recipe.metrics.bodyPaddingBottom,
+            left: recipe.metrics.bodyPaddingX,
+          }}
+        >
+          {props.children}
+        </Inset>
+      </Vertical>
+    </Surface>
   );
 }
+
+registerIntrinsicSize(Dialog, (props) => ({
+  width: props.width,
+  height: props.height,
+}));

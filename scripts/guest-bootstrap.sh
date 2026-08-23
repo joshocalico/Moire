@@ -42,7 +42,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libinput-dev libxkbcommon-dev libseat-dev seatd \
   wayland-protocols libwayland-dev \
   dbus dbus-user-session \
-  nautilus gvfs gvfs-backends foot libreoffice xwayland \
+  foot libreoffice xwayland \
   adwaita-icon-theme hicolor-icon-theme mesa-utils \
   linux-tools-generic\n\
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -\n\

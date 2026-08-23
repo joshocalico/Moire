@@ -1,7 +1,8 @@
 import React, { useEffect, useState, type ReactNode } from "react";
-import { Group, Rect, Text, measureTextBounds } from "@moire/react-host";
+import { Group, Rect, measureTextBounds } from "@moire/react-host";
 import { Icon, type IconName } from "./icon.js";
-import { Surface } from "./primitives.js";
+import { Surface, TextBlock } from "./primitives.js";
+import { Align, Box, Center, Horizontal, Inset, Vertical, registerIntrinsicSize } from "./layout.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
 export type BadgeTone = "neutral" | "accent" | "success" | "warning" | "danger";
@@ -30,7 +31,7 @@ export function Badge(props: BadgeProps): ReactNode {
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={height}>
       <Rect width={width} height={height} fill={toneColor(props.tone ?? "neutral", pal)} radius={height / 2} />
-      <Text x={Math.floor((width - bounds.width) / 2)} y={Math.floor((height - bounds.height) / 2)} text={props.text} color={0xffffffff} fontSize={10} fontWeight="medium" />
+      <TextBlock width={width} height={height} text={props.text} color={0xffffffff} fontSize={10} fontWeight="medium" horizontalAlign="center" verticalAlign="center" overflow="ellipsis" maxLines={1} />
     </Group>
   );
 }
@@ -48,16 +49,23 @@ export type BannerProps = {
 };
 
 export function Banner(props: BannerProps): ReactNode {
-  const pal = useWidgetTheme().foundations.palette;
+  const theme = useWidgetTheme();
+  const pal = theme.foundations.palette;
   const height = props.height ?? 64;
   const accent = toneColor(props.tone ?? "accent", pal);
   return (
-    <Surface x={props.x} y={props.y} width={props.width} height={height} fill={pal.surface} radius={pal.radiusMd} stroke={pal.borderSubtle} strokeWidth={1}>
+    <Surface x={props.x} y={props.y} width={props.width} height={height} fill={pal.surface} radius={theme.foundations.radii.medium} stroke={pal.borderSubtle} strokeWidth={theme.foundations.borders.control} elevation="low">
       <Rect width={4} height={height} fill={accent} radius={2} />
-      {props.icon ? <Icon x={14} y={Math.floor((height - 20) / 2)} name={props.icon} size={20} color={accent} /> : null}
-      <Text x={props.icon ? 44 : 16} y={props.message ? 12 : 22} text={props.title} color={pal.text} fontSize={13} fontWeight="medium" />
-      {props.message ? <Text x={props.icon ? 44 : 16} y={34} text={props.message} color={pal.muted} fontSize={11} /> : null}
-      {props.action ? <Group x={props.width - 120} y={14} width={108} height={36}>{props.action}</Group> : null}
+      <Inset width={props.width} height={height} padding={{ left: 14, right: 12, vertical: 10 }}>
+        <Horizontal gap={10} align="center">
+          {props.icon ? <Box width={20} height={20}><Icon name={props.icon} size={20} color={accent} symbolic /></Box> : null}
+          <Vertical flexGrow={1} gap={2} justify="center">
+            <TextBlock height={18} text={props.title} color={pal.text} fontSize={13} fontWeight="medium" verticalAlign="center" overflow="ellipsis" maxLines={1} />
+            {props.message ? <TextBlock height={16} text={props.message} color={pal.muted} fontSize={11} verticalAlign="center" overflow="ellipsis" maxLines={1} /> : null}
+          </Vertical>
+          {props.action ? <Align width={108} alignX="stretch" alignY="center">{props.action}</Align> : null}
+        </Horizontal>
+      </Inset>
     </Surface>
   );
 }
@@ -99,17 +107,41 @@ export type EmptyStateProps = {
 };
 
 export function EmptyState(props: EmptyStateProps): ReactNode {
-  const pal = useWidgetTheme().foundations.palette;
-  const centerX = props.width / 2;
-  const contentY = Math.max(20, props.height / 2 - 70);
-  const title = measureTextBounds(props.title, { fontSize: 15, fontWeight: "medium" });
-  const message = props.message ? measureTextBounds(props.message, { fontSize: 11 }) : null;
+  const theme = useWidgetTheme();
+  const pal = theme.foundations.palette;
+  const contentWidth = Math.max(1, Math.min(360, props.width - 32));
+  const contentHeight = (props.icon ? 56 : 0) + 24 + (props.message ? 28 : 0) + (props.action ? 46 : 0);
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
-      {props.icon ? <Icon x={centerX - 24} y={contentY} name={props.icon} size={48} color={pal.muted} /> : null}
-      <Text x={centerX - title.width / 2} y={contentY + 58} text={props.title} color={pal.text} fontSize={15} fontWeight="medium" />
-      {props.message && message ? <Text x={centerX - message.width / 2} y={contentY + 84} text={props.message} color={pal.muted} fontSize={11} /> : null}
-      {props.action ? <Group x={centerX - 70} y={contentY + 108} width={140} height={36}>{props.action}</Group> : null}
+      <Center width={props.width} height={props.height}>
+        <Vertical width={contentWidth} height={contentHeight} gap={8} align="center">
+          {props.icon ? <Box width={48} height={48}><Icon name={props.icon} size={48} color={pal.muted} symbolic /></Box> : null}
+          <TextBlock width={contentWidth} height={24} text={props.title} color={pal.text} fontSize={15} fontWeight="medium" horizontalAlign="center" verticalAlign="center" overflow="ellipsis" maxLines={1} />
+          {props.message ? <TextBlock width={contentWidth} height={20} text={props.message} color={pal.muted} fontSize={11} horizontalAlign="center" verticalAlign="center" overflow="ellipsis" maxLines={1} /> : null}
+          {props.action ? <Box width={140} height={36}>{props.action}</Box> : null}
+        </Vertical>
+      </Center>
     </Group>
   );
 }
+
+registerIntrinsicSize(Badge, (props) => {
+  const height = props.height ?? 22;
+  const bounds = measureTextBounds(props.text, { fontSize: 10, fontWeight: "medium" });
+  return { width: Math.max(height, bounds.width + 14), height };
+});
+
+registerIntrinsicSize(Banner, (props) => ({
+  width: props.width,
+  height: props.height ?? 64,
+}));
+
+registerIntrinsicSize(Spinner, (props) => {
+  const size = props.size ?? 24;
+  return { width: size, height: size };
+});
+
+registerIntrinsicSize(EmptyState, (props) => ({
+  width: props.width,
+  height: props.height,
+}));

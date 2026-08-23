@@ -47,6 +47,12 @@ Each allocated child box is published through layout context, so nested
 components can consume it with `Measure` or `useLayoutMetrics()` instead of
 repeating parent arithmetic.
 
+Public widgets with recipe-owned defaults publish intrinsic sizes to flow
+parents. A `Column` containing `TextField`, `Checkbox`, `Banner`, or `Button`
+therefore reserves each control's themed height even when the caller omits
+`height`. Compound widget authors should use `registerIntrinsicSize`; painting
+beyond a zero-sized allocation is a layout-contract bug.
+
 | Prop | Type | Default |
 | --- | --- | --- |
 | `width`, `height` | `number` | nearest allocated box when omitted |
@@ -209,13 +215,32 @@ Filled background. `Panel` defaults fill to `pal.surface`; `Surface` to `pal.pan
 
 | Prop | Type | Default |
 | --- | --- | --- |
+| `x`, `y` | `number` | `0` |
 | `width` | `number` | required |
 | `height` | `number` | required |
 | `fill` | `number` | theme |
 | `radius`, `stroke`, `strokeWidth` | `number` | optional |
+| `elevation` | `none` \| `low` \| `medium` \| `high` | `none` |
+| `opacity` | `number` | `1` |
 | `clip` | `boolean` | `false` |
 | `onPress` | `() => void` | |
 | `children` | `ReactNode` | |
+
+`elevation` is a semantic request. The software renderer currently paints a
+lightweight fallback shadow; accelerated backends may implement the same level
+with richer effects without changing widget JSX.
+
+### `FocusRing`
+
+Shared focus outline geometry. Prefer this over local outline rectangles so
+focus width, inset, radius, and color stay themeable.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `width`, `height` | `number` | required |
+| `radius` | `number` | medium theme radius plus focus offset |
+| `color` | `number` | theme focus color |
+| `visible` | `boolean` | `true` |
 
 ### `Separator` (`Divider` alias)
 
@@ -262,7 +287,7 @@ Hit target with eased hover/press fills (`pal.hover` / `pal.pressed`).
 | --- | --- | --- |
 | `width`, `height` | `number` | required |
 | `fill` | `number` | transparent |
-| `onPress` | `() => void` | |
+| `onPress` | `(event?: HitPointerEvent) => void` | |
 | `onDoublePress` | `() => void` | 400ms window |
 | `disabled` | `boolean` | |
 | `children` | `ReactNode` | |
@@ -303,7 +328,7 @@ its child control.
 | `fontSize` | `number` | `14` |
 | `disabled` | `boolean` | |
 | `autoFocus`, `focusId` | focus control | |
-| `onPress` | `() => void` | |
+| `onPress` | `(event?: HitPointerEvent) => void` | keyboard activation supplies the focused control center |
 
 Primary uses `accentLine` fill; secondary uses `surface` + rim; ghost is transparent.
 Buttons with an action participate in Tab traversal, paint the recipe focus
@@ -345,6 +370,7 @@ text, Left/Right, Home/End, Backspace/Delete, Enter, and Escape.
 | `onChange` | `(value: string) => void` | |
 | `onSubmit` | `(value: string) => void` | |
 | `onCancel` | `() => void` | |
+| `onPress` | `(event: HitPointerEvent) => void` | optional activation/anchor hook |
 | `onFocusChange` | `(focused: boolean) => void` | |
 | `focused` | `boolean` | optional visual focus override |
 | `autoFocus` | `boolean` | focus once when mounted |
@@ -355,6 +381,63 @@ text, Left/Right, Home/End, Backspace/Delete, Enter, and Escape.
 slots. It preserves the `TextField` keyboard/focus contract, clears through
 `onChange("")`, and can additionally report `onClear`. Launch and Open With use
 this shared control rather than maintaining local search-field paint.
+
+### `Select` / `ComboBox`
+
+Overlay-backed controlled choice fields. `Select` presents a known set;
+`ComboBox` keeps the editor active while filtering the same option model.
+Pointer activation records the control's host-space geometry, so nested
+callers do not normally calculate popover coordinates.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `width`, `height` | `number` | width required; recipe height |
+| `viewportWidth`, `viewportHeight` | `number` | required overlay bounds |
+| `options` | `SelectOption[]` | required |
+| `value` (`Select`) | `string \| null` | controlled selection |
+| `onChange` (`Select`) | `(id: string) => void` | |
+| `value` (`ComboBox`) | `string` | controlled editable text |
+| `selectedId` (`ComboBox`) | `string \| null` | optional selected option |
+| `onValueChange` (`ComboBox`) | `(value: string) => void` | |
+| `onSelect` (`ComboBox`) | `(id: string) => void` | |
+| `placeholder` | `string` | widget-specific prompt |
+| `size` | `small \| medium \| large` | `medium` |
+| `disabled` | `boolean` | `false` |
+| `maxMenuHeight` | `number` | `280` |
+| `anchorX`, `anchorY` | `number` | measured pointer origin, then local position |
+| `onOpenChange` | `(open: boolean) => void` | |
+
+`SelectOption` has `id`, `label`, optional `description`, and optional
+`disabled`. Mount the application under `OverlayHost`; without one, the menu
+uses an inline compatibility fallback.
+
+### `FocusScope` / `ShortcutManager`
+
+`FocusScope` marks a subtree as the active traversal boundary. An active
+trapped scope receives initial focus, wraps Tab/Shift+Tab, and prevents focus
+or global commands leaking to the surface behind it. `ShortcutManager`
+dispatches declarative window-level commands before focused-widget handling.
+
+| Prop (`FocusScope`) | Type | Default |
+| --- | --- | --- |
+| `id` | `string` | generated |
+| `x`, `y`, `width`, `height` | layout values | nearest allocation |
+| `active` | `boolean` | `true` |
+| `trap` | `boolean` | `true` |
+| `onEscape` | `() => void` | |
+| `children` | `ReactNode` | |
+
+| Prop (`ShortcutManager`) | Type | Default |
+| --- | --- | --- |
+| `shortcuts` | `Shortcut[]` | required |
+| `enabled` | `boolean` | `true` |
+| `x`, `y`, `width`, `height` | layout values | nearest allocation |
+| `children` | `ReactNode` | |
+
+A `Shortcut` has `id`, `onInvoke`, and either `key`, numeric `code`, or both.
+It can match `ctrl`, `alt`, `shift`, `meta`, or `platformModifier`, and accepts
+`allowRepeat` and `disabled`. `platformModifier` accepts Ctrl or Meta so apps
+can describe a conventional primary command without knowing the backend.
 
 ### `Breadcrumbs` / `PathBar`
 
@@ -394,6 +477,64 @@ stable identity, a theme-sized artwork slot, and per-tab availability. Active
 tabs use an accent underline rather than a full slab. Tabs are focusable and
 support Left/Right/Home/End navigation, skipping disabled entries, plus
 Enter/Space activation.
+
+### `OverlayHost` and transient surfaces
+
+`OverlayHost` owns one application-sized top layer. `OverlayPortal` registers
+its children there. This keeps transient paint and hit testing above ordinary
+chrome without forcing a child widget to know which window, pane, or sidebar
+contains it. Place the host inside application-level providers whose values
+the overlay should share; a provider nested only around the portal origin does
+not wrap the registered top-layer subtree.
+
+| Prop (`OverlayHost`) | Type | Default |
+| --- | --- | --- |
+| `width`, `height` | `number` | required viewport size |
+| `children` | `ReactNode` | ordinary content and portals |
+
+| Prop (`Popover`) | Type | Default |
+| --- | --- | --- |
+| `open` | `boolean` | required controlled state |
+| `viewportWidth`, `viewportHeight` | `number` | required |
+| `anchor` | `{ x, y, width, height }` | required host-space bounds |
+| `width`, `height` | `number` | required |
+| `placement` | `bottom-start \| bottom-end \| top-start \| top-end` | `bottom-start` |
+| `modal` | `boolean` | `false` (transparent pointer barrier) |
+| `trapFocus` | `boolean` | `true` |
+| `dismissOnOutside` | `boolean` | `true` |
+| `onDismiss` | `() => void` | required |
+| `children` | `ReactNode` | |
+
+| Prop (`Sheet`) | Type | Default |
+| --- | --- | --- |
+| `open` | `boolean` | required |
+| `viewportWidth`, `viewportHeight` | `number` | required |
+| `edge` | `right \| bottom` | `right` |
+| `width`, `height` | `number` | `440` right / `360` bottom, viewport-clamped |
+| `title` | `string` | required |
+| `onDismiss` | `() => void` | required |
+| `children` | `ReactNode` | sheet body |
+
+| Prop (`ConfirmationDialog`) | Type | Default |
+| --- | --- | --- |
+| `open` | `boolean` | required |
+| `viewportWidth`, `viewportHeight` | `number` | required |
+| `title`, `message` | `string` | required |
+| `confirmLabel`, `cancelLabel` | `string` | `Continue`, `Cancel` |
+| `danger` | `boolean` | `false` |
+| `onConfirm`, `onDismiss` | `() => void` | required |
+
+| Prop (`ToastHost`) | Type | Default |
+| --- | --- | --- |
+| `viewportWidth`, `viewportHeight` | `number` | required |
+| `items` | `ToastItem[]` | required controlled queue |
+| `onDismiss` | `(id: string) => void` | required |
+| `width` | `number` | min of `380` and viewport inset |
+
+`ToastItem` has `id`, `title`, optional `message`, `actionLabel`, `onAction`,
+and `durationMs` (default `5000`; non-positive stays visible). Popovers and
+modal surfaces share theme motion, elevation, focus scopes, Escape handling,
+and viewport clamping.
 
 ### `Dialog` / `Menu` / `MenuItem`
 
@@ -950,3 +1091,11 @@ Returns `themePalette()`.
 ### Design tokens
 
 `TYPE_ROLES`, `SPACE` — see [Theme](../theme/README.md).
+
+`WidgetThemeProvider` also exposes semantic foundations used by public
+widgets: palette, type, space, radii, motion durations, elevation levels,
+border weights, control heights, density multipliers, focus-ring geometry,
+and disabled/inactive/scrim opacity. Component recipes remain the place for
+variant/size/state decisions. Apps should choose semantics such as
+`elevation="medium"` or `size="small"`; pixel-level overrides are compatibility
+escape hatches rather than a second theme system.

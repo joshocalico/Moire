@@ -1,6 +1,6 @@
 import React, { type ReactNode } from "react";
 import { Surface } from "./primitives.js";
-import { Row } from "./layout.js";
+import { Row, registerIntrinsicSize } from "./layout.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
 export type ToolbarProps = {
@@ -37,3 +37,8 @@ export function Toolbar(props: ToolbarProps): ReactNode {
     </Surface>
   );
 }
+
+registerIntrinsicSize(Toolbar, (props) => ({
+  width: props.width,
+  height: props.height ?? 52,
+}));

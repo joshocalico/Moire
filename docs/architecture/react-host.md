@@ -13,7 +13,7 @@ shaders.
 ## Why it exists
 
 Moire shell and `@moire/ui` windows need deterministic UI without a browser.
-Yoga (via layout helpers) positions children; react-host owns:
+Measured layout helpers allocate children; react-host owns:
 
 - Reconciliation into a scene tree
 - Hit regions for pointer, focus, and keyboard dispatch

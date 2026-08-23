@@ -1,7 +1,8 @@
 import React, { type ReactNode } from "react";
-import { Group, Text, measureTextBounds } from "@moire/react-host";
+import { Icon } from "./icon.js";
+import { Box, Horizontal, Inset, Measure, Vertical, registerIntrinsicSize } from "./layout.js";
 import { Pressable } from "./pressable.js";
-import { Separator, Surface } from "./primitives.js";
+import { Separator, Surface, TextBlock } from "./primitives.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
 export type DisclosureProps = {
@@ -20,10 +21,10 @@ export type DisclosureProps = {
 
 /** Controlled collapsible section with a single semantic header target. */
 export function Disclosure(props: DisclosureProps): ReactNode {
-  const pal = useWidgetTheme().foundations.palette;
+  const theme = useWidgetTheme();
+  const pal = theme.foundations.palette;
   const headerHeight = props.headerHeight ?? (props.description ? 52 : 40);
   const height = headerHeight + (props.expanded ? props.contentHeight : 0);
-  const title = measureTextBounds(props.title, { fontSize: 12, fontWeight: "medium" });
   return (
     <Surface
       x={props.x}
@@ -31,53 +32,49 @@ export function Disclosure(props: DisclosureProps): ReactNode {
       width={props.width}
       height={height}
       fill={pal.surface}
-      radius={pal.radiusMd}
+      radius={theme.foundations.radii.medium}
       stroke={pal.borderSubtle}
-      strokeWidth={1}
+      strokeWidth={theme.foundations.borders.control}
+      elevation="low"
       clip
     >
-      <Pressable
-        width={props.width}
-        height={headerHeight}
-        disabled={props.disabled}
-        radius={pal.radiusMd}
-        onPress={() => props.onExpandedChange?.(!props.expanded)}
-      />
-      <Text
-        x={14}
-        y={Math.floor((headerHeight - title.height) / 2) - (props.description ? 7 : 0)}
-        text={props.expanded ? "▾" : "›"}
-        color={pal.accent}
-        fontSize={12}
-      />
-      <Text
-        x={36}
-        y={props.description ? 10 : Math.floor((headerHeight - title.height) / 2)}
-        text={props.title}
-        color={props.disabled ? pal.muted : pal.text}
-        fontSize={12}
-        fontWeight="medium"
-      />
-      {props.description ? (
-        <Text
-          x={36}
-          y={30}
-          text={props.description}
-          color={pal.muted}
-          fontSize={10}
-        />
-      ) : null}
-      {props.expanded ? (
-        <Group
-          y={headerHeight}
-          width={props.width}
-          height={props.contentHeight}
-          clip
-        >
-          <Separator width={props.width} color={pal.borderSubtle} />
-          {props.children}
-        </Group>
-      ) : null}
+      <Vertical width={props.width} height={height} gap={0}>
+        <Box height={headerHeight}>
+          <Pressable
+            width={props.width}
+            height={headerHeight}
+            disabled={props.disabled}
+            radius={theme.foundations.radii.medium}
+            focusable={Boolean(props.onExpandedChange)}
+            onPress={() => props.onExpandedChange?.(!props.expanded)}
+          />
+          <Inset width={props.width} height={headerHeight} padding={{ horizontal: 14 }}>
+            <Horizontal gap={10} align="center">
+              <Box width={14} height={14}>
+                <Icon name={props.expanded ? "chevron-down" : "chevron-right"} size={14} color={pal.accent} symbolic />
+              </Box>
+              <Vertical flexGrow={1} gap={2} justify="center">
+                <TextBlock height={16} text={props.title} color={props.disabled ? pal.muted : pal.text} fontSize={12} fontWeight="medium" verticalAlign="center" overflow="ellipsis" maxLines={1} />
+                {props.description ? <TextBlock height={14} text={props.description} color={pal.muted} fontSize={10} verticalAlign="center" overflow="ellipsis" maxLines={1} /> : null}
+              </Vertical>
+            </Horizontal>
+          </Inset>
+        </Box>
+        {props.expanded ? (
+          <Vertical height={props.contentHeight} gap={0}>
+            <Measure height={1}>{({ width }) => <Separator width={width} color={pal.borderSubtle} />}</Measure>
+            <Box flexGrow={1}>{props.children}</Box>
+          </Vertical>
+        ) : null}
+      </Vertical>
     </Surface>
   );
 }
+
+registerIntrinsicSize(Disclosure, (props) => {
+  const headerHeight = props.headerHeight ?? (props.description ? 52 : 40);
+  return {
+    width: props.width,
+    height: headerHeight + (props.expanded ? props.contentHeight : 0),
+  };
+});

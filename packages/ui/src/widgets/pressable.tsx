@@ -27,7 +27,7 @@ export type PressableProps = {
   indicatorColor?: number;
   indicatorWidth?: number;
   children?: ReactNode;
-  onPress?: () => void;
+  onPress?: (event?: HitPointerEvent) => void;
   onDoublePress?: () => void;
   onContextMenu?: (event: HitPointerEvent) => void;
   disabled?: boolean;
@@ -83,7 +83,7 @@ export function Pressable(props: PressableProps): ReactNode {
     }
   }
 
-  const handlePress = () => {
+  const handlePress = (event?: HitPointerEvent) => {
     if (props.disabled) return;
     const now = Date.now();
     if (props.onDoublePress && now - lastClick.current < 400) {
@@ -92,7 +92,7 @@ export function Pressable(props: PressableProps): ReactNode {
       return;
     }
     lastClick.current = now;
-    props.onPress?.();
+    props.onPress?.(event);
   };
 
   return (

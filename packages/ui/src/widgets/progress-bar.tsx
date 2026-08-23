@@ -2,6 +2,7 @@
 import React, { type ReactNode } from "react";
 import { Group, Rect } from "@moire/react-host";
 import { useWidgetTheme, type ButtonSize } from "../widget-theme.js";
+import { registerIntrinsicSize } from "./layout.js";
 
 export type ProgressBarProps = {
   x?: number;
@@ -41,3 +42,8 @@ export function ProgressBar(props: ProgressBarProps): ReactNode {
     </Group>
   );
 }
+
+registerIntrinsicSize(ProgressBar, (props, theme) => ({
+  width: props.width,
+  height: props.height ?? theme.recipes.progressBar[props.size ?? "medium"].metrics.height,
+}));

@@ -203,6 +203,7 @@ export {
   TextBlock,
   Surface,
   Panel,
+  FocusRing,
   Separator,
   Divider,
   usePalette,
@@ -211,8 +212,44 @@ export type {
   LabelProps,
   SurfaceProps,
   PanelProps,
+  FocusRingProps,
   SeparatorProps,
 } from "./primitives.js";
+
+export { FocusScope, ShortcutManager } from "./focus.js";
+export type {
+  FocusScopeProps,
+  ShortcutManagerProps,
+  Shortcut,
+} from "./focus.js";
+
+export {
+  OverlayHost,
+  OverlayPortal,
+  ModalBarrier,
+  Popover,
+  Sheet,
+  ConfirmationDialog,
+  ToastHost,
+} from "./overlay.js";
+export type {
+  OverlayHostProps,
+  OverlayPortalProps,
+  ModalBarrierProps,
+  PopoverProps,
+  PopoverPlacement,
+  SheetProps,
+  ConfirmationDialogProps,
+  ToastHostProps,
+  ToastItem,
+} from "./overlay.js";
+
+export { Select, ComboBox } from "./select.js";
+export type {
+  SelectProps,
+  ComboBoxProps,
+  SelectOption,
+} from "./select.js";
 
 export { Dialog } from "./dialog.js";
 export type { DialogProps } from "./dialog.js";

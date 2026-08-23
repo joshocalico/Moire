@@ -3,6 +3,7 @@ import React, { type ReactNode } from "react";
 import { Icon } from "./icon.js";
 import { IconButton } from "./icon-button.js";
 import { TextField, type TextFieldProps } from "./text-field.js";
+import { registerIntrinsicSize } from "./layout.js";
 
 export type SearchFieldProps = Omit<
   TextFieldProps,
@@ -47,3 +48,8 @@ export function SearchField(props: SearchFieldProps): ReactNode {
     />
   );
 }
+
+registerIntrinsicSize(SearchField, (props, theme) => ({
+  width: props.width,
+  height: props.height ?? theme.recipes.textField[props.size ?? "medium"].metrics.height,
+}));

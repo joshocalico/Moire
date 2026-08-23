@@ -15,6 +15,7 @@ import {
   type WidgetIconStyle,
   type WidgetState,
 } from "../widget-theme.js";
+import { registerIntrinsicSize } from "./layout.js";
 
 export type TextFieldSlot =
   | ReactNode
@@ -33,6 +34,8 @@ export type TextFieldProps = {
   onChange?: (value: string) => void;
   onSubmit?: (value: string) => void;
   onCancel?: () => void;
+  /** Pointer activation, useful for anchoring adjacent overlays in host space. */
+  onPress?: (event: HitPointerEvent) => void;
   /** Return true to consume a key before the built-in editor handles it. */
   onKeyDown?: (event: HitKeyEvent) => boolean | void;
   onFocusChange?: (focused: boolean) => void;
@@ -214,6 +217,7 @@ export function TextField(props: TextFieldProps): ReactNode {
         cursorFromX(props.value, event.localX, textX, textStyle.fontSize),
       );
     }
+    props.onPress?.(event);
   };
 
   return (
@@ -287,3 +291,8 @@ export function TextField(props: TextFieldProps): ReactNode {
     </Group>
   );
 }
+
+registerIntrinsicSize(TextField, (props, theme) => ({
+  width: props.width,
+  height: props.height ?? theme.recipes.textField[props.size ?? "medium"].metrics.height,
+}));

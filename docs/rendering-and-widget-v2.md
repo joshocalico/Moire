@@ -250,7 +250,8 @@ States are semantic (`rest`, `hover`, `pressed`, `focused`, `disabled`,
 Recipes are plain data and remain renderer-neutral.
 
 The first vertical slices are active. `WidgetThemeProvider` supplies foundation
-color/type/space/radius/motion/elevation data plus recipe matrices for Button,
+color/type/space/radius/motion/elevation, border, control-height, density,
+focus-ring, and opacity data plus recipe matrices for Button,
 IconButton, ListItem, GridItem, TextField, Tabs, Menu, Checkbox, Toggle, Slider,
 ProgressBar, ScrollArea, Dialog, PathBar/Breadcrumbs, DnD feedback, ImageWidget,
 and semantic CollectionItem outlines. Buttons consume root, label/icon,
@@ -267,6 +268,9 @@ control without a component fork.
 
 Button and IconButton now consume their focus recipes through actual Tab
 traversal and Enter/Space activation rather than exposing pointer-only paint.
+`FocusScope` and `ShortcutManager` provide retained-scene focus containment and
+window command routing; `Surface` and `FocusRing` consume semantic elevation,
+opacity, and focus geometry.
 
 ### W2 — active: slot-based primitives
 
@@ -293,6 +297,10 @@ recipe-owned presentation helper across compatibility wrappers, drop zones,
 window sinks, and semantic collection items. Breadcrumbs and PathBar resolve
 their segment states, hierarchy typography, separators, density, and edit
 geometry through one size-aware recipe.
+Dialog, Menu/MenuItem, Banner, EmptyState, Tooltip, Disclosure, and Button
+content have moved onto the shared box model and semantic surface/text
+primitives. Select/ComboBox compose the same button/editor/menu contracts with
+host-space overlay anchoring rather than app-calculated descendant offsets.
 
 ### W3 — primitive completeness
 
@@ -312,6 +320,8 @@ Extend the retained scene consistently across software and EGL:
 
 - Baseline shipped: a launchable, renderer-native catalog with interactive
   previews, a navigation list, and syntax-highlighted TSX Code tabs.
+- Select/combo, focus/shortcut, and overlay samples now exercise anchored
+  portal paint, trapped traversal, sheets, confirmation, and toast lifetime.
 - Turn the widget gallery into a theme/variant/state matrix.
 - Exercise pointer, keyboard, focus, disabled, high-scale, narrow-window, dark,
   light, and custom-theme cases.

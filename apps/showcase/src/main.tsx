@@ -22,6 +22,8 @@ import {
   NavigationSidebar,
   SegmentedControl,
   RadioGroup,
+  Select,
+  ComboBox,
   Badge,
   Banner,
   Spinner,
@@ -43,6 +45,12 @@ import {
   TextBlock,
   Measure,
   Tween,
+  FocusScope,
+  ShortcutManager,
+  OverlayHost,
+  Sheet,
+  ConfirmationDialog,
+  ToastHost,
   Box,
   Row,
   Column,
@@ -52,6 +60,7 @@ import {
   setUiScaleFactor,
   type NavigationSidebarSection,
   type TableSort,
+  type ToastItem,
   type WindowSize,
 } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
@@ -110,6 +119,47 @@ const SAMPLES: Sample[] = [
 
 <SegmentedControl options={density} value={value} onChange={setValue} />
 <RadioGroup options={themes} value={theme} onChange={setTheme} />`,
+  },
+  {
+    id: "select-combo",
+    title: "Select and combo box",
+    description: "Anchored selection and editable filtering",
+    section: "Controls",
+    code: `<OverlayHost width={window.width} height={window.height}>
+  <Select
+    width={320}
+    viewportWidth={window.width}
+    viewportHeight={window.height}
+    options={densityOptions}
+    value={density}
+    onChange={setDensity}
+  />
+  <ComboBox
+    width={320}
+    viewportWidth={window.width}
+    viewportHeight={window.height}
+    options={applicationOptions}
+    value={query}
+    onValueChange={setQuery}
+    onSelect={setApplication}
+  />
+</OverlayHost>`,
+  },
+  {
+    id: "focus-shortcuts",
+    title: "Focus and shortcuts",
+    description: "Scoped traversal, Escape handling, and declarative commands",
+    section: "Controls",
+    code: `<ShortcutManager shortcuts={[
+  { id: "search", key: "k", platformModifier: true, onInvoke: openSearch },
+]}>
+  <FocusScope width={420} height={160} trap onEscape={closePanel}>
+    <Column gap={10}>
+      <Button width={140} label="First" autoFocus />
+      <Button width={140} label="Second" />
+    </Column>
+  </FocusScope>
+</ShortcutManager>`,
   },
   {
     id: "split-view",
@@ -305,6 +355,25 @@ const SAMPLES: Sample[] = [
 </Column>`,
   },
   {
+    id: "overlays",
+    title: "Overlays",
+    description: "Modal sheets, confirmation, and durable toast feedback",
+    section: "Feedback",
+    code: `<OverlayHost width={window.width} height={window.height}>
+  <Button label="Open sheet" onPress={() => setSheetOpen(true)} />
+  <Sheet
+    open={sheetOpen}
+    viewportWidth={window.width}
+    viewportHeight={window.height}
+    title="Inspector"
+    onDismiss={() => setSheetOpen(false)}
+  >
+    <Inspector />
+  </Sheet>
+  <ToastHost items={toasts} onDismiss={dismissToast} {...window} />
+</OverlayHost>`,
+  },
+  {
     id: "help",
     title: "Help and disclosure",
     description: "Hover context and collapsible secondary content",
@@ -367,6 +436,14 @@ const GUIDANCE: Record<string, SampleGuidance> = {
     about: "Exclusive controls make a small, known set of alternatives directly comparable.",
     when: "Use segmented choices for compact peers and radio rows when options need explanation.",
   },
+  "select-combo": {
+    about: "Select presents a known option set; ComboBox adds text filtering while keeping the same anchored menu contract.",
+    when: "Use Select for constrained values and ComboBox when a longer set benefits from direct filtering or free text.",
+  },
+  "focus-shortcuts": {
+    about: "FocusScope contains traversal for transient work, while ShortcutManager maps commands independently of whichever control owns focus.",
+    when: "Use scopes for modal or temporary regions and shortcuts for stable window-level commands with discoverable equivalents.",
+  },
   "split-view": {
     about: "SplitView owns a clipped two-pane composition and one accessible resize boundary.",
     when: "Use for persistent peer regions such as a sidebar and canvas, inspector, or preview.",
@@ -411,6 +488,10 @@ const GUIDANCE: Record<string, SampleGuidance> = {
     about: "ProgressRow composes task identity, determinate or indeterminate progress, and cancellation.",
     when: "Use for file operations and background work whose ongoing state deserves a durable row.",
   },
+  overlays: {
+    about: "OverlayHost gives transient surfaces a single topmost layer; sheets, dialogs, and toasts supply focus, dismissal, and motion policy.",
+    when: "Use a sheet for substantial secondary work, confirmation for consequential choices, and toasts for non-blocking outcomes.",
+  },
   help: {
     about: "Tooltips add terse hover context; Disclosure keeps secondary controls available but quiet.",
     when: "Use tooltips for unlabeled icons and disclosure for optional detail—not essential decisions.",
@@ -445,7 +526,13 @@ const SECTIONS: NavigationSidebarSection[] = [
   })),
 }));
 
-function Preview(props: { sample: Sample; width: number; height: number }): ReactNode {
+function Preview(props: {
+  sample: Sample;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
+}): ReactNode {
   const pal = themePalette();
   const [text, setText] = useState("Taste is a feature");
   const [query, setQuery] = useState("");
@@ -465,6 +552,12 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
   const [page, setPage] = useState(7);
   const [propertySelected, setPropertySelected] = useState("name");
   const [motionOpen, setMotionOpen] = useState(true);
+  const [selectValue, setSelectValue] = useState("comfortable");
+  const [comboValue, setComboValue] = useState("");
+  const [shortcutStatus, setShortcutStatus] = useState("Press Ctrl/Meta + K");
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
   const virtualRows = useMemo(
     () => Array.from({ length: 10_000 }, (_, index) => ({ id: `row-${index}`, label: `Renderer sample ${String(index + 1).padStart(5, "0")}` })),
     [],
@@ -506,6 +599,66 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
         <SegmentedControl width={Math.min(440, contentW)} options={[{ id: "comfortable", label: "Comfortable" }, { id: "compact", label: "Compact" }, { id: "touch", label: "Touch" }]} value={choice} onChange={setChoice} />
         <RadioGroup width={Math.min(440, contentW)} options={[{ id: "system", label: "System", description: "Follow the desktop appearance" }, { id: "dark", label: "Dark", description: "Always use dark recipes" }, { id: "contrast", label: "High contrast", description: "Increase boundaries and focus" }]} value={radio} onChange={setRadio} />
       </Column>
+    );
+  } else if (props.sample.id === "select-combo") {
+    const options = [
+      { id: "comfortable", label: "Comfortable", description: "Balanced spacing for everyday use" },
+      { id: "compact", label: "Compact", description: "More information in the same space" },
+      { id: "touch", label: "Touch", description: "Larger targets and more breathing room" },
+      { id: "legacy", label: "Legacy", description: "Unavailable compatibility mode", disabled: true },
+    ];
+    content = (
+      <Column width={Math.min(420, contentW)} gap={16}>
+        <Select
+          width={Math.min(360, contentW)}
+          viewportWidth={props.viewportWidth}
+          viewportHeight={props.viewportHeight}
+          options={options}
+          value={selectValue}
+          onChange={setSelectValue}
+        />
+        <ComboBox
+          width={Math.min(360, contentW)}
+          viewportWidth={props.viewportWidth}
+          viewportHeight={props.viewportHeight}
+          options={options}
+          value={comboValue}
+          selectedId={selectValue}
+          placeholder="Filter density presets…"
+          onValueChange={setComboValue}
+          onSelect={setSelectValue}
+        />
+        <TextBlock height={22} text={`Selected: ${selectValue}`} color={pal.muted} fontSize={11} verticalAlign="center" />
+      </Column>
+    );
+  } else if (props.sample.id === "focus-shortcuts") {
+    content = (
+      <ShortcutManager
+        width={Math.min(520, contentW)}
+        height={190}
+        shortcuts={[{
+          id: "show-search",
+          key: "k",
+          platformModifier: true,
+          onInvoke: () => setShortcutStatus("Shortcut invoked"),
+        }]}
+      >
+        <FocusScope width={Math.min(520, contentW)} height={190} trap onEscape={() => setShortcutStatus("Escape handled by scope")}>
+          <Surface width={Math.min(520, contentW)} height={190} elevation="low">
+            <Inset width={Math.min(520, contentW)} height={190} padding={18}>
+              <Vertical gap={14}>
+                <TextBlock height={22} text={shortcutStatus} color={pal.accent} fontSize={12} verticalAlign="center" />
+                <Horizontal height={40} gap={10}>
+                  <Button width={132} label="First stop" autoFocus onPress={() => setShortcutStatus("First invoked")} />
+                  <Button width={132} label="Second stop" onPress={() => setShortcutStatus("Second invoked")} />
+                  <Button width={132} label="Third stop" onPress={() => setShortcutStatus("Third invoked")} />
+                </Horizontal>
+                <TextBlock height={36} text="Tab and Shift+Tab wrap inside this active scope. Escape is handled before the focused button." color={pal.muted} fontSize={11} wrap lineGap={2} />
+              </Vertical>
+            </Inset>
+          </Surface>
+        </FocusScope>
+      </ShortcutManager>
     );
   } else if (props.sample.id === "split-view") {
     const splitWidth = Math.min(720, contentW);
@@ -760,6 +913,67 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
         </Box>
       </Column>
     );
+  } else if (props.sample.id === "overlays") {
+    content = (
+      <Column width={contentW} gap={16}>
+        <Horizontal width={contentW} height={40} gap={10}>
+          <Button width={132} label="Open sheet" variant="primary" onPress={() => setSheetOpen(true)} />
+          <Button width={144} label="Ask to remove" onPress={() => setConfirmationOpen(true)} />
+          <Button
+            width={132}
+            label="Show toast"
+            variant="ghost"
+            onPress={() => setToasts((current) => [...current, {
+              id: `toast-${Date.now()}-${current.length}`,
+              title: "Preview updated",
+              message: "The renderer accepted the new widget recipe.",
+            }])}
+          />
+        </Horizontal>
+        <Surface width={Math.min(620, contentW)} height={150} fill={pal.panel} elevation="low">
+          <Inset width={Math.min(620, contentW)} height={150} padding={18}>
+            <Vertical gap={8}>
+              <TextBlock height={22} text="The content remains in ordinary layout" fontSize={14} fontWeight="medium" verticalAlign="center" />
+              <TextBlock height={48} text="Transient surfaces register with the nearest OverlayHost, so they paint and hit-test above application chrome without being constrained by this preview pane." color={pal.muted} fontSize={11} wrap lineGap={3} />
+            </Vertical>
+          </Inset>
+        </Surface>
+        <Sheet
+          open={sheetOpen}
+          viewportWidth={props.viewportWidth}
+          viewportHeight={props.viewportHeight}
+          width={390}
+          title="Widget inspector"
+          onDismiss={() => setSheetOpen(false)}
+        >
+          <Vertical gap={12}>
+            <TextBlock height={46} text="Sheets keep a focused secondary workflow close to its source without pretending to be a new application window." color={pal.muted} fontSize={12} wrap lineGap={3} />
+            <Toggle width={280} on={enabled} onChange={setEnabled} label="Animate transitions" />
+            <Checkbox width={280} checked={checked} onChange={setChecked} label="Show focus boundary" />
+          </Vertical>
+        </Sheet>
+        <ConfirmationDialog
+          open={confirmationOpen}
+          viewportWidth={props.viewportWidth}
+          viewportHeight={props.viewportHeight}
+          title="Remove this preset?"
+          message="This demonstrates a focused, blocking decision. Nothing is removed from the showcase."
+          confirmLabel="Remove"
+          danger
+          onConfirm={() => {
+            setConfirmationOpen(false);
+            setToasts((current) => [...current, { id: `removed-${Date.now()}`, title: "Preset removed", durationMs: 3500 }]);
+          }}
+          onDismiss={() => setConfirmationOpen(false)}
+        />
+        <ToastHost
+          viewportWidth={props.viewportWidth}
+          viewportHeight={props.viewportHeight}
+          items={toasts}
+          onDismiss={(id) => setToasts((current) => current.filter((item) => item.id !== id))}
+        />
+      </Column>
+    );
   } else if (props.sample.id === "help") {
     content = (
       <Column width={contentW} gap={24}>
@@ -849,34 +1063,36 @@ function ShowcaseApp(
   const tabsH = 36;
   const bodyH = Math.max(1, props.height - toolbarH - tabsH - 2);
   return (
-    <Surface width={props.width} height={props.height} fill={pal.bg}>
-      <NavigationSidebar
-        width={sideW}
-        height={props.height}
-        sections={SECTIONS}
-        selectedId={selectedId}
-        onSelect={(item) => {
-          setSelectedId(item.id);
-          setTab(0);
-        }}
-        header={<Label text="WIDGETS" color={pal.accent} fontSize={11} fontWeight="medium" width={sideW - 32} height={24} />}
-      />
-      <Separator x={sideW} width={1} height={props.height} />
-      <Toolbar x={sideW + 1} width={mainW} height={toolbarH}>
-        <Label text="Moire Widget Showcase" fontSize={16} fontWeight="medium" width={mainW - 150} height={24} />
-        <Surface width={62} height={24} fill={0x00000000}>
-          <Badge text="LIVE" tone="accent" />
+    <OverlayHost width={props.width} height={props.height}>
+      <Surface width={props.width} height={props.height} fill={pal.bg}>
+        <NavigationSidebar
+          width={sideW}
+          height={props.height}
+          sections={SECTIONS}
+          selectedId={selectedId}
+          onSelect={(item) => {
+            setSelectedId(item.id);
+            setTab(0);
+          }}
+          header={<Label text="WIDGETS" color={pal.accent} fontSize={11} fontWeight="medium" width={sideW - 32} height={24} />}
+        />
+        <Separator x={sideW} width={1} height={props.height} />
+        <Toolbar x={sideW + 1} width={mainW} height={toolbarH}>
+          <Label text="Moire Widget Showcase" fontSize={16} fontWeight="medium" width={mainW - 150} height={24} />
+          <Surface width={62} height={24} fill={0x00000000}>
+            <Badge text="LIVE" tone="accent" />
+          </Surface>
+        </Toolbar>
+        <Tabs x={sideW + 1} y={toolbarH} width={mainW} height={tabsH} tabs={["Preview", "Code"]} active={tab} onChange={setTab} />
+        <Surface x={sideW + 1} y={toolbarH + tabsH + 1} width={mainW} height={bodyH} fill={pal.bg}>
+          {tab === 0 ? (
+            <Preview sample={sample} width={mainW} height={bodyH} viewportWidth={props.width} viewportHeight={props.height} />
+          ) : (
+            <CodeView x={24} y={20} width={Math.max(1, mainW - 48)} height={Math.max(1, bodyH - 40)} code={sample.code} language="tsx" lineNumbers />
+          )}
         </Surface>
-      </Toolbar>
-      <Tabs x={sideW + 1} y={toolbarH} width={mainW} height={tabsH} tabs={["Preview", "Code"]} active={tab} onChange={setTab} />
-      <Surface x={sideW + 1} y={toolbarH + tabsH + 1} width={mainW} height={bodyH} fill={pal.bg}>
-        {tab === 0 ? (
-          <Preview sample={sample} width={mainW} height={bodyH} />
-        ) : (
-          <CodeView x={24} y={20} width={Math.max(1, mainW - 48)} height={Math.max(1, bodyH - 40)} code={sample.code} language="tsx" lineNumbers />
-        )}
       </Surface>
-    </Surface>
+    </OverlayHost>
   );
 }
 

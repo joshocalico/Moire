@@ -9,6 +9,7 @@ import {
   resolveStatefulStyle,
   useWidgetTheme,
 } from "../widget-theme.js";
+import { FocusRing } from "./primitives.js";
 import {
   DndFeedback,
   useDragSource,
@@ -161,15 +162,11 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
         }
       />
       {showOutline ? (
-        <Rect
-          x={1}
-          y={1}
-          width={Math.max(1, props.width - 2)}
-          height={Math.max(1, props.height - 2)}
-          fill={0x00000000}
+        <FocusRing
+          width={props.width}
+          height={props.height}
           radius={outline.radius}
-          stroke={outline.stroke}
-          strokeWidth={outline.strokeWidth}
+          color={outline.stroke}
         />
       ) : null}
       {drag.dragging ? (

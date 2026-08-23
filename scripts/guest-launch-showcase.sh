@@ -2,9 +2,15 @@
 # Launch the widget showcase in the active Moire session for visual checks.
 set -euo pipefail
 
+SRC=/media/psf/moire
 DST=/home/moire/moire
 RUNTIME=/home/moire/.moire-runtime
 SAMPLE="${1:-}"
+
+rsync -a --delete --exclude node_modules "$SRC/packages/ui/" "$DST/packages/ui/"
+rsync -a --delete --exclude node_modules "$SRC/packages/react-host/" "$DST/packages/react-host/"
+rsync -a --delete --exclude node_modules "$SRC/apps/showcase/" "$DST/apps/showcase/"
+chown -R moire:moire "$DST/packages/ui" "$DST/packages/react-host" "$DST/apps/showcase"
 
 pkill -u moire -f '@moire/showcase' 2>/dev/null || true
 pkill -u moire -f 'apps/showcase' 2>/dev/null || true

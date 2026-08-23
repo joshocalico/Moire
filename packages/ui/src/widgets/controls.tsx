@@ -1,8 +1,10 @@
 import React, { useId, useState, type ReactNode } from "react";
-import { Group, Rect, Text, measureTextBounds, type HitKeyEvent } from "@moire/react-host";
+import { Group, Rect, type HitKeyEvent } from "@moire/react-host";
 import { Pressable } from "./pressable.js";
 import { Tabs, type TabItem } from "./tabs.js";
 import { useWidgetTheme, type ButtonSize } from "../widget-theme.js";
+import { Box, Horizontal, Inset, Vertical, registerIntrinsicSize } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 
 export type SegmentedControlOption = {
   id: string;
@@ -47,6 +49,11 @@ export function SegmentedControl(props: SegmentedControlProps): ReactNode {
     />
   );
 }
+
+registerIntrinsicSize(SegmentedControl, (props, theme) => ({
+  width: props.width,
+  height: props.height ?? theme.recipes.tabs[props.size ?? "medium"].metrics.height,
+}));
 
 export type RadioOption = {
   id: string;
@@ -96,20 +103,18 @@ export function RadioGroup(props: RadioGroupProps): ReactNode {
   };
 
   return (
-    <Group
+    <Vertical
       x={props.x ?? 0}
       y={props.y ?? 0}
       width={props.width}
       height={props.options.length * rowHeight}
+      gap={0}
     >
       {props.options.map((option, index) => {
         const selected = option.id === props.value;
-        const title = measureTextBounds(option.label, { fontSize: 13, fontWeight: "regular" });
         return (
           <Group
             key={option.id}
-            x={0}
-            y={index * rowHeight}
             width={props.width}
             height={rowHeight}
           >
@@ -127,45 +132,53 @@ export function RadioGroup(props: RadioGroupProps): ReactNode {
               onKeyDown={(event) => handleKey(event, index)}
               onPress={() => props.onChange?.(option.id)}
             />
-            <Rect
-              x={10}
-              y={Math.floor((rowHeight - 16) / 2)}
-              width={16}
-              height={16}
-              fill={pal.surface}
-              radius={8}
-              stroke={focused === index ? pal.focusRing : selected ? pal.accent : pal.border}
-              strokeWidth={focused === index ? 2 : 1}
-            />
-            {selected ? (
-              <Rect
-                x={14}
-                y={Math.floor((rowHeight - 8) / 2)}
-                width={8}
-                height={8}
-                fill={pal.accent}
-                radius={4}
-              />
-            ) : null}
-            <Text
-              x={36}
-              y={option.description ? 7 : Math.floor((rowHeight - title.height) / 2)}
-              text={option.label}
-              color={option.disabled ? pal.muted : pal.text}
-              fontSize={13}
-            />
-            {option.description ? (
-              <Text
-                x={36}
-                y={24}
-                text={option.description}
-                color={pal.muted}
-                fontSize={10}
-              />
-            ) : null}
+            <Inset width={props.width} height={rowHeight} padding={{ horizontal: 10 }}>
+              <Horizontal gap={10} align="center">
+                <Box width={16} height={16}>
+                  <Rect
+                    width={16}
+                    height={16}
+                    fill={pal.surface}
+                    radius={8}
+                    stroke={focused === index ? pal.focusRing : selected ? pal.accent : pal.border}
+                    strokeWidth={focused === index ? 2 : 1}
+                  />
+                  {selected ? (
+                    <Rect x={4} y={4} width={8} height={8} fill={pal.accent} radius={4} />
+                  ) : null}
+                </Box>
+                <Vertical flexGrow={1} height={option.description ? 35 : 20} gap={1} justify="center">
+                  <TextBlock
+                    height={18}
+                    text={option.label}
+                    color={option.disabled ? pal.muted : pal.text}
+                    fontSize={13}
+                    verticalAlign="center"
+                    overflow="ellipsis"
+                    maxLines={1}
+                  />
+                  {option.description ? (
+                    <TextBlock
+                      height={16}
+                      text={option.description}
+                      color={pal.muted}
+                      fontSize={10}
+                      verticalAlign="center"
+                      overflow="ellipsis"
+                      maxLines={1}
+                    />
+                  ) : null}
+                </Vertical>
+              </Horizontal>
+            </Inset>
           </Group>
         );
       })}
-    </Group>
+    </Vertical>
   );
 }
+
+registerIntrinsicSize(RadioGroup, (props) => ({
+  width: props.width,
+  height: props.options.length * (props.rowHeight ?? 44),
+}));

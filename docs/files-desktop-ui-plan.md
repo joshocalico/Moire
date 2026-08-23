@@ -21,9 +21,9 @@ Its largest gaps are structural:
 - Sidebar places now respect XDG user directories and persist custom favorites
   with add-current-folder, rename, and remove editing. Reordering, sections,
   devices, collapsed state, and reusable sidebar widgets remain.
-- Focus, basic single-line editing, and a keyed selection controller now exist,
-  but clipboard, composition, shortcut scopes, and full control keyboard parity
-  remain.
+- Focus scopes, visible focus geometry, declarative shortcuts, basic
+  single-line editing, and a keyed selection controller now exist; clipboard,
+  composition, and full control keyboard parity remain.
 - Files grid and list views now share replace/toggle/range selection plus
   arrow, Home/End, Space, and Select All keyboard behavior. Rubber-band and
   type-to-select remain.
@@ -37,9 +37,9 @@ Its largest gaps are structural:
   repository is configured for JSX. Context menus and the Open With picker
   have now moved to JSX; the remaining presentation modules should follow.
 - Shell overlays now own pointer hover and press/release while visible, so
-  menus remain above clients without leaking interaction into them. Context
-  menus use renderer-neutral opacity/clip animation with eased row feedback;
-  a general overlay stack and anchored lifecycle are still due.
+  menus remain above clients without leaking interaction into them. Client
+  widgets now have a general `OverlayHost`/portal layer with anchored popovers,
+  modal barriers, sheets, dialogs, toasts, focus trapping, and shared motion.
 - Files context menus now use native `xdg_popup` surfaces when Wayland offers
   them, including compositor-owned placement, grabs, Escape/outside-click
   dismissal, and stacking above every toplevel. `Window.showPopup()` keeps
@@ -242,8 +242,11 @@ Layout allocation is now published through `Measure` and `useLayoutMetrics`,
 with application-oriented `Horizontal`/`Vertical` flows, border-box `Inset`,
 alignment helpers, and a measured overlay `Stack`. Components no longer need
 parent arithmetic to consume flexible space. Text blocks already publish their
-natural size to flow parents; other recipe widgets should adopt the same
-intrinsic-size hook when callers should not have to repeat their defaults.
+natural size to flow parents; recipe controls, inputs, feedback, navigation
+rows, and compound surfaces now publish their default sizes through the same
+theme-aware intrinsic-size hook. New composed widgets must either publish a
+natural size or require an explicit allocation instead of painting outside a
+zero-sized flow box.
 
 Once this widget list is exhausted, migrate the compositor-owned desktop icon
 presentation into standard persistent React state/components. The compositor
@@ -253,11 +256,11 @@ controller and across a narrow event/state bridge.
 
 ### Foundation and interaction
 
-- `FocusScope`, focus traversal, shortcut manager, and focus ring
+- `FocusScope`, focus traversal, shortcut manager, and focus ring — shipped
 - real `TextField` and text-editing model
 - `InteractiveRegion` / `CollectionItem`
 - `ContextMenuTrigger`, `useDragSource`, and `DropZone`
-- overlay/portal stack, tooltip, popover, and modal barrier
+- overlay/portal stack, tooltip, popover, and modal barrier — shipped baseline
 
 ### Navigation and collections
 
@@ -272,23 +275,25 @@ controller and across a narrow event/state bridge.
 
 ### Controls and feedback
 
-- `SearchField`, combo box, select, radio group, and segmented control
+- `SearchField`, combo box, select, radio group, and segmented control — shipped
 - submenu-capable `Menu` and anchored `ContextMenu`
-- robust dialogs, confirmation dialogs, and sheets
-- toast, banner, progress row, spinner, and empty state
+- robust dialogs, confirmation dialogs, and sheets — shipped baseline
+- toast, banner, progress row, spinner, and empty state — shipped
 - badges and status indicators
 
 The showcase now includes `Toolbar`, configurable
 `NavigationSidebar`, `SegmentedControl`, `RadioGroup`, `Banner`, `Badge`,
 `Spinner`, `EmptyState`, syntax-highlighted `CodeView`, `VirtualList`, `Table`,
-`TreeView`, `Tooltip`, `Disclosure`, and `ProgressRow`. Remaining work in this
-list should deepen overlay-backed controls and selection/editing behavior
-rather than adding app-local substitutes.
+`TreeView`, `Tooltip`, `Disclosure`, `ProgressRow`, `Select`, `ComboBox`, focus
+scopes/shortcuts, sheets, confirmation dialogs, and toasts. Remaining work in
+this list should deepen selection/editing behavior, submenu semantics, and
+theme/state conformance rather than adding app-local substitutes.
 
 ### Visual primitives
 
 - rounded surface and stroke
-- elevation/shadow
+- semantic elevation with software fallback shadow — shipped; backend-native
+  effect layers remain
 - consistent icon button and artwork slots
 - clipping and transform containers
 - animation/transition components

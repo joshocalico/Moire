@@ -3,9 +3,8 @@ import React, { useId, useState, type ReactNode } from "react";
 import {
   Group,
   Rect,
-  Text,
-  measureTextBounds,
   type HitKeyEvent,
+  type HitPointerEvent,
 } from "@moire/react-host";
 import {
   resolveStatefulStyle,
@@ -15,6 +14,8 @@ import {
   type WidgetIconStyle,
 } from "../widget-theme.js";
 import { Pressable } from "./pressable.js";
+import { Box, Horizontal, Inset, registerIntrinsicSize } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 
 export type { ButtonSize, ButtonVariant } from "../widget-theme.js";
 
@@ -40,7 +41,7 @@ export type ButtonProps = {
   autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
-  onPress?: () => void;
+  onPress?: (event?: HitPointerEvent) => void;
 };
 
 function renderSlot(slot: ButtonSlot, style: WidgetIconStyle): ReactNode {
@@ -78,23 +79,6 @@ export function Button(props: ButtonProps): ReactNode {
   const height = props.height ?? recipe.metrics.height;
   const fontSize = props.fontSize ?? label.fontSize;
   const fontWeight = label.fontWeight;
-  const labelBounds = measureTextBounds(props.label, { fontSize, fontWeight });
-  const leadingWidth = props.leadingIcon ? leadingIcon.size : 0;
-  const trailingWidth = props.trailingIcon ? trailingIcon.size : 0;
-  const leadingGap = props.leadingIcon ? recipe.metrics.gap : 0;
-  const trailingGap = props.trailingIcon ? recipe.metrics.gap : 0;
-  const contentWidth =
-    leadingWidth +
-    leadingGap +
-    labelBounds.width +
-    trailingGap +
-    trailingWidth;
-  const contentX = Math.max(
-    recipe.metrics.paddingX,
-    Math.floor((props.width - contentWidth) / 2),
-  );
-  const labelX = contentX + leadingWidth + leadingGap;
-  const labelY = Math.floor((height - labelBounds.height) / 2);
   const explicitFill = props.fill != null;
   const baseFill = props.fill ?? root.fill;
   const labelColor = props.disabled
@@ -119,7 +103,14 @@ export function Button(props: ButtonProps): ReactNode {
       event.key === "Enter" ||
       event.key === " "
     ) {
-      props.onPress?.();
+      const bounds = event.targetBounds;
+      props.onPress?.(bounds ? {
+        x: bounds.x + bounds.width / 2,
+        y: bounds.y + bounds.height / 2,
+        localX: bounds.width / 2,
+        localY: bounds.height / 2,
+        button: "left",
+      } : undefined);
     }
   };
 
@@ -162,34 +153,34 @@ export function Button(props: ButtonProps): ReactNode {
           fill={recipe.rim.color}
         />
       ) : null}
-      {props.leadingIcon ? (
-        <Group
-          x={contentX}
-          y={Math.floor((height - leadingIcon.size) / 2)}
-          width={leadingIcon.size}
-          height={leadingIcon.size}
-        >
-          {renderSlot(props.leadingIcon, leadingIcon)}
-        </Group>
-      ) : null}
-      <Text
-        x={labelX}
-        y={labelY}
-        text={props.label}
-        color={labelColor}
-        fontSize={fontSize}
-        fontWeight={fontWeight}
-      />
-      {props.trailingIcon ? (
-        <Group
-          x={labelX + labelBounds.width + trailingGap}
-          y={Math.floor((height - trailingIcon.size) / 2)}
-          width={trailingIcon.size}
-          height={trailingIcon.size}
-        >
-          {renderSlot(props.trailingIcon, trailingIcon)}
-        </Group>
-      ) : null}
+      <Inset width={props.width} height={height} padding={{ horizontal: recipe.metrics.paddingX }}>
+        <Horizontal gap={recipe.metrics.gap} justify="center" align="center">
+          {props.leadingIcon ? (
+            <Box width={leadingIcon.size} height={leadingIcon.size}>
+              {renderSlot(props.leadingIcon, leadingIcon)}
+            </Box>
+          ) : null}
+          <TextBlock
+            flexShrink={1}
+            text={props.label}
+            color={labelColor}
+            fontSize={fontSize}
+            fontWeight={fontWeight}
+            overflow="ellipsis"
+            maxLines={1}
+          />
+          {props.trailingIcon ? (
+            <Box width={trailingIcon.size} height={trailingIcon.size}>
+              {renderSlot(props.trailingIcon, trailingIcon)}
+            </Box>
+          ) : null}
+        </Horizontal>
+      </Inset>
     </Group>
   );
 }
+
+registerIntrinsicSize(Button, (props, theme) => ({
+  width: props.width,
+  height: props.height ?? theme.recipes.button[props.variant ?? "secondary"][props.size ?? "medium"].metrics.height,
+}));

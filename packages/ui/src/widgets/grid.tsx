@@ -3,8 +3,6 @@ import React, { type ReactNode } from "react";
 import {
   Group,
   Rect,
-  Text,
-  measureText,
   measureTextBounds,
   type HitPointerEvent,
 } from "@moire/react-host";
@@ -15,21 +13,8 @@ import {
 } from "../widget-theme.js";
 import { Pressable } from "./pressable.js";
 import { ScrollArea } from "./scroll.js";
-
-function ellipsize(text: string, maxWidth: number, fontSize: number): string {
-  const scale = fontSize / 14;
-  if (measureText(text, scale) <= maxWidth) return text;
-  const ellipsis = "…";
-  let low = 0;
-  let high = text.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    const candidate = text.slice(0, middle) + ellipsis;
-    if (measureText(candidate, scale) <= maxWidth) low = middle;
-    else high = middle - 1;
-  }
-  return low > 0 ? text.slice(0, low) + ellipsis : ellipsis;
-}
+import { Align, Box, Inset, Stack, Vertical } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 
 export type GridItemProps = {
   x?: number;
@@ -83,20 +68,6 @@ export function GridItem(props: GridItemProps): ReactNode {
         props.height - labelHeight - recipe.metrics.iconGap,
       ),
     );
-  const iconAreaHeight = props.height - labelHeight - 6;
-  const iconX = Math.floor((props.width - iconSize) / 2);
-  const iconY = Math.max(4, Math.floor((iconAreaHeight - iconSize) / 2));
-  const labelY = iconAreaHeight + 2;
-  const labelMaxWidth = Math.max(
-    8,
-    props.width - recipe.metrics.labelPadding * 2,
-  );
-  const label = ellipsize(props.label, labelMaxWidth, labelStyle.fontSize);
-  const textWidth = measureText(label, labelStyle.fontSize / 14);
-  const textX = Math.max(
-    recipe.metrics.labelPadding,
-    Math.floor((props.width - textWidth) / 2),
-  );
   const highlight = props.dropHover
     ? recipe.dropTarget
     : props.selected
@@ -139,34 +110,37 @@ export function GridItem(props: GridItemProps): ReactNode {
           onContextMenu={props.onContextMenu}
         />
       ) : null}
-      {props.icon ? (
-        <Group
-          x={iconX}
-          y={iconY}
-          width={iconSize}
-          height={iconSize}
-        >
-          {props.icon}
-        </Group>
-      ) : null}
-      {props.labelScrim ? (
-        <Rect
-          x={Math.max(0, textX - 4)}
-          y={labelY - 1}
-          width={Math.min(props.width, textWidth + 8)}
-          height={labelHeight}
-          fill={recipe.labelScrim.fill}
-          radius={recipe.labelScrim.radius}
-        />
-      ) : null}
-      <Text
-        x={textX}
-        y={labelY + Math.floor((labelHeight - textHeight) / 2)}
-        text={label}
-        color={labelStyle.color}
-        fontSize={labelStyle.fontSize}
-        fontWeight={labelStyle.fontWeight}
-      />
+      <Inset width={props.width} height={props.height} padding={{ vertical: 4 }}>
+        <Vertical gap={2} align="stretch">
+          <Align flexGrow={1} minHeight={1} alignX="center" alignY="center">
+            {props.icon ? (
+              <Box width={iconSize} height={iconSize}>{props.icon}</Box>
+            ) : null}
+          </Align>
+          <Inset height={labelHeight} padding={{ horizontal: recipe.metrics.labelPadding }}>
+            <Stack alignX="stretch" alignY="stretch">
+              {props.labelScrim ? (
+                <Rect
+                  width={Math.max(1, props.width - recipe.metrics.labelPadding * 2)}
+                  height={labelHeight}
+                  fill={recipe.labelScrim.fill}
+                  radius={recipe.labelScrim.radius}
+                />
+              ) : null}
+              <TextBlock
+                text={props.label}
+                color={labelStyle.color}
+                fontSize={labelStyle.fontSize}
+                fontWeight={labelStyle.fontWeight}
+                horizontalAlign="center"
+                verticalAlign="center"
+                overflow="ellipsis"
+                maxLines={1}
+              />
+            </Stack>
+          </Inset>
+        </Vertical>
+      </Inset>
     </Group>
   );
 }

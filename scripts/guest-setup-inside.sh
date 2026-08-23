@@ -14,7 +14,7 @@ sudo apt-get install -y \
   wayland-protocols libwayland-dev \
   dbus dbus-user-session \
   xdg-desktop-portal xdg-desktop-portal-gtk \
-  nautilus gvfs gvfs-backends foot xwayland \
+  foot xwayland \
   adwaita-icon-theme hicolor-icon-theme mesa-utils
 
 # LibreOffice is large — install if missing

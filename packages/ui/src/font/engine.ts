@@ -28,7 +28,7 @@ type GlyphBitmap = {
   bearingX: number;
   bearingY: number;
   advance: number;
-  /** Premultiplied-ish coverage alpha in R channel; we store A only as grayscale. */
+  /** Shape coverage. Color and premultiplication are applied when drawing. */
   alpha: Uint8Array;
 };
 
@@ -328,17 +328,27 @@ export class FontEngine {
           if (px < 0 || px >= fbW) continue;
           const a = g.alpha[gy * g.width + gx]!;
           if (a === 0) continue;
-          const srcA = (a * ca) / 255;
-          if (srcA >= 254) {
-            fb[row + px] = color;
+          const srcA = Math.round((a * ca) / 255);
+          if (srcA === 255) {
+            fb[row + px] = (0xff000000 | (cr << 16) | (cg << 8) | cb) >>> 0;
             continue;
           }
           const dst = fb[row + px]!;
           const inv = 255 - srcA;
-          const r = ((cr * srcA + ((dst >>> 16) & 0xff) * inv) / 255) | 0;
-          const gch = ((cg * srcA + ((dst >>> 8) & 0xff) * inv) / 255) | 0;
-          const b = ((cb * srcA + (dst & 0xff) * inv) / 255) | 0;
-          fb[row + px] = (0xff000000 | (r << 16) | (gch << 8) | b) >>> 0;
+          const dstA = (dst >>> 24) & 0xff;
+          // Framebuffer pixels are premultiplied ARGB. Keeping glyph-edge
+          // alpha here is essential when TextBlock paints into a transparent
+          // clip layer; forcing those pixels opaque turns white AA coverage
+          // into a gray fringe when the layer is later composited over a fill.
+          const outA = srcA + Math.round((dstA * inv) / 255);
+          const outR = Math.round((cr * srcA) / 255) +
+            Math.round((((dst >>> 16) & 0xff) * inv) / 255);
+          const outG = Math.round((cg * srcA) / 255) +
+            Math.round((((dst >>> 8) & 0xff) * inv) / 255);
+          const outB = Math.round((cb * srcA) / 255) +
+            Math.round(((dst & 0xff) * inv) / 255);
+          fb[row + px] =
+            ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
         }
       }
       penX += g.advance;

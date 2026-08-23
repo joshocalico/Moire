@@ -3,8 +3,6 @@ import React, { useId, useState, type ReactNode } from "react";
 import {
   Group,
   Rect,
-  Text,
-  measureTextBounds,
   type HitKeyEvent,
 } from "@moire/react-host";
 import {
@@ -15,6 +13,8 @@ import {
   type WidgetState,
 } from "../widget-theme.js";
 import { Pressable } from "./pressable.js";
+import { Box, Horizontal, Inset, Measure, registerIntrinsicSize } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 
 export type TabSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
@@ -53,7 +53,6 @@ export function Tabs(props: TabsProps): ReactNode {
   const [focused, setFocused] = useState<number | null>(null);
   const height = props.height ?? recipe.metrics.height;
   const tabs = props.tabs.map(normalizeTab);
-  const count = Math.max(1, tabs.length);
 
   const nextEnabled = (from: number, direction: -1 | 1): number => {
     for (let offset = 1; offset <= tabs.length; offset++) {
@@ -103,10 +102,8 @@ export function Tabs(props: TabsProps): ReactNode {
         stroke={recipe.root.stroke}
         strokeWidth={recipe.root.strokeWidth}
       />
+      <Horizontal width={props.width} height={height} gap={0} align="stretch">
       {tabs.map((tab, index) => {
-        const tabX = Math.floor((index * props.width) / count);
-        const nextX = Math.floor(((index + 1) * props.width) / count);
-        const tabWidth = nextX - tabX;
         const selected = index === props.active;
         const disabled = !!props.disabled || !!tab.disabled;
         const states: WidgetState[] = [];
@@ -118,75 +115,71 @@ export function Tabs(props: TabsProps): ReactNode {
         const pressed = resolveStatefulStyle(recipe.tab, "pressed");
         const label = resolveStatefulStyle(recipe.label, ...states);
         const icon = resolveStatefulStyle(recipe.icon, ...states);
-        const labelBounds = measureTextBounds(tab.label, {
-          fontSize: label.fontSize,
-          fontWeight: label.fontWeight,
-        });
-        const iconWidth = tab.leading ? icon.size + recipe.metrics.gap : 0;
-        const contentWidth = iconWidth + labelBounds.width;
-        const contentX = Math.max(
-          recipe.metrics.paddingX,
-          Math.floor((tabWidth - contentWidth) / 2),
-        );
-        const contentY = Math.floor(
-          (height - recipe.metrics.indicatorHeight - labelBounds.height) / 2,
-        );
 
         return (
-          <Group key={tab.id} x={tabX} y={0} width={tabWidth} height={height}>
-            <Pressable
-              width={tabWidth}
-              height={height - recipe.metrics.indicatorHeight}
-              fill={root.fill}
-              hoverFill={hovered.fill}
-              pressedFill={pressed.fill}
-              disabledFill={root.fill}
-              radius={root.radius}
-              stroke={root.stroke}
-              strokeWidth={root.strokeWidth}
-              disabled={disabled}
-              focusable
-              focusId={`tabs:${generatedId}:${tab.id}`}
-              onFocusChange={(next) => {
-                if (next) setFocused(index);
-                else {
-                  setFocused((current) => current === index ? null : current);
-                }
-              }}
-              onKeyDown={(event) => handleKey(event, index)}
-              onPress={() => props.onChange?.(index)}
-            />
-            {tab.leading ? (
-              <Group
-                x={contentX}
-                y={Math.floor((height - recipe.metrics.indicatorHeight - icon.size) / 2)}
-                width={icon.size}
-                height={icon.size}
-              >
-                {renderSlot(tab.leading, icon)}
+          <Measure key={tab.id} flexGrow={1} minWidth={1}>
+            {({ width: tabWidth }) => (
+              <Group width={tabWidth} height={height}>
+                <Pressable
+                  width={tabWidth}
+                  height={height - recipe.metrics.indicatorHeight}
+                  fill={root.fill}
+                  hoverFill={hovered.fill}
+                  pressedFill={pressed.fill}
+                  disabledFill={root.fill}
+                  radius={root.radius}
+                  stroke={root.stroke}
+                  strokeWidth={root.strokeWidth}
+                  disabled={disabled}
+                  focusable
+                  focusId={`tabs:${generatedId}:${tab.id}`}
+                  onFocusChange={(next) => {
+                    if (next) setFocused(index);
+                    else {
+                      setFocused((current) => current === index ? null : current);
+                    }
+                  }}
+                  onKeyDown={(event) => handleKey(event, index)}
+                  onPress={() => props.onChange?.(index)}
+                />
+                <Inset
+                  width={tabWidth}
+                  height={height - recipe.metrics.indicatorHeight}
+                  padding={{ horizontal: recipe.metrics.paddingX }}
+                >
+                  <Horizontal gap={recipe.metrics.gap} justify="center" align="center">
+                    {tab.leading ? (
+                      <Box width={icon.size} height={icon.size}>
+                        {renderSlot(tab.leading, icon)}
+                      </Box>
+                    ) : null}
+                    <TextBlock
+                      flexShrink={1}
+                      text={tab.label}
+                      color={label.color}
+                      fontSize={label.fontSize}
+                      fontWeight={label.fontWeight}
+                      overflow="ellipsis"
+                      maxLines={1}
+                    />
+                  </Horizontal>
+                </Inset>
+                {selected ? (
+                  <Rect
+                    x={recipe.metrics.indicatorInsetX}
+                    y={height - recipe.metrics.indicatorHeight}
+                    width={Math.max(1, tabWidth - recipe.metrics.indicatorInsetX * 2)}
+                    height={recipe.metrics.indicatorHeight}
+                    fill={recipe.indicator.fill}
+                    radius={recipe.indicator.radius}
+                  />
+                ) : null}
               </Group>
-            ) : null}
-            <Text
-              x={contentX + iconWidth}
-              y={contentY}
-              text={tab.label}
-              color={label.color}
-              fontSize={label.fontSize}
-              fontWeight={label.fontWeight}
-            />
-            {selected ? (
-              <Rect
-                x={recipe.metrics.indicatorInsetX}
-                y={height - recipe.metrics.indicatorHeight}
-                width={Math.max(1, tabWidth - recipe.metrics.indicatorInsetX * 2)}
-                height={recipe.metrics.indicatorHeight}
-                fill={recipe.indicator.fill}
-                radius={recipe.indicator.radius}
-              />
-            ) : null}
-          </Group>
+            )}
+          </Measure>
         );
       })}
+      </Horizontal>
       <Rect
         x={0}
         y={height - recipe.divider.height}
@@ -197,3 +190,8 @@ export function Tabs(props: TabsProps): ReactNode {
     </Group>
   );
 }
+
+registerIntrinsicSize(Tabs, (props, theme) => ({
+  width: props.width,
+  height: props.height ?? theme.recipes.tabs[props.size ?? "medium"].metrics.height,
+}));

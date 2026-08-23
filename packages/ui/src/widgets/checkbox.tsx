@@ -3,7 +3,6 @@ import React, { useId, useState, type ReactNode } from "react";
 import {
   Group,
   Rect,
-  Text,
   measureTextBounds,
   type HitKeyEvent,
 } from "@moire/react-host";
@@ -13,6 +12,8 @@ import {
   type ButtonSize,
   type WidgetState,
 } from "../widget-theme.js";
+import { Box, Horizontal, registerIntrinsicSize } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 
 export type CheckboxProps = {
   x?: number;
@@ -55,11 +56,6 @@ export function Checkbox(props: CheckboxProps): ReactNode {
     props.width ??
     recipe.metrics.controlSize +
       (labelBounds ? recipe.metrics.gap + labelBounds.width : 0);
-  const controlY = Math.floor((height - recipe.metrics.controlSize) / 2);
-  const markBounds = measureTextBounds("✓", {
-    fontSize: mark.fontSize,
-    fontWeight: mark.fontWeight,
-  });
 
   const toggle = () => {
     if (!props.disabled) props.onChange?.(!props.checked);
@@ -83,36 +79,42 @@ export function Checkbox(props: CheckboxProps): ReactNode {
       width={width}
       height={height}
     >
-      <Rect
-        x={0}
-        y={controlY}
-        width={recipe.metrics.controlSize}
-        height={recipe.metrics.controlSize}
-        fill={control.fill}
-        radius={control.radius}
-        stroke={control.stroke}
-        strokeWidth={control.strokeWidth}
-      />
-      {props.checked ? (
-        <Text
-          x={Math.floor((recipe.metrics.controlSize - markBounds.width) / 2)}
-          y={controlY + Math.floor((recipe.metrics.controlSize - markBounds.height) / 2)}
-          text="✓"
-          color={mark.color}
-          fontSize={mark.fontSize}
-          fontWeight={mark.fontWeight}
-        />
-      ) : null}
-      {props.label && labelBounds ? (
-        <Text
-          x={recipe.metrics.controlSize + recipe.metrics.gap}
-          y={Math.floor((height - labelBounds.height) / 2)}
-          text={props.label}
-          color={label.color}
-          fontSize={label.fontSize}
-          fontWeight={label.fontWeight}
-        />
-      ) : null}
+      <Horizontal width={width} height={height} gap={recipe.metrics.gap} align="center">
+        <Box width={recipe.metrics.controlSize} height={recipe.metrics.controlSize}>
+          <Rect
+            width={recipe.metrics.controlSize}
+            height={recipe.metrics.controlSize}
+            fill={control.fill}
+            radius={control.radius}
+            stroke={control.stroke}
+            strokeWidth={control.strokeWidth}
+          />
+          {props.checked ? (
+            <TextBlock
+              width={recipe.metrics.controlSize}
+              height={recipe.metrics.controlSize}
+              text="✓"
+              color={mark.color}
+              fontSize={mark.fontSize}
+              fontWeight={mark.fontWeight}
+              horizontalAlign="center"
+              verticalAlign="center"
+            />
+          ) : null}
+        </Box>
+        {props.label && labelBounds ? (
+          <TextBlock
+            flexGrow={1}
+            text={props.label}
+            color={label.color}
+            fontSize={label.fontSize}
+            fontWeight={label.fontWeight}
+            verticalAlign="center"
+            overflow="ellipsis"
+            maxLines={1}
+          />
+        ) : null}
+      </Horizontal>
       <Rect
         width={width}
         height={height}
@@ -138,3 +140,21 @@ export function Checkbox(props: CheckboxProps): ReactNode {
     </Group>
   );
 }
+
+registerIntrinsicSize(Checkbox, (props, theme) => {
+  const recipe = theme.recipes.checkbox[props.size ?? "medium"];
+  const labelStyle = resolveStatefulStyle(
+    recipe.label,
+    props.disabled ? "disabled" : "rest",
+  );
+  const labelWidth = props.label
+    ? measureTextBounds(props.label, {
+        fontSize: labelStyle.fontSize,
+        fontWeight: labelStyle.fontWeight,
+      }).width
+    : 0;
+  return {
+    width: props.width ?? recipe.metrics.controlSize + (props.label ? recipe.metrics.gap + labelWidth : 0),
+    height: props.height ?? recipe.metrics.height,
+  };
+});

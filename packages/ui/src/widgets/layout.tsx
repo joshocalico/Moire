@@ -14,6 +14,7 @@ import {
   type FlexChildSpec,
   type Insets,
 } from "../layout/yoga.js";
+import { useWidgetTheme, type WidgetTheme } from "../widget-theme.js";
 
 export type { Insets } from "../layout/yoga.js";
 
@@ -24,7 +25,10 @@ export type LayoutMetrics = {
   height: number;
 };
 
-type IntrinsicSizeProvider = (props: Record<string, unknown>) => {
+type IntrinsicSizeProvider = (
+  props: Record<string, unknown>,
+  theme: WidgetTheme,
+) => {
   width?: number;
   height?: number;
 };
@@ -34,7 +38,7 @@ const intrinsicSizeProviders = new WeakMap<object, IntrinsicSizeProvider>();
 /** Register recipe-owned natural size without exposing it as caller arithmetic. */
 export function registerIntrinsicSize<P extends object>(
   component: (props: P) => ReactNode,
-  provider: (props: P) => { width?: number; height?: number },
+  provider: (props: P, theme: WidgetTheme) => { width?: number; height?: number },
 ): void {
   intrinsicSizeProviders.set(component, provider as IntrinsicSizeProvider);
 }
@@ -140,7 +144,7 @@ export function Measure(props: MeasureProps): ReactNode {
   );
 }
 
-function collectFlexChildren(children: ReactNode): {
+function collectFlexChildren(children: ReactNode, theme: WidgetTheme): {
   specs: FlexChildSpec[];
   elements: ReactElement[];
 } {
@@ -152,6 +156,7 @@ function collectFlexChildren(children: ReactNode): {
     const intrinsic = (typeof child.type === "function" || typeof child.type === "object")
       ? intrinsicSizeProviders.get(child.type as object)?.(
           child.props as Record<string, unknown>,
+          theme,
         )
       : undefined;
     specs.push({
@@ -188,10 +193,11 @@ export type RowProps = FlexItemProps & {
 function FlexLayout(
   props: RowProps & { direction: "row" | "column" },
 ): ReactNode {
+  const theme = useWidgetTheme();
   const allocated = useLayoutMetrics();
   const width = props.width ?? allocated?.width ?? 0;
   const height = props.height ?? allocated?.height;
-  const { specs, elements } = collectFlexChildren(props.children);
+  const { specs, elements } = collectFlexChildren(props.children, theme);
   const laid = layoutFlex(
     {
       direction: props.direction,

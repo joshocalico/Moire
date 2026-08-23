@@ -43,7 +43,6 @@ sudo apt install -y \
   libinput-dev libxkbcommon-dev libseat-dev seatd \
   wayland-protocols libwayland-dev \
   dbus dbus-user-session \
-  nautilus gvfs gvfs-backends \
   foot \
   libreoffice \
   xwayland \

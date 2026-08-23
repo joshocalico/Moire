@@ -7,6 +7,7 @@ import {
   type ButtonSize,
   type WidgetState,
 } from "../widget-theme.js";
+import { registerIntrinsicSize } from "./layout.js";
 
 export type SliderProps = {
   x?: number;
@@ -141,3 +142,8 @@ export function Slider(props: SliderProps): ReactNode {
     </Group>
   );
 }
+
+registerIntrinsicSize(Slider, (props, theme) => ({
+  width: props.width,
+  height: props.height ?? theme.recipes.slider[props.size ?? "medium"].metrics.height,
+}));

@@ -8,6 +8,7 @@ import React, { useState, type ReactNode } from "react";
 import {
   Group,
   Rect,
+  Text,
   SoftwareRenderer,
   collectHits,
   createShellRoot,
@@ -28,6 +29,10 @@ import {
   Stack,
   Label,
   TextBlock,
+  FocusScope,
+  ShortcutManager,
+  OverlayHost,
+  Select,
   Button,
   IconButton,
   WidgetThemeProvider,
@@ -85,6 +90,7 @@ import {
   EmptyState,
   CodeView,
   TerminalView,
+  installUiFonts,
   type PlatformPopupOpts,
   type PlatformWindow,
 } from "./index.js";
@@ -149,6 +155,38 @@ function rendererSmoke(): void {
     "translucent rect on a clear frame must preserve premultiplied alpha",
   );
   assert.equal(collectHits(root.container).length, 1);
+}
+
+async function clippedTextCompositionSmoke(): Promise<void> {
+  await installUiFonts();
+  const width = 96;
+  const rowHeight = 24;
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <Group width={width} height={rowHeight * 2}>
+      <Rect width={width} height={rowHeight * 2} fill={0xff2f8797} />
+      <Text x={4} y={3} text="Antialias" color={0xffffffff} fontSize={14} />
+      <Group y={rowHeight} width={width} height={rowHeight} clip>
+        <Text x={4} y={3} text="Antialias" color={0xffffffff} fontSize={14} />
+      </Group>
+    </Group>,
+  );
+
+  const frame = new SoftwareRenderer().render(root.container, {
+    width,
+    height: rowHeight * 2,
+  });
+  const pixels = new Uint32Array(frame.pixels.buffer);
+  for (let y = 0; y < rowHeight; y++) {
+    for (let x = 0; x < width; x++) {
+      assert.equal(
+        pixels[y * width + x],
+        pixels[(y + rowHeight) * width + x],
+        `clipped text must composite like direct text at ${x},${y}`,
+      );
+    }
+  }
 }
 
 function declarativeLayoutAndTweenSmoke(): void {
@@ -239,6 +277,29 @@ function boxModelAndTextLayoutSmoke(): void {
       : node.children.map(findText).find(Boolean) ?? null;
   const centered = findText(root.container);
   assert.ok(centered && centered.x > 0 && centered.y > 0, "TextBlock did not align inside its box");
+  renderShell(root, null);
+}
+
+function intrinsicControlLayoutSmoke(): void {
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <Column x={10} y={10} width={300} gap={14}>
+      <TextField width={300} value="Taste is a feature" onChange={() => {}} />
+      <SearchField width={300} value="" onChange={() => {}} />
+      <Checkbox checked label="Show focus rings" onChange={() => {}} />
+      <Toggle on label="Live preview" onChange={() => {}} />
+      <Slider width={300} value={0.62} onChange={() => {}} />
+      <ProgressBar width={300} value={0.62} />
+    </Column>,
+  );
+  const controls = collectHits(root.container).filter((hit) => hit.focusable);
+  assert.equal(controls.length, 5);
+  assert.deepEqual(
+    controls.map((hit) => hit.y),
+    [10, 56, 102, 148, 194],
+    "recipe-sized controls must reserve distinct Column allocations",
+  );
   renderShell(root, null);
 }
 
@@ -878,7 +939,7 @@ function menuRecipeSmoke(): void {
   });
   const words = new Uint32Array(frame.pixels.buffer);
   assert.equal(words[2 * frame.width + 2], surfaceFill);
-  assert.equal(words[12 * frame.width + 8], selectedFill);
+  assert.equal(words[12 * frame.width + 16], selectedFill);
   assert.equal(slotSize, medium.leadingIcon.base.size);
 }
 
@@ -1556,6 +1617,139 @@ async function collectionFocusRecipeSmoke(): Promise<void> {
   backend.disconnect();
 }
 
+async function focusScopeAndShortcutSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Focus scope smoke", width: 280, height: 160 });
+  let focused = "";
+  let shortcuts = 0;
+  let escapes = 0;
+  win.setContent(
+    <Group width={280} height={160}>
+      <Button
+        x={10}
+        y={120}
+        width={100}
+        label="Outside"
+        onPress={() => {}}
+        onFocusChange={(next) => { if (next) focused = "outside"; }}
+      />
+      <FocusScope x={10} y={10} width={240} height={90} onEscape={() => { escapes++; }}>
+        <ShortcutManager
+          width={240}
+          height={90}
+          shortcuts={[{
+            id: "command",
+            key: "k",
+            ctrl: true,
+            onInvoke: () => { shortcuts++; },
+          }]}
+        >
+          <Button
+            x={0}
+            y={0}
+            width={100}
+            label="First"
+            onPress={() => {}}
+            onFocusChange={(next) => { if (next) focused = "first"; }}
+          />
+          <Button
+            x={120}
+            y={0}
+            width={100}
+            label="Second"
+            onPress={() => {}}
+            onFocusChange={(next) => { if (next) focused = "second"; }}
+          />
+        </ShortcutManager>
+      </FocusScope>
+    </Group>,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  assert.equal(focused, "first", "active FocusScope should claim its first focusable child");
+  platformWindow.injectKey({
+    type: "down",
+    code: 15,
+    key: "Tab",
+    text: "\t",
+    modifiers: NO_MODIFIERS,
+    timeMs: 1,
+  });
+  assert.equal(focused, "second");
+  platformWindow.injectKey({
+    type: "down",
+    code: 15,
+    key: "Tab",
+    text: "\t",
+    modifiers: NO_MODIFIERS,
+    timeMs: 2,
+  });
+  assert.equal(focused, "first", "trapped traversal must wrap inside the scope");
+  platformWindow.injectKey({
+    type: "down",
+    code: 37,
+    key: "k",
+    text: "k",
+    modifiers: { ...NO_MODIFIERS, ctrl: true },
+    timeMs: 3,
+  });
+  assert.equal(shortcuts, 1, "ShortcutManager did not intercept the scoped command");
+  platformWindow.injectKey({
+    type: "down",
+    code: 1,
+    key: "Escape",
+    modifiers: NO_MODIFIERS,
+    timeMs: 4,
+  });
+  assert.equal(escapes, 1, "FocusScope did not handle Escape");
+  win.destroy();
+  backend.disconnect();
+}
+
+async function overlaySelectSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Overlay select smoke", width: 320, height: 220 });
+  let value = "one";
+  win.setContent(() => (
+    <OverlayHost width={320} height={220}>
+      <Select
+        x={20}
+        y={20}
+        width={180}
+        viewportWidth={320}
+        viewportHeight={220}
+        value={value}
+        options={[
+          { id: "one", label: "One" },
+          { id: "two", label: "Two" },
+        ]}
+        onChange={(next) => { value = next; }}
+      />
+    </OverlayHost>
+  ));
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectPointer({ type: "down", x: 40, y: 32, button: "left", timeMs: 1 });
+  platformWindow.injectPointer({ type: "up", x: 40, y: 32, button: "left", timeMs: 2 });
+  await Promise.resolve();
+  win.tick();
+  await Promise.resolve();
+  win.tick();
+  platformWindow.injectPointer({ type: "down", x: 60, y: 108, button: "left", timeMs: 3 });
+  platformWindow.injectPointer({ type: "up", x: 60, y: 108, button: "left", timeMs: 4 });
+  assert.equal(value, "two", "Select option did not activate through the overlay host");
+  win.destroy();
+  backend.disconnect();
+}
+
 async function textFieldInteractionSmoke(): Promise<void> {
   const backend = new HeadlessPlatform();
   await backend.connect();
@@ -1713,6 +1907,8 @@ async function buttonKeyboardInteractionSmoke(): Promise<void> {
   const win = new Window({ title: "Button keyboard smoke", width: 240, height: 60 });
   let buttonPresses = 0;
   let iconPresses = 0;
+  let buttonOrigin = "";
+  let iconOrigin = "";
   win.setContent(
     <Group width={240} height={60}>
       <Button
@@ -1721,16 +1917,18 @@ async function buttonKeyboardInteractionSmoke(): Promise<void> {
         width={100}
         label="Continue"
         autoFocus
-        onPress={() => {
+        onPress={(event) => {
           buttonPresses++;
+          buttonOrigin = event ? `${event.x},${event.y}:${event.localX},${event.localY}` : "missing";
         }}
       />
       <IconButton
         x={130}
         y={10}
         icon="×"
-        onPress={() => {
+        onPress={(event) => {
           iconPresses++;
+          iconOrigin = event ? `${event.x},${event.y}:${event.localX},${event.localY}` : "missing";
         }}
       />
     </Group>,
@@ -1748,6 +1946,7 @@ async function buttonKeyboardInteractionSmoke(): Promise<void> {
     timeMs: 1,
   });
   assert.equal(buttonPresses, 1, "Button should activate from Enter");
+  assert.equal(buttonOrigin, "60,27:50,17", "keyboard activation should retain the focused button geometry");
   platformWindow.injectKey({
     type: "down",
     code: 15,
@@ -1765,6 +1964,7 @@ async function buttonKeyboardInteractionSmoke(): Promise<void> {
     timeMs: 3,
   });
   assert.equal(iconPresses, 1, "IconButton should activate from Space");
+  assert.equal(iconOrigin, "147,27:17,17", "icon keyboard activation should retain its geometry");
 
   win.destroy();
   backend.disconnect();
@@ -2660,6 +2860,12 @@ function SmokeApp(props: { onQuit: () => void }): ReactNode {
 
 async function main() {
   process.env.MOIRE_UI_PLATFORM = "headless";
+  if (process.env.MOIRE_UI_SMOKE === "text") {
+    rendererSmoke();
+    await clippedTextCompositionSmoke();
+    console.log("[ui/smoke:text] ok");
+    return;
+  }
   if (process.env.MOIRE_UI_SMOKE === "image") {
     imageWidgetRecipeSmoke();
     await imageWidgetLoadingSmoke();
@@ -2686,8 +2892,10 @@ async function main() {
     return;
   }
   rendererSmoke();
+  await clippedTextCompositionSmoke();
   declarativeLayoutAndTweenSmoke();
   boxModelAndTextLayoutSmoke();
+  intrinsicControlLayoutSmoke();
   symbolicSvgIconSmoke();
   selectionModelSmoke();
   await pointerModifierSmoke();
@@ -2705,6 +2913,8 @@ async function main() {
   utilityWidgetSmoke();
   await terminalViewInteractionSmoke();
   await collectionFocusRecipeSmoke();
+  await focusScopeAndShortcutSmoke();
+  await overlaySelectSmoke();
   await textFieldInteractionSmoke();
   await searchFieldInteractionSmoke();
   await menuItemInteractionSmoke();
