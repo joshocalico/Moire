@@ -274,11 +274,12 @@ controller and across a narrow event/state bridge.
 - toast, banner, progress row, spinner, and empty state
 - badges and status indicators
 
-The first showcase tranche now includes `Toolbar`, configurable
+The showcase now includes `Toolbar`, configurable
 `NavigationSidebar`, `SegmentedControl`, `RadioGroup`, `Banner`, `Badge`,
-`Spinner`, `EmptyState`, and syntax-highlighted `CodeView`. Remaining work in
-this list should deepen overlay-backed controls, collection virtualization,
-and file-operation feedback rather than adding app-local substitutes.
+`Spinner`, `EmptyState`, syntax-highlighted `CodeView`, `VirtualList`, `Table`,
+`TreeView`, `Tooltip`, `Disclosure`, and `ProgressRow`. Remaining work in this
+list should deepen overlay-backed controls and selection/editing behavior
+rather than adding app-local substitutes.
 
 ### Visual primitives
 

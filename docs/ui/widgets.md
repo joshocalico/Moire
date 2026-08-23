@@ -17,12 +17,16 @@ Import from `@moire/ui`. Defaults resolve through the nearest
 
 ### `Box`
 
-Absolute group.
+Explicit measurement and positioning boundary. In a `Row` or `Column`, wrap a
+composed component in `Box` when its public size is supplied by internal
+defaults: flex layout can only inspect props declared on its direct children.
 
 | Prop | Type | Default |
 | --- | --- | --- |
 | `x`, `y` | `number` | `0` |
 | `width`, `height` | `number` | `0` |
+| `flexGrow`, `flexShrink` | `number` | |
+| `minWidth`, `minHeight` | `number` | |
 | `children` | `ReactNode` | |
 
 ### `Row` / `Column`
@@ -33,15 +37,19 @@ Flex containers (`ColumnProps` extends the same shape as `Row`).
 | --- | --- | --- |
 | `width` | `number` | required |
 | `height` | `number` | |
+| `x`, `y` | `number` | `0` |
 | `gap` | `number` | `8` |
 | `padding` | `number` | `0` |
 | `justify` | `start` \| `center` \| `end` \| `space-between` \| `space-around` | |
 | `align` | `start` \| `center` \| `end` \| `stretch` | Row: `center`, Column: `stretch` |
+| `flexGrow`, `flexShrink` | `number` | |
+| `minWidth`, `minHeight` | `number` | |
 | `children` | `ReactNode` | |
 
 ```tsx
 <Row width={400} gap={12} padding={16}>
-  {children}
+  <Box width={120} height={36}>{fixedSizeControl}</Box>
+  <Box height={36} flexGrow={1}>{growingContent}</Box>
 </Row>
 ```
 
@@ -272,6 +280,10 @@ the content is mounted in a clipped region only while expanded.
 Task/file-operation feedback composed from text, `ProgressBar` or `Spinner`,
 and an optional action slot.
 
+When several rows are children of `Column`, either pass their `height`
+explicitly or place each one in a same-sized `Box`; this publishes the intended
+measurement to the flex parent.
+
 | Prop | Type | Default |
 | --- | --- | --- |
 | `x`, `y` | `number` | `0` |
@@ -286,14 +298,18 @@ and an optional action slot.
 | `disabled` | `boolean` | `false` |
 
 ```tsx
-<ProgressRow
-  width={560}
-  title="Copying project assets"
-  detail="24 of 80 files"
-  value={0.3}
-  status="30%"
-  action={<Button width={96} label="Cancel" variant="ghost" />}
-/>
+<Column width={560} gap={12}>
+  <Box width={560} height={78}>
+    <ProgressRow
+      width={560}
+      title="Copying project assets"
+      detail="24 of 80 files"
+      value={0.3}
+      status="30%"
+      action={<Button width={96} label="Cancel" variant="ghost" />}
+    />
+  </Box>
+</Column>
 ```
 
 ### `RichTextView` / `CodeView`

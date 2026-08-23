@@ -1,4 +1,4 @@
-import React, { useState, type ReactNode } from "react";
+import React, { useMemo, useState, type ReactNode } from "react";
 import {
   Application,
   Window,
@@ -15,6 +15,9 @@ import {
   ProgressBar,
   List,
   ListItem,
+  VirtualList,
+  Table,
+  TreeView,
   Icon,
   NavigationSidebar,
   SegmentedControl,
@@ -26,6 +29,10 @@ import {
   Tabs,
   CodeView,
   TerminalView,
+  Tooltip,
+  Disclosure,
+  ProgressRow,
+  Box,
   Row,
   Column,
   Separator,
@@ -33,6 +40,7 @@ import {
   themePalette,
   setUiScaleFactor,
   type NavigationSidebarSection,
+  type TableSort,
   type WindowSize,
 } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
@@ -114,6 +122,54 @@ const SAMPLES: Sample[] = [
 />`,
   },
   {
+    id: "virtual-list",
+    title: "Virtual list",
+    description: "Ten thousand rows with bounded scene cost",
+    section: "Collections",
+    code: `<VirtualList
+  width={640}
+  height={360}
+  items={tenThousandRows}
+  itemHeight={34}
+  getKey={(row) => row.id}
+  renderItem={(row) => <ResultRow row={row} />}
+  overscan={3}
+/>`,
+  },
+  {
+    id: "table",
+    title: "Table",
+    description: "Virtualized rows and controlled sortable headers",
+    section: "Collections",
+    code: `<Table
+  width={720}
+  height={420}
+  columns={columns}
+  rows={files}
+  getRowKey={(file) => file.id}
+  selectedKey={selected}
+  onSelect={(file) => setSelected(file.id)}
+  sort={sort}
+  onSortChange={setSort}
+  striped
+/>`,
+  },
+  {
+    id: "tree",
+    title: "Tree view",
+    description: "Expandable hierarchy with keyed selection",
+    section: "Collections",
+    code: `<TreeView
+  width={420}
+  height={420}
+  nodes={workspace}
+  expandedIds={expanded}
+  onExpandedChange={setExpanded}
+  selectedId={selected}
+  onSelect={(node) => setSelected(node.id)}
+/>`,
+  },
+  {
     id: "navigation",
     title: "Navigation sidebar",
     description: "Configurable sections and editable rows",
@@ -144,6 +200,43 @@ const SAMPLES: Sample[] = [
   <ProgressBar width={280} value={0.68} />
   <Badge text="Live" tone="accent" />
 </Row>`,
+  },
+  {
+    id: "progress-row",
+    title: "Progress rows",
+    description: "Determinate and indeterminate task feedback",
+    section: "Feedback",
+    code: `<Column width={640} gap={14}>
+  <Box width={640} height={78}>
+    <ProgressRow
+      width={640}
+      title="Copying project assets"
+      detail="24 of 80 files"
+      value={0.3}
+      status="30%"
+      action={<Button width={96} label="Cancel" variant="ghost" />}
+    />
+  </Box>
+</Column>`,
+  },
+  {
+    id: "help",
+    title: "Help and disclosure",
+    description: "Hover context and collapsible secondary content",
+    section: "Content",
+    code: `<Tooltip width={36} height={36} label="Search" placement="bottom">
+  <IconButton width={36} height={36} icon={<Icon name="search" />} />
+</Tooltip>
+
+<Disclosure
+  width={560}
+  title="Advanced options"
+  expanded={expanded}
+  onExpandedChange={setExpanded}
+  contentHeight={120}
+>
+  {advancedControls}
+</Disclosure>`,
   },
   {
     id: "terminal",
@@ -205,6 +298,15 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
   const [radio, setRadio] = useState("system");
   const [selected, setSelected] = useState(1);
   const [navSelected, setNavSelected] = useState("desktop");
+  const [tableSelected, setTableSelected] = useState("terminal");
+  const [tableSort, setTableSort] = useState<TableSort>({ columnId: "name", direction: "ascending" });
+  const [treeSelected, setTreeSelected] = useState("main");
+  const [treeExpanded, setTreeExpanded] = useState<Set<string>>(() => new Set(["src", "packages"]));
+  const [disclosureOpen, setDisclosureOpen] = useState(true);
+  const virtualRows = useMemo(
+    () => Array.from({ length: 10_000 }, (_, index) => ({ id: `row-${index}`, label: `Renderer sample ${String(index + 1).padStart(5, "0")}` })),
+    [],
+  );
   const contentW = Math.max(280, props.width - 64);
 
   let content: ReactNode;
@@ -264,6 +366,70 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
         )}
       />
     );
+  } else if (props.sample.id === "virtual-list") {
+    content = (
+      <VirtualList
+        width={Math.min(620, contentW)}
+        height={Math.min(380, props.height - 90)}
+        items={virtualRows}
+        itemHeight={34}
+        getKey={(row) => row.id}
+        renderItem={(row, index) => (
+          <ListItem
+            width={Math.min(620, contentW)}
+            height={34}
+            size="small"
+            title={row.label}
+            subtitle={index % 3 === 0 ? "Rendered inside the visible range" : undefined}
+          />
+        )}
+      />
+    );
+  } else if (props.sample.id === "table") {
+    const rows = [
+      { id: "terminal", name: "Terminal", kind: "Application", status: "Running", size: 18 },
+      { id: "showcase", name: "Widget Showcase", kind: "Application", status: "Running", size: 24 },
+      { id: "files", name: "Files", kind: "Application", status: "Ready", size: 31 },
+      { id: "renderer", name: "react-host", kind: "Package", status: "Modified", size: 84 },
+      { id: "shell", name: "shell", kind: "Package", status: "Ready", size: 62 },
+      { id: "theme", name: "theme", kind: "Package", status: "Ready", size: 14 },
+    ];
+    content = (
+      <Table
+        width={Math.min(700, contentW)}
+        height={Math.min(390, props.height - 80)}
+        columns={[
+          { id: "name", label: "Name", sortable: true, getValue: (row: typeof rows[number]) => row.name },
+          { id: "kind", label: "Kind", width: 130, sortable: true, getValue: (row: typeof rows[number]) => row.kind },
+          { id: "status", label: "Status", width: 110, sortable: true, getValue: (row: typeof rows[number]) => row.status },
+          { id: "size", label: "Size", width: 74, align: "right", sortable: true, getValue: (row: typeof rows[number]) => row.size },
+        ]}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        selectedKey={tableSelected}
+        onSelect={(row) => setTableSelected(row.id)}
+        sort={tableSort}
+        onSortChange={setTableSort}
+        striped
+      />
+    );
+  } else if (props.sample.id === "tree") {
+    content = (
+      <TreeView
+        width={Math.min(440, contentW)}
+        height={Math.min(390, props.height - 80)}
+        nodes={[
+          { id: "src", label: "src", icon: "folder", children: [{ id: "main", label: "main.tsx", icon: "file" }, { id: "model", label: "model.ts", icon: "file" }] },
+          { id: "packages", label: "packages", icon: "folder", children: [{ id: "ui", label: "ui", icon: "folder", children: [{ id: "widgets", label: "widgets", icon: "folder" }] }, { id: "shell", label: "shell", icon: "folder" }, { id: "terminal-package", label: "terminal", icon: "folder" }] },
+          { id: "docs", label: "docs", icon: "folder", children: [{ id: "widget-docs", label: "widgets.md", icon: "file" }] },
+          { id: "readme", label: "README.md", icon: "file" },
+        ]}
+        expandedIds={treeExpanded}
+        onExpandedChange={(ids) => setTreeExpanded(new Set(ids))}
+        selectedId={treeSelected}
+        onSelect={(node) => setTreeSelected(node.id)}
+      />
+    );
   } else if (props.sample.id === "navigation") {
     content = (
       <NavigationSidebar
@@ -285,6 +451,69 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
           <Badge text="3 issues" tone="danger" />
         </Row>
         <EmptyState width={Math.min(620, contentW)} height={210} icon="folder" title="Nothing here yet" message="Drop a file or create a new project." action={<Button width={140} height={34} label="New Project" variant="primary" />} />
+      </Column>
+    );
+  } else if (props.sample.id === "progress-row") {
+    const rowWidth = Math.min(660, contentW);
+    content = (
+      <Column width={contentW} gap={14}>
+        <Box width={rowWidth} height={78}>
+          <ProgressRow
+            width={rowWidth}
+            title="Copying project assets"
+            detail="24 of 80 files"
+            value={0.3}
+            status="30%"
+            action={<Button width={96} height={34} label="Cancel" variant="ghost" />}
+            actionWidth={96}
+          />
+        </Box>
+        <Box width={rowWidth} height={78}>
+          <ProgressRow
+            width={rowWidth}
+            title="Indexing widget examples"
+            detail="Discovering TSX samples…"
+            status="WORKING"
+            action={<Button width={96} height={34} label="Stop" variant="ghost" />}
+            actionWidth={96}
+          />
+        </Box>
+        <Box width={rowWidth} height={78}>
+          <ProgressRow
+            width={rowWidth}
+            title="Renderer conformance"
+            detail="Software and EGL scene semantics"
+            value={1}
+            status="DONE"
+          />
+        </Box>
+      </Column>
+    );
+  } else if (props.sample.id === "help") {
+    content = (
+      <Column width={contentW} gap={24}>
+        <Row width={contentW} height={64} gap={12} align="center">
+          <Tooltip width={36} height={36} label="Search widgets" placement="bottom" delayMs={150}>
+            <IconButton width={36} height={36} icon={<Icon name="search" />} />
+          </Tooltip>
+          <Tooltip width={36} height={36} label="Grid view" placement="bottom" delayMs={150}>
+            <IconButton width={36} height={36} icon={<Icon name="grid" />} variant="ghost" />
+          </Tooltip>
+          <Label text="Hover the icon controls" color={pal.muted} fontSize={11} width={220} height={22} />
+        </Row>
+        <Disclosure
+          width={Math.min(620, contentW)}
+          title="Advanced options"
+          description="Secondary controls stay available without dominating the surface"
+          expanded={disclosureOpen}
+          onExpandedChange={setDisclosureOpen}
+          contentHeight={120}
+        >
+          <Column x={36} y={18} width={Math.min(540, contentW - 72)} gap={12}>
+            <Toggle width={280} on={enabled} onChange={setEnabled} label="Animate transitions" />
+            <Checkbox width={280} checked={checked} onChange={setChecked} label="Show renderer bounds" />
+          </Column>
+        </Disclosure>
       </Column>
     );
   } else if (props.sample.id === "terminal") {
@@ -320,9 +549,15 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
   );
 }
 
-function ShowcaseApp(props: WindowSize): ReactNode {
+function ShowcaseApp(
+  props: WindowSize & { initialSampleId?: string },
+): ReactNode {
   const pal = themePalette();
-  const [selectedId, setSelectedId] = useState(SAMPLES[0]!.id);
+  const [selectedId, setSelectedId] = useState(() =>
+    SAMPLES.some((sample) => sample.id === props.initialSampleId)
+      ? props.initialSampleId!
+      : SAMPLES[0]!.id,
+  );
   const [tab, setTab] = useState(0);
   const sample = SAMPLES.find((entry) => entry.id === selectedId) ?? SAMPLES[0]!;
   const sideW = Math.min(300, Math.max(220, Math.round(props.width * 0.27)));
@@ -366,6 +601,8 @@ async function main(): Promise<void> {
   const settings = loadSettings();
   setUiScaleFactor(settings.uiScale);
   const app = new Application();
+  const sampleIndex = process.argv.indexOf("--sample");
+  const initialSampleId = sampleIndex >= 0 ? process.argv[sampleIndex + 1] : undefined;
   const win = new Window({
     title: "Widget Showcase",
     appId: "org.moire.Showcase",
@@ -373,7 +610,9 @@ async function main(): Promise<void> {
     height: Math.round(700 * settings.uiScale),
     resizable: true,
   });
-  win.setContent((size) => <ShowcaseApp {...size} />);
+  win.setContent((size) => (
+    <ShowcaseApp {...size} initialSampleId={initialSampleId} />
+  ));
   win.onClose(() => app.quit());
   app.addWindow(win);
   await app.run();

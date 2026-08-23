@@ -15,6 +15,7 @@ Host and guest helpers under `scripts/`. Prefer these over ad-hoc `prlctl exec â
 | `guest-run-compositor.sh` | Run compositor alone; honors `MOIRE_RENDERER` and `MOIRE_EGL_PRESENT=auto|readback|direct` |
 | `guest-run-foot.sh` | Launch foot |
 | `guest-launch-files.sh` | Launch Moire Files |
+| `guest-launch-showcase.sh [sample-id]` | Launch the widget showcase, optionally deep-linked to a sample |
 | `guest-launch-settings.sh [tab]` | Launch Settings in the active session; optional tab index aids visual checks |
 | `guest-display-mode.sh [list \| output \| outputs \| set MODE \| try MODE]` | Query live modes, connector identity/layout, confirm, or trial a KMS mode through D-Bus |
 | `guest-smoke-multi-output.sh` | Run synthetic layout/crop checks, inject a DRM change, and verify topology/session survival |

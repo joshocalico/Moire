@@ -9,6 +9,7 @@ Run it inside a Moire session with:
 
 ```sh
 moire-showcase
+moire-showcase --sample table
 ```
 
 The session installs its launcher and desktop entry automatically. New public
@@ -24,3 +25,9 @@ Composition is part of its contract: content-specific surfaces should expose
 the smaller general primitive below them. For example, `CodeView` tokenizes
 into `RichTextView`, while `TerminalView` adds caret and keyboard semantics to
 the same rich-text viewport.
+
+The current catalog also exercises fixed-row virtualization at 10,000 items,
+sortable tables, expandable trees, tooltip motion, disclosures, and composed
+operation progress. Each public sample has a matching prop table in
+[`ui/widgets.md`](../ui/widgets.md); the Code tab is illustrative usage rather
+than a substitute for that API reference.
