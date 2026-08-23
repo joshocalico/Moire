@@ -1271,6 +1271,16 @@ function compositionWidgetSmoke(): void {
     collectHits(root.container).length >= 3,
     "composed feedback widgets lost interaction surfaces",
   );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 640,
+    height: 360,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(
+    words[100 * frame.width + 70],
+    0,
+    "hidden tooltip content leaked through group opacity",
+  );
   renderShell(root, null);
 }
 

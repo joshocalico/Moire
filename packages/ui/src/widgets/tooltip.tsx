@@ -77,6 +77,7 @@ export function Tooltip(props: TooltipProps): ReactNode {
         y={tipY}
         width={tipWidth}
         height={tipHeight}
+        clip
         opacity={opacity.get() / 100}
       >
         <Rect
