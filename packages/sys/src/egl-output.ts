@@ -55,6 +55,7 @@ const GL_COLOR_BUFFER_BIT = 0x00004000;
 const GL_UNPACK_ALIGNMENT = 0x0cf5;
 const GL_PACK_ALIGNMENT = 0x0d05;
 const GL_BLEND = 0x0be2;
+const GL_SCISSOR_TEST = 0x0c11;
 const GL_ONE = 1;
 const GL_ONE_MINUS_SRC_ALPHA = 0x0303;
 
@@ -188,6 +189,85 @@ type CachedTexture = {
   lastSeenFrame: number;
 };
 
+type DamageRect = { x: number; y: number; width: number; height: number };
+
+type LayerSnapshot = {
+  pixels: Uint8Array;
+  revision: number | undefined;
+  signature: string;
+  bounds: DamageRect;
+};
+
+function rectUnion(a: DamageRect | null, b: DamageRect): DamageRect {
+  if (!a) return { ...b };
+  const left = Math.min(a.x, b.x);
+  const top = Math.min(a.y, b.y);
+  const right = Math.max(a.x + a.width, b.x + b.width);
+  const bottom = Math.max(a.y + a.height, b.y + b.height);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function rectsIntersect(a: DamageRect, b: DamageRect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+function clampRect(rect: DamageRect, width: number, height: number): DamageRect {
+  const x = Math.max(0, Math.floor(rect.x));
+  const y = Math.max(0, Math.floor(rect.y));
+  const right = Math.min(width, Math.ceil(rect.x + rect.width));
+  const bottom = Math.min(height, Math.ceil(rect.y + rect.height));
+  return {
+    x,
+    y,
+    width: Math.max(0, right - x),
+    height: Math.max(0, bottom - y),
+  };
+}
+
+function layerBounds(
+  layer: EglCompositionLayer,
+  sceneWidth: number,
+  sceneHeight: number,
+): DamageRect {
+  if (layer.transform) return { x: 0, y: 0, width: sceneWidth, height: sceneHeight };
+  let bounds: DamageRect = { ...layer.destination };
+  const shadow = layer.dropShadow;
+  if (shadow) {
+    const padding = Math.max(1, shadow.blurRadius + Math.max(0, shadow.spread ?? 0));
+    bounds = rectUnion(bounds, {
+      x: layer.destination.x + shadow.offsetX - padding,
+      y: layer.destination.y + shadow.offsetY - padding,
+      width: layer.destination.width + padding * 2,
+      height: layer.destination.height + padding * 2,
+    });
+  }
+  return clampRect(bounds, sceneWidth, sceneHeight);
+}
+
+function layerSignature(layer: EglCompositionLayer): string {
+  return JSON.stringify({
+    sourceWidth: layer.sourceWidth,
+    sourceHeight: layer.sourceHeight,
+    sourceStride: layer.sourceStride,
+    sourceRect: layer.sourceRect,
+    destination: layer.destination,
+    opacity: layer.opacity,
+    transform: layer.transform,
+    transformOrigin: layer.transformOrigin,
+    sampling: layer.sampling,
+    surfaceGeometry: layer.surfaceGeometry,
+    cornerRadius: layer.cornerRadius,
+    dropShadow: layer.dropShadow,
+    backdropBlur: layer.backdropBlur,
+    colorMatrix: layer.colorMatrix,
+  });
+}
+
 type DirectOutputTarget = EglDirectPresent & {
   bo: unknown;
   image: unknown;
@@ -233,6 +313,7 @@ export class EglOutputScaler {
   private readonly glFramebufferTexture2D: NativeFunction;
   private readonly glCheckFramebufferStatus: NativeFunction;
   private readonly glViewport: NativeFunction;
+  private readonly glScissor: NativeFunction;
   private readonly glClearColor: NativeFunction;
   private readonly glClear: NativeFunction;
   private readonly glUniform1i: NativeFunction;
@@ -297,6 +378,10 @@ export class EglOutputScaler {
   private readonly blurFramebufferB: number;
   private outputSourceTexture = 0;
   private readonly layerTextures = new Map<string, CachedTexture>();
+  private layerSnapshots = new Map<string, LayerSnapshot>();
+  private layerOrder: string[] = [];
+  private sceneClearColor: number | null = null;
+  private activeDamage: DamageRect | null = null;
   private readonly directTargets = new Map<string, DirectOutputPool>();
   private compositionFrame = 0;
   private sourceWidth = 0;
@@ -554,6 +639,9 @@ export class EglOutputScaler {
     ) as NativeFunction;
     this.glViewport = this.gl.func(
       "void glViewport(int x, int y, int width, int height)",
+    ) as NativeFunction;
+    this.glScissor = this.gl.func(
+      "void glScissor(int x, int y, int width, int height)",
     ) as NativeFunction;
     this.glClearColor = this.gl.func(
       "void glClearColor(float red, float green, float blue, float alpha)",
@@ -1060,6 +1148,9 @@ void main() {
   ): void {
     const effect = layer.backdropBlur;
     if (!effect || effect.radius <= 0) return;
+    // Blur uses smaller intermediate framebuffers; scene-space scissor values
+    // are invalid there. Restore the active damage clip on the scene target.
+    this.glDisable(GL_SCISSOR_TEST);
 
     // An untransformed material only needs the pixels beneath its bounds plus
     // the kernel reach. Transformed effects retain the conservative full-scene
@@ -1171,6 +1262,7 @@ void main() {
 
     this.bindColorTarget(this.sceneFramebuffer, this.sceneTexture);
     this.glViewport(0, 0, scene.width, scene.height);
+    this.restoreSceneScissor();
     this.glEnable(GL_BLEND);
     this.glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     this.glBindTexture(GL_TEXTURE_2D, this.blurTextureB);
@@ -1232,6 +1324,97 @@ void main() {
     );
   }
 
+  private compositionDamage(scene: EglCompositionScene): DamageRect | null {
+    const full: DamageRect = { x: 0, y: 0, width: scene.width, height: scene.height };
+    const nextOrder = scene.layers.map((layer) => layer.id);
+    const orderChanged =
+      nextOrder.length !== this.layerOrder.length ||
+      nextOrder.some((id, index) => id !== this.layerOrder[index]);
+    let damage: DamageRect | null =
+      this.sceneWidth !== scene.width ||
+      this.sceneHeight !== scene.height ||
+      this.sceneClearColor !== scene.clearColor ||
+      orderChanged
+        ? full
+        : null;
+    const nextSnapshots = new Map<string, LayerSnapshot>();
+    for (const layer of scene.layers) {
+      const bounds = layerBounds(layer, scene.width, scene.height);
+      const signature = layerSignature(layer);
+      const previous = this.layerSnapshots.get(layer.id);
+      nextSnapshots.set(layer.id, {
+        pixels: layer.pixels,
+        revision: layer.revision,
+        signature,
+        bounds,
+      });
+      if (
+        !previous ||
+        layer.revision == null ||
+        previous.revision !== layer.revision ||
+        previous.pixels !== layer.pixels ||
+        previous.signature !== signature
+      ) {
+        if (previous) damage = rectUnion(damage, previous.bounds);
+        damage = rectUnion(damage, bounds);
+      }
+    }
+    for (const [id, previous] of this.layerSnapshots) {
+      if (!nextSnapshots.has(id)) damage = rectUnion(damage, previous.bounds);
+    }
+
+    // A changed backdrop sample invalidates the material drawn over it. Grow
+    // damage until all dependent blur destinations are included.
+    if (damage) {
+      let expanded = true;
+      while (expanded) {
+        expanded = false;
+        for (const layer of scene.layers) {
+          const effect = layer.backdropBlur;
+          if (!effect) continue;
+          const sample = clampRect(
+            {
+              x: layer.destination.x - effect.radius,
+              y: layer.destination.y - effect.radius,
+              width: layer.destination.width + effect.radius * 2,
+              height: layer.destination.height + effect.radius * 2,
+            },
+            scene.width,
+            scene.height,
+          );
+          if (!rectsIntersect(damage, sample)) continue;
+          const grown = rectUnion(damage, layer.destination);
+          if (
+            grown.x !== damage.x ||
+            grown.y !== damage.y ||
+            grown.width !== damage.width ||
+            grown.height !== damage.height
+          ) {
+            damage = grown;
+            expanded = true;
+          }
+        }
+      }
+    }
+
+    this.layerSnapshots = nextSnapshots;
+    this.layerOrder = nextOrder;
+    this.sceneClearColor = scene.clearColor;
+    if (!damage) return null;
+    const clipped = clampRect(damage, scene.width, scene.height);
+    return clipped.width > 0 && clipped.height > 0 ? clipped : null;
+  }
+
+  private restoreSceneScissor(): void {
+    const damage = this.activeDamage;
+    if (!damage) {
+      this.glDisable(GL_SCISSOR_TEST);
+      return;
+    }
+    this.glEnable(GL_SCISSOR_TEST);
+    this.glScissor(damage.x, damage.y, damage.width, damage.height);
+  }
+
   /** Compose retained, revisioned layers into one logical GPU scene. */
   beginComposition(scene: EglCompositionScene): void {
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
@@ -1239,6 +1422,8 @@ void main() {
       throw new RangeError("EGL composition scene has invalid dimensions");
     }
     this.compositionFrame++;
+    const damage = this.compositionDamage(scene);
+    this.activeDamage = damage;
     this.glBindTexture(GL_TEXTURE_2D, this.sceneTexture);
     if (scene.width !== this.sceneWidth || scene.height !== this.sceneHeight) {
       this.glTexImage2D(
@@ -1269,7 +1454,12 @@ void main() {
     if (status !== GL_FRAMEBUFFER_COMPLETE) {
       throw new Error(`GLES scene framebuffer incomplete: 0x${status.toString(16)}`);
     }
+    if (!damage) {
+      this.outputSourceTexture = this.sceneTexture;
+      return;
+    }
     this.glViewport(0, 0, scene.width, scene.height);
+    this.restoreSceneScissor();
     const color = scene.clearColor >>> 0;
     this.glClearColor(
       (color & 0xff) / 255,
@@ -1286,6 +1476,9 @@ void main() {
     this.glUniform1i(this.samplerLocation, 0);
 
     for (const layer of scene.layers) {
+      if (!rectsIntersect(layerBounds(layer, scene.width, scene.height), damage)) {
+        continue;
+      }
       const clipX = (x: number) => (x / scene.width) * 2 - 1;
       const clipY = (y: number) => (y / scene.height) * 2 - 1;
       this.paintBackdropBlur(scene, layer);
@@ -1433,6 +1626,8 @@ void main() {
     this.glDisableVertexAttribArray(this.positionLocation);
     this.glDisableVertexAttribArray(this.texCoordLocation);
     this.glDisable(GL_BLEND);
+    this.glDisable(GL_SCISSOR_TEST);
+    this.activeDamage = null;
     this.outputSourceTexture = this.sceneTexture;
 
     if (this.compositionFrame % 120 === 0) {

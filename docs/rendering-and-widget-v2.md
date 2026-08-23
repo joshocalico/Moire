@@ -94,6 +94,14 @@ future regional upload/damage. Desktop-directory and application-discovery
 polls now compare their results before invalidating those rasters, removing the
 former periodic full-screen rebuild when nothing changed.
 
+Retained EGL composition also snapshots layer identity, order, source
+revision/pointer, geometry, transforms, and effect parameters. Changed layers
+damage both their previous and current visual bounds; removed layers repair
+their old bounds. Recomposition clears and redraws only layers intersecting the
+accumulated scissor. Backdrop dependencies expand damage into their material
+bounds, and blur temporarily suspends the scene-space scissor while using its
+smaller intermediate targets.
+
 ### R3 — active: native effects
 
 - Layers render into an offscreen scene target.
@@ -177,8 +185,11 @@ arbitrary shaders.
 
 ### R5 — damage and direct scanout
 
-- Propagate surface and widget damage through transforms and effects.
-- Redraw only damaged output regions; expand blur damage by kernel radius.
+- Retained layer-diff damage and bounded scene recomposition are shipped.
+- Propagate finer surface/widget damage rectangles rather than treating every
+  source revision as damage to the layer's complete visual bounds.
+- Track alternating scanout-buffer history so the final per-output pass can
+  also redraw only damaged physical regions.
 - Direct-scanout an eligible opaque fullscreen dmabuf when no higher layer or
   effect requires composition.
 
