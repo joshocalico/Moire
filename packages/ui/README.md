@@ -84,6 +84,8 @@ composition of those primitives with reusable search and clear affordances.
 Tabs recipes own the strip, interaction/focus states, typography, optional
 artwork, indicator, divider, and size metrics while the widget retains keyboard
 selection semantics.
+Menu and ContextMenu share one MenuItem implementation and recipe family;
+native popup placement and dismissal remain outside the reusable item.
 Software and EGL consume the same resulting scene.
 
 Hard rule: `widgets/`, `font/`, `layout/` never import Wayland/koffi.

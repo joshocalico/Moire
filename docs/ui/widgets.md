@@ -182,8 +182,16 @@ Enter/Space activation.
 ### `Dialog` / `Menu` / `MenuItem`
 
 - `Dialog`: `title`, `width`, `height`, `onClose?`, `children` — title bar with danger close.
-- `Menu`: `width`, `items: { label, onPress? }[]`.
-- `MenuItem`: single row helper.
+- `Menu`: `width`, `size?`, `title?`, and `items`. Entries accept stable `id`,
+  separators, leading/trailing slots, descriptions, selection, danger, and
+  disabled state.
+- `MenuItem`: the shared focusable row used by both `Menu` and the desktop/app
+  `ContextMenu`; Enter and Space activate it.
+
+Menu recipes own the popup surface/shadow, row interaction and focus states,
+text/icon roles, indicator, separators, and all three size metrics. Popup
+placement, dismissal, stacking, and entrance/exit motion remain overlay policy,
+not row behavior.
 
 ### `ProgressBar`
 

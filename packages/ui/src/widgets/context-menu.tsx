@@ -12,9 +12,11 @@ import {
   measureTextBounds,
 } from "@moire/react-host";
 import { themePalette } from "../theme.js";
+import { getWidgetTheme, useWidgetTheme } from "../widget-theme.js";
 import { Button } from "./button.js";
 import { Icon, type IconName } from "./icon.js";
 import { Pressable } from "./pressable.js";
+import { MenuItem } from "./menu.js";
 import { ScrollArea } from "./scroll.js";
 import { SearchField } from "./search-field.js";
 import { easeTo, useMotionValue } from "../motion.js";
@@ -73,28 +75,36 @@ export function contextMenuSurfaceSize(
   title?: string,
   width = 244,
 ): { width: number; height: number } {
+  const recipe = getWidgetTheme().recipes.menu.medium;
   const separators = actions.filter((action) => action.separatorBefore).length;
   const menuHeight =
-    (title ? 34 : 8) + actions.length * 38 + separators * 9 + 8;
+    (title ? recipe.metrics.headerHeight : recipe.metrics.surfacePadding) +
+    actions.length * recipe.metrics.rowHeight +
+    separators * recipe.metrics.separatorGap +
+    recipe.metrics.surfacePadding;
   // Shadow extends 6px right/8px down; entrance settles upward by 5px.
   return { width: width + 6, height: menuHeight + 13 };
 }
 
 export function ContextMenu(props: ContextMenuProps): ReactNode {
-  const pal = themePalette();
+  const theme = useWidgetTheme();
+  const pal = theme.foundations.palette;
+  const recipe = theme.recipes.menu.medium;
   const reveal = useMotionValue(0);
   const [closing, setClosing] = useState(false);
   const afterClose = useRef<(() => void) | null>(null);
   const finalized = useRef(false);
   const width = props.width ?? 244;
-  const rowH = 38;
-  const menuLineH = measureTextBounds("Mg", {
-    fontSize: 13,
-    fontWeight: "medium",
-  }).height;
-  const titleH = props.title ? 34 : 8;
+  const rowH = recipe.metrics.rowHeight;
+  const titleH = props.title
+    ? recipe.metrics.headerHeight
+    : recipe.metrics.surfacePadding;
   const separators = props.actions.filter((action) => action.separatorBefore).length;
-  const height = titleH + props.actions.length * rowH + separators * 9 + 8;
+  const height =
+    titleH +
+    props.actions.length * rowH +
+    separators * recipe.metrics.separatorGap +
+    recipe.metrics.surfacePadding;
   const x = props.surface
     ? 0
     : Math.max(8, Math.min(props.x, props.viewportWidth - width - 8));
@@ -130,54 +140,43 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
       rows.push(
         <Rect
           key={`${action.id}:separator`}
-          x={10}
-          y={rowY + 4}
-          width={width - 20}
-          height={1}
-          fill={pal.borderSubtle}
+          x={recipe.metrics.paddingX}
+          y={rowY + Math.floor(recipe.metrics.separatorGap / 2)}
+          width={width - recipe.metrics.paddingX * 2}
+          height={recipe.separator.height}
+          fill={recipe.separator.fill}
         />,
       );
-      rowY += 9;
+      rowY += recipe.metrics.separatorGap;
     }
     const yForRow = rowY;
     rows.push(
-      <Pressable
+      <MenuItem
         key={action.id}
-        x={6}
+        x={recipe.metrics.itemInset}
         y={yForRow}
-        width={width - 12}
+        width={width - recipe.metrics.itemInset * 2}
         height={rowH}
-        radius={pal.radiusSm}
-        indicatorColor={action.danger ? pal.danger : pal.accentLine}
+        label={action.label}
+        description={action.description}
+        leading={
+          action.icon
+            ? (style) => (
+                <Icon
+                  name={action.icon!}
+                  size={style.size}
+                  color={style.color}
+                />
+              )
+            : undefined
+        }
+        indicator
+        danger={action.danger}
         disabled={action.disabled}
         onPress={() => {
           if (!action.disabled) dismiss(action.onPress);
         }}
-      >
-        {action.icon ? (
-          <Icon
-            x={10}
-            y={9}
-            name={action.icon}
-            size={20}
-            color={action.danger ? pal.danger : pal.text}
-          />
-        ) : null}
-        <Text
-          x={action.icon ? 40 : 12}
-          y={Math.floor((rowH - menuLineH) / 2)}
-          text={action.label}
-          color={
-            action.disabled
-              ? pal.muted
-              : action.danger
-                ? pal.danger
-                : pal.text
-          }
-          fontSize={13}
-          fontWeight="medium"
-        />
-      </Pressable>,
+      />,
     );
     rowY += rowH;
   }
@@ -211,16 +210,16 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
           y={4}
           width={width}
           height={height}
-          fill={pal.rimShade}
-          radius={pal.radiusMd}
+          fill={recipe.shadow.fill}
+          radius={recipe.shadow.radius}
         />
         <LayerSurface
           x={0}
           y={0}
           width={width}
           height={height}
-          fill={pal.panel}
-          radius={pal.radiusMd}
+          fill={recipe.surface.fill}
+          radius={recipe.surface.radius}
         >
           <Rect
             x={0}
@@ -234,9 +233,9 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
               x={16}
               y={10}
               text={props.title}
-              color={pal.muted}
-              fontSize={11}
-              fontWeight="medium"
+              color={recipe.header.color}
+              fontSize={recipe.header.fontSize}
+              fontWeight={recipe.header.fontWeight}
             />
           ) : null}
           {rows}

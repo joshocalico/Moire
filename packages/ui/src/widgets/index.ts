@@ -70,6 +70,7 @@ export type {
   CollectionItemRecipe,
   TextFieldRecipe,
   TabsRecipe,
+  MenuRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";
@@ -107,6 +108,15 @@ export type {
 
 export { Tabs } from "./tabs.js";
 export type { TabsProps, TabItem, TabSlot } from "./tabs.js";
+
+export { Menu, MenuItem } from "./menu.js";
+export type {
+  MenuProps,
+  MenuEntry,
+  MenuItemProps,
+  MenuItemSlot,
+  MenuTrailingSlot,
+} from "./menu.js";
 
 export { TextField } from "./text-field.js";
 export type { TextFieldProps, TextFieldSlot } from "./text-field.js";
@@ -637,61 +647,6 @@ export function Dialog(props: DialogProps): ReactNode {
       Group,
       { x: 12, y: 44, width: props.width - 24, height: props.height - 56 },
       props.children,
-    ),
-  );
-}
-
-/* ---------- Menu ---------- */
-
-export type MenuItemProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  height?: number;
-  label: string;
-  onPress?: () => void;
-};
-
-export function MenuItem(props: MenuItemProps): ReactNode {
-  const pal = themePalette();
-  const h = props.height ?? 28;
-  const lineH = textLineHeight();
-  return createElement(
-    Group,
-    { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h },
-    createElement(Pressable, {
-      x: 0, y: 0, width: props.width, height: h, onPress: props.onPress,
-    }),
-    createElement(Text, {
-      x: 10,
-      y: Math.floor((h - lineH) / 2),
-      text: props.label,
-      color: pal.text,
-    }),
-  );
-}
-
-export type MenuProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  items: Array<{ label: string; onPress?: () => void }>;
-};
-
-export function Menu(props: MenuProps): ReactNode {
-  const pal = themePalette();
-  const rowH = 28;
-  const h = props.items.length * rowH + 8;
-  return createElement(
-    Surface,
-    { x: props.x ?? 0, y: props.y ?? 0, width: props.width, height: h, fill: pal.panel },
-    ...props.items.map((item, i) =>
-      createElement(MenuItem, {
-        key: i, x: 4, y: 4 + i * rowH,
-        width: props.width - 8,
-        label: item.label,
-        onPress: item.onPress,
-      }),
     ),
   );
 }

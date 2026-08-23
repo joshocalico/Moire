@@ -35,6 +35,8 @@ import {
   TextField,
   SearchField,
   Tabs,
+  Menu,
+  MenuItem,
   PathBar,
   CollectionItem,
   ContextMenuTrigger,
@@ -302,6 +304,69 @@ function tabsRecipeSmoke(): void {
   assert.equal(words[38 * frame.width + 20], indicatorFill);
   assert.equal(words[41 * frame.width + 4], 0);
   assert.equal(slotSize, medium.icon.base.size);
+}
+
+function menuRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const medium = theme.recipes.menu.medium;
+  const surfaceFill = 0xff28233d;
+  const selectedFill = 0xff5a3d78;
+  const customTheme = {
+    ...theme,
+    name: "menu-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      menu: {
+        ...theme.recipes.menu,
+        medium: {
+          ...medium,
+          surface: { ...medium.surface, fill: surfaceFill, radius: 0 },
+          item: {
+            ...medium.item,
+            states: {
+              ...medium.item.states,
+              selected: { fill: selectedFill },
+            },
+          },
+        },
+      },
+    },
+  };
+  let slotSize = 0;
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <Menu
+        width={140}
+        items={[
+          {
+            id: "selected",
+            label: "Selected",
+            selected: true,
+            leading: (style) => {
+              slotSize = style.size;
+              return <Rect width={style.size} height={style.size} fill={style.color} />;
+            },
+          },
+          {
+            id: "danger",
+            label: "Remove",
+            danger: true,
+            separatorBefore: true,
+          },
+        ]}
+      />
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 144,
+    height: 100,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[2 * frame.width + 2], surfaceFill);
+  assert.equal(words[12 * frame.width + 8], selectedFill);
+  assert.equal(slotSize, medium.leadingIcon.base.size);
 }
 
 function collectionRecipeSmoke(): void {
@@ -625,6 +690,42 @@ async function searchFieldInteractionSmoke(): Promise<void> {
   });
   assert.equal(query, "", "SearchField clear affordance should clear its value");
   assert.equal(cleared, 1);
+
+  win.destroy();
+  backend.disconnect();
+}
+
+async function menuItemInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Menu item smoke", width: 200, height: 60 });
+  let presses = 0;
+  win.setContent(
+    <MenuItem
+      x={10}
+      y={10}
+      width={180}
+      label="Keyboard action"
+      autoFocus
+      onPress={() => {
+        presses++;
+      }}
+    />,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectKey({
+    type: "down",
+    code: 28,
+    key: "Enter",
+    modifiers: NO_MODIFIERS,
+    timeMs: 1,
+  });
+  assert.equal(presses, 1, "MenuItem should expose keyboard activation");
 
   win.destroy();
   backend.disconnect();
@@ -1233,10 +1334,12 @@ async function main() {
   buttonRecipeSmoke();
   textFieldRecipeSmoke();
   tabsRecipeSmoke();
+  menuRecipeSmoke();
   collectionRecipeSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
   await searchFieldInteractionSmoke();
+  await menuItemInteractionSmoke();
   await tabsInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();

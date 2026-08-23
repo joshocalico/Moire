@@ -136,6 +136,29 @@ export type TabsRecipe = {
   };
 };
 
+export type MenuRecipe = {
+  surface: WidgetBoxStyle;
+  shadow: WidgetBoxStyle;
+  item: StatefulStyle<WidgetBoxStyle>;
+  label: StatefulStyle<WidgetTextStyle>;
+  description: StatefulStyle<WidgetTextStyle>;
+  header: WidgetTextStyle;
+  leadingIcon: StatefulStyle<WidgetIconStyle>;
+  trailingText: StatefulStyle<WidgetTextStyle>;
+  indicator: StatefulStyle<{ fill: number; width: number }>;
+  separator: { fill: number; height: number };
+  metrics: {
+    rowHeight: number;
+    surfacePadding: number;
+    itemInset: number;
+    paddingX: number;
+    contentGap: number;
+    descriptionGap: number;
+    headerHeight: number;
+    separatorGap: number;
+  };
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -170,6 +193,7 @@ export type WidgetTheme = {
     collectionItem: CollectionItemRecipe;
     textField: Record<ButtonSize, TextFieldRecipe>;
     tabs: Record<ButtonSize, TabsRecipe>;
+    menu: Record<ButtonSize, MenuRecipe>;
   };
 };
 
@@ -617,6 +641,126 @@ function tabsRecipe(size: ButtonSize, palette: ThemePalette): TabsRecipe {
   };
 }
 
+function menuRecipe(size: ButtonSize, palette: ThemePalette): MenuRecipe {
+  const metrics = {
+    small: {
+      rowHeight: 30,
+      surfacePadding: 4,
+      itemInset: 4,
+      paddingX: 9,
+      contentGap: 7,
+      descriptionGap: 1,
+      headerHeight: 28,
+      separatorGap: 7,
+      fontSize: 12,
+      descriptionSize: 10,
+      iconSize: 16,
+    },
+    medium: {
+      rowHeight: 38,
+      surfacePadding: 8,
+      itemInset: 6,
+      paddingX: 12,
+      contentGap: 8,
+      descriptionGap: 2,
+      headerHeight: 34,
+      separatorGap: 9,
+      fontSize: 13,
+      descriptionSize: 11,
+      iconSize: 20,
+    },
+    large: {
+      rowHeight: 48,
+      surfacePadding: 10,
+      itemInset: 7,
+      paddingX: 14,
+      contentGap: 10,
+      descriptionGap: 2,
+      headerHeight: 40,
+      separatorGap: 11,
+      fontSize: 14,
+      descriptionSize: 12,
+      iconSize: 24,
+    },
+  }[size];
+  return {
+    surface: {
+      fill: palette.panel,
+      radius: palette.radiusMd,
+      stroke: palette.borderSubtle,
+      strokeWidth: 1,
+    },
+    shadow: { fill: palette.rimShade, radius: palette.radiusMd },
+    item: {
+      base: { fill: 0x00000000, radius: palette.radiusSm },
+      states: {
+        hover: { fill: withAlpha(palette.hover, 0xc0) },
+        pressed: { fill: withAlpha(palette.pressed, 0xe0) },
+        focused: { stroke: palette.focusRing, strokeWidth: 1 },
+        selected: { fill: palette.selection },
+        disabled: { fill: 0x00000000, stroke: undefined, strokeWidth: 0 },
+      },
+    },
+    label: {
+      base: {
+        color: palette.text,
+        fontSize: metrics.fontSize,
+        fontWeight: "medium",
+      },
+      states: {
+        danger: { color: palette.danger },
+        disabled: { color: palette.muted },
+      },
+    },
+    description: {
+      base: {
+        color: palette.muted,
+        fontSize: metrics.descriptionSize,
+        fontWeight: "regular",
+      },
+      states: { disabled: { color: withAlpha(palette.muted, 0x80) } },
+    },
+    header: {
+      color: palette.muted,
+      fontSize: 11,
+      fontWeight: "medium",
+    },
+    leadingIcon: {
+      base: { color: palette.text, size: metrics.iconSize },
+      states: {
+        danger: { color: palette.danger },
+        disabled: { color: palette.muted },
+      },
+    },
+    trailingText: {
+      base: {
+        color: palette.muted,
+        fontSize: Math.max(10, metrics.fontSize - 2),
+        fontWeight: "regular",
+      },
+      states: { disabled: { color: withAlpha(palette.muted, 0x80) } },
+    },
+    indicator: {
+      base: { fill: palette.accentLine, width: 2 },
+      states: {
+        danger: { fill: palette.danger },
+        disabled: { fill: 0x00000000 },
+      },
+    },
+    separator: { fill: palette.borderSubtle, height: 1 },
+    metrics: {
+      rowHeight: metrics.rowHeight,
+      surfacePadding: metrics.surfacePadding,
+      itemInset: metrics.itemInset,
+      paddingX: metrics.paddingX,
+      contentGap: metrics.contentGap,
+      descriptionGap: metrics.descriptionGap,
+      headerHeight: metrics.headerHeight,
+      separatorGap: metrics.separatorGap,
+    },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -640,6 +784,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   const gridItem = {} as WidgetTheme["recipes"]["gridItem"];
   const textField = {} as WidgetTheme["recipes"]["textField"];
   const tabs = {} as WidgetTheme["recipes"]["tabs"];
+  const menu = {} as WidgetTheme["recipes"]["menu"];
   for (const variant of variants) {
     button[variant] = {} as Record<ButtonSize, ButtonRecipe>;
     for (const size of sizes) {
@@ -657,6 +802,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
     gridItem[size] = gridItemRecipe(size, palette);
     textField[size] = textFieldRecipe(size, palette);
     tabs[size] = tabsRecipe(size, palette);
+    menu[size] = menuRecipe(size, palette);
   }
   return {
     name: `${theme.name}-widgets`,
@@ -690,6 +836,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       collectionItem: collectionItemRecipe(palette),
       textField,
       tabs,
+      menu,
     },
   };
 }

@@ -25,6 +25,7 @@ export type PressableProps = {
   strokeWidth?: number;
   /** Optional leading feedback mark that follows hover and press motion. */
   indicatorColor?: number;
+  indicatorWidth?: number;
   children?: ReactNode;
   onPress?: () => void;
   onDoublePress?: () => void;
@@ -151,7 +152,7 @@ export function Pressable(props: PressableProps): ReactNode {
         <Rect
           x={0}
           y={8}
-          width={2}
+          width={props.indicatorWidth ?? 2}
           height={Math.max(0, props.height - 16)}
           radius={1}
           fill={lerpArgb(
