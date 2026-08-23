@@ -46,6 +46,20 @@ export {
 export { layoutFlex, type FlexChildSpec, type FlexContainerOpts } from "./layout/index.js";
 export { themePalette, getTheme, loadTheme, hexToArgb } from "./theme.js";
 export type { MoireTheme, ThemePalette, MoireTokens } from "./theme.js";
+export {
+  createSelectionState,
+  reconcileSelection,
+  reduceSelection,
+  useSelectionModel,
+} from "./selection.js";
+export type {
+  SelectionState,
+  SelectionGesture,
+  SelectionMoveOptions,
+  SelectionOptions,
+  SelectionAction,
+  SelectionModel,
+} from "./selection.js";
 
 // Motion system
 export {

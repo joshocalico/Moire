@@ -450,6 +450,10 @@ export class Window {
       localY: ev.y - h.y,
       button: ev.button,
       deltaY: ev.deltaY,
+      shiftKey: ev.modifiers?.shift ?? false,
+      ctrlKey: ev.modifiers?.ctrl ?? false,
+      altKey: ev.modifiers?.alt ?? false,
+      metaKey: ev.modifiers?.meta ?? false,
     };
   }
 
@@ -558,13 +562,7 @@ export class Window {
     if (ev.type === "wheel") {
       const hit = this.findTopHit(ev.x, ev.y, (h) => !!h.onWheel);
       if (hit?.onWheel) {
-        hit.onWheel({
-          x: ev.x,
-          y: ev.y,
-          localX: ev.x - hit.x,
-          localY: ev.y - hit.y,
-          deltaY: ev.deltaY,
-        });
+        hit.onWheel(this.makeEvArgs(hit, ev));
         this.flushAndDirty();
       }
       return;

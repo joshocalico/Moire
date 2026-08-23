@@ -41,6 +41,9 @@ import {
   GridItem,
   ImageWidget,
   clearImageCache,
+  createSelectionState,
+  reconcileSelection,
+  reduceSelection,
   TextField,
   SearchField,
   Tabs,
@@ -114,6 +117,102 @@ function rendererSmoke(): void {
     "translucent rect on a clear frame must preserve premultiplied alpha",
   );
   assert.equal(collectHits(root.container).length, 1);
+}
+
+function orderedSelection<Key>(
+  keys: readonly Key[],
+  selected: ReadonlySet<Key>,
+): Key[] {
+  return keys.filter((key) => selected.has(key));
+}
+
+function selectionModelSmoke(): void {
+  const keys = ["a", "b", "c", "d"] as const;
+  let state = createSelectionState(keys);
+  state = reduceSelection(state, keys, { type: "select", key: "b" });
+  assert.deepEqual(orderedSelection(keys, state.selectedKeys), ["b"]);
+  assert.equal(state.anchorKey, "b");
+
+  state = reduceSelection(state, keys, {
+    type: "select",
+    key: "d",
+    gesture: { range: true },
+  });
+  assert.deepEqual(orderedSelection(keys, state.selectedKeys), ["b", "c", "d"]);
+  assert.equal(state.anchorKey, "b");
+  assert.equal(state.focusKey, "d");
+
+  state = reduceSelection(state, keys, {
+    type: "select",
+    key: "c",
+    gesture: { toggle: true },
+  });
+  assert.deepEqual(orderedSelection(keys, state.selectedKeys), ["b", "d"]);
+
+  state = reduceSelection(state, keys, {
+    type: "move",
+    delta: -1,
+    options: { extend: true },
+  });
+  assert.deepEqual(orderedSelection(keys, state.selectedKeys), ["b", "c"]);
+  assert.equal(state.focusKey, "b");
+
+  state = reduceSelection(state, keys, { type: "all" });
+  assert.deepEqual(orderedSelection(keys, state.selectedKeys), keys);
+  state = reconcileSelection(state, ["b", "d"]);
+  assert.deepEqual(orderedSelection(["b", "d"], state.selectedKeys), ["b", "d"]);
+  assert.equal(state.focusKey, "b");
+
+  state = reduceSelection(state, ["b", "d"], { type: "clear" }, {
+    allowEmpty: false,
+  });
+  assert.deepEqual(orderedSelection(["b", "d"], state.selectedKeys), ["b"]);
+}
+
+async function pointerModifierSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Pointer modifier smoke", width: 40, height: 40 });
+  let modifiers = { shift: false, ctrl: false, meta: false };
+  win.setContent(
+    <Rect
+      width={40}
+      height={40}
+      fill={0xff223344}
+      onPress={(event) => {
+        modifiers = {
+          shift: event.shiftKey === true,
+          ctrl: event.ctrlKey === true,
+          meta: event.metaKey === true,
+        };
+      }}
+    />,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  const held = { shift: true, ctrl: true, alt: false, meta: true };
+  platformWindow.injectPointer({
+    type: "down",
+    x: 10,
+    y: 10,
+    button: "left",
+    modifiers: held,
+    timeMs: 1,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 10,
+    y: 10,
+    button: "left",
+    modifiers: held,
+    timeMs: 2,
+  });
+  assert.deepEqual(modifiers, { shift: true, ctrl: true, meta: true });
+  win.destroy();
+  backend.disconnect();
 }
 
 function imageWidgetRecipeSmoke(): void {
@@ -2126,7 +2225,15 @@ async function main() {
     console.log("[ui/smoke:path] ok");
     return;
   }
+  if (process.env.MOIRE_UI_SMOKE === "selection") {
+    selectionModelSmoke();
+    await pointerModifierSmoke();
+    console.log("[ui/smoke:selection] ok");
+    return;
+  }
   rendererSmoke();
+  selectionModelSmoke();
+  await pointerModifierSmoke();
   buttonRecipeSmoke();
   textFieldRecipeSmoke();
   tabsRecipeSmoke();

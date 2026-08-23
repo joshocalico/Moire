@@ -1005,6 +1005,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
   private handlePointer(opcode: number, r: MessageReader): void {
     const now = Date.now();
+    const modifiers = modifiersFromPressed(this.pressedKeys);
     if (opcode === EV.pointer_enter) {
       const serial = r.uint();
       const surfaceId = r.object();
@@ -1017,6 +1018,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         type: "move",
         x: this.pointerX,
         y: this.pointerY,
+        modifiers,
         timeMs: now,
       });
     } else if (opcode === EV.pointer_leave) {
@@ -1031,6 +1033,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         type: "move",
         x: this.pointerX,
         y: this.pointerY,
+        modifiers,
         timeMs: now,
       });
     } else if (opcode === EV.pointer_button) {
@@ -1044,6 +1047,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         x: this.pointerX,
         y: this.pointerY,
         button: buttonName(button),
+        modifiers,
         timeMs: now,
       });
     } else if (opcode === EV.pointer_axis) {
@@ -1057,6 +1061,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           x: this.pointerX,
           y: this.pointerY,
           deltaY: value,
+          modifiers,
           timeMs: now,
         });
       }

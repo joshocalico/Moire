@@ -242,7 +242,8 @@ The desktop should also support:
 - `Toolbar` and proper icon buttons
 - `Breadcrumbs` and editable `PathBar`
 - `NavigationSidebar`, sections, editable/reorderable items
-- shared `SelectionModel`
+- shared keyed `SelectionModel` (replace/toggle/range/keyboard reconciliation
+  foundation implemented; Files and desktop integration follows)
 - virtualized list, grid, table, and tree views
 - rubber-band selection and inline rename
 - sortable column headers

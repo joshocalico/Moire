@@ -10,6 +10,8 @@ export type UiPointerEvent = {
   button?: PointerButton;
   /** Scroll delta in pixels (positive = scroll down). Only set for type="wheel". */
   deltaY?: number;
+  /** Keyboard modifiers held when the pointer event was emitted. */
+  modifiers?: UiKeyModifiers;
   timeMs: number;
 };
 

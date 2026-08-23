@@ -229,6 +229,30 @@ fill.
 
 ## Collections
 
+### `useSelectionModel`
+
+Renderer-independent keyed selection for list, grid, table, tree, Files, and
+desktop compositions. Keys remain stable when items are reordered or refreshed.
+The model supports replace, Ctrl/Command toggle, Shift range, additive range,
+Select All, clear, first/last, and directional focus movement with optional
+range extension, wrapping, or focus-only movement.
+
+```tsx
+const selection = useSelectionModel(items.map((item) => item.id));
+
+<CollectionItem
+  onPress={(event) => selection.select(item.id, {
+    toggle: event?.ctrlKey || event?.metaKey,
+    range: event?.shiftKey,
+  })}
+>
+  <ListItem selected={selection.isSelected(item.id)} />
+</CollectionItem>
+```
+
+`createSelectionState`, `reduceSelection`, and `reconcileSelection` expose the
+same semantics to non-React controllers and deterministic tests.
+
 ### `ScrollArea`
 
 | Prop | Type | Default |

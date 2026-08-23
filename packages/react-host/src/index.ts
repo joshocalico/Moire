@@ -38,6 +38,10 @@ export type HitPointerEvent = {
   localY: number;
   button?: "left" | "right" | "middle";
   deltaY?: number;
+  shiftKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
 };
 
 /** Backward-compatible alias for pointer events delivered to press handlers. */
