@@ -217,9 +217,15 @@ fill.
 | `contentHeight` | `number` | required |
 | `scrollY` / `onScroll` | controlled scroll | |
 | `scrollbar` | `boolean` | auto when overflow |
+| `size` | `small \| medium \| large` | `medium` |
+| `fill` | `number` | recipe viewport fill |
 | `children` | `ReactNode` | |
 
-Clipped viewport; wheel scrolls. Content should be positioned for the full content height.
+The scrollbar overlays rather than narrowing content, so it does not cause a
+layout jump when overflow appears. Wheel input preserves platform deltas;
+clicking the track seeks, and the thumb remains captured and scrolls
+continuously when dragged outside its original hit rectangle. Content should
+be positioned for the full content height.
 
 ### `List` / `ListItem`
 

@@ -454,6 +454,56 @@ function formControlRecipeSmoke(): void {
   assert.equal(words[84 * frame.width + 16], progressFill);
 }
 
+function scrollAreaRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const medium = theme.recipes.scrollArea.medium;
+  const viewportFill = 0xff25233b;
+  const trackFill = 0xff4c4866;
+  const thumbFill = 0xffb47de8;
+  const customTheme = {
+    ...theme,
+    name: "scroll-area-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      scrollArea: {
+        ...theme.recipes.scrollArea,
+        medium: {
+          ...medium,
+          viewport: { ...medium.viewport, fill: viewportFill },
+          track: {
+            ...medium.track,
+            base: { ...medium.track.base, fill: trackFill },
+          },
+          thumb: {
+            ...medium.thumb,
+            base: { ...medium.thumb.base, fill: thumbFill },
+          },
+        },
+      },
+    },
+  };
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <ScrollArea
+        width={80}
+        height={60}
+        contentHeight={120}
+        scrollY={30}
+      />
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 84,
+    height: 64,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[2 * frame.width + 2], viewportFill);
+  assert.equal(words[4 * frame.width + 73], trackFill);
+  assert.equal(words[20 * frame.width + 73], thumbFill);
+}
+
 function collectionRecipeSmoke(): void {
   const theme = createWidgetTheme();
   const icon = theme.recipes.iconButton.standard.medium;
@@ -775,6 +825,75 @@ async function searchFieldInteractionSmoke(): Promise<void> {
   });
   assert.equal(query, "", "SearchField clear affordance should clear its value");
   assert.equal(cleared, 1);
+
+  win.destroy();
+  backend.disconnect();
+}
+
+async function scrollAreaInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Scroll area smoke", width: 130, height: 130 });
+  let observedScroll = 0;
+
+  function Harness(): ReactNode {
+    const [scrollY, setScrollY] = useState(0);
+    return (
+      <ScrollArea
+        x={10}
+        y={10}
+        width={100}
+        height={100}
+        contentHeight={300}
+        scrollY={scrollY}
+        onScroll={(value) => {
+          observedScroll = value;
+          setScrollY(value);
+        }}
+      />
+    );
+  }
+
+  win.setContent(<Harness />);
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectPointer({
+    type: "wheel",
+    x: 40,
+    y: 40,
+    deltaY: 30,
+    timeMs: 1,
+  });
+  assert.equal(observedScroll, 30, "ScrollArea should preserve wheel deltas");
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 104,
+    y: 30,
+    button: "left",
+    timeMs: 2,
+  });
+  platformWindow.injectPointer({
+    type: "move",
+    x: 104,
+    y: 70,
+    button: "left",
+    timeMs: 3,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 104,
+    y: 70,
+    button: "left",
+    timeMs: 4,
+  });
+  assert.ok(
+    observedScroll > 120,
+    "ScrollArea thumb should continuously scroll under pointer capture",
+  );
 
   win.destroy();
   backend.disconnect();
@@ -1547,12 +1666,14 @@ async function main() {
   tabsRecipeSmoke();
   menuRecipeSmoke();
   formControlRecipeSmoke();
+  scrollAreaRecipeSmoke();
   collectionRecipeSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
   await searchFieldInteractionSmoke();
   await menuItemInteractionSmoke();
   await formControlInteractionSmoke();
+  await scrollAreaInteractionSmoke();
   await tabsInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();

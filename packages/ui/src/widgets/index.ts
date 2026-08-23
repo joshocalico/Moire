@@ -73,6 +73,7 @@ export type {
   ToggleRecipe,
   SliderRecipe,
   ProgressBarRecipe,
+  ScrollAreaRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";

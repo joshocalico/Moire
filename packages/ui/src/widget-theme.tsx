@@ -193,6 +193,18 @@ export type ProgressBarRecipe = {
   metrics: { height: number };
 };
 
+export type ScrollAreaRecipe = {
+  viewport: WidgetBoxStyle;
+  track: StatefulStyle<WidgetBoxStyle>;
+  thumb: StatefulStyle<WidgetBoxStyle>;
+  metrics: {
+    scrollbarWidth: number;
+    scrollbarMargin: number;
+    minThumbHeight: number;
+    wheelStep: number;
+  };
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -232,6 +244,7 @@ export type WidgetTheme = {
     toggle: Record<ButtonSize, ToggleRecipe>;
     slider: Record<ButtonSize, SliderRecipe>;
     progressBar: Record<ButtonSize, ProgressBarRecipe>;
+    scrollArea: Record<ButtonSize, ScrollAreaRecipe>;
   };
 };
 
@@ -987,6 +1000,53 @@ function progressBarRecipe(
   };
 }
 
+function scrollAreaRecipe(
+  size: ButtonSize,
+  palette: ThemePalette,
+): ScrollAreaRecipe {
+  const metrics = {
+    small: {
+      scrollbarWidth: 5,
+      scrollbarMargin: 2,
+      minThumbHeight: 16,
+      wheelStep: 28,
+    },
+    medium: {
+      scrollbarWidth: 6,
+      scrollbarMargin: 2,
+      minThumbHeight: 20,
+      wheelStep: 34,
+    },
+    large: {
+      scrollbarWidth: 8,
+      scrollbarMargin: 3,
+      minThumbHeight: 24,
+      wheelStep: 42,
+    },
+  }[size];
+  return {
+    viewport: { fill: palette.panel, radius: 0 },
+    track: {
+      base: {
+        fill: withAlpha(palette.surface, 0x90),
+        radius: Math.ceil(metrics.scrollbarWidth / 2),
+      },
+      states: { hover: { fill: palette.surface } },
+    },
+    thumb: {
+      base: {
+        fill: palette.border,
+        radius: Math.ceil(metrics.scrollbarWidth / 2),
+      },
+      states: {
+        hover: { fill: palette.muted },
+        pressed: { fill: palette.accent },
+      },
+    },
+    metrics,
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -1015,6 +1075,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   const toggle = {} as WidgetTheme["recipes"]["toggle"];
   const slider = {} as WidgetTheme["recipes"]["slider"];
   const progressBar = {} as WidgetTheme["recipes"]["progressBar"];
+  const scrollArea = {} as WidgetTheme["recipes"]["scrollArea"];
   for (const variant of variants) {
     button[variant] = {} as Record<ButtonSize, ButtonRecipe>;
     for (const size of sizes) {
@@ -1037,6 +1098,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
     toggle[size] = toggleRecipe(size, palette);
     slider[size] = sliderRecipe(size, palette);
     progressBar[size] = progressBarRecipe(size, palette);
+    scrollArea[size] = scrollAreaRecipe(size, palette);
   }
   return {
     name: `${theme.name}-widgets`,
@@ -1075,6 +1137,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       toggle,
       slider,
       progressBar,
+      scrollArea,
     },
   };
 }

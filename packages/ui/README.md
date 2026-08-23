@@ -89,6 +89,9 @@ native popup placement and dismissal remain outside the reusable item.
 Checkbox, Toggle, Slider, and ProgressBar also resolve paint, geometry, sizes,
 and semantic states from recipes. Their focus, keyboard, and captured-drag
 behavior stays renderer-independent.
+ScrollArea recipes own viewport and scrollbar paint plus density metrics. Its
+overlay thumb supports track seeking and captured dragging without reducing the
+content width.
 Software and EGL consume the same resulting scene.
 
 Hard rule: `widgets/`, `font/`, `layout/` never import Wayland/koffi.

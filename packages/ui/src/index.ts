@@ -141,6 +141,7 @@ export type {
   ToggleRecipe,
   SliderRecipe,
   ProgressBarRecipe,
+  ScrollAreaRecipe,
   SurfaceProps,
   PanelProps,
   RowProps,
