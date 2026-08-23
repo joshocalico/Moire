@@ -48,6 +48,7 @@ import {
   MenuItem,
   PathBar,
   CollectionItem,
+  DropTarget,
   ContextMenuTrigger,
   ContextMenu,
   OpenWithPicker,
@@ -56,7 +57,11 @@ import {
   type PlatformWindow,
 } from "./index.js";
 import { HeadlessPlatform } from "./platforms/headless/index.js";
-import { notifyDragEnded } from "./widgets/dnd.js";
+import {
+  DndFeedback,
+  notifyDragEnded,
+  notifyDrop,
+} from "./widgets/dnd.js";
 
 const NO_MODIFIERS = {
   shift: false,
@@ -185,6 +190,90 @@ function imageWidgetRecipeSmoke(): void {
     0,
     "cover should remain clipped to the widget bounds",
   );
+}
+
+function dndRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const draggingFill = 0xff6b497f;
+  const targetFill = 0xff277f78;
+  const customTheme = {
+    ...theme,
+    name: "dnd-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      dnd: {
+        dragging: {
+          ...theme.recipes.dnd.dragging,
+          fill: draggingFill,
+          radius: 0,
+          stroke: undefined,
+          strokeWidth: 0,
+        },
+        dropTarget: {
+          ...theme.recipes.dnd.dropTarget,
+          fill: targetFill,
+          radius: 0,
+          stroke: undefined,
+          strokeWidth: 0,
+        },
+      },
+    },
+  };
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <Group width={34} height={16}>
+        <DndFeedback width={16} height={16} kind="dragging" />
+        <Group x={18} width={16} height={16}>
+          <DndFeedback width={16} height={16} kind="drop-target" />
+        </Group>
+      </Group>
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 34,
+    height: 16,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[8 * frame.width + 8], draggingFill);
+  assert.equal(words[8 * frame.width + 26], targetFill);
+}
+
+async function dndRegistrySmoke(): Promise<void> {
+  const root = createShellRoot();
+  let drops = 0;
+  const renderTarget = (mimeTypes: string[]) => {
+    renderShell(
+      root,
+      <DropTarget
+        width={32}
+        height={32}
+        mimeTypes={mimeTypes}
+        onDrop={() => {
+          drops += 1;
+        }}
+      />,
+    );
+  };
+
+  renderTarget(["text/plain"]);
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  notifyDrop("first", ["text/plain"], 2, 2);
+  assert.equal(drops, 1);
+
+  renderTarget(["image/png"]);
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  notifyDrop("stale", ["text/plain"], 2, 2);
+  notifyDrop("current", ["image/png"], 2, 2);
+  assert.equal(
+    drops,
+    2,
+    "DropTarget should replace its sink when accepted MIME types change",
+  );
+
+  renderShell(root, null);
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
 function hasImageNode(node: SceneNode): boolean {
@@ -1960,6 +2049,13 @@ async function main() {
     console.log("[ui/smoke:image] ok");
     return;
   }
+  if (process.env.MOIRE_UI_SMOKE === "dnd") {
+    dndRecipeSmoke();
+    await dndRegistrySmoke();
+    await interactionOwnershipSmoke();
+    console.log("[ui/smoke:dnd] ok");
+    return;
+  }
   rendererSmoke();
   buttonRecipeSmoke();
   textFieldRecipeSmoke();
@@ -1984,6 +2080,8 @@ async function main() {
   await nativePopupLifecycleSmoke();
   imageWidgetRecipeSmoke();
   await imageWidgetLoadingSmoke();
+  dndRecipeSmoke();
+  await dndRegistrySmoke();
   const app = new Application({ platform: "headless" });
   const win = new Window({ title: "Smoke", width: 460, height: 600 });
   win.setContent(<SmokeApp onQuit={() => app.quit()} />);

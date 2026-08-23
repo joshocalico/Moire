@@ -227,6 +227,11 @@ export type ImageWidgetRecipe = {
   image: { opacity: number };
 };
 
+export type DndRecipe = {
+  dragging: WidgetBoxStyle;
+  dropTarget: WidgetBoxStyle;
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -269,6 +274,7 @@ export type WidgetTheme = {
     scrollArea: Record<ButtonSize, ScrollAreaRecipe>;
     dialog: Record<ButtonSize, DialogRecipe>;
     imageWidget: ImageWidgetRecipe;
+    dnd: DndRecipe;
   };
 };
 
@@ -1151,6 +1157,23 @@ function imageWidgetRecipe(palette: ThemePalette): ImageWidgetRecipe {
   };
 }
 
+function dndRecipe(palette: ThemePalette): DndRecipe {
+  return {
+    dragging: {
+      fill: 0x00000000,
+      radius: palette.radiusSm,
+      stroke: palette.accent,
+      strokeWidth: 1,
+    },
+    dropTarget: {
+      fill: palette.selection,
+      radius: palette.radiusMd,
+      stroke: palette.focusRing,
+      strokeWidth: 2,
+    },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -1246,6 +1269,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       scrollArea,
       dialog,
       imageWidget: imageWidgetRecipe(palette),
+      dnd: dndRecipe(palette),
     },
   };
 }

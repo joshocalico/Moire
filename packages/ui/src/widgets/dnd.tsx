@@ -4,15 +4,9 @@
  * Draggable: pointer-down + move threshold starts a real drag (not click-to-drag).
  * DropTarget: registers for incoming drops; Wayland receive path calls notifyDrop.
  */
-import {
-  createElement,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
-import { themePalette } from "../theme.js";
+import { useWidgetTheme, type WidgetBoxStyle } from "../widget-theme.js";
 import { requestActiveWindowRedraw } from "../window.js";
 
 /* ---------- Bridge (plugged in by platform, optional) ---------- */
@@ -124,57 +118,29 @@ export function notifyDragEnded(): void {
 
 const DRAG_THRESHOLD_PX = 6;
 
-/**
- * Wash + 2px accent border, the shared "a compatible drag is hovering this
- * element" visual for `Draggable`'s drop-zone mode and `DropZone`.
- */
-function dropHoverRects(
-  width: number,
-  height: number,
-  pal: ReturnType<typeof themePalette>,
-): ReactNode[] {
-  return [
-    createElement(Rect, {
-      key: "wash",
-      x: 1,
-      y: 1,
-      width: width - 2,
-      height: height - 2,
-      fill: pal.selection,
-    }),
-    createElement(Rect, {
-      key: "top",
-      x: 0,
-      y: 0,
-      width,
-      height: 2,
-      fill: pal.accent,
-    }),
-    createElement(Rect, {
-      key: "bottom",
-      x: 0,
-      y: height - 2,
-      width,
-      height: 2,
-      fill: pal.accent,
-    }),
-    createElement(Rect, {
-      key: "left",
-      x: 0,
-      y: 0,
-      width: 2,
-      height,
-      fill: pal.accent,
-    }),
-    createElement(Rect, {
-      key: "right",
-      x: width - 2,
-      y: 0,
-      width: 2,
-      height,
-      fill: pal.accent,
-    }),
-  ];
+export type DndFeedbackKind = "dragging" | "drop-target";
+
+/** Shared, renderer-neutral DnD feedback used by every interaction owner. */
+export function DndFeedback(props: {
+  width: number;
+  height: number;
+  kind: DndFeedbackKind;
+}): ReactNode {
+  const recipe = useWidgetTheme().recipes.dnd;
+  const style: WidgetBoxStyle =
+    props.kind === "dragging" ? recipe.dragging : recipe.dropTarget;
+  return (
+    <Rect
+      x={0}
+      y={0}
+      width={Math.max(0, props.width)}
+      height={Math.max(0, props.height)}
+      fill={style.fill}
+      radius={style.radius}
+      stroke={style.stroke}
+      strokeWidth={style.strokeWidth}
+    />
+  );
 }
 
 /* ---------- Draggable ---------- */
@@ -318,7 +284,6 @@ export function useDragSource(options: DragSourceOptions): DragSourceController 
 export function Draggable(props: DraggableProps): ReactNode {
   const drag = useDragSource(props);
   const [dropHover, setDropHover] = useState(false);
-  const pal = themePalette();
   const lastClick = useRef(0);
 
   const handleClick = () => {
@@ -333,70 +298,46 @@ export function Draggable(props: DraggableProps): ReactNode {
     props.onPress?.();
   };
 
-  return createElement(
-    Group,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: props.height,
-    },
-    // Children first (visuals), then hit layer on top so we own press/drag.
-    props.children,
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: props.height,
-      fill: 0x00000000,
-      data: props.dropData,
-      onDropHoverChange: props.dropData !== undefined ? setDropHover : undefined,
-      onPointerDown: drag.onPointerDown,
-      onPointerMove: drag.onPointerMove,
-      onPointerUp: drag.onPointerUp,
-      onPointerLeave: drag.onPointerLeave,
-      onPress: handleClick,
-      onContextMenu: props.onContextMenu,
-    }),
-    drag.dragging
-      ? createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: props.width,
-          height: 1,
-          fill: pal.accent,
-        })
-      : null,
-    drag.dragging
-      ? createElement(Rect, {
-          x: 0,
-          y: props.height - 1,
-          width: props.width,
-          height: 1,
-          fill: pal.accent,
-        })
-      : null,
-    drag.dragging
-      ? createElement(Rect, {
-          x: 0,
-          y: 1,
-          width: 1,
-          height: props.height - 2,
-          fill: pal.accent,
-        })
-      : null,
-    drag.dragging
-      ? createElement(Rect, {
-          x: props.width - 1,
-          y: 1,
-          width: 1,
-          height: props.height - 2,
-          fill: pal.accent,
-        })
-      : null,
-    // Drop-zone acceptor highlight — a compatible drag is hovering this
-    // element specifically (web dragenter/dragleave equivalent).
-    ...(dropHover ? dropHoverRects(props.width, props.height, pal) : []),
+  return (
+    <Group
+      x={props.x ?? 0}
+      y={props.y ?? 0}
+      width={props.width}
+      height={props.height}
+    >
+      {props.children}
+      <Rect
+        x={0}
+        y={0}
+        width={props.width}
+        height={props.height}
+        fill={0x00000000}
+        data={props.dropData}
+        onDropHoverChange={
+          props.dropData !== undefined ? setDropHover : undefined
+        }
+        onPointerDown={drag.onPointerDown}
+        onPointerMove={drag.onPointerMove}
+        onPointerUp={drag.onPointerUp}
+        onPointerLeave={drag.onPointerLeave}
+        onPress={handleClick}
+        onContextMenu={props.onContextMenu}
+      />
+      {drag.dragging ? (
+        <DndFeedback
+          width={props.width}
+          height={props.height}
+          kind="dragging"
+        />
+      ) : null}
+      {dropHover ? (
+        <DndFeedback
+          width={props.width}
+          height={props.height}
+          kind="drop-target"
+        />
+      ) : null}
+    </Group>
   );
 }
 
@@ -421,27 +362,32 @@ export type DropZoneProps = {
  */
 export function DropZone(props: DropZoneProps): ReactNode {
   const [hover, setHover] = useState(false);
-  const pal = themePalette();
 
-  return createElement(
-    Group,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: props.height,
-    },
-    props.children,
-    createElement(Rect, {
-      x: 0,
-      y: 0,
-      width: props.width,
-      height: props.height,
-      fill: 0x00000000,
-      data: props.id,
-      onDropHoverChange: setHover,
-    }),
-    ...(hover ? dropHoverRects(props.width, props.height, pal) : []),
+  return (
+    <Group
+      x={props.x ?? 0}
+      y={props.y ?? 0}
+      width={props.width}
+      height={props.height}
+    >
+      {props.children}
+      <Rect
+        x={0}
+        y={0}
+        width={props.width}
+        height={props.height}
+        fill={0x00000000}
+        data={props.id}
+        onDropHoverChange={setHover}
+      />
+      {hover ? (
+        <DndFeedback
+          width={props.width}
+          height={props.height}
+          kind="drop-target"
+        />
+      ) : null}
+    </Group>
   );
 }
 
@@ -459,26 +405,24 @@ export type DropTargetProps = {
 
 export function DropTarget(props: DropTargetProps): ReactNode {
   const [hovered, setHovered] = useState(false);
-  const pal = themePalette();
   const mimeTypes = props.mimeTypes ?? [];
+  const mimeKey = mimeTypes.join("\u0000");
 
-  // Registration below is intentionally a one-time effect (stable sink
-  // identity for the widget's lifetime), but `onDrop` closes over per-render
-  // state in callers (e.g. Files' current `cwd`). Route through a ref that's
-  // updated every render so the sink always dispatches to the latest
-  // callback instead of the one captured at mount.
+  // Keep callback changes cheap through a ref. A semantic MIME-list change
+  // refreshes the registered sink so a live target cannot retain stale types.
   const onDropRef = useRef(props.onDrop);
   onDropRef.current = props.onDrop;
 
   useEffect(() => {
     return registerDropSink({
-      mimeTypes,
-      onDrop: (payload, mimes, x, y) => onDropRef.current?.(payload, mimes, x, y),
+      mimeTypes: [...mimeTypes],
+      onDrop: (payload, mimes, x, y) =>
+        onDropRef.current?.(payload, mimes, x, y),
       onHover: setHovered,
     });
-    // Intentionally stable for the widget lifetime.
+    // A semantic MIME list change replaces the sink; callback identity does not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mimeKey]);
 
   const acceptsLocal = () => {
     if (!activeDrag) return false;
@@ -486,59 +430,23 @@ export function DropTarget(props: DropTargetProps): ReactNode {
     return activeDrag.mimeTypes.some((t) => mimeTypes.includes(t));
   };
 
-  return createElement(
-    Group,
-    {
-      x: props.x ?? 0,
-      y: props.y ?? 0,
-      width: props.width,
-      height: props.height,
-    },
-    hovered || (acceptsLocal() && hovered)
-      ? createElement(Rect, {
-          x: 2,
-          y: 2,
-          width: props.width - 4,
-          height: props.height - 4,
-          fill: pal.selection,
-        })
-      : null,
-    hovered
-      ? createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: props.width,
-          height: 2,
-          fill: pal.accent,
-        })
-      : null,
-    hovered
-      ? createElement(Rect, {
-          x: 0,
-          y: props.height - 2,
-          width: props.width,
-          height: 2,
-          fill: pal.accent,
-        })
-      : null,
-    hovered
-      ? createElement(Rect, {
-          x: 0,
-          y: 0,
-          width: 2,
-          height: props.height,
-          fill: pal.accent,
-        })
-      : null,
-    hovered
-      ? createElement(Rect, {
-          x: props.width - 2,
-          y: 0,
-          width: 2,
-          height: props.height,
-          fill: pal.accent,
-        })
-      : null,
-    props.children,
+  const showHover = hovered && (!activeDrag || acceptsLocal());
+
+  return (
+    <Group
+      x={props.x ?? 0}
+      y={props.y ?? 0}
+      width={props.width}
+      height={props.height}
+    >
+      {props.children}
+      {showHover ? (
+        <DndFeedback
+          width={props.width}
+          height={props.height}
+          kind="drop-target"
+        />
+      ) : null}
+    </Group>
   );
 }

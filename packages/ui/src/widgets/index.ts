@@ -55,6 +55,7 @@ export type {
   ScrollAreaRecipe,
   DialogRecipe,
   ImageWidgetRecipe,
+  DndRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";
@@ -72,7 +73,13 @@ export type { ImageWidgetProps, ImageFit } from "./image-widget.js";
 export { Icon } from "./icon.js";
 export type { IconProps, IconName } from "./icon.js";
 
-export { Draggable, DropTarget, DropZone, setDndBridge } from "./dnd.js";
+export {
+  Draggable,
+  DropTarget,
+  DropZone,
+  DndFeedback,
+  setDndBridge,
+} from "./dnd.js";
 export type {
   DraggableProps,
   DropTargetProps,
@@ -81,6 +88,7 @@ export type {
   DragPreviewSpec,
   DragSourceOptions,
   DragSourceController,
+  DndFeedbackKind,
 } from "./dnd.js";
 export { useDragSource } from "./dnd.js";
 

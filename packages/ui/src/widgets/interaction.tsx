@@ -10,6 +10,7 @@ import {
   useWidgetTheme,
 } from "../widget-theme.js";
 import {
+  DndFeedback,
   useDragSource,
   type DragSourceOptions,
 } from "./dnd.js";
@@ -106,10 +107,10 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
     }
   };
 
-  const showOutline = focused || drag.dragging || dropHover;
+  const showOutline = focused;
   const outline = resolveStatefulStyle(
     theme.recipes.collectionItem.outline,
-    focused ? "focused" : props.disabled ? "disabled" : "selected",
+    "focused",
   );
 
   return (
@@ -162,6 +163,20 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
           radius={outline.radius}
           stroke={outline.stroke}
           strokeWidth={outline.strokeWidth}
+        />
+      ) : null}
+      {drag.dragging ? (
+        <DndFeedback
+          width={props.width}
+          height={props.height}
+          kind="dragging"
+        />
+      ) : null}
+      {dropHover ? (
+        <DndFeedback
+          width={props.width}
+          height={props.height}
+          kind="drop-target"
         />
       ) : null}
     </Group>

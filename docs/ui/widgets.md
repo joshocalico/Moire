@@ -360,6 +360,13 @@ window-level incoming-drop sink.
 | `onDrop` | `(payload, mimeTypes) => void` | |
 | `children` | | |
 
+`Draggable`, `DropZone`, `DropTarget`, and the drag/drop states of
+`CollectionItem` all use the same topmost `DndFeedback` presentation helper.
+Its rounded source outline and drop wash resolve through `theme.recipes.dnd`,
+so renderer backends receive one ordinary fill/stroke primitive rather than a
+widget-specific paint path. A mounted `DropTarget` also refreshes its registry
+entry when its semantic MIME list changes.
+
 ```tsx
 <CollectionItem
   width={cellW}
