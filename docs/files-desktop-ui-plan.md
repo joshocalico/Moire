@@ -238,11 +238,12 @@ actions/drags. It should additionally support:
 
 ## Widget library roadmap
 
-Layout allocation is now published from Yoga through `Measure` and
-`useLayoutMetrics`, with application-oriented `Horizontal`/`Vertical` flows
-and a measured overlay `Stack`. Components no longer need parent arithmetic to
-consume flexible space. A future ergonomic layer may still register intrinsic
-recipe sizes automatically when a direct child omits all size/flex props.
+Layout allocation is now published through `Measure` and `useLayoutMetrics`,
+with application-oriented `Horizontal`/`Vertical` flows, border-box `Inset`,
+alignment helpers, and a measured overlay `Stack`. Components no longer need
+parent arithmetic to consume flexible space. Text blocks already publish their
+natural size to flow parents; other recipe widgets should adopt the same
+intrinsic-size hook when callers should not have to repeat their defaults.
 
 Once this widget list is exhausted, migrate the compositor-owned desktop icon
 presentation into standard persistent React state/components. The compositor

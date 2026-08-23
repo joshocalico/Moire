@@ -174,6 +174,11 @@ export {
   Horizontal,
   Vertical,
   Stack,
+  Align,
+  Center,
+  Inset,
+  Padding,
+  Spacer,
   Measure,
   useLayoutMetrics,
 } from "./layout.js";
@@ -183,6 +188,11 @@ export type {
   ColumnProps,
   StackProps,
   StackAlignment,
+  AlignProps,
+  CenterProps,
+  InsetProps,
+  SpacerProps,
+  Insets,
   MeasureProps,
   LayoutMetrics,
   FlexItemProps,
@@ -190,6 +200,7 @@ export type {
 
 export {
   Label,
+  TextBlock,
   Surface,
   Panel,
   Separator,

@@ -4,63 +4,173 @@ import {
   Group,
   Rect,
   Text,
+  measureTextBounds,
   type HitPressEvent,
 } from "@moire/react-host";
-import { getUiScaleFactor } from "../font/index.js";
 import { useWidgetTheme } from "../widget-theme.js";
+import {
+  registerIntrinsicSize,
+  useLayoutMetrics,
+  type FlexItemProps,
+} from "./layout.js";
 
 const DEFAULT_FONT = 14;
 
-function textHeight(scale = 1, fontSize?: number): number {
-  const base = fontSize ?? DEFAULT_FONT * scale;
-  return Math.ceil(base * getUiScaleFactor());
-}
-
-export type LabelProps = {
-  x?: number;
-  y?: number;
+export type LabelProps = FlexItemProps & {
   text: string;
   color?: number;
   scale?: number;
   fontSize?: number;
   fontWeight?: "regular" | "medium" | "bold";
   fontFamily?: "sans" | "mono";
-  width?: number;
-  height?: number;
+  horizontalAlign?: "start" | "center" | "end";
+  verticalAlign?: "start" | "center" | "end";
+  wrap?: boolean;
+  maxLines?: number;
+  lineGap?: number;
+  overflow?: "visible" | "clip" | "ellipsis";
 };
 
-export function Label(props: LabelProps): ReactNode {
-  const palette = useWidgetTheme().foundations.palette;
+type TextMeasureStyle = Pick<
+  LabelProps,
+  "scale" | "fontSize" | "fontWeight" | "fontFamily"
+>;
+
+function lineWidth(text: string, style: TextMeasureStyle): number {
+  return measureTextBounds(text, style).width;
+}
+
+function fitLine(text: string, width: number, style: TextMeasureStyle, ellipsis: boolean): string {
+  if (width <= 0) return "";
+  if (lineWidth(text, style) <= width) return text;
+  const suffix = ellipsis ? "…" : "";
+  const characters = Array.from(text);
+  let low = 0;
+  let high = characters.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (lineWidth(characters.slice(0, middle).join("") + suffix, style) <= width) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return characters.slice(0, low).join("") + suffix;
+}
+
+function wrapParagraph(text: string, width: number, style: TextMeasureStyle): string[] {
+  if (!text) return [""];
+  const words = text.trim().split(/\s+/u);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (!line || lineWidth(candidate, style) <= width) {
+      line = candidate;
+      continue;
+    }
+    lines.push(line);
+    line = word;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function intrinsicTextSize(props: LabelProps): { width: number; height: number } {
   const scale = props.scale ?? 1;
   const fontSize = props.fontSize ?? (scale > 1 ? DEFAULT_FONT * scale : undefined);
-  const text = (
-    <Text
-      text={props.text}
-      color={props.color ?? palette.text}
-      scale={scale}
-      fontSize={fontSize}
-      fontWeight={props.fontWeight}
-      fontFamily={props.fontFamily}
-    />
-  );
-  if (props.width != null || props.height != null) {
-    return (
-      <Group
-        x={props.x ?? 0}
-        y={props.y ?? 0}
-        width={props.width ?? 0}
-        height={props.height ?? textHeight(scale, fontSize)}
-      >
-        {text}
-      </Group>
+  const style = {
+    scale,
+    fontSize,
+    fontWeight: props.fontWeight,
+    fontFamily: props.fontFamily,
+  };
+  const lines = props.text.split("\n");
+  const lineHeight = measureTextBounds("Mg", style).height;
+  return {
+    width: Math.max(0, ...lines.map((line) => lineWidth(line, style))),
+    height: Math.max(1, lines.length) * lineHeight +
+      Math.max(0, lines.length - 1) * (props.lineGap ?? 0),
+  };
+}
+
+/** Measured text with allocation-aware alignment, wrapping, and overflow. */
+export function TextBlock(props: LabelProps): ReactNode {
+  const palette = useWidgetTheme().foundations.palette;
+  const allocated = useLayoutMetrics();
+  const scale = props.scale ?? 1;
+  const fontSize = props.fontSize ?? (scale > 1 ? DEFAULT_FONT * scale : undefined);
+  const style = {
+    scale,
+    fontSize,
+    fontWeight: props.fontWeight,
+    fontFamily: props.fontFamily,
+  };
+  const natural = intrinsicTextSize(props);
+  const width = props.width ?? allocated?.width ?? natural.width;
+  const lineHeight = measureTextBounds("Mg", style).height;
+  const lineGap = props.lineGap ?? 0;
+  let lines = props.wrap
+    ? props.text.split("\n").flatMap((line) => wrapParagraph(line, width, style))
+    : props.text.split("\n");
+  const naturalHeight = Math.max(1, lines.length) * lineHeight + Math.max(0, lines.length - 1) * lineGap;
+  const height = props.height ?? allocated?.height ?? naturalHeight;
+  const heightLimit = props.overflow === "visible"
+    ? Number.POSITIVE_INFINITY
+    : Math.max(1, Math.floor((height + lineGap) / Math.max(1, lineHeight + lineGap)));
+  const lineLimit = Math.max(1, Math.min(props.maxLines ?? Number.POSITIVE_INFINITY, heightLimit));
+  const truncated = lines.length > lineLimit;
+  lines = lines.slice(0, lineLimit);
+  if (props.overflow === "ellipsis") {
+    lines = lines.map((line, index) =>
+      fitLine(line, width, style, truncated && index === lines.length - 1),
     );
   }
+  const contentHeight = lines.length * lineHeight + Math.max(0, lines.length - 1) * lineGap;
+  const blockY = props.verticalAlign === "center"
+    ? Math.floor((height - contentHeight) / 2)
+    : props.verticalAlign === "end"
+      ? height - contentHeight
+      : 0;
   return (
-    <Group x={props.x ?? 0} y={props.y ?? 0}>
-      {text}
+    <Group
+      x={props.x ?? 0}
+      y={props.y ?? 0}
+      width={width}
+      height={height}
+      clip={props.overflow === "clip" || props.overflow === "ellipsis"}
+    >
+      {lines.map((line, index) => {
+        const measuredWidth = lineWidth(line, style);
+        const textX = props.horizontalAlign === "center"
+          ? Math.floor((width - measuredWidth) / 2)
+          : props.horizontalAlign === "end"
+            ? width - measuredWidth
+            : 0;
+        return (
+          <Text
+            key={`${index}:${line}`}
+            x={textX}
+            y={blockY + index * (lineHeight + lineGap)}
+            text={line}
+            color={props.color ?? palette.text}
+            scale={scale}
+            fontSize={fontSize}
+            fontWeight={props.fontWeight}
+            fontFamily={props.fontFamily}
+          />
+        );
+      })}
     </Group>
   );
 }
+
+export function Label(props: LabelProps): ReactNode {
+  return <TextBlock {...props} />;
+}
+
+registerIntrinsicSize(TextBlock, intrinsicTextSize);
+registerIntrinsicSize(Label, intrinsicTextSize);
 
 export type SurfaceProps = {
   x?: number;

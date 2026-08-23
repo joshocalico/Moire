@@ -1,7 +1,9 @@
 import React, { type ReactNode } from "react";
-import { Group, Rect, Text, type HitKeyEvent } from "@moire/react-host";
+import { Group, Rect, type HitKeyEvent } from "@moire/react-host";
 import { Pressable } from "./pressable.js";
 import { ScrollArea } from "./scroll.js";
+import { Align, Horizontal, Inset, Vertical } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
 export type PropertyListItem = {
@@ -41,10 +43,109 @@ function isTextValue(value: ReactNode): value is string | number | boolean {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
 }
 
+type PropertyRowProps = {
+  item: PropertyListItem;
+  width: number;
+  height: number;
+  labelWidth: number;
+  selected: boolean;
+  striped: boolean;
+  interactive: boolean;
+  onActivate: (item: PropertyListItem) => void;
+};
+
+function PropertyRow(props: PropertyRowProps): ReactNode {
+  const pal = useWidgetTheme().foundations.palette;
+  const pad = 12;
+  const handleKey = (event: HitKeyEvent) => {
+    if (event.repeat) return;
+    if (event.key === "Enter" || event.key === " " || event.code === 28 || event.code === 57) {
+      props.onActivate(props.item);
+    }
+  };
+  return (
+    <Group width={props.width} height={props.height}>
+      {props.striped || props.selected ? (
+        <Rect
+          width={props.width}
+          height={props.height}
+          fill={props.selected
+            ? ((pal.accent & 0x00ffffff) | 0x22000000) >>> 0
+            : pal.panel}
+        />
+      ) : null}
+      {props.interactive ? (
+        <Pressable
+          width={props.width}
+          height={props.height}
+          fill={0x00000000}
+          focusable
+          focusId={`property:${props.item.id}`}
+          disabled={props.item.disabled}
+          onPress={() => props.onActivate(props.item)}
+          onKeyDown={handleKey}
+        />
+      ) : null}
+      <Inset
+        width={props.width}
+        height={props.height}
+        padding={{ horizontal: pad }}
+      >
+        <Horizontal gap={pad} align="stretch">
+          <Vertical width={props.labelWidth} justify="center" gap={2}>
+            <TextBlock
+              height={16}
+              text={props.item.label}
+              color={props.item.disabled ? pal.muted : pal.text}
+              fontSize={12}
+              fontWeight="medium"
+              verticalAlign="center"
+              overflow="ellipsis"
+              maxLines={1}
+            />
+            {props.item.description ? (
+              <TextBlock
+                height={14}
+                text={props.item.description}
+                color={pal.muted}
+                fontSize={10}
+                verticalAlign="center"
+                overflow="ellipsis"
+                maxLines={1}
+              />
+            ) : null}
+          </Vertical>
+          <Align flexGrow={1} alignX="stretch" alignY="center">
+            {isTextValue(props.item.value) ? (
+              <TextBlock
+                height={16}
+                text={typeof props.item.value === "boolean"
+                  ? (props.item.value ? "Yes" : "No")
+                  : String(props.item.value)}
+                color={props.item.disabled ? pal.muted : pal.text}
+                fontSize={12}
+                verticalAlign="center"
+                overflow="ellipsis"
+                maxLines={1}
+              />
+            ) : props.item.value}
+          </Align>
+        </Horizontal>
+      </Inset>
+      <Rect
+        x={pad}
+        y={props.height - 1}
+        width={props.width - pad * 2}
+        height={1}
+        fill={pal.border}
+      />
+    </Group>
+  );
+}
+
 /** Sectioned key-value presentation for inspectors, metadata, and settings. */
 export function PropertyList(props: PropertyListProps): ReactNode {
   const pal = useWidgetTheme().foundations.palette;
-  const pad = 12;
   const labelWidth = Math.max(72, Math.min(props.width - 96, props.labelWidth ?? Math.round(props.width * 0.38)));
   const rowHeight = Math.max(30, props.rowHeight ?? 42);
   const descriptionRowHeight = Math.max(rowHeight, props.descriptionRowHeight ?? 58);
@@ -54,17 +155,9 @@ export function PropertyList(props: PropertyListProps): ReactNode {
       (sum, item) => sum + (item.description ? descriptionRowHeight : rowHeight),
       0,
     ), 0);
-  let cursorY = 0;
-  let rowIndex = 0;
   const activate = (item: PropertyListItem) => {
     props.onSelect?.(item);
     item.onPress?.();
-  };
-  const handleKey = (item: PropertyListItem, event: HitKeyEvent) => {
-    if (event.repeat) return;
-    if (event.key === "Enter" || event.key === " " || event.code === 28 || event.code === 57) {
-      activate(item);
-    }
   };
 
   return (
@@ -77,93 +170,48 @@ export function PropertyList(props: PropertyListProps): ReactNode {
           contentHeight={Math.max(props.height, contentHeight)}
           scrollbar={props.scrollbar}
         >
-          {props.sections.map((section) => {
-            const sectionY = cursorY;
-            if (section.label) cursorY += SECTION_HEIGHT;
-            const rows = section.items.map((item) => {
-              const height = item.description ? descriptionRowHeight : rowHeight;
-              const y = cursorY;
-              const selected = item.id === props.selectedId;
-              const striped = props.striped && rowIndex % 2 === 1;
-              rowIndex += 1;
-              cursorY += height;
-              const valueX = labelWidth + pad * 2;
-              const valueWidth = Math.max(1, props.width - valueX - pad);
+          <Vertical width={props.width} height={Math.max(props.height, contentHeight)} gap={0}>
+            {props.sections.map((section, sectionIndex) => {
+              const sectionHeight = (section.label ? SECTION_HEIGHT : 0) +
+                section.items.reduce(
+                  (sum, item) => sum + (item.description ? descriptionRowHeight : rowHeight),
+                  0,
+                );
+              const rowsBefore = props.sections
+                .slice(0, sectionIndex)
+                .reduce((count, prior) => count + prior.items.length, 0);
               return (
-                <Group key={item.id} x={0} y={y - sectionY} width={props.width} height={height}>
-                  {striped || selected ? (
-                    <Rect
-                      width={props.width}
-                      height={height}
-                      fill={selected ? ((pal.accent & 0x00ffffff) | 0x22000000) >>> 0 : pal.panel}
-                    />
-                  ) : null}
-                  {item.onPress || props.onSelect ? (
-                    <Pressable
-                      width={props.width}
-                      height={height}
-                      fill={0x00000000}
-                      focusable
-                      focusId={`property:${item.id}`}
-                      disabled={item.disabled}
-                      onPress={() => activate(item)}
-                      onKeyDown={(event) => handleKey(item, event)}
-                    />
-                  ) : null}
-                  <Text
-                    x={pad}
-                    y={item.description ? 10 : Math.floor((height - 15) / 2)}
-                    text={item.label}
-                    color={item.disabled ? pal.muted : pal.text}
-                    fontSize={12}
-                    fontWeight="medium"
-                  />
-                  {item.description ? (
-                    <Text
-                      x={pad}
-                      y={30}
-                      text={item.description}
-                      color={pal.muted}
-                      fontSize={10}
-                    />
-                  ) : null}
-                  <Group
-                    x={valueX}
-                    y={0}
-                    width={valueWidth}
-                    height={height}
-                    clip
-                  >
-                    {isTextValue(item.value) ? (
-                      <Text
-                        y={Math.floor((height - 15) / 2)}
-                        text={typeof item.value === "boolean" ? (item.value ? "Yes" : "No") : String(item.value)}
-                        color={item.disabled ? pal.muted : pal.text}
-                        fontSize={12}
+                <Vertical key={section.id} height={sectionHeight} gap={0}>
+                  {section.label ? (
+                    <Inset height={SECTION_HEIGHT} padding={{ horizontal: 12 }}>
+                      <TextBlock
+                        text={section.label.toUpperCase()}
+                        color={pal.accent}
+                        fontSize={10}
+                        fontWeight="medium"
+                        verticalAlign="center"
+                        overflow="ellipsis"
+                        maxLines={1}
                       />
-                    ) : item.value}
-                  </Group>
-                  <Rect x={pad} y={height - 1} width={props.width - pad * 2} height={1} fill={pal.border} />
-                </Group>
+                    </Inset>
+                  ) : null}
+                  {section.items.map((item, itemIndex) => (
+                    <PropertyRow
+                      key={item.id}
+                      item={item}
+                      width={props.width}
+                      height={item.description ? descriptionRowHeight : rowHeight}
+                      labelWidth={labelWidth}
+                      selected={item.id === props.selectedId}
+                      striped={Boolean(props.striped && (rowsBefore + itemIndex) % 2 === 1)}
+                      interactive={Boolean(item.onPress || props.onSelect)}
+                      onActivate={activate}
+                    />
+                  ))}
+                </Vertical>
               );
-            });
-            const sectionHeight = cursorY - sectionY;
-            return (
-              <Group key={section.id} x={0} y={sectionY} width={props.width} height={sectionHeight}>
-                {section.label ? (
-                  <Text
-                    x={pad}
-                    y={9}
-                    text={section.label.toUpperCase()}
-                    color={pal.accent}
-                    fontSize={10}
-                    fontWeight="medium"
-                  />
-                ) : null}
-                {rows}
-              </Group>
-            );
-          })}
+            })}
+          </Vertical>
         </ScrollArea>
       ) : null}
     </Group>

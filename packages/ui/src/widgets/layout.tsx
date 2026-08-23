@@ -1,4 +1,4 @@
-/** Renderer-neutral flex layout wrappers backed by Yoga measurement. */
+/** Renderer-neutral box, flow, and overlay layout primitives. */
 import React, {
   Children,
   createContext,
@@ -8,7 +8,14 @@ import React, {
   type ReactNode,
 } from "react";
 import { Group } from "@moire/react-host";
-import { layoutFlex, type FlexChildSpec } from "../layout/yoga.js";
+import {
+  layoutFlex,
+  resolveInsets,
+  type FlexChildSpec,
+  type Insets,
+} from "../layout/yoga.js";
+
+export type { Insets } from "../layout/yoga.js";
 
 export type LayoutMetrics = {
   x: number;
@@ -16,6 +23,21 @@ export type LayoutMetrics = {
   width: number;
   height: number;
 };
+
+type IntrinsicSizeProvider = (props: Record<string, unknown>) => {
+  width?: number;
+  height?: number;
+};
+
+const intrinsicSizeProviders = new WeakMap<object, IntrinsicSizeProvider>();
+
+/** Register recipe-owned natural size without exposing it as caller arithmetic. */
+export function registerIntrinsicSize<P extends object>(
+  component: (props: P) => ReactNode,
+  provider: (props: P) => { width?: number; height?: number },
+): void {
+  intrinsicSizeProviders.set(component, provider as IntrinsicSizeProvider);
+}
 
 const LayoutMetricsContext = createContext<LayoutMetrics | null>(null);
 
@@ -33,7 +55,11 @@ export type FlexItemProps = {
   flexShrink?: number;
   minWidth?: number;
   minHeight?: number;
-  margin?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  aspectRatio?: number;
+  alignSelf?: "start" | "center" | "end" | "stretch";
+  margin?: Insets;
 };
 
 export type BoxProps = FlexItemProps & {
@@ -53,11 +79,52 @@ export function Box(props: BoxProps): ReactNode {
   );
 }
 
+export type InsetProps = FlexItemProps & {
+  padding?: Insets;
+  children?: ReactNode;
+};
+
+/** A border-box boundary whose children receive its padded content box. */
+export function Inset(props: InsetProps): ReactNode {
+  const allocated = useLayoutMetrics();
+  const width = props.width ?? allocated?.width ?? 0;
+  const height = props.height ?? allocated?.height ?? 0;
+  const padding = resolveInsets(props.padding);
+  const contentWidth = Math.max(0, width - padding.left - padding.right);
+  const contentHeight = Math.max(0, height - padding.top - padding.bottom);
+  return (
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={height}>
+      <LayoutMetricsContext.Provider
+        value={{ x: 0, y: 0, width: contentWidth, height: contentHeight }}
+      >
+        <Group
+          x={padding.left}
+          y={padding.top}
+          width={contentWidth}
+          height={contentHeight}
+        >
+          {props.children}
+        </Group>
+      </LayoutMetricsContext.Provider>
+    </Group>
+  );
+}
+
+/** Familiar alias for Inset when emphasizing spacing rather than the box. */
+export const Padding = Inset;
+
+export type SpacerProps = FlexItemProps;
+
+/** Empty flexible space for a Row or Column. */
+export function Spacer(_props: SpacerProps): ReactNode {
+  return null;
+}
+
 export type MeasureProps = FlexItemProps & {
   children: (metrics: LayoutMetrics) => ReactNode;
 };
 
-/** Render from the actual box assigned by Yoga (or explicit fallback size). */
+/** Render from the actual box assigned by a layout parent. */
 export function Measure(props: MeasureProps): ReactNode {
   const allocated = useLayoutMetrics();
   const metrics: LayoutMetrics = allocated ?? {
@@ -82,13 +149,22 @@ function collectFlexChildren(children: ReactNode): {
   Children.forEach(children, (child) => {
     if (!isValidElement(child)) return;
     const props = child.props as FlexItemProps;
+    const intrinsic = (typeof child.type === "function" || typeof child.type === "object")
+      ? intrinsicSizeProviders.get(child.type as object)?.(
+          child.props as Record<string, unknown>,
+        )
+      : undefined;
     specs.push({
-      width: props.width,
-      height: props.height,
-      flexGrow: props.flexGrow,
+      width: props.width ?? intrinsic?.width,
+      height: props.height ?? intrinsic?.height,
+      flexGrow: props.flexGrow ?? (child.type === Spacer ? 1 : undefined),
       flexShrink: props.flexShrink,
       minWidth: props.minWidth,
       minHeight: props.minHeight,
+      maxWidth: props.maxWidth,
+      maxHeight: props.maxHeight,
+      aspectRatio: props.aspectRatio,
+      alignSelf: props.alignSelf,
       margin: props.margin,
     });
     elements.push(child as ReactElement);
@@ -102,7 +178,7 @@ export type RowProps = FlexItemProps & {
   width?: number;
   height?: number;
   gap?: number;
-  padding?: number;
+  padding?: Insets;
   justify?: "start" | "center" | "end" | "space-between" | "space-around";
   align?: "start" | "center" | "end" | "stretch";
   wrap?: boolean;
@@ -160,7 +236,7 @@ export function Column(props: ColumnProps): ReactNode {
   return <FlexLayout {...props} direction="column" />;
 }
 
-/** Application-layout flows remain Yoga-backed and stretch across by default. */
+/** Application-layout flow that stretches children across by default. */
 export function Horizontal(props: RowProps): ReactNode {
   return <FlexLayout {...props} align={props.align ?? "stretch"} direction="row" />;
 }
@@ -217,4 +293,18 @@ export function Stack(props: StackProps): ReactNode {
       })}
     </Group>
   );
+}
+
+export type AlignProps = StackProps;
+
+/** Place content within an allocated box without manual offset arithmetic. */
+export function Align(props: AlignProps): ReactNode {
+  return <Stack {...props} />;
+}
+
+export type CenterProps = Omit<StackProps, "alignX" | "alignY">;
+
+/** Center content on both axes inside an allocated box. */
+export function Center(props: CenterProps): ReactNode {
+  return <Stack {...props} alignX="center" alignY="center" />;
 }

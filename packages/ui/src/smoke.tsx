@@ -22,9 +22,12 @@ import {
   Box,
   Column,
   Horizontal,
+  Inset,
   Measure,
+  Spacer,
   Stack,
   Label,
+  TextBlock,
   Button,
   IconButton,
   WidgetThemeProvider,
@@ -189,6 +192,53 @@ function declarativeLayoutAndTweenSmoke(): void {
   assert.equal(tween.get(), 25);
   assert.equal(tween.tick(0.75), false);
   assert.equal(tween.get(), 100, "Tween did not settle exactly on its target");
+  renderShell(root, null);
+}
+
+function boxModelAndTextLayoutSmoke(): void {
+  const root = createShellRoot();
+  let firstBox: { width: number; height: number } | null = null;
+  let trailingBox: { x: number; width: number } | null = null;
+  renderShell(
+    root,
+    <Group width={240} height={160}>
+      <Inset
+        width={200}
+        height={100}
+        padding={{ top: 5, right: 20, bottom: 15, left: 10 }}
+      >
+        <Horizontal gap={8}>
+          <Measure width={50}>{(box) => {
+            firstBox = box;
+            return <Rect width={box.width} height={box.height} fill={0xff27465c} />;
+          }}</Measure>
+          <Spacer />
+          <Measure width={20}>{(box) => {
+            trailingBox = box;
+            return <Rect width={box.width} height={box.height} fill={0xff3b8f9f} />;
+          }}</Measure>
+        </Horizontal>
+      </Inset>
+      <TextBlock
+        y={110}
+        width={100}
+        height={40}
+        text="Centered"
+        horizontalAlign="center"
+        verticalAlign="center"
+        overflow="ellipsis"
+        maxLines={1}
+      />
+    </Group>,
+  );
+  assert.deepEqual(firstBox, { x: 0, y: 0, width: 50, height: 80 });
+  assert.deepEqual(trailingBox, { x: 150, y: 0, width: 20, height: 80 });
+  const findText = (node: SceneNode): SceneNode | null =>
+    node.kind === "text" && node.text === "Centered"
+      ? node
+      : node.children.map(findText).find(Boolean) ?? null;
+  const centered = findText(root.container);
+  assert.ok(centered && centered.x > 0 && centered.y > 0, "TextBlock did not align inside its box");
   renderShell(root, null);
 }
 
@@ -2637,6 +2687,7 @@ async function main() {
   }
   rendererSmoke();
   declarativeLayoutAndTweenSmoke();
+  boxModelAndTextLayoutSmoke();
   symbolicSvgIconSmoke();
   selectionModelSmoke();
   await pointerModifierSmoke();

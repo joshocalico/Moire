@@ -32,8 +32,8 @@ the same rich-text viewport.
 The current catalog also exercises fixed-row virtualization at 10,000 items,
 sortable tables, expandable trees, resizable split panes, condensed
 pagination, sectioned property inspectors, tooltip motion, disclosures, and
-composed operation progress. The layout/motion sample demonstrates Yoga-backed
-`Horizontal`/`Vertical` flow, allocated-size `Measure`, overlay `Stack`, and
-duration/easing `Tween`. Each public sample has a matching prop table in
+composed operation progress. The layout/motion sample demonstrates
+`Horizontal`/`Vertical` flow, content `Inset`, allocated-size `Measure`, overlay
+`Stack`, and duration/easing `Tween`. Each public sample has a matching prop table in
 [`ui/widgets.md`](../ui/widgets.md); the Code tab is illustrative usage rather
 than a substitute for that API reference.

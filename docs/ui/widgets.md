@@ -1,8 +1,8 @@
 # Widgets
 
-All widgets are React elements and JSX is the presentation standard.
-Coordinates are absolute within the parent; `Row` / `Column` position children
-via Yoga.
+All widgets are React elements and JSX is the presentation standard. Flow and
+overlay containers allocate their children; explicit coordinates remain an
+escape hatch for paint geometry and unusual compositions.
 
 Moire currently uses the classic React JSX transform for compatibility with
 the custom reconciler, so `.tsx` presentation modules import `React` as a
@@ -14,6 +14,12 @@ Import from `@moire/ui`. Defaults resolve through the nearest
 ---
 
 ## Layout
+
+Moire uses a border-box model: declared width and height include padding and
+borders, padding reduces the box offered to children, and margin participates
+in the parent flow. `Insets` accepts either one number or an object with
+`horizontal`, `vertical`, `top`, `right`, `bottom`, and `left` values. Explicit
+edges take precedence over axis values.
 
 ### `Box`
 
@@ -27,7 +33,9 @@ defaults: flex layout can only inspect props declared on its direct children.
 | `width`, `height` | `number` | `0` |
 | `flexGrow`, `flexShrink` | `number` | |
 | `minWidth`, `minHeight` | `number` | |
-| `margin` | `number` | |
+| `maxWidth`, `maxHeight`, `aspectRatio` | `number` | |
+| `alignSelf` | `start` \| `center` \| `end` \| `stretch` | parent alignment |
+| `margin` | `Insets` | `0` |
 | `children` | `ReactNode` | |
 
 ### `Row` / `Column` (`Horizontal` / `Vertical` aliases)
@@ -35,22 +43,24 @@ defaults: flex layout can only inspect props declared on its direct children.
 Flex containers (`ColumnProps` extends the same shape as `Row`). `Row` keeps a
 control-friendly centered cross axis; `Horizontal` defaults to stretch for
 pane/application layout. `Column` and `Vertical` both default to stretch.
-They remain backed by Yoga. Each allocated child box is published through
-layout context, so nested components can consume it with `Measure` or
-`useLayoutMetrics()` instead of repeating parent arithmetic.
+Each allocated child box is published through layout context, so nested
+components can consume it with `Measure` or `useLayoutMetrics()` instead of
+repeating parent arithmetic.
 
 | Prop | Type | Default |
 | --- | --- | --- |
 | `width`, `height` | `number` | nearest allocated box when omitted |
 | `x`, `y` | `number` | `0` |
 | `gap` | `number` | `8` |
-| `padding` | `number` | `0` |
+| `padding` | `Insets` | `0` |
 | `justify` | `start` \| `center` \| `end` \| `space-between` \| `space-around` | |
 | `align` | `start` \| `center` \| `end` \| `stretch` | Row: `center`, Column: `stretch` |
 | `wrap` | `boolean` | `false` |
 | `flexGrow`, `flexShrink` | `number` | |
 | `minWidth`, `minHeight` | `number` | |
-| `margin` | `number` | |
+| `maxWidth`, `maxHeight`, `aspectRatio` | `number` | |
+| `alignSelf` | `start` \| `center` \| `end` \| `stretch` | parent alignment |
+| `margin` | `Insets` | `0` |
 | `children` | `ReactNode` | |
 
 ```tsx
@@ -60,11 +70,64 @@ layout context, so nested components can consume it with `Measure` or
 </Row>
 ```
 
+### `Inset` (`Padding` alias)
+
+Border-box boundary that gives its children a padded content allocation.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | nearest allocated box |
+| `padding` | `Insets` | `0` |
+| `flexGrow`, `flexShrink` | `number` | |
+| `minWidth`, `minHeight`, `maxWidth`, `maxHeight` | `number` | |
+| `aspectRatio` | `number` | |
+| `alignSelf` | `start` \| `center` \| `end` \| `stretch` | parent alignment |
+| `margin` | `Insets` | `0` |
+| `children` | `ReactNode` | |
+
+```tsx
+<Inset width={420} height={120} padding={{ horizontal: 16, vertical: 12 }}>
+  <Vertical gap={4}>
+    <TextBlock text="Transfer complete" fontWeight="medium" />
+    <TextBlock text="42 files copied" color={muted} />
+  </Vertical>
+</Inset>
+```
+
+### `Spacer`, `Align`, and `Center`
+
+`Spacer` consumes flexible flow space. It accepts `width`, `height`,
+`flexGrow`, `flexShrink`, min/max size, `aspectRatio`, `alignSelf`, and
+`margin`; `flexGrow` defaults to `1`. `Align` places children within an
+allocated overlay box; `Center` is its centered-axis shorthand.
+
+| Prop (`Align`) | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | nearest allocated box |
+| `alignX`, `alignY` | `start` \| `center` \| `end` \| `stretch` | `stretch` |
+| `flexGrow`, `flexShrink` | `number` | |
+| `minWidth`, `minHeight`, `maxWidth`, `maxHeight` | `number` | |
+| `aspectRatio`, `alignSelf`, `margin` | flex item values | |
+| `children` | `ReactNode` | |
+
+`Center` accepts the same props except `alignX` and `alignY`, which are fixed
+to `center`.
+
+```tsx
+<Horizontal width={360} height={40} gap={8}>
+  <TextBlock text="Appearance" verticalAlign="center" />
+  <Spacer flexGrow={1} />
+  <Button width={92} label="Restore" />
+</Horizontal>
+```
+
 ### `Measure`
 
 Render-prop bridge from a layout allocation to ordinary JSX. As a direct
 `Horizontal`/`Vertical` child it accepts the same flex item props and receives
-Yoga's computed `{ x, y, width, height }`.
+the allocated `{ x, y, width, height }`.
 
 | Prop | Type | Default |
 | --- | --- | --- |
@@ -72,7 +135,8 @@ Yoga's computed `{ x, y, width, height }`.
 | `width`, `height` | `number` | allocated box |
 | `flexGrow`, `flexShrink` | `number` | |
 | `minWidth`, `minHeight` | `number` | |
-| `margin` | `number` | |
+| `maxWidth`, `maxHeight`, `aspectRatio` | `number` | |
+| `margin` | `Insets` | `0` |
 | `children` | `(metrics: LayoutMetrics) => ReactNode` | required |
 
 ```tsx
@@ -98,7 +162,8 @@ children share one box and are positioned by two alignment axes.
 | `width`, `height` | `number` | nearest allocated box when omitted |
 | `alignX`, `alignY` | `start \| center \| end \| stretch` | `stretch` |
 | `flexGrow`, `flexShrink` | `number` | |
-| `minWidth`, `minHeight`, `margin` | `number` | |
+| `minWidth`, `minHeight`, `maxWidth`, `maxHeight` | `number` | |
+| `margin` | `Insets` | `0` |
 | `children` | `ReactNode` | painted in source order |
 
 ```tsx
@@ -160,16 +225,28 @@ Filled background. `Panel` defaults fill to `pal.surface`; `Surface` to `pal.pan
 | `height` | `number` | `1` |
 | `color` | `number` | `pal.border` |
 
-### `Label`
+### `TextBlock` / `Label`
+
+Allocation-aware text. `Label` is the familiar semantic alias; both render the
+same text primitive. Text is aligned inside its allocated box without callers
+calculating font baselines.
 
 | Prop | Type | Default |
 | --- | --- | --- |
+| `x`, `y` | `number` | `0` |
 | `text` | `string` | required |
 | `color` | `number` | `pal.text` |
 | `fontSize` | `number` | ~14 |
 | `fontWeight` | `regular` \| `medium` \| `bold` | |
 | `fontFamily` | `sans` \| `mono` | |
-| `width`, `height` | `number` | optional clip box |
+| `width`, `height` | `number` | nearest allocation or natural text size |
+| `horizontalAlign` | `start` \| `center` \| `end` | `start` |
+| `verticalAlign` | `start` \| `center` \| `end` | `start` |
+| `wrap` | `boolean` | `false` |
+| `maxLines` | `number` | unlimited |
+| `lineGap` | `number` | `0` |
+| `overflow` | `visible` \| `clip` \| `ellipsis` | `visible` |
+| `flexGrow`, `flexShrink`, min/max size, `margin` | flex item values | |
 
 Prefer `TYPE_ROLES.*.size` for consistent hierarchy.
 

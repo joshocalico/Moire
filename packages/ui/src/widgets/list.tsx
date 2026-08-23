@@ -3,7 +3,6 @@ import React, { isValidElement, type ReactNode } from "react";
 import {
   Group,
   Rect,
-  Text,
   measureTextBounds,
   type HitPointerEvent,
 } from "@moire/react-host";
@@ -15,6 +14,8 @@ import {
 } from "../widget-theme.js";
 import { Pressable } from "./pressable.js";
 import { ScrollArea } from "./scroll.js";
+import { Box, Horizontal, Inset, Vertical, useLayoutMetrics } from "./layout.js";
+import { TextBlock } from "./primitives.js";
 
 export type ListItemSlot =
   | ReactNode
@@ -23,7 +24,7 @@ export type ListItemSlot =
 export type ListItemProps = {
   x?: number;
   y?: number;
-  width: number;
+  width?: number;
   height?: number;
   size?: ButtonSize;
   /** Optional leading artwork slot (icon, avatar, status graphic…). */
@@ -41,7 +42,9 @@ export type ListItemProps = {
 
 export function ListItem(props: ListItemProps): ReactNode {
   const theme = useWidgetTheme();
+  const allocated = useLayoutMetrics();
   const recipe = theme.recipes.listItem[props.size ?? "medium"];
+  const width = props.width ?? allocated?.width ?? 0;
   const height = props.height ?? recipe.metrics.height;
   const interaction = resolveStatefulStyle(recipe.interaction, "rest");
   const hovered = resolveStatefulStyle(recipe.interaction, "hover");
@@ -70,17 +73,6 @@ export function ListItem(props: ListItemProps): ReactNode {
     fontSize: subtitle.fontSize,
     fontWeight: subtitle.fontWeight,
   }).height;
-  const titleY = props.subtitle
-    ? Math.floor(
-        (height -
-          titleLineHeight -
-          recipe.metrics.subtitleGap -
-          subtitleLineHeight) /
-          2,
-      )
-    : Math.floor((height - titleLineHeight) / 2);
-  const subtitleY =
-    titleY + titleLineHeight + recipe.metrics.subtitleGap;
   const elementProps = isValidElement(props.leading)
     ? (props.leading.props as { size?: number; height?: number; width?: number })
     : undefined;
@@ -89,10 +81,9 @@ export function ListItem(props: ListItemProps): ReactNode {
     elementProps?.height ??
     elementProps?.width ??
     leadingStyle.size;
-  const contentX = recipe.indicator.width + recipe.metrics.paddingX;
-  const textX = props.leading
-    ? contentX + leadingSize + recipe.metrics.leadingGap
-    : contentX;
+  const textHeight = props.subtitle
+    ? titleLineHeight + recipe.metrics.subtitleGap + subtitleLineHeight
+    : titleLineHeight;
   const leading =
     typeof props.leading === "function"
       ? props.leading(leadingStyle)
@@ -102,14 +93,14 @@ export function ListItem(props: ListItemProps): ReactNode {
     <Group
       x={props.x ?? 0}
       y={props.y ?? 0}
-      width={props.width}
+      width={width}
       height={height}
     >
       {props.selected ? (
         <Rect
           x={0}
           y={0}
-          width={props.width}
+          width={width}
           height={height}
           fill={recipe.selection.fill}
           radius={recipe.selection.radius}
@@ -130,7 +121,7 @@ export function ListItem(props: ListItemProps): ReactNode {
         <Pressable
           x={0}
           y={0}
-          width={props.width}
+          width={width}
           height={height}
           fill={interaction.fill}
           hoverFill={hovered.fill}
@@ -143,34 +134,48 @@ export function ListItem(props: ListItemProps): ReactNode {
           onContextMenu={props.onContextMenu}
         />
       ) : null}
-      {leading ? (
-        <Group
-          x={contentX}
-          y={Math.floor((height - leadingSize) / 2)}
-          width={leadingSize}
-          height={leadingSize}
-        >
-          {leading}
-        </Group>
-      ) : null}
-      <Text
-        x={textX}
-        y={titleY}
-        text={props.title}
-        color={title.color}
-        fontSize={title.fontSize}
-        fontWeight={title.fontWeight}
-      />
-      {props.subtitle ? (
-        <Text
-          x={textX}
-          y={subtitleY}
-          text={props.subtitle}
-          color={subtitle.color}
-          fontSize={subtitle.fontSize}
-          fontWeight={subtitle.fontWeight}
-        />
-      ) : null}
+      <Inset
+        width={width}
+        height={height}
+        padding={{
+          left: recipe.indicator.width + recipe.metrics.paddingX,
+          right: recipe.metrics.paddingX,
+        }}
+      >
+        <Horizontal gap={leading ? recipe.metrics.leadingGap : 0} align="center">
+          {leading ? (
+            <Box width={leadingSize} height={leadingSize}>
+              {leading}
+            </Box>
+          ) : null}
+          <Vertical
+            flexGrow={1}
+            height={textHeight}
+            gap={props.subtitle ? recipe.metrics.subtitleGap : 0}
+          >
+            <TextBlock
+              height={titleLineHeight}
+              text={props.title}
+              color={title.color}
+              fontSize={title.fontSize}
+              fontWeight={title.fontWeight}
+              overflow="ellipsis"
+              maxLines={1}
+            />
+            {props.subtitle ? (
+              <TextBlock
+                height={subtitleLineHeight}
+                text={props.subtitle}
+                color={subtitle.color}
+                fontSize={subtitle.fontSize}
+                fontWeight={subtitle.fontWeight}
+                overflow="ellipsis"
+                maxLines={1}
+              />
+            ) : null}
+          </Vertical>
+        </Horizontal>
+      </Inset>
     </Group>
   );
 }

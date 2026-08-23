@@ -38,6 +38,9 @@ import {
   Horizontal,
   Vertical,
   Stack,
+  Inset,
+  Spacer,
+  TextBlock,
   Measure,
   Tween,
   Box,
@@ -127,26 +130,27 @@ const SAMPLES: Sample[] = [
   {
     id: "layout-motion",
     title: "Layout and motion",
-    description: "Measured Yoga flow, overlays, and duration-based tweening",
+    description: "Measured flow, consistent insets, overlays, and duration-based tweening",
     section: "Layout",
     code: `<Vertical width={720} height={360} gap={12}>
-  <Box height={280}>
-    <Horizontal gap={12}>
-      <Measure width={200}>{({ width, height }) => (
-        <Inspector width={width} height={height} />
-      )}</Measure>
-      <Measure flexGrow={1}>{({ width, height }) => (
-        <Stack width={width} height={height} alignX="center" alignY="center">
-          <Canvas width={width} height={height} />
-          <Box width={240} height={120}>
-            <Tween value={open ? 1 : 0} duration={240} easing="ease-out">
-              {(progress) => <PreviewCard x={(1 - progress) * 36} />}
-            </Tween>
-          </Box>
-        </Stack>
-      )}</Measure>
-    </Horizontal>
-  </Box>
+  <Horizontal flexGrow={1} gap={12}>
+    <Inset width={200} padding={16}>
+      <Vertical gap={6}>
+        <TextBlock text="Inspector" fontWeight="medium" />
+        <TextBlock text="Allocated by its parent" color={muted} />
+        <Spacer />
+        <Button label="Details" />
+      </Vertical>
+    </Inset>
+    <Measure flexGrow={1}>{({ width, height }) => (
+      <Stack width={width} height={height} alignX="center" alignY="center">
+        <Canvas width={width} height={height} />
+        <Tween value={open ? 1 : 0} duration={240} easing="ease-out">
+          {(progress) => <PreviewCard x={(1 - progress) * 36} />}
+        </Tween>
+      </Stack>
+    )}</Measure>
+  </Horizontal>
 </Vertical>`,
   },
   {
@@ -368,7 +372,7 @@ const GUIDANCE: Record<string, SampleGuidance> = {
     when: "Use for persistent peer regions such as a sidebar and canvas, inspector, or preview.",
   },
   "layout-motion": {
-    about: "Yoga handles flow; Measure exposes its allocation; Stack and Tween add overlay and time.",
+    about: "Flow, insets, and alignment compose the box model; Measure, Stack, and Tween expose allocation, overlay, and time.",
     when: "Use these primitives before calculating descendant positions or animation frames by hand.",
   },
   list: {
@@ -537,9 +541,14 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
           <Horizontal gap={12}>
             <Measure width={190}>{({ width, height }) => (
               <Surface width={width} height={height} fill={pal.panel} radius={10} stroke={pal.border} strokeWidth={1}>
-                <Label x={16} y={18} text="Measured inspector" fontSize={13} fontWeight="medium" width={width - 32} height={22} />
-                <Label x={16} y={48} text={`${Math.round(width)} × ${Math.round(height)}`} color={pal.accent} fontSize={11} fontFamily="mono" width={width - 32} height={20} />
-                <Label x={16} y={78} text="Fixed 190 px pane" color={pal.muted} fontSize={10} width={width - 32} height={18} />
+                <Inset width={width} height={height} padding={16}>
+                  <Vertical gap={6}>
+                    <TextBlock height={22} text="Measured inspector" fontSize={13} fontWeight="medium" verticalAlign="center" />
+                    <TextBlock height={20} text={`${Math.round(width)} × ${Math.round(height)}`} color={pal.accent} fontSize={11} fontFamily="mono" verticalAlign="center" />
+                    <Spacer />
+                    <TextBlock height={18} text="Fixed 190 px pane" color={pal.muted} fontSize={10} verticalAlign="center" />
+                  </Vertical>
+                </Inset>
               </Surface>
             )}</Measure>
             <Measure flexGrow={1}>{({ width, height }) => (
@@ -558,9 +567,13 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
                         stroke={pal.accent}
                         strokeWidth={1}
                       >
-                        <Label x={18} y={18} text="Tweened overlay" fontSize={14} fontWeight="medium" width={220} height={22} />
-                        <Label x={18} y={50} text={`progress ${progress.toFixed(2)}`} color={pal.accent} fontSize={11} fontFamily="mono" width={220} height={20} />
-                        <Label x={18} y={80} text={`${Math.round(width)} × ${Math.round(height)} allocation`} color={pal.muted} fontSize={10} width={220} height={18} />
+                        <Inset width={Math.min(270, width - 32)} height={132} padding={18}>
+                          <Vertical gap={6}>
+                            <TextBlock height={22} text="Tweened overlay" fontSize={14} fontWeight="medium" verticalAlign="center" />
+                            <TextBlock height={20} text={`progress ${progress.toFixed(2)}`} color={pal.accent} fontSize={11} fontFamily="mono" verticalAlign="center" />
+                            <TextBlock height={18} text={`${Math.round(width)} × ${Math.round(height)} allocation`} color={pal.muted} fontSize={10} verticalAlign="center" overflow="ellipsis" maxLines={1} />
+                          </Vertical>
+                        </Inset>
                       </Surface>
                     )}
                   </Tween>
