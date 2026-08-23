@@ -72,6 +72,9 @@ win.setContent(
 
 Button recipes cover `primary`, `secondary`, `ghost`, and `danger` variants;
 `small`, `medium`, and `large` sizes; semantic interaction states; and leading
-or trailing artwork slots. Software and EGL consume the same resulting scene.
+or trailing artwork slots. IconButton has a centered text/artwork slot rather
+than treating its icon as a Button label. ListItem recipes separately own
+selection, interaction feedback, typography, leading artwork, metrics, and the
+selection indicator. Software and EGL consume the same resulting scene.
 
 Hard rule: `widgets/`, `font/`, `layout/` never import Wayland/koffi.

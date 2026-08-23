@@ -63,6 +63,29 @@ export type ButtonRecipe = {
   };
 };
 
+export type IconButtonVariant = "standard" | "ghost" | "danger";
+
+export type IconButtonRecipe = {
+  root: StatefulStyle<WidgetBoxStyle>;
+  icon: StatefulStyle<WidgetIconStyle>;
+  metrics: { size: number };
+};
+
+export type ListItemRecipe = {
+  selection: WidgetBoxStyle;
+  interaction: StatefulStyle<WidgetBoxStyle>;
+  title: StatefulStyle<WidgetTextStyle>;
+  subtitle: StatefulStyle<WidgetTextStyle>;
+  leadingIcon: StatefulStyle<WidgetIconStyle>;
+  indicator: { fill: number; width: number };
+  metrics: {
+    height: number;
+    paddingX: number;
+    leadingGap: number;
+    subtitleGap: number;
+  };
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -91,6 +114,8 @@ export type WidgetTheme = {
   foundations: WidgetFoundations;
   recipes: {
     button: Record<ButtonVariant, Record<ButtonSize, ButtonRecipe>>;
+    iconButton: Record<IconButtonVariant, Record<ButtonSize, IconButtonRecipe>>;
+    listItem: Record<ButtonSize, ListItemRecipe>;
   };
 };
 
@@ -211,6 +236,98 @@ function buttonRecipe(
   };
 }
 
+function iconButtonRecipe(
+  variant: IconButtonVariant,
+  size: ButtonSize,
+  palette: ThemePalette,
+): IconButtonRecipe {
+  const buttonVariant: ButtonVariant =
+    variant === "standard" ? "secondary" : variant;
+  const source = buttonRecipe(buttonVariant, size, palette);
+  return {
+    root: source.root,
+    icon: source.leadingIcon,
+    metrics: { size: source.metrics.height },
+  };
+}
+
+function listItemRecipe(
+  size: ButtonSize,
+  palette: ThemePalette,
+): ListItemRecipe {
+  const metrics = {
+    small: {
+      height: 32,
+      paddingX: 10,
+      leadingGap: 7,
+      subtitleGap: 1,
+      titleSize: 12,
+      subtitleSize: 10,
+      iconSize: 18,
+    },
+    medium: {
+      height: 40,
+      paddingX: 11,
+      leadingGap: 8,
+      subtitleGap: 1,
+      titleSize: 14,
+      subtitleSize: 11,
+      iconSize: 24,
+    },
+    large: {
+      height: 52,
+      paddingX: 14,
+      leadingGap: 10,
+      subtitleGap: 2,
+      titleSize: 15,
+      subtitleSize: 12,
+      iconSize: 28,
+    },
+  }[size];
+  const textDisabled = { disabled: { color: palette.muted } };
+  return {
+    selection: {
+      fill: palette.selection,
+      radius: palette.radiusSm,
+    },
+    interaction: {
+      base: { fill: 0x00000000, radius: palette.radiusSm },
+      states: {
+        hover: { fill: withAlpha(palette.hover, 0xb0) },
+        pressed: { fill: withAlpha(palette.pressed, 0xd0) },
+        disabled: { fill: 0x00000000 },
+      },
+    },
+    title: {
+      base: {
+        color: palette.text,
+        fontSize: metrics.titleSize,
+        fontWeight: "regular",
+      },
+      states: textDisabled,
+    },
+    subtitle: {
+      base: {
+        color: palette.muted,
+        fontSize: metrics.subtitleSize,
+        fontWeight: "regular",
+      },
+      states: textDisabled,
+    },
+    leadingIcon: {
+      base: { color: palette.text, size: metrics.iconSize },
+      states: { disabled: { color: palette.muted } },
+    },
+    indicator: { fill: palette.accentLine, width: 3 },
+    metrics: {
+      height: metrics.height,
+      paddingX: metrics.paddingX,
+      leadingGap: metrics.leadingGap,
+      subtitleGap: metrics.subtitleGap,
+    },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -226,14 +343,24 @@ export function resolveStatefulStyle<T extends object>(
 export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   const palette = themePalette(theme);
   const variants: ButtonVariant[] = ["primary", "secondary", "ghost", "danger"];
+  const iconVariants: IconButtonVariant[] = ["standard", "ghost", "danger"];
   const sizes: ButtonSize[] = ["small", "medium", "large"];
   const button = {} as WidgetTheme["recipes"]["button"];
+  const iconButton = {} as WidgetTheme["recipes"]["iconButton"];
+  const listItem = {} as WidgetTheme["recipes"]["listItem"];
   for (const variant of variants) {
     button[variant] = {} as Record<ButtonSize, ButtonRecipe>;
     for (const size of sizes) {
       button[variant][size] = buttonRecipe(variant, size, palette);
     }
   }
+  for (const variant of iconVariants) {
+    iconButton[variant] = {} as Record<ButtonSize, IconButtonRecipe>;
+    for (const size of sizes) {
+      iconButton[variant][size] = iconButtonRecipe(variant, size, palette);
+    }
+  }
+  for (const size of sizes) listItem[size] = listItemRecipe(size, palette);
   return {
     name: `${theme.name}-widgets`,
     foundations: {
@@ -258,7 +385,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
         high: { blur: 32, offsetY: 12, opacity: 0.32 },
       },
     },
-    recipes: { button },
+    recipes: { button, iconButton, listItem },
   };
 }
 

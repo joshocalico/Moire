@@ -20,6 +20,7 @@ import {
   Column,
   Label,
   Button,
+  IconButton,
   WidgetThemeProvider,
   createWidgetTheme,
   Checkbox,
@@ -174,6 +175,94 @@ function buttonRecipeSmoke(): void {
     medium.leadingIcon.base.size,
     "Button artwork slots should receive the recipe's semantic icon style",
   );
+}
+
+function collectionRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const icon = theme.recipes.iconButton.standard.medium;
+  const list = theme.recipes.listItem.medium;
+  const iconFill = 0xff315f8f;
+  const selectionFill = 0xff56356f;
+  const indicatorFill = 0xffffc857;
+  const customTheme = {
+    ...theme,
+    name: "collection-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      iconButton: {
+        ...theme.recipes.iconButton,
+        standard: {
+          ...theme.recipes.iconButton.standard,
+          medium: {
+            ...icon,
+            root: {
+              ...icon.root,
+              base: {
+                ...icon.root.base,
+                fill: iconFill,
+                radius: 0,
+                stroke: undefined,
+                strokeWidth: 0,
+              },
+            },
+          },
+        },
+      },
+      listItem: {
+        ...theme.recipes.listItem,
+        medium: {
+          ...list,
+          selection: {
+            ...list.selection,
+            fill: selectionFill,
+            radius: 0,
+          },
+          indicator: { fill: indicatorFill, width: 5 },
+        },
+      },
+    },
+  };
+  let iconSlotSize = 0;
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <Group x={0} y={0} width={128} height={84}>
+        <IconButton
+          x={2}
+          y={2}
+          icon={(style) => {
+            iconSlotSize = style.size;
+            return (
+              <Rect
+                width={style.size}
+                height={style.size}
+                radius={3}
+                fill={style.color}
+              />
+            );
+          }}
+        />
+        <ListItem
+          x={2}
+          y={42}
+          width={124}
+          title="Recipe row"
+          selected
+          interactive={false}
+        />
+      </Group>
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 128,
+    height: 84,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[2 * frame.width + 2], iconFill);
+  assert.equal(words[52 * frame.width + 2], indicatorFill);
+  assert.equal(words[52 * frame.width + 8], selectionFill);
+  assert.equal(iconSlotSize, icon.icon.base.size);
 }
 
 async function textFieldInteractionSmoke(): Promise<void> {
@@ -810,6 +899,7 @@ async function main() {
   process.env.MOIRE_UI_PLATFORM = "headless";
   rendererSmoke();
   buttonRecipeSmoke();
+  collectionRecipeSmoke();
   await textFieldInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();

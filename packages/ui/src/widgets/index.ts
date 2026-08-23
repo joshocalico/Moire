@@ -40,6 +40,13 @@ export type {
   ButtonSlot,
 } from "./button.js";
 
+export { IconButton } from "./icon-button.js";
+export type {
+  IconButtonProps,
+  IconButtonSlot,
+  IconButtonVariant,
+} from "./icon-button.js";
+
 export {
   WidgetThemeProvider,
   createWidgetTheme,
@@ -57,13 +64,15 @@ export type {
   WidgetTextStyle,
   WidgetIconStyle,
   ButtonRecipe,
+  IconButtonRecipe,
+  ListItemRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";
 export type { ScrollAreaProps } from "./scroll.js";
 
 export { List, ListItem } from "./list.js";
-export type { ListProps, ListItemProps } from "./list.js";
+export type { ListProps, ListItemProps, ListItemSlot } from "./list.js";
 
 export { Grid, GridItem } from "./grid.js";
 export type { GridProps, GridItemProps } from "./grid.js";
@@ -392,32 +401,6 @@ export function Separator(props: SeparatorProps): ReactNode {
 
 /** @deprecated use Separator */
 export const Divider = Separator;
-
-/* ---------- IconButton ---------- */
-
-export type IconButtonProps = {
-  x?: number;
-  y?: number;
-  width: number;
-  height: number;
-  icon: string;
-  fill?: number;
-  color?: number;
-  onPress?: () => void;
-};
-
-export function IconButton(props: IconButtonProps): ReactNode {
-  return createElement(Button, {
-    x: props.x,
-    y: props.y,
-    width: props.width,
-    height: props.height,
-    label: props.icon,
-    fill: props.fill,
-    color: props.color,
-    onPress: props.onPress,
-  });
-}
 
 /* ---------- Checkbox ---------- */
 

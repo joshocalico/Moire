@@ -249,15 +249,16 @@ States are semantic (`rest`, `hover`, `pressed`, `focused`, `disabled`,
 `selected`, `danger`) and may alter geometry, paint, typography, or motion.
 Recipes are plain data and remain renderer-neutral.
 
-The first vertical slice is active. `WidgetThemeProvider` supplies foundation
-color/type/space/radius/motion/elevation data and a complete Button recipe
-matrix across variant, size, and semantic state. Button consumes its root,
-label, metrics, rim, and named artwork-slot styles from that context; explicit
-legacy colors remain compatibility escape hatches. A headless conformance case
-proves a subtree recipe can materially change the rendered control without a
-component fork.
+The first vertical slices are active. `WidgetThemeProvider` supplies foundation
+color/type/space/radius/motion/elevation data plus recipe matrices for Button,
+IconButton, and ListItem. Buttons consume root, label/icon, metrics, rim, and
+named artwork-slot styles from that context. List rows keep persistent selection
+and accent layers separate from animated hover/press feedback. Explicit legacy
+colors remain compatibility escape hatches. Headless conformance cases prove a
+subtree recipe can materially change each rendered control without a component
+fork.
 
-### W2 — slot-based primitives
+### W2 — active: slot-based primitives
 
 - Give compound widgets named slots instead of one monolithic paint function.
 - Accept `class`/recipe keys, local style overrides, and replacement slot
@@ -265,6 +266,13 @@ component fork.
 - Move interaction state into headless controllers/hooks; recipes paint it.
 - Remove hard-coded pixel geometry from `Button`, `ListItem`, `TextField`,
   `Tabs`, menus, sidebar rows, titlebar controls, and collection items.
+
+Button exposes leading/trailing artwork slots, IconButton exposes one centered
+artwork slot, and ListItem exposes a recipe-sized leading slot. Slot callbacks
+receive semantic icon style data while callers remain free to replace the
+renderer-neutral subtree. Button, IconButton, Pressable, and List/ListItem use
+JSX; GridItem and the remaining monolithic widget module are next in the
+presentation migration.
 
 ### W3 — primitive completeness
 
