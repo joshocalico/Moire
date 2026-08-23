@@ -6,6 +6,7 @@ import React, { type ReactNode } from "react";
 import { Group, Image, Rect } from "@moire/react-host";
 import { useWidgetTheme } from "../widget-theme.js";
 import { loadImageSync, type ImageData } from "../image/load.js";
+import { loadSvgIconSync } from "../image/svg-icon.js";
 
 export type IconName =
   | "folder"
@@ -73,11 +74,27 @@ function resolveIconPath(name: string, explicit?: string): string | null {
   return fs.existsSync(bundled) ? bundled : null;
 }
 
+function resolveSvgPath(name: string, explicit?: string): string | null {
+  if (explicit?.toLowerCase().endsWith(".svg") && fs.existsSync(explicit)) return explicit;
+  const bundled = path.join(iconsDir(), `${name}.svg`);
+  return fs.existsSync(bundled) ? bundled : null;
+}
+
 function tryLoad(name: string, explicit?: string): ImageData | null {
   const iconPath = resolveIconPath(name, explicit);
   if (!iconPath) return null;
   try {
     return loadImageSync(iconPath);
+  } catch {
+    return null;
+  }
+}
+
+function tryLoadSvg(name: string, size: number, color: number, explicit?: string): ImageData | null {
+  const iconPath = resolveSvgPath(name, explicit);
+  if (!iconPath) return null;
+  try {
+    return loadSvgIconSync(iconPath, size, color);
   } catch {
     return null;
   }
@@ -312,7 +329,10 @@ export function Icon(props: IconProps): ReactNode {
   const size = props.size ?? 16;
   const color = props.color ?? palette.text;
   const name = String(props.name);
-  const bitmap = props.symbolic ? null : tryLoad(name, props.path);
+  const vector = props.symbolic || props.path?.toLowerCase().endsWith(".svg")
+    ? tryLoadSvg(name, size, color, props.path)
+    : null;
+  const bitmap = vector ?? (props.symbolic ? null : tryLoad(name, props.path));
 
   if (bitmap) {
     return (

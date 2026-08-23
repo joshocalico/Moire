@@ -46,6 +46,7 @@ import {
   TreeView,
   Grid,
   GridItem,
+  Icon,
   ImageWidget,
   clearImageCache,
   createSelectionState,
@@ -183,6 +184,24 @@ function declarativeLayoutAndTweenSmoke(): void {
   assert.equal(tween.get(), 25);
   assert.equal(tween.tick(0.75), false);
   assert.equal(tween.get(), 100, "Tween did not settle exactly on its target");
+  renderShell(root, null);
+}
+
+function symbolicSvgIconSmoke(): void {
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <Group width={40} height={40}>
+      <Icon x={4} y={4} name="home" size={32} color={0xff42b9c8} symbolic />
+    </Group>,
+  );
+  const findImage = (node: SceneNode): SceneNode | null =>
+    node.kind === "image" ? node : node.children.map(findImage).find(Boolean) ?? null;
+  const image = findImage(root.container);
+  assert.ok(image?.imagePixels, "symbolic Icon did not load its SVG source into an Image primitive");
+  const alpha = Array.from(image.imagePixels).filter((_, index) => index % 4 === 3);
+  assert.ok(alpha.some((value) => value === 255), "SVG icon has no opaque artwork");
+  assert.ok(alpha.some((value) => value > 0 && value < 255), "SVG icon lost antialiased edges");
   renderShell(root, null);
 }
 
@@ -2613,6 +2632,7 @@ async function main() {
   }
   rendererSmoke();
   declarativeLayoutAndTweenSmoke();
+  symbolicSvgIconSmoke();
   selectionModelSmoke();
   await pointerModifierSmoke();
   buttonRecipeSmoke();

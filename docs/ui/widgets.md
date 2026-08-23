@@ -738,13 +738,19 @@ threshold/session behavior.
 | `size` | `number` | `16` |
 | `path` | `string` | optional PNG path |
 | `color` | `number` | fallback geometry only |
-| `symbolic` | `boolean` | `false`; bypass bitmap and apply `color` |
+| `symbolic` | `boolean` | `false`; load runtime SVG and apply `color` |
 
 Names: `folder`, `file`, `image`, `app`, `trash`, `home`, `desktop`,
 `downloads`, `up`, `grid`, `list`, `search`, `close`, `chevron-up`,
 `chevron-down`, `chevron-left`, `chevron-right`, and `remove`.
 
-Bundled files: `packages/ui/icons/<name>.png`.
+Symbolic source files live at `packages/ui/icons/<name>.svg`. They use a small,
+auditable SVG subset (rounded rectangles, circles, lines, polylines, and
+polygons), rasterize once with 4×4 antialiasing, and cache by size/tint into the
+backend-neutral `Image` scene primitive. This keeps the source elegant and
+inspectable without coupling widgets to the software or EGL renderer. Bundled
+PNG artwork remains available for colorful file/media icons when `symbolic` is
+false; an explicit `.svg` path automatically takes the vector route.
 
 ### `ImageWidget`
 
