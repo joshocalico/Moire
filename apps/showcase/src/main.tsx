@@ -32,6 +32,9 @@ import {
   Tooltip,
   Disclosure,
   ProgressRow,
+  SplitView,
+  Pagination,
+  PropertyList,
   Box,
   Row,
   Column,
@@ -99,6 +102,22 @@ const SAMPLES: Sample[] = [
 
 <SegmentedControl options={density} value={value} onChange={setValue} />
 <RadioGroup options={themes} value={theme} onChange={setTheme} />`,
+  },
+  {
+    id: "split-view",
+    title: "Split view",
+    description: "Resizable, keyboard-accessible pane composition",
+    section: "Layout",
+    code: `<SplitView
+  width={760}
+  height={420}
+  firstSize={sidebarWidth}
+  onFirstSizeChange={setSidebarWidth}
+  minFirst={180}
+  minSecond={280}
+  first={<Inspector />}
+  second={<Canvas />}
+/>`,
   },
   {
     id: "list",
@@ -183,6 +202,38 @@ const SAMPLES: Sample[] = [
   onSelect={(item) => setSelected(item.id)}
   onMove={moveFavorite}
   onRemove={removeFavorite}
+/>`,
+  },
+  {
+    id: "property-list",
+    title: "Property list",
+    description: "Sectioned metadata and inspector controls",
+    section: "Collections",
+    code: `<PropertyList
+  width={560}
+  height={380}
+  selectedId={selectedProperty}
+  onSelect={(item) => setSelectedProperty(item.id)}
+  sections={[{
+    id: "file",
+    label: "File",
+    items: [
+      { id: "name", label: "Name", value: file.name },
+      { id: "kind", label: "Kind", value: file.mimeType },
+    ],
+  }]}
+/>`,
+  },
+  {
+    id: "pagination",
+    title: "Pagination",
+    description: "Compact navigation across large result sets",
+    section: "Collections",
+    code: `<Pagination
+  page={page}
+  pageCount={42}
+  onPageChange={setPage}
+  siblingCount={1}
 />`,
   },
   {
@@ -303,6 +354,9 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
   const [treeSelected, setTreeSelected] = useState("main");
   const [treeExpanded, setTreeExpanded] = useState<Set<string>>(() => new Set(["src", "packages"]));
   const [disclosureOpen, setDisclosureOpen] = useState(true);
+  const [splitSize, setSplitSize] = useState(230);
+  const [page, setPage] = useState(7);
+  const [propertySelected, setPropertySelected] = useState("name");
   const virtualRows = useMemo(
     () => Array.from({ length: 10_000 }, (_, index) => ({ id: `row-${index}`, label: `Renderer sample ${String(index + 1).padStart(5, "0")}` })),
     [],
@@ -344,6 +398,32 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
         <SegmentedControl width={Math.min(440, contentW)} options={[{ id: "comfortable", label: "Comfortable" }, { id: "compact", label: "Compact" }, { id: "touch", label: "Touch" }]} value={choice} onChange={setChoice} />
         <RadioGroup width={Math.min(440, contentW)} options={[{ id: "system", label: "System", description: "Follow the desktop appearance" }, { id: "dark", label: "Dark", description: "Always use dark recipes" }, { id: "contrast", label: "High contrast", description: "Increase boundaries and focus" }]} value={radio} onChange={setRadio} />
       </Column>
+    );
+  } else if (props.sample.id === "split-view") {
+    const splitWidth = Math.min(720, contentW);
+    const splitHeight = Math.min(390, props.height - 80);
+    const secondWidth = Math.max(1, splitWidth - splitSize - 7);
+    content = (
+      <SplitView
+        width={splitWidth}
+        height={splitHeight}
+        firstSize={splitSize}
+        onFirstSizeChange={setSplitSize}
+        minFirst={170}
+        minSecond={260}
+        first={
+          <Surface width={splitSize} height={splitHeight} fill={pal.panel}>
+            <Label x={18} y={18} text="Inspector" fontSize={14} fontWeight="medium" width={splitSize - 36} height={22} />
+            <Label x={18} y={50} text="Drag the divider or use arrow keys" color={pal.muted} fontSize={10} width={splitSize - 36} height={20} />
+          </Surface>
+        }
+        second={
+          <Surface width={secondWidth} height={splitHeight} fill={pal.surface}>
+            <Label x={24} y={22} text="Renderer canvas" fontSize={16} fontWeight="medium" width={secondWidth - 48} height={24} />
+            <Surface x={24} y={64} width={Math.max(1, secondWidth - 48)} height={Math.max(1, splitHeight - 92)} fill={pal.bg} radius={10} stroke={pal.border} strokeWidth={1} />
+          </Surface>
+        }
+      />
     );
   } else if (props.sample.id === "list") {
     const rows = ["Window effects", "Terminal emulator", "Widget showcase", "File operations", "Desktop React migration"];
@@ -439,6 +519,35 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
         selectedId={navSelected}
         onSelect={(item) => setNavSelected(item.id)}
       />
+    );
+  } else if (props.sample.id === "property-list") {
+    content = (
+      <PropertyList
+        width={Math.min(620, contentW)}
+        height={Math.min(400, props.height - 80)}
+        selectedId={propertySelected}
+        onSelect={(item) => setPropertySelected(item.id)}
+        striped
+        sections={[
+          { id: "file", label: "File", items: [
+            { id: "name", label: "Name", value: "Widget Showcase" },
+            { id: "kind", label: "Kind", value: "Moire application", description: "Resolved through freedesktop MIME metadata" },
+            { id: "status", label: "Status", value: <Badge y={10} text="Running" tone="success" /> },
+          ] },
+          { id: "renderer", label: "Renderer", items: [
+            { id: "backend", label: "Backend", value: "Software / EGL" },
+            { id: "animations", label: "Animations", value: <Toggle y={7} width={180} on={enabled} onChange={setEnabled} label="Enabled" /> },
+          ] },
+        ]}
+      />
+    );
+  } else if (props.sample.id === "pagination") {
+    content = (
+      <Surface width={contentW} height={260} fill={0x00000000}>
+        <Pagination x={0} y={0} page={page} pageCount={42} onPageChange={setPage} siblingCount={1} />
+        <Pagination x={0} y={70} page={page} pageCount={42} onPageChange={setPage} siblingCount={1} showFirstLast size="small" />
+        <Label x={0} y={140} text={`Page ${page} of 42`} color={pal.muted} fontSize={12} width={240} height={22} />
+      </Surface>
     );
   } else if (props.sample.id === "feedback") {
     content = (

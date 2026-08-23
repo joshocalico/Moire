@@ -27,7 +27,8 @@ into `RichTextView`, while `TerminalView` adds caret and keyboard semantics to
 the same rich-text viewport.
 
 The current catalog also exercises fixed-row virtualization at 10,000 items,
-sortable tables, expandable trees, tooltip motion, disclosures, and composed
-operation progress. Each public sample has a matching prop table in
+sortable tables, expandable trees, resizable split panes, condensed
+pagination, sectioned property inspectors, tooltip motion, disclosures, and
+composed operation progress. Each public sample has a matching prop table in
 [`ui/widgets.md`](../ui/widgets.md); the Code tab is illustrative usage rather
 than a substitute for that API reference.
