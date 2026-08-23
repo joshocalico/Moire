@@ -175,7 +175,13 @@ Edit action and swaps to an autofocus `TextField`; Enter validates through
 | `onNavigate` | `(id: string) => void` | segment activation |
 | `value` | `string` | `PathBar` editable location |
 | `onCommit` | `(value) => string \| undefined` | return an error string to remain in edit mode |
-| `height` | `number` | `32` |
+| `size` | `small` \| `medium` \| `large` | `medium` |
+| `height` | `number` | selected recipe height |
+
+The `pathBar` recipe owns segment interaction, current/ancestor typography,
+separator styling, density, padding, and edit-control geometry. Entering edit
+mode mounts a one-shot autofocus target, so typing is routed to the location
+field even though the persistent Edit/Done button initiated the transition.
 
 ### `Tabs`
 

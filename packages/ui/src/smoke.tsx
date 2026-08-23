@@ -46,6 +46,7 @@ import {
   Tabs,
   Menu,
   MenuItem,
+  Breadcrumbs,
   PathBar,
   CollectionItem,
   DropTarget,
@@ -274,6 +275,58 @@ async function dndRegistrySmoke(): Promise<void> {
 
   renderShell(root, null);
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+function pathBarRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const medium = theme.recipes.pathBar.medium;
+  const segmentFill = 0xff3f5f72;
+  const customTheme = {
+    ...theme,
+    name: "path-bar-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      pathBar: {
+        ...theme.recipes.pathBar,
+        medium: {
+          ...medium,
+          segment: {
+            ...medium.segment,
+            base: {
+              ...medium.segment.base,
+              fill: segmentFill,
+              radius: 0,
+              stroke: undefined,
+              strokeWidth: 0,
+            },
+          },
+          metrics: { ...medium.metrics, height: 26 },
+        },
+      },
+    },
+  };
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <Breadcrumbs
+        width={80}
+        segments={[{ id: "/", label: "Root" }]}
+        onNavigate={() => {}}
+      />
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 80,
+    height: 30,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[25 * frame.width + 1], segmentFill);
+  assert.equal(
+    words[27 * frame.width + 1],
+    0,
+    "Breadcrumbs should take their implicit height from the selected recipe",
+  );
 }
 
 function hasImageNode(node: SceneNode): boolean {
@@ -2056,6 +2109,12 @@ async function main() {
     console.log("[ui/smoke:dnd] ok");
     return;
   }
+  if (process.env.MOIRE_UI_SMOKE === "path") {
+    pathBarRecipeSmoke();
+    await pathBarInteractionSmoke();
+    console.log("[ui/smoke:path] ok");
+    return;
+  }
   rendererSmoke();
   buttonRecipeSmoke();
   textFieldRecipeSmoke();
@@ -2082,6 +2141,7 @@ async function main() {
   await imageWidgetLoadingSmoke();
   dndRecipeSmoke();
   await dndRegistrySmoke();
+  pathBarRecipeSmoke();
   const app = new Application({ platform: "headless" });
   const win = new Window({ title: "Smoke", width: 460, height: 600 });
   win.setContent(<SmokeApp onQuit={() => app.quit()} />);

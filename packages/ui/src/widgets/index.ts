@@ -56,6 +56,7 @@ export type {
   DialogRecipe,
   ImageWidgetRecipe,
   DndRecipe,
+  PathBarRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";

@@ -371,20 +371,21 @@ export class Window {
     for (const id of this.consumedAutoFocusIds) {
       if (!presentAutoFocusIds.has(id)) this.consumedAutoFocusIds.delete(id);
     }
+    const autoFocusCandidate = this.hits.find(
+      (hit) =>
+        hit.focusable &&
+        hit.autoFocus &&
+        !!hit.focusId &&
+        !this.consumedAutoFocusIds.has(hit.focusId),
+    );
+    if (autoFocusCandidate?.focusId) {
+      this.consumedAutoFocusIds.add(autoFocusCandidate.focusId);
+      this.changeFocus(autoFocusCandidate);
+      this.dirty = true;
+      return;
+    }
     if (!this.focusedId) {
       this.focusedHit = null;
-      const candidate = this.hits.find(
-        (hit) =>
-          hit.focusable &&
-          hit.autoFocus &&
-          !!hit.focusId &&
-          !this.consumedAutoFocusIds.has(hit.focusId),
-      );
-      if (candidate?.focusId) {
-        this.consumedAutoFocusIds.add(candidate.focusId);
-        this.changeFocus(candidate);
-        this.dirty = true;
-      }
       return;
     }
     this.focusedHit =

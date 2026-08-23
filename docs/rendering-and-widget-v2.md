@@ -252,9 +252,9 @@ Recipes are plain data and remain renderer-neutral.
 The first vertical slices are active. `WidgetThemeProvider` supplies foundation
 color/type/space/radius/motion/elevation data plus recipe matrices for Button,
 IconButton, ListItem, GridItem, TextField, Tabs, Menu, Checkbox, Toggle, Slider,
-ProgressBar, ScrollArea, Dialog, and semantic CollectionItem outlines. Buttons
-consume root, label/icon, metrics, rim, and named artwork-slot styles from that
-context.
+ProgressBar, ScrollArea, Dialog, PathBar/Breadcrumbs, DnD feedback, ImageWidget,
+and semantic CollectionItem outlines. Buttons consume root, label/icon,
+metrics, rim, and named artwork-slot styles from that context.
 List and grid cells keep persistent selection/drop layers separate from
 animated hover/press feedback; focus/drag outlines remain owned by the headless
 CollectionItem behavior but resolve their paint through the theme.
@@ -290,7 +290,9 @@ modules, leaving `widgets/index.ts` as a pure public barrel. ImageWidget uses
 JSX, recipe-owned placeholder states, repainting async loads, and complete
 fill/contain/cover fitting. DnD source/drop feedback now shares one JSX,
 recipe-owned presentation helper across compatibility wrappers, drop zones,
-window sinks, and semantic collection items.
+window sinks, and semantic collection items. Breadcrumbs and PathBar resolve
+their segment states, hierarchy typography, separators, density, and edit
+geometry through one size-aware recipe.
 
 ### W3 — primitive completeness
 

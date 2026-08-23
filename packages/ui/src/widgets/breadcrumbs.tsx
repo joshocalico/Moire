@@ -1,6 +1,10 @@
 import React, { useMemo, useState, type ReactNode } from "react";
-import { Group, Text, measureText } from "@moire/react-host";
-import { themePalette } from "../theme.js";
+import { Group, Text, measureText, measureTextBounds } from "@moire/react-host";
+import {
+  resolveStatefulStyle,
+  useWidgetTheme,
+  type ButtonSize,
+} from "../widget-theme.js";
 import { Button } from "./button.js";
 import { DropZone } from "./dnd.js";
 import { Pressable } from "./pressable.js";
@@ -16,31 +20,44 @@ export type BreadcrumbsProps = {
   y?: number;
   width: number;
   height?: number;
+  size?: ButtonSize;
   segments: readonly BreadcrumbSegment[];
   onNavigate: (id: string) => void;
 };
 
-const PAD_X = 9;
-const GAP = 2;
-const SEPARATOR_W = 12;
-const FONT_SIZE = 13;
-
 export function Breadcrumbs(props: BreadcrumbsProps): ReactNode {
-  const pal = themePalette();
-  const h = props.height ?? 34;
+  const recipe = useWidgetTheme().recipes.pathBar[props.size ?? "medium"];
+  const metrics = recipe.metrics;
+  const h = props.height ?? metrics.height;
+  const label = resolveStatefulStyle(recipe.label, "rest");
+  const currentLabel = resolveStatefulStyle(recipe.label, "selected");
+  const segmentStyle = resolveStatefulStyle(recipe.segment, "rest");
+  const hoveredSegment = resolveStatefulStyle(recipe.segment, "hover");
+  const pressedSegment = resolveStatefulStyle(recipe.segment, "pressed");
+  const labelHeight = measureTextBounds("Mg", {
+    fontSize: label.fontSize,
+    fontWeight: label.fontWeight,
+  }).height;
+  const separatorHeight = measureTextBounds("›", {
+    fontSize: recipe.separator.fontSize,
+    fontWeight: recipe.separator.fontWeight,
+  }).height;
   const visible = useMemo(() => {
     const widths = props.segments.map(
-      (segment) => Math.ceil(measureText(segment.label, FONT_SIZE / 14)) + PAD_X * 2,
+      (item) =>
+        Math.ceil(measureText(item.label, label.fontSize / 14)) +
+        metrics.paddingX * 2,
     );
     let total = widths.reduce((sum, width) => sum + width, 0) +
-      Math.max(0, widths.length - 1) * (SEPARATOR_W + GAP);
+      Math.max(0, widths.length - 1) *
+        (metrics.separatorWidth + metrics.gap);
     let start = 0;
     while (start < widths.length - 1 && total > props.width) {
-      total -= widths[start]! + SEPARATOR_W + GAP;
+      total -= widths[start]! + metrics.separatorWidth + metrics.gap;
       start++;
     }
     return props.segments.slice(start);
-  }, [props.segments, props.width]);
+  }, [label.fontSize, metrics, props.segments, props.width]);
 
   let cursorX = 0;
   return (
@@ -48,36 +65,51 @@ export function Breadcrumbs(props: BreadcrumbsProps): ReactNode {
       {visible.map((segment, index) => {
         const itemWidth = Math.min(
           props.width - cursorX,
-          Math.ceil(measureText(segment.label, FONT_SIZE / 14)) + PAD_X * 2,
+          Math.ceil(measureText(segment.label, label.fontSize / 14)) +
+            metrics.paddingX * 2,
         );
         const x = cursorX;
-        cursorX += itemWidth + SEPARATOR_W + GAP;
+        cursorX += itemWidth + metrics.separatorWidth + metrics.gap;
+        const isCurrent = index === visible.length - 1;
+        const labelStyle = isCurrent ? currentLabel : label;
         return (
-          <Group key={segment.id} x={x} y={0} width={itemWidth + SEPARATOR_W} height={h}>
+          <Group
+            key={segment.id}
+            x={x}
+            y={0}
+            width={itemWidth + metrics.separatorWidth}
+            height={h}
+          >
             <DropZone width={itemWidth} height={h} id={segment.id}>
               <Pressable
                 width={itemWidth}
                 height={h}
-                radius={pal.radiusSm}
+                fill={segmentStyle.fill}
+                hoverFill={hoveredSegment.fill}
+                pressedFill={pressedSegment.fill}
+                radius={segmentStyle.radius}
+                stroke={segmentStyle.stroke}
+                strokeWidth={segmentStyle.strokeWidth}
                 onPress={() => props.onNavigate(segment.id)}
               >
                 <Text
-                  x={PAD_X}
-                  y={Math.floor((h - 12) / 2)}
+                  x={metrics.paddingX}
+                  y={Math.floor((h - labelHeight) / 2)}
                   text={segment.label}
-                  color={index === visible.length - 1 ? pal.text : pal.muted}
-                  fontSize={FONT_SIZE}
-                  fontWeight={index === visible.length - 1 ? "medium" : "regular"}
+                  color={labelStyle.color}
+                  fontSize={labelStyle.fontSize}
+                  fontWeight={labelStyle.fontWeight}
                 />
               </Pressable>
             </DropZone>
-            {index < visible.length - 1 ? (
+            {!isCurrent ? (
               <Text
-                x={itemWidth + GAP}
-                y={Math.floor((h - 12) / 2)}
+                x={itemWidth + metrics.gap}
+                y={Math.floor((h - separatorHeight) / 2)}
                 text="›"
-                color={pal.muted}
-                fontSize={FONT_SIZE}
+                color={recipe.separator.color}
+                fontSize={recipe.separator.fontSize}
+                fontWeight={recipe.separator.fontWeight}
               />
             ) : null}
           </Group>
@@ -94,12 +126,13 @@ export type PathBarProps = BreadcrumbsProps & {
 };
 
 export function PathBar(props: PathBarProps): ReactNode {
+  const recipe = useWidgetTheme().recipes.pathBar[props.size ?? "medium"];
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(props.value);
   const [error, setError] = useState<string | null>(null);
-  const buttonWidth = props.editButtonWidth ?? 54;
-  const gap = 6;
-  const h = props.height ?? 34;
+  const buttonWidth = props.editButtonWidth ?? recipe.metrics.editButtonWidth;
+  const gap = recipe.metrics.editGap;
+  const h = props.height ?? recipe.metrics.height;
 
   const beginEditing = () => {
     setDraft(props.value);
@@ -118,6 +151,7 @@ export function PathBar(props: PathBarProps): ReactNode {
         <TextField
           width={Math.max(1, props.width - buttonWidth - gap)}
           height={h}
+          size={props.size}
           value={draft}
           autoFocus
           invalid={!!error}
@@ -135,6 +169,7 @@ export function PathBar(props: PathBarProps): ReactNode {
         <Breadcrumbs
           width={Math.max(1, props.width - buttonWidth - gap)}
           height={h}
+          size={props.size}
           segments={props.segments}
           onNavigate={props.onNavigate}
         />
@@ -144,8 +179,9 @@ export function PathBar(props: PathBarProps): ReactNode {
         y={0}
         width={buttonWidth}
         height={h}
+        size={props.size}
         label={editing ? (error ? "Retry" : "Done") : "Edit"}
-        variant="ghost"
+        variant={error ? "danger" : "ghost"}
         onPress={editing ? commit : beginEditing}
       />
     </Group>

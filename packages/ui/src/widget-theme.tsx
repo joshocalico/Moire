@@ -232,6 +232,20 @@ export type DndRecipe = {
   dropTarget: WidgetBoxStyle;
 };
 
+export type PathBarRecipe = {
+  segment: StatefulStyle<WidgetBoxStyle>;
+  label: StatefulStyle<WidgetTextStyle>;
+  separator: WidgetTextStyle;
+  metrics: {
+    height: number;
+    paddingX: number;
+    gap: number;
+    separatorWidth: number;
+    editButtonWidth: number;
+    editGap: number;
+  };
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -275,6 +289,7 @@ export type WidgetTheme = {
     dialog: Record<ButtonSize, DialogRecipe>;
     imageWidget: ImageWidgetRecipe;
     dnd: DndRecipe;
+    pathBar: Record<ButtonSize, PathBarRecipe>;
   };
 };
 
@@ -1174,6 +1189,73 @@ function dndRecipe(palette: ThemePalette): DndRecipe {
   };
 }
 
+function pathBarRecipe(
+  size: ButtonSize,
+  palette: ThemePalette,
+): PathBarRecipe {
+  const metrics = {
+    small: {
+      height: 28,
+      paddingX: 7,
+      gap: 1,
+      separatorWidth: 10,
+      editButtonWidth: 48,
+      editGap: 4,
+      fontSize: 12,
+    },
+    medium: {
+      height: 34,
+      paddingX: 9,
+      gap: 2,
+      separatorWidth: 12,
+      editButtonWidth: 54,
+      editGap: 6,
+      fontSize: 13,
+    },
+    large: {
+      height: 40,
+      paddingX: 11,
+      gap: 3,
+      separatorWidth: 14,
+      editButtonWidth: 60,
+      editGap: 8,
+      fontSize: 14,
+    },
+  }[size];
+  return {
+    segment: {
+      base: { fill: 0x00000000, radius: palette.radiusSm },
+      states: {
+        hover: { fill: palette.hover },
+        pressed: { fill: palette.pressed },
+      },
+    },
+    label: {
+      base: {
+        color: palette.muted,
+        fontSize: metrics.fontSize,
+        fontWeight: "regular",
+      },
+      states: {
+        selected: { color: palette.text, fontWeight: "medium" },
+      },
+    },
+    separator: {
+      color: palette.muted,
+      fontSize: metrics.fontSize,
+      fontWeight: "regular",
+    },
+    metrics: {
+      height: metrics.height,
+      paddingX: metrics.paddingX,
+      gap: metrics.gap,
+      separatorWidth: metrics.separatorWidth,
+      editButtonWidth: metrics.editButtonWidth,
+      editGap: metrics.editGap,
+    },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -1204,6 +1286,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   const progressBar = {} as WidgetTheme["recipes"]["progressBar"];
   const scrollArea = {} as WidgetTheme["recipes"]["scrollArea"];
   const dialog = {} as WidgetTheme["recipes"]["dialog"];
+  const pathBar = {} as WidgetTheme["recipes"]["pathBar"];
   for (const variant of variants) {
     button[variant] = {} as Record<ButtonSize, ButtonRecipe>;
     for (const size of sizes) {
@@ -1228,6 +1311,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
     progressBar[size] = progressBarRecipe(size, palette);
     scrollArea[size] = scrollAreaRecipe(size, palette);
     dialog[size] = dialogRecipe(size, palette);
+    pathBar[size] = pathBarRecipe(size, palette);
   }
   return {
     name: `${theme.name}-widgets`,
@@ -1270,6 +1354,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       dialog,
       imageWidget: imageWidgetRecipe(palette),
       dnd: dndRecipe(palette),
+      pathBar,
     },
   };
 }
