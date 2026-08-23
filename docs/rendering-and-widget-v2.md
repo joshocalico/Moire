@@ -100,7 +100,9 @@ damage both their previous and current visual bounds; removed layers repair
 their old bounds. Recomposition clears and redraws only layers intersecting the
 accumulated scissor. Backdrop dependencies expand damage into their material
 bounds, and blur temporarily suspends the scene-space scissor while using its
-smaller intermediate targets.
+smaller intermediate targets. Each retained material also owns a downsampled
+blur cache keyed to the lower layers which intersect its sample region, so
+damage above a panel can repaint its tint and mask without re-running the blur.
 
 ### R3 — active: native effects
 
@@ -110,7 +112,8 @@ smaller intermediate targets.
 - Separable, downsampled backdrop blur executes against the accumulated
   backdrop and is clipped to the requesting layer; it is a stacking effect,
   not a widget screenshot trick.
-- Propagate bounded blur damage so unchanged regions do not rerun the pass.
+- Propagate finer surface damage rectangles through the retained graph; bounded
+  layer damage and dependency-aware retained blur caching are active.
 - Saturation/tint, rounded masks, shadows, and semantic RGBA color matrices
   execute in GLES; preserve their ordering when effects move behind plugins.
 - Define effect quality tiers so software, low-power EGL, and full EGL can make

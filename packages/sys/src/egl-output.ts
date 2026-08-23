@@ -189,6 +189,14 @@ type CachedTexture = {
   lastSeenFrame: number;
 };
 
+type BackdropCache = {
+  texture: number;
+  width: number;
+  height: number;
+  dependencyKey: string;
+  lastSeenFrame: number;
+};
+
 type DamageRect = { x: number; y: number; width: number; height: number };
 
 type LayerSnapshot = {
@@ -378,6 +386,9 @@ export class EglOutputScaler {
   private readonly blurFramebufferB: number;
   private outputSourceTexture = 0;
   private readonly layerTextures = new Map<string, CachedTexture>();
+  private readonly backdropCaches = new Map<string, BackdropCache>();
+  private readonly pixelIds = new WeakMap<Uint8Array, number>();
+  private nextPixelId = 1;
   private layerSnapshots = new Map<string, LayerSnapshot>();
   private layerOrder: string[] = [];
   private sceneClearColor: number | null = null;
@@ -1064,6 +1075,84 @@ void main() {
     return cached.texture;
   }
 
+  private pixelIdentity(pixels: Uint8Array): number {
+    let id = this.pixelIds.get(pixels);
+    if (id != null) return id;
+    id = this.nextPixelId++;
+    this.pixelIds.set(pixels, id);
+    return id;
+  }
+
+  private backdropDependencyKey(
+    scene: EglCompositionScene,
+    layerIndex: number,
+    sampleBounds: DamageRect,
+  ): string {
+    const material = scene.layers[layerIndex]!;
+    const dependencies = scene.layers.slice(0, layerIndex).flatMap((layer) => {
+      if (!rectsIntersect(layerBounds(layer, scene.width, scene.height), sampleBounds)) {
+        return [];
+      }
+      return [{
+        id: layer.id,
+        pixels: this.pixelIdentity(layer.pixels),
+        revision: layer.revision ?? this.compositionFrame,
+        signature: layerSignature(layer),
+      }];
+    });
+    return JSON.stringify({
+      clearColor: scene.clearColor,
+      width: scene.width,
+      height: scene.height,
+      destination: material.destination,
+      transform: material.transform,
+      transformOrigin: material.transformOrigin,
+      backdropBlur: material.backdropBlur,
+      dependencies,
+    });
+  }
+
+  private backdropCacheForLayer(
+    layer: EglCompositionLayer,
+    width: number,
+    height: number,
+  ): BackdropCache {
+    let cached = this.backdropCaches.get(layer.id);
+    if (!cached) {
+      const glGenTextures = this.gl.func(
+        "void glGenTextures(int n, _Out_ unsigned int *textures)",
+      ) as NativeFunction;
+      cached = {
+        texture: uintOut((out) => void glGenTextures(1, out)),
+        width: 0,
+        height: 0,
+        dependencyKey: "",
+        lastSeenFrame: this.compositionFrame,
+      };
+      this.configureTexture(cached.texture);
+      this.backdropCaches.set(layer.id, cached);
+    }
+    cached.lastSeenFrame = this.compositionFrame;
+    if (cached.width !== width || cached.height !== height) {
+      this.glBindTexture(GL_TEXTURE_2D, cached.texture);
+      this.glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        width,
+        height,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        null,
+      );
+      cached.width = width;
+      cached.height = height;
+      cached.dependencyKey = "";
+    }
+    return cached;
+  }
+
   private transformLayerPoint(
     layer: EglCompositionLayer,
     x: number,
@@ -1145,12 +1234,10 @@ void main() {
   private paintBackdropBlur(
     scene: EglCompositionScene,
     layer: EglCompositionLayer,
+    layerIndex: number,
   ): void {
     const effect = layer.backdropBlur;
     if (!effect || effect.radius <= 0) return;
-    // Blur uses smaller intermediate framebuffers; scene-space scissor values
-    // are invalid there. Restore the active damage clip on the scene target.
-    this.glDisable(GL_SCISSOR_TEST);
 
     // An untransformed material only needs the pixels beneath its bounds plus
     // the kernel reach. Transformed effects retain the conservative full-scene
@@ -1177,95 +1264,123 @@ void main() {
       : scene.height;
     const backdropWidth = Math.max(1, sampleRight - sampleX);
     const backdropHeight = Math.max(1, sampleBottom - sampleY);
-
-    // Snapshot the already-composited stack. Sampling sceneTexture while it is
-    // the active render target would be undefined feedback in GLES.
-    this.glActiveTexture(GL_TEXTURE0);
-    this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
-    if (
-      backdropWidth !== this.backdropWidth ||
-      backdropHeight !== this.backdropHeight
-    ) {
-      this.glTexImage2D(
-        GL_TEXTURE_2D,
-        0,
-        GL_RGBA,
-        backdropWidth,
-        backdropHeight,
-        0,
-        GL_RGBA,
-        GL_UNSIGNED_BYTE,
-        null,
-      );
-      this.backdropWidth = backdropWidth;
-      this.backdropHeight = backdropHeight;
-    }
-    this.glCopyTexSubImage2D(
-      GL_TEXTURE_2D,
-      0,
-      0,
-      0,
-      sampleX,
-      sampleY,
-      backdropWidth,
-      backdropHeight,
-    );
-
     const downsample = 4;
     const blurWidth = Math.max(1, Math.ceil(backdropWidth / downsample));
     const blurHeight = Math.max(1, Math.ceil(backdropHeight / downsample));
-    if (blurWidth !== this.blurWidth || blurHeight !== this.blurHeight) {
-      for (const texture of [this.blurTextureA, this.blurTextureB]) {
-        this.glBindTexture(GL_TEXTURE_2D, texture);
+    const dependencyKey = this.backdropDependencyKey(scene, layerIndex, {
+      x: sampleX,
+      y: sampleY,
+      width: backdropWidth,
+      height: backdropHeight,
+    });
+    const cached = this.backdropCacheForLayer(layer, blurWidth, blurHeight);
+
+    if (cached.dependencyKey !== dependencyKey) {
+      // Blur uses smaller intermediate framebuffers; scene-space scissor values
+      // are invalid there. Restore the active damage clip on the scene target.
+      this.glDisable(GL_SCISSOR_TEST);
+
+      // Snapshot the already-composited stack. Sampling sceneTexture while it is
+      // the active render target would be undefined feedback in GLES.
+      this.glActiveTexture(GL_TEXTURE0);
+      this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
+      if (
+        backdropWidth !== this.backdropWidth ||
+        backdropHeight !== this.backdropHeight
+      ) {
         this.glTexImage2D(
           GL_TEXTURE_2D,
           0,
           GL_RGBA,
-          blurWidth,
-          blurHeight,
+          backdropWidth,
+          backdropHeight,
           0,
           GL_RGBA,
           GL_UNSIGNED_BYTE,
           null,
         );
+        this.backdropWidth = backdropWidth;
+        this.backdropHeight = backdropHeight;
       }
-      this.blurWidth = blurWidth;
-      this.blurHeight = blurHeight;
+      this.glCopyTexSubImage2D(
+        GL_TEXTURE_2D,
+        0,
+        0,
+        0,
+        sampleX,
+        sampleY,
+        backdropWidth,
+        backdropHeight,
+      );
+
+      if (blurWidth !== this.blurWidth || blurHeight !== this.blurHeight) {
+        for (const texture of [this.blurTextureA, this.blurTextureB]) {
+          this.glBindTexture(GL_TEXTURE_2D, texture);
+          this.glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RGBA,
+            blurWidth,
+            blurHeight,
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            null,
+          );
+        }
+        this.blurWidth = blurWidth;
+        this.blurHeight = blurHeight;
+      }
+
+      const fullPositions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+      const fullCoords = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
+      const kernelReach = 3.230769;
+      this.glDisable(GL_BLEND);
+      this.glUniform1f(this.modeLocation, 2);
+      this.glUniform1f(this.opacityLocation, 1);
+      this.glUniform4f(this.uvRectLocation, 0, 0, 1, 1);
+
+      this.bindColorTarget(this.blurFramebufferA, this.blurTextureA);
+      this.glViewport(0, 0, blurWidth, blurHeight);
+      this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
+      this.glUniform2f(
+        this.blurDirectionLocation,
+        Math.max(0.5, effect.radius) / kernelReach / backdropWidth,
+        0,
+      );
+      this.drawQuad(fullPositions, fullCoords);
+
+      this.bindColorTarget(this.blurFramebufferB, this.blurTextureB);
+      this.glBindTexture(GL_TEXTURE_2D, this.blurTextureA);
+      this.glUniform2f(
+        this.blurDirectionLocation,
+        0,
+        Math.max(0.5, effect.radius / downsample) / kernelReach / blurHeight,
+      );
+      this.drawQuad(fullPositions, fullCoords);
+
+      // Preserve the finished blur in a material-owned texture. The shared
+      // intermediate pair is reused by every effect in the scene.
+      this.glBindTexture(GL_TEXTURE_2D, cached.texture);
+      this.glCopyTexSubImage2D(
+        GL_TEXTURE_2D,
+        0,
+        0,
+        0,
+        0,
+        0,
+        blurWidth,
+        blurHeight,
+      );
+      cached.dependencyKey = dependencyKey;
     }
-
-    const fullPositions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
-    const fullCoords = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
-    const kernelReach = 3.230769;
-    this.glDisable(GL_BLEND);
-    this.glUniform1f(this.modeLocation, 2);
-    this.glUniform1f(this.opacityLocation, 1);
-    this.glUniform4f(this.uvRectLocation, 0, 0, 1, 1);
-
-    this.bindColorTarget(this.blurFramebufferA, this.blurTextureA);
-    this.glViewport(0, 0, blurWidth, blurHeight);
-    this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
-    this.glUniform2f(
-      this.blurDirectionLocation,
-      Math.max(0.5, effect.radius) / kernelReach / backdropWidth,
-      0,
-    );
-    this.drawQuad(fullPositions, fullCoords);
-
-    this.bindColorTarget(this.blurFramebufferB, this.blurTextureB);
-    this.glBindTexture(GL_TEXTURE_2D, this.blurTextureA);
-    this.glUniform2f(
-      this.blurDirectionLocation,
-      0,
-      Math.max(0.5, effect.radius / downsample) / kernelReach / blurHeight,
-    );
-    this.drawQuad(fullPositions, fullCoords);
 
     this.bindColorTarget(this.sceneFramebuffer, this.sceneTexture);
     this.glViewport(0, 0, scene.width, scene.height);
     this.restoreSceneScissor();
     this.glEnable(GL_BLEND);
     this.glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    this.glBindTexture(GL_TEXTURE_2D, this.blurTextureB);
+    this.glBindTexture(GL_TEXTURE_2D, cached.texture);
     this.glUniform1f(this.modeLocation, 3);
     this.glUniform1f(this.opacityLocation, layer.opacity ?? 1);
     this.glUniform1f(this.hasGeometryLocation, 0);
@@ -1475,13 +1590,14 @@ void main() {
     this.glActiveTexture(GL_TEXTURE0);
     this.glUniform1i(this.samplerLocation, 0);
 
-    for (const layer of scene.layers) {
+    for (let layerIndex = 0; layerIndex < scene.layers.length; layerIndex++) {
+      const layer = scene.layers[layerIndex]!;
       if (!rectsIntersect(layerBounds(layer, scene.width, scene.height), damage)) {
         continue;
       }
       const clipX = (x: number) => (x / scene.width) * 2 - 1;
       const clipY = (y: number) => (y / scene.height) * 2 - 1;
-      this.paintBackdropBlur(scene, layer);
+      this.paintBackdropBlur(scene, layer, layerIndex);
       const shadow = layer.dropShadow;
       if (shadow) {
         const spread = shadow.spread ?? 0;
@@ -1635,6 +1751,11 @@ void main() {
         if (this.compositionFrame - cached.lastSeenFrame < 120) continue;
         this.glDeleteTextures(1, new Uint32Array([cached.texture]));
         this.layerTextures.delete(id);
+      }
+      for (const [id, cached] of this.backdropCaches) {
+        if (this.compositionFrame - cached.lastSeenFrame < 120) continue;
+        this.glDeleteTextures(1, new Uint32Array([cached.texture]));
+        this.backdropCaches.delete(id);
       }
     }
   }
@@ -2009,6 +2130,7 @@ void main() {
         this.blurTextureA,
         this.blurTextureB,
         ...[...this.layerTextures.values()].map((entry) => entry.texture),
+        ...[...this.backdropCaches.values()].map((entry) => entry.texture),
       ];
       this.glDeleteTextures(textures.length, Uint32Array.from(textures));
       const framebuffers = [
@@ -2019,6 +2141,7 @@ void main() {
       ];
       this.glDeleteFramebuffers(framebuffers.length, Uint32Array.from(framebuffers));
       this.layerTextures.clear();
+      this.backdropCaches.clear();
       this.glDeleteProgram(this.program);
     } catch {
       // best effort during compositor shutdown
