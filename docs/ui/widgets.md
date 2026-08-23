@@ -97,6 +97,30 @@ Hit target with eased hover/press fills (`pal.hover` / `pal.pressed`).
 | `disabled` | `boolean` | |
 | `children` | `ReactNode` | |
 
+### `Tooltip`
+
+Non-interactive hover help composed around an existing fixed-size trigger. The
+tooltip fades through the shared motion system and does not steal clicks from
+its child control.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | required trigger geometry |
+| `label` | `string` | required |
+| `placement` | `top \| bottom \| left \| right` | `top` |
+| `delayMs` | `number` | `350` |
+| `offset` | `number` | `7` |
+| `tooltipWidth` | `number` | measured label width, clamped `60..260` |
+| `disabled` | `boolean` | `false` |
+| `children` | `ReactNode` | trigger presentation |
+
+```tsx
+<Tooltip width={36} height={36} label="Search" placement="bottom">
+  <IconButton width={36} height={36} icon={<Icon name="search" />} />
+</Tooltip>
+```
+
 ### `Button`
 
 | Prop | Type | Default |
@@ -224,6 +248,53 @@ content. The close action uses the shared IconButton and geometric close icon.
 Determinate, recipe-driven progress with `width`, `value` 0..1, `size?`, and an
 optional explicit `height`. Values are clamped and the track clips the rounded
 fill.
+
+### `Disclosure`
+
+Controlled collapsible section. The header is one semantic press target and
+the content is mounted in a clipped region only while expanded.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width` | `number` | required |
+| `title` | `string` | required |
+| `description` | `string` | |
+| `expanded` | `boolean` | required |
+| `onExpandedChange` | `(expanded: boolean) => void` | |
+| `headerHeight` | `number` | `40`, or `52` with description |
+| `contentHeight` | `number` | required |
+| `disabled` | `boolean` | `false` |
+| `children` | `ReactNode` | expanded content |
+
+### `ProgressRow`
+
+Task/file-operation feedback composed from text, `ProgressBar` or `Spinner`,
+and an optional action slot.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width` | `number` | required |
+| `height` | `number` | `78` |
+| `title` | `string` | required |
+| `detail` | `string` | |
+| `value` | `number` | indeterminate spinner when omitted |
+| `status` | `string` | optional trailing monospace status |
+| `action` | `ReactNode` | |
+| `actionWidth` | `number` | `110` when action exists |
+| `disabled` | `boolean` | `false` |
+
+```tsx
+<ProgressRow
+  width={560}
+  title="Copying project assets"
+  detail="24 of 80 files"
+  value={0.3}
+  status="30%"
+  action={<Button width={96} label="Cancel" variant="ghost" />}
+/>
+```
 
 ### `RichTextView` / `CodeView`
 

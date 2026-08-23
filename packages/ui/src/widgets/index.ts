@@ -191,6 +191,15 @@ export type { DialogProps } from "./dialog.js";
 export { Toolbar } from "./toolbar.js";
 export type { ToolbarProps } from "./toolbar.js";
 
+export { Tooltip } from "./tooltip.js";
+export type { TooltipProps, TooltipPlacement } from "./tooltip.js";
+
+export { Disclosure } from "./disclosure.js";
+export type { DisclosureProps } from "./disclosure.js";
+
+export { ProgressRow } from "./progress-row.js";
+export type { ProgressRowProps } from "./progress-row.js";
+
 export { NavigationSidebar } from "./navigation-sidebar.js";
 export type {
   NavigationSidebarProps,

@@ -61,6 +61,9 @@ import {
   OpenWithPicker,
   contextMenuSurfaceSize,
   Toolbar,
+  Tooltip,
+  Disclosure,
+  ProgressRow,
   NavigationSidebar,
   SegmentedControl,
   RadioGroup,
@@ -1221,6 +1224,53 @@ function advancedCollectionSmoke(): void {
   assert.ok(texts.includes("README.md"), "TreeView did not flatten expanded children");
   assert.ok(collectHits(root.container).length >= 5, "advanced collections lost interaction hits");
   renderShell(virtualRoot, null);
+  renderShell(root, null);
+}
+
+function compositionWidgetSmoke(): void {
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <Group width={640} height={360}>
+      <Tooltip
+        x={20}
+        y={50}
+        width={100}
+        height={36}
+        label="Helpful context"
+        delayMs={0}
+        placement="bottom"
+      >
+        <Button width={100} height={36} label="Hover" />
+      </Tooltip>
+      <Disclosure
+        x={150}
+        y={20}
+        width={300}
+        title="Advanced"
+        description="Optional controls"
+        expanded
+        contentHeight={80}
+      >
+        <Label x={16} y={16} text="Expanded content" width={220} height={24} />
+      </Disclosure>
+      <ProgressRow
+        x={20}
+        y={190}
+        width={540}
+        title="Copying project assets"
+        detail="24 of 80 files"
+        status="30%"
+        value={0.3}
+        action={<Button width={96} height={34} label="Cancel" variant="ghost" />}
+        actionWidth={96}
+      />
+    </Group>,
+  );
+  assert.ok(
+    collectHits(root.container).length >= 3,
+    "composed feedback widgets lost interaction surfaces",
+  );
   renderShell(root, null);
 }
 
@@ -2469,6 +2519,7 @@ async function main() {
   collectionRecipeSmoke();
   showcaseWidgetSmoke();
   advancedCollectionSmoke();
+  compositionWidgetSmoke();
   await terminalViewInteractionSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
