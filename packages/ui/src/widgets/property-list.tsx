@@ -1,6 +1,6 @@
 import React, { type ReactNode } from "react";
-import { Group, Rect, Text } from "@moire/react-host";
-import { CollectionItem } from "./interaction.js";
+import { Group, Rect, Text, type HitKeyEvent } from "@moire/react-host";
+import { Pressable } from "./pressable.js";
 import { ScrollArea } from "./scroll.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
@@ -56,6 +56,16 @@ export function PropertyList(props: PropertyListProps): ReactNode {
     ), 0);
   let cursorY = 0;
   let rowIndex = 0;
+  const activate = (item: PropertyListItem) => {
+    props.onSelect?.(item);
+    item.onPress?.();
+  };
+  const handleKey = (item: PropertyListItem, event: HitKeyEvent) => {
+    if (event.repeat) return;
+    if (event.key === "Enter" || event.key === " " || event.code === 28 || event.code === 57) {
+      activate(item);
+    }
+  };
 
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
@@ -89,15 +99,15 @@ export function PropertyList(props: PropertyListProps): ReactNode {
                     />
                   ) : null}
                   {item.onPress || props.onSelect ? (
-                    <CollectionItem
+                    <Pressable
                       width={props.width}
                       height={height}
+                      fill={0x00000000}
+                      focusable
                       focusId={`property:${item.id}`}
                       disabled={item.disabled}
-                      onPress={() => {
-                        props.onSelect?.(item);
-                        item.onPress?.();
-                      }}
+                      onPress={() => activate(item)}
+                      onKeyDown={(event) => handleKey(item, event)}
                     />
                   ) : null}
                   <Text

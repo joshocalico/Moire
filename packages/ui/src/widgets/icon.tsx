@@ -262,27 +262,41 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
     );
   }
   if (name === "chevron-up" || name === "chevron-down") {
-    const top = name === "chevron-up";
-    const levels = Math.max(3, Math.floor(size / 5));
+    const up = name === "chevron-up";
+    const dot = Math.max(2, pixel * 2);
+    const steps = Math.max(3, Math.floor(size / 4));
+    const apexY = up ? 1 : size - dot - 1;
+    const centerX = Math.floor((size - dot) / 2);
     return (
       <>
-        {Array.from({ length: levels }, (_, index) => {
-          const y = top ? levels - index : index;
-          const inset = index * 2 * pixel;
-          return <Rect key={index} x={inset} y={y * pixel + Math.floor(size / 3)} width={Math.max(pixel, size - inset * 2)} height={pixel} fill={color} radius={pixel} />;
+        {Array.from({ length: steps }, (_, index) => {
+          const y = apexY + (up ? index * dot : -index * dot);
+          return (
+            <React.Fragment key={index}>
+              <Rect x={centerX - index * dot} y={y} width={dot} height={dot} fill={color} radius={pixel} />
+              {index > 0 ? <Rect x={centerX + index * dot} y={y} width={dot} height={dot} fill={color} radius={pixel} /> : null}
+            </React.Fragment>
+          );
         })}
       </>
     );
   }
   if (name === "chevron-left" || name === "chevron-right") {
     const left = name === "chevron-left";
-    const levels = Math.max(3, Math.floor(size / 5));
+    const dot = Math.max(2, pixel * 2);
+    const steps = Math.max(3, Math.floor(size / 4));
+    const apexX = left ? 1 : size - dot - 1;
+    const centerY = Math.floor((size - dot) / 2);
     return (
       <>
-        {Array.from({ length: levels }, (_, index) => {
-          const x = left ? levels - index : index;
-          const inset = index * 2 * pixel;
-          return <Rect key={index} x={x * pixel + Math.floor(size / 3)} y={inset} width={pixel} height={Math.max(pixel, size - inset * 2)} fill={color} radius={pixel} />;
+        {Array.from({ length: steps }, (_, index) => {
+          const x = apexX + (left ? index * dot : -index * dot);
+          return (
+            <React.Fragment key={index}>
+              <Rect x={x} y={centerY - index * dot} width={dot} height={dot} fill={color} radius={pixel} />
+              {index > 0 ? <Rect x={x} y={centerY + index * dot} width={dot} height={dot} fill={color} radius={pixel} /> : null}
+            </React.Fragment>
+          );
         })}
       </>
     );

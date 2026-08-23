@@ -9,6 +9,8 @@ import { useWidgetTheme, type ButtonSize } from "../widget-theme.js";
 export type PaginationProps = {
   x?: number;
   y?: number;
+  /** Optional published layout width; controls remain intrinsically sized. */
+  width?: number;
   page: number;
   pageCount: number;
   onPageChange?: (page: number) => void;
@@ -48,8 +50,9 @@ export function Pagination(props: PaginationProps): ReactNode {
       : { height: 34, button: 34, gap: 5, fontSize: 12 };
   const tokens = pageTokens(page, count, siblings);
   const edgeButtons = props.showFirstLast ? 4 : 2;
-  const width = (tokens.length + edgeButtons) * metrics.button +
+  const intrinsicWidth = (tokens.length + edgeButtons) * metrics.button +
     Math.max(0, tokens.length + edgeButtons - 1) * metrics.gap;
+  const width = Math.max(props.width ?? 0, intrinsicWidth);
   let cursorX = 0;
   const commit = (next: number) => {
     if (props.disabled || count === 0) return;

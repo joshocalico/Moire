@@ -598,6 +598,7 @@ ellipsis tokens while keeping the first, last, current, and sibling pages.
 | Prop | Type | Default |
 | --- | --- | --- |
 | `x`, `y` | `number` | `0` |
+| `width` | `number` | intrinsic; may publish flex measurement |
 | `page` | `number` | required; clamped to range |
 | `pageCount` | `number` | required |
 | `onPageChange` | `(page: number) => void` | |
