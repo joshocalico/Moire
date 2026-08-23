@@ -8,6 +8,7 @@ export { Application, type ApplicationOpts } from "./application.js";
 export {
   Window,
   hitTestDropData,
+  requestActiveWindowRedraw,
   type WindowOpts,
   type WindowSize,
   type WindowContent,

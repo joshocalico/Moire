@@ -93,7 +93,7 @@ export type WindowOpts = {
  * Toolkit window — rasterizes React → ARGB and presents via PlatformBackend.
  */
 export class Window {
-  readonly title: string;
+  title: string;
   readonly appId: string;
   readonly resizable: boolean;
   readonly decorated: boolean;
@@ -147,6 +147,12 @@ export class Window {
   setContent(node: WindowContent): void {
     this.content = node;
     this.dirty = true;
+  }
+
+  setTitle(title: string): void {
+    if (title === this.title) return;
+    this.title = title;
+    this.platformWin?.setTitle(title);
   }
 
   onClose(cb: () => void): void {
@@ -341,6 +347,7 @@ export class Window {
     this.focusedHit?.onFocusChange?.(false);
     this.focusedHit = null;
     this.focusedId = null;
+    renderShell(this.root, null);
     this.platformWin?.destroy();
     this.platformWin = null;
     this.backend = null;

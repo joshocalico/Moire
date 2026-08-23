@@ -64,6 +64,10 @@ import { Group, Rect, measureText } from "@moire/react-host";
 
 export type ShellSpawn = (opts: { exec: string }) => { unref?: () => void };
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 export type ShellRasterSurface = {
   id: string;
   pixels: Uint8Array;
@@ -860,7 +864,9 @@ export function createShell(
   }, 1000).unref?.();
 
   const launch = (app: DesktopEntry) => {
-    const exec = app.terminal ? `foot -e ${app.exec}` : app.exec;
+    const exec = app.terminal
+      ? `moire-terminal --command ${shellQuote(app.exec)}`
+      : app.exec;
     try {
       const child = spawn({ exec });
       child.unref?.();

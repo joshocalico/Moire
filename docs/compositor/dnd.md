@@ -40,7 +40,7 @@ Moire implements full `wl_data_device` DnD between shell, Files, and (eventually
 - Drag a desktop item directly onto a desktop folder — confirm the folder highlights and the item moves into it.
 - Drag a desktop icon onto an open Files window showing a different folder — confirm the file moves (rename, falling back to copy) into that folder and disappears from the desktop within the 2s poll.
 - Ctrl-select two desktop icons, drag either one locally and into Files, and confirm both move together.
-- Drag a desktop icon and release it back on the desktop (or over foot, which has no DnD target) — confirm it still just repositions, no copy/duplicate.
+- Drag a desktop icon and release it back on the desktop (or over a client with no DnD target) — confirm it still just repositions, no copy/duplicate.
 - Confirm the preview keeps the source item size, follows the original grab point, and snaps home after Escape or a rejected drop.
 - Confirm window-under-cursor still receives clicks when not over icons.
 

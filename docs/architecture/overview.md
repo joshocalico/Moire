@@ -1,6 +1,8 @@
 # Architecture overview
 
-Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized shell, and native apps are either Wayland clients (foot, LibreOffice) or `@moire/ui` apps (Files, Settings).
+Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized
+shell, native React clients use `@moire/ui` (Files, Settings, Terminal), and
+third-party Wayland/Xwayland clients remain ordinary peers.
 
 ## Package responsibilities
 
@@ -17,7 +19,7 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
               │                               │
 ┌─────────────▼─────────────┐   ┌─────────────▼───────────────┐
 │  packages/shell           │   │  Wayland clients             │
-│  Panel, Launcher, Taskbar │   │  foot, Xwayland apps, …      │
+│  Panel, Launcher, Taskbar │   │  Moire UI + external apps    │
 │  DesktopIcons             │   └──────────────────────────────┘
 └─────────────┬─────────────┘
               │ uses
@@ -43,6 +45,7 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 | `prefs` | User settings + applying theme/GTK/volume |
 | `react-host` | Retained scene graph, renderer contract, software renderer, hit regions |
 | `ui` | Portable app SDK (no Wayland in widgets) |
+| `terminal` | Renderer-independent VT buffer and Linux PTY transport |
 | `shell` | DE chrome attached to the compositor process |
 | `app-discovery` | Freedesktop `.desktop`, shared MIME, canonical file activation/Open With policy, and context-action registry |
 | `dbus` | Pure-TypeScript session-bus authentication, wire codec, calls, exported objects, replies, errors, and signals |
@@ -51,7 +54,9 @@ Moire is a monorepo Wayland desktop: a DRM compositor hosts a React-rasterized s
 ## Two React worlds
 
 1. **In-compositor shell** — `createShell()` renders panel/launcher/taskbar/SSD/desktop with `react-host` directly inside the compositor process. The compositor publishes its top-level window model through `ShellBridge.setTasks()`, and task actions return through a narrow callback. No `Application` loop; dirty flags + `needsRepaint()`.
-2. **UI apps** — Files/Settings use `Application` + `Window`, connect as normal Wayland clients, present SHM buffers each tick.
+2. **UI apps** — Files, Settings, Terminal, Showcase, and portal surfaces use
+   `Application` + `Window`, connect as normal Wayland clients, and present
+   through the selected portable renderer path.
 
 Both share widgets/tokens where possible; shell re-exports or duplicates thin wrappers (`packages/shell/src/widgets.tsx`).
 

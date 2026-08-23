@@ -1,6 +1,7 @@
 # Files
 
-Day-0 file manager for Moire. Session starts Files (and foot); Nautilus is not part of the Moire session after verification.
+Day-0 file manager for Moire. Session starts Files and Moire Terminal; Nautilus
+is not part of the Moire session after verification.
 
 Package: `apps/files`.
 
@@ -31,9 +32,9 @@ Files is a reference consumer of `@moire/ui`:
 - Theme tokens for chrome
 
 The current visual pass gives navigation, location, favorites, selection
-details, and content distinct hierarchy. Files remains the main widget showcase:
-new interaction primitives should be proven here before proliferating through
-the rest of the desktop.
+details, and content distinct hierarchy. The dedicated Widget Showcase proves
+isolated APIs and renderer conformance; Files remains the realistic integration
+surface where those primitives must hold up under navigation, DnD, and data.
 
 ## MIME associations and actions
 

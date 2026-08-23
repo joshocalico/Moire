@@ -2,7 +2,8 @@
 
 Moire’s day-0 file story: a native **Files** app, **desktop icons** on the wallpaper, and **Wayland** `wl_data_device` drag-and-drop shared with other clients. Visual language and interaction live in `@moire/theme` + `@moire/ui` so shell chrome and Settings stay consistent.
 
-Day-0 session apps: **Moire Files** + **foot** (Nautilus is not started by `moire-session`).
+Day-0 session apps: **Moire Files** + **Moire Terminal** (Nautilus is not
+started by `moire-session`).
 
 Rollback marker before this work: git tag **`v0.2.0`**.
 
@@ -199,12 +200,13 @@ pnpm --filter @moire/files smoke
 - Files Places selection correct; grid/list; drag shows a source-sized preview anchored at the original grab point.
 - `xdg-open` on a folder launches Files at that requested folder.
 - Desktop item dropped over a desktop folder moves into it; empty-desktop drop still repositions.
-- Session runs compositor + Files + foot without Nautilus.
+- Session runs compositor + Files + Moire Terminal without Nautilus.
 
 ## Source map
 
 ```
 apps/files/src/main.tsx
+apps/terminal/src/main.tsx
 apps/session/moire-session
 packages/ui/src/widgets/{pressable,button,text-field,breadcrumbs,interaction}.tsx
 packages/ui/src/widgets/{scroll,list,grid,icon,dnd,tabs}.ts

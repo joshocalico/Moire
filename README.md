@@ -2,7 +2,7 @@
 
 A TypeScript **compositing Wayland desktop environment** — DRM/KMS-first, always-on scene compositing, React/Yoga shell (SSD, launcher, panel), Freedesktop app discovery, and XWayland for broad app support.
 
-> Day-0 bar: session D-Bus, Moire Files, foot, LibreOffice, overlapping composited windows with React decorations.
+> Day-0 bar: session D-Bus, Moire Files, native Terminal, LibreOffice, overlapping composited windows with React decorations.
 
 ## Documentation
 
@@ -17,6 +17,8 @@ apps/
   session/        # moire-session (dbus + day-0 clients)
   files/          # Moire Files
   settings/       # Appearance / prefs UI
+  showcase/       # interactive @moire/ui catalog
+  terminal/       # native terminal emulator
   portal/         # native xdg-desktop-portal AppChooser backend
 packages/
   dbus/           # pure-TypeScript session D-Bus wire/client/server
@@ -27,6 +29,7 @@ packages/
   prefs/          # settings.json + apply
   react-host/     # react-reconciler → CPU scene graph + TTF
   ui/             # @moire/ui app SDK + widgets
+  terminal/       # VT screen model + Linux PTY transport
   shell/          # SSD, launcher, panel, desktop icons
   app-discovery/  # Freedesktop .desktop + MIME/file activation
 themes/           # bundled theme.json + GTK Moire theme

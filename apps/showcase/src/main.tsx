@@ -25,6 +25,7 @@ import {
   EmptyState,
   Tabs,
   CodeView,
+  TerminalView,
   Row,
   Column,
   Separator,
@@ -143,6 +144,20 @@ const SAMPLES: Sample[] = [
   <ProgressBar width={280} value={0.68} />
   <Badge text="Live" tone="accent" />
 </Row>`,
+  },
+  {
+    id: "terminal",
+    title: "Terminal view",
+    description: "Rich text composed with caret and keyboard semantics",
+    section: "Content",
+    code: `<TerminalView
+  width={720}
+  height={420}
+  lines={terminal.snapshot().lines}
+  cursor={{ line: cursor.row, column: cursor.column }}
+  onKeyDown={(event) => session.write(keySequence(event))}
+  autoFocus
+/>`,
   },
   {
     id: "code",
@@ -271,6 +286,23 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
         </Row>
         <EmptyState width={Math.min(620, contentW)} height={210} icon="folder" title="Nothing here yet" message="Drop a file or create a new project." action={<Button width={140} height={34} label="New Project" variant="primary" />} />
       </Column>
+    );
+  } else if (props.sample.id === "terminal") {
+    content = (
+      <TerminalView
+        width={Math.min(700, contentW)}
+        height={Math.min(420, props.height - 70)}
+        lines={[
+          { id: "one", runs: [{ text: "Welcome to Moire Terminal", color: pal.accent, fontWeight: "bold" }] },
+          { id: "two", runs: [{ text: "", color: pal.text }] },
+          { id: "three", runs: [{ text: "moire", color: 0xff70b77e, fontWeight: "medium" }, { text: "@desktop", color: 0xff639ad6 }, { text: ":~/Projects $ ", color: pal.text }, { text: "pnpm smoke", color: 0xffffd166 }] },
+          { id: "four", runs: [{ text: "✓ 42 renderer assertions passed", color: 0xff8fd694 }] },
+          { id: "five", runs: [{ text: "moire@desktop:~/Projects $ ", color: pal.text }] },
+        ]}
+        cursor={{ line: 4, column: 27 }}
+        fontSize={13}
+        focusId="showcase-terminal"
+      />
     );
   } else {
     content = <CodeView width={Math.min(700, contentW)} height={Math.min(420, props.height - 70)} code={props.sample.code} language="tsx" />;

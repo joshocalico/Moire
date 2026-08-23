@@ -233,7 +233,9 @@ export function buildDesktopExec(app: DesktopEntry, paths: string[]): string {
   });
   command = command.replaceAll(marker, "%").replace(/\s+/g, " ").trim();
   if (!usedFileCode && local.length > 0) command += ` ${local.join(" ")}`;
-  return app.terminal ? `foot -e ${command}` : command;
+  return app.terminal
+    ? `moire-terminal --command ${shellQuote(command)}`
+    : command;
 }
 
 function writeDefault(mime: string, desktopId: string): void {

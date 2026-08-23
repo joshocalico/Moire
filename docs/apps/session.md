@@ -7,14 +7,16 @@ How Moire runs inside the Parallels guest (MoireDev).
 | App | Role |
 | --- | --- |
 | Files | File manager |
-| foot | Terminal |
+| Moire Terminal | Native React terminal and PTY session |
 | Portal backend | Moire-native Open With chooser, D-Bus activated on demand |
 
 Nautilus is intentionally out of the Moire session once Files is verified.
 
 ## Default applications
 
-During startup, `moire-session` installs the Moire Files launcher and desktop entry into the user's `~/.local` directories, then sets:
+During startup, `moire-session` installs the Files, Terminal, and Widget
+Showcase launchers and desktop entries into the user's `~/.local` directories,
+then sets:
 
 ```text
 inode/directory=moire-files.desktop
@@ -27,7 +29,7 @@ This makes `xdg-open <folder>` launch Files with that folder. The association is
 - Wayland socket under `$HOME/.moire-runtime` (session sets `XDG_RUNTIME_DIR` here).
 - Config under `~/.config/moire/`.
 - Default-app association under `~/.config/mimeapps.list`.
-- Files launcher/entry under `~/.local/bin` and `~/.local/share/applications`.
+- Native app launchers/entries under `~/.local/bin` and `~/.local/share/applications`.
 - AppChooser backend manifest/config under `~/.local/share/xdg-desktop-portal/`.
 - D-Bus activation entry under `~/.local/share/dbus-1/services/`.
 

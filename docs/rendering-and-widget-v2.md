@@ -307,6 +307,8 @@ Extend the retained scene consistently across software and EGL:
 
 ### W4 — showcase and conformance
 
+- Baseline shipped: a launchable, renderer-native catalog with interactive
+  previews, a navigation list, and syntax-highlighted TSX Code tabs.
 - Turn the widget gallery into a theme/variant/state matrix.
 - Exercise pointer, keyboard, focus, disabled, high-scale, narrow-window, dark,
   light, and custom-theme cases.

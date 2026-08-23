@@ -51,6 +51,7 @@ This directory is meant to be browsed as a tree or fed to a Markdown site render
 | [Files](./apps/files.md) | Places, grid/list, default folder handler, DnD |
 | [Settings](./apps/settings.md) | Appearance, live apply |
 | [Widget Showcase](./apps/showcase.md) | Interactive widget catalog, previews, and highlighted TSX |
+| [Terminal](./apps/terminal.md) | Native VT engine, PTY transport, and rich-text terminal surface |
 | [Session](./apps/session.md) | `moire-session` day-0 boot |
 
 ## Compositor
@@ -78,6 +79,7 @@ apps/
   files/          Moire Files
   settings/       Settings
   showcase/       Interactive @moire/ui widget catalog
+  terminal/       Native terminal application
   portal/         native xdg-desktop-portal AppChooser backend
 packages/
   dbus/           pure-TypeScript session D-Bus wire/client/server
@@ -88,6 +90,7 @@ packages/
   prefs/          User settings + apply
   react-host/     React → retained scene + renderer backends
   ui/             App SDK + widgets
+  terminal/       VT buffer and Linux PTY transport
   shell/          Panel, launcher, SSD, desktop
   app-discovery/  .desktop discovery, MIME/file activation, action registry
 themes/

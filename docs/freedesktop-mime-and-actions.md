@@ -29,7 +29,9 @@ contents. That is the next accuracy step.
 
 The parser retains the original `Exec=` template. `buildDesktopExec` expands
 `%f`, `%F`, `%u`, `%U`, `%c`, and `%i`, handles literal `%%`, quotes paths, and
-wraps terminal applications with `foot -e`.
+wraps `Terminal=true` applications with `moire-terminal --command`, preserving
+the same expansion and quoting path while keeping the session on native Moire
+chrome.
 
 Choosing “Always Use” updates both `[Default Applications]` and
 `[Added Associations]` in `~/.config/mimeapps.list`, then refreshes the live

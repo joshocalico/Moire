@@ -105,7 +105,8 @@ From the Moire session (launcher / later tooling):
 
 | App | Notes |
 | --- | --- |
-| **foot** | Native Wayland terminal |
+| **Moire Terminal** | Default native React terminal; launched by `moire-session` |
+| **foot** | Optional external Wayland interop/reference client |
 | **Moire Files** | Day-0 file manager (`@moire/files`); desktop icons via shell — see [files-and-desktop.md](./files-and-desktop.md) |
 | **LibreOffice** | May use XWayland; install `xwayland` |
 

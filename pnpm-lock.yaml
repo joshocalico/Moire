@@ -141,6 +141,56 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  apps/showcase:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../packages/prefs
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/terminal:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../packages/prefs
+      '@moire/terminal':
+        specifier: workspace:*
+        version: link:../../packages/terminal
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/app-discovery:
     dependencies:
       '@moire/dbus':
@@ -273,6 +323,22 @@ importers:
         version: 5.9.3
 
   packages/sys:
+    dependencies:
+      koffi:
+        specifier: ^2.10.1
+        version: 2.16.2
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/terminal:
     dependencies:
       koffi:
         specifier: ^2.10.1

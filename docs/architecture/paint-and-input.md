@@ -61,7 +61,7 @@ black fullscreen rectangles when composited later.
 
 ## Why desktop clicks can “fail”
 
-Desktop handlers run only when the compositor’s hit-test finds **no client surface** under the cursor. A Files or foot window covering icons will receive the click instead. Kill or move windows (or use `guest-prep-desktop-shot.sh`) when testing icons alone.
+Desktop handlers run only when the compositor’s hit-test finds **no client surface** under the cursor. A Files or Terminal window covering icons will receive the click instead. Kill or move windows (or use `guest-prep-desktop-shot.sh`) when testing icons alone.
 
 ## Related
 
