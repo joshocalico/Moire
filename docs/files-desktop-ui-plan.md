@@ -236,6 +236,11 @@ actions/drags. It should additionally support:
 
 ## Widget library roadmap
 
+Layout follow-up: let flex containers consume a widget's resolved intrinsic
+size (not only explicit element props), so composed custom widgets such as an
+icon-only `IconButton` can participate in `Row`/`Column` without restating
+their recipe dimensions at each call site.
+
 Once this widget list is exhausted, migrate the compositor-owned desktop icon
 presentation into standard persistent React state/components. The compositor
 should retain authoritative stacking, hit-testing, and DnD escalation, while

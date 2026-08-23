@@ -57,7 +57,7 @@ const SAMPLES: Sample[] = [
       <Button label="Continue" variant="primary" />
       <Button label="Secondary" variant="secondary" />
       <Button label="Quiet" variant="ghost" />
-      <IconButton icon={<Icon name="search" />} />
+      <IconButton width={36} height={36} icon={<Icon name="search" />} />
     </Row>
   );
 }`,
@@ -218,9 +218,9 @@ function Preview(props: { sample: Sample; width: number; height: number }): Reac
           <Button width={92} height={36} label="Delete" variant="danger" />
         </Row>
         <Row width={contentW} height={40} gap={10}>
-          <IconButton icon={<Icon name="search" />} />
-          <IconButton icon={<Icon name="grid" />} variant="ghost" />
-          <IconButton icon={<Icon name="trash" />} variant="danger" />
+          <IconButton width={36} height={36} icon={<Icon name="search" />} />
+          <IconButton width={36} height={36} icon={<Icon name="grid" />} variant="ghost" />
+          <IconButton width={36} height={36} icon={<Icon name="trash" />} variant="danger" />
           <Button width={120} height={36} label="Unavailable" disabled />
         </Row>
       </Column>
