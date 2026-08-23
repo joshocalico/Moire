@@ -39,6 +39,7 @@ import {
   flushMmap,
   GbmDevice,
   getLibc,
+  LinuxReadinessDispatcher,
 } from "@moire/sys";
 import { mmapShm, munmapShm, copyFromPool } from "./shm-map.js";
 import {
@@ -993,6 +994,7 @@ export class CompositorServer {
   private keymap: KeymapMemfd | null = null;
   private evdev: EvdevKeyboard | null = null;
   private pointerDev: EvdevPointer | null = null;
+  private inputReadiness: LinuxReadinessDispatcher | null = null;
   private focused: ClientSession | null = null;
   private pointerFocus: { session: ClientSession; surfaceId: number } | null =
     null;
@@ -1256,11 +1258,12 @@ export class CompositorServer {
       console.warn("[seat] keymap unavailable:", err);
     }
 
-    this.evdev = new EvdevKeyboard();
+    this.inputReadiness = new LinuxReadinessDispatcher("input");
+    this.evdev = new EvdevKeyboard(this.inputReadiness);
     this.evdev.on("key", (ev: EvdevKeyEvent) => this.onKey(ev));
     this.evdev.start();
 
-    this.pointerDev = new EvdevPointer();
+    this.pointerDev = new EvdevPointer(this.inputReadiness);
     this.pointerDev.on("motion", (ev: EvdevPointerMotion) => this.onPointerMotion(ev));
     this.pointerDev.on("absolute", (ev: EvdevPointerAbsolute) =>
       this.onPointerAbsolute(ev),
@@ -1380,6 +1383,8 @@ export class CompositorServer {
     this.evdev = null;
     this.pointerDev?.stop();
     this.pointerDev = null;
+    this.inputReadiness?.stop();
+    this.inputReadiness = null;
     this.pointerFocus = null;
     for (const c of this.clients) c.destroy();
     this.clients.clear();

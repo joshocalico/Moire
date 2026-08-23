@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { assertLinux } from "./platform.js";
 import { getLibc } from "./libc.js";
+import { LinuxReadinessDispatcher } from "./readiness.js";
 
 const EV_SYN = 0x00;
 const EV_KEY = 0x01;
@@ -112,9 +113,12 @@ function norm(v: number, max: number): number {
 
 export class EvdevPointer extends EventEmitter {
   private devices = new Map<number, DeviceState>();
-  private timer: NodeJS.Timeout | null = null;
   private loggedFirstAbs = false;
   private loggedFirstRel = false;
+
+  constructor(private readonly readiness: LinuxReadinessDispatcher) {
+    super();
+  }
 
   start(paths?: string[]): void {
     assertLinux("evdev");
@@ -138,6 +142,7 @@ export class EvdevPointer extends EventEmitter {
           absMax: DEFAULT_ABS_MAX,
           pendingTimeMs: 0,
         });
+        this.readiness.add(fd, () => this.poll());
         console.log(`[evdev] pointer opened ${p} fd=${fd}`);
       } catch {
         // skip
@@ -149,13 +154,11 @@ export class EvdevPointer extends EventEmitter {
       return;
     }
 
-    this.timer = setInterval(() => this.poll(), 8);
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
     for (const fd of this.devices.keys()) {
+      this.readiness.remove(fd);
       try {
         fs.closeSync(fd);
       } catch {
@@ -281,6 +284,7 @@ export class EvdevPointer extends EventEmitter {
 
   private reopenDevice(oldFd: number, dev: DeviceState): void {
     this.devices.delete(oldFd);
+    this.readiness.remove(oldFd);
     try {
       fs.closeSync(oldFd);
     } catch {
@@ -299,6 +303,7 @@ export class EvdevPointer extends EventEmitter {
         pendingDy: 0,
         pendingWheel: 0,
       });
+      this.readiness.add(newFd, () => this.poll());
       console.log(`[evdev] reopened ${dev.path} as fd=${newFd}`);
     } catch (err) {
       console.warn(`[evdev] failed to reopen ${dev.path}:`, err);

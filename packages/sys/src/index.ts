@@ -2,6 +2,7 @@
  * Thin TypeScript + koffi bindings to Linux graphics/input libraries.
  */
 export { isLinux, assertLinux } from "./platform.js";
+export { LinuxReadinessDispatcher } from "./readiness.js";
 export { listDrmConnectors, type DrmConnectorInfo } from "./drm.js";
 export {
   readDisplayIdentity,

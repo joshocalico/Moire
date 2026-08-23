@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { assertLinux } from "./platform.js";
+import { LinuxReadinessDispatcher } from "./readiness.js";
 
 const EV_KEY = 0x01;
 // aarch64 / x86_64: timeval is 16 bytes, then type/code/value = 8 → 24
@@ -46,8 +47,11 @@ export class EvdevKeyboard extends EventEmitter {
   private fds: number[] = [];
   private buffers = new Map<number, Buffer>();
   private paths = new Map<number, string>();
-  private timer: NodeJS.Timeout | null = null;
   private recent = new Map<string, number>();
+
+  constructor(private readonly readiness: LinuxReadinessDispatcher) {
+    super();
+  }
 
   start(paths?: string[]): void {
     assertLinux("evdev");
@@ -59,6 +63,7 @@ export class EvdevKeyboard extends EventEmitter {
         this.fds.push(fd);
         this.buffers.set(fd, Buffer.alloc(0));
         this.paths.set(fd, p);
+        this.readiness.add(fd, () => this.poll());
         console.log(`[evdev] opened ${p} fd=${fd}`);
       } catch {
         // no permission or not a keyboard — skip
@@ -70,13 +75,11 @@ export class EvdevKeyboard extends EventEmitter {
       return;
     }
 
-    this.timer = setInterval(() => this.poll(), 8);
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
     for (const fd of this.fds) {
+      this.readiness.remove(fd);
       try {
         fs.closeSync(fd);
       } catch {
@@ -138,6 +141,7 @@ export class EvdevKeyboard extends EventEmitter {
     this.fds = this.fds.filter((f) => f !== oldFd);
     this.buffers.delete(oldFd);
     this.paths.delete(oldFd);
+    this.readiness.remove(oldFd);
     try {
       fs.closeSync(oldFd);
     } catch {
@@ -148,6 +152,7 @@ export class EvdevKeyboard extends EventEmitter {
       this.fds.push(newFd);
       this.buffers.set(newFd, Buffer.alloc(0));
       this.paths.set(newFd, path);
+      this.readiness.add(newFd, () => this.poll());
       console.log(`[evdev] reopened ${path} as fd=${newFd}`);
     } catch (err) {
       console.warn(`[evdev] failed to reopen ${path}:`, err);
