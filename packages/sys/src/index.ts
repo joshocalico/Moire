@@ -22,11 +22,15 @@ export {
   switchKmsConnector,
   presentKms,
   presentKmsFramebuffer,
+  setKmsCursor,
+  moveKmsCursor,
+  disableKmsCursor,
   closeKmsOutput,
   runClearColorLoop,
   type KmsOutput,
   type KmsMode,
   type KmsOutputRefresh,
+  type KmsCursorImage,
   type Rgba,
 } from "./kms.js";
 export {

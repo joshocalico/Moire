@@ -46,8 +46,16 @@ def wev(typ, code, value):
 
 t0 = time.time(); c0 = cpu_times(pid)
 end = t0 + 3.0
+direction = -1
+next_turn = t0 + 0.4
 while time.time() < end:
-    wev(EV_REL, 0, 4); wev(EV_REL, 1, 3); wev(EV_SYN, 0, 0)
+    now = time.time()
+    if now >= next_turn:
+        direction *= -1
+        next_turn = now + 0.4
+    wev(EV_REL, 0, 4 * direction)
+    wev(EV_REL, 1, 3 * direction)
+    wev(EV_SYN, 0, 0)
     time.sleep(0.016)
 fd.close()
 t1 = time.time(); c1 = cpu_times(pid)

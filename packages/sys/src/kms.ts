@@ -6,6 +6,7 @@ import {
 } from "./display-identity.js";
 import {
   closeFd,
+  flushMmap,
   MAP_SHARED,
   mmap,
   munmap,
@@ -53,6 +54,34 @@ type KmsPageFlipDevicePresenter = {
 
 const pageFlipPresenters = new WeakMap<KmsOutput, KmsPageFlipDevicePresenter>();
 const pageFlipDevices = new Map<number, KmsPageFlipDevicePresenter>();
+
+const CURSOR_BUFFER_SIZE = 64;
+
+export type KmsCursorImage = {
+  pixels: Uint8Array;
+  width: number;
+  height: number;
+  stride: number;
+  hotspotX: number;
+  hotspotY: number;
+};
+
+type KmsCursorBuffer = {
+  handle: number;
+  pitch: number;
+  size: number;
+  map: unknown;
+};
+
+type KmsCursorState = {
+  supported: boolean;
+  visible: boolean;
+  buffer: KmsCursorBuffer | null;
+  setCursor2: (...args: unknown[]) => unknown;
+  moveCursor: (...args: unknown[]) => unknown;
+};
+
+const kmsCursorStates = new WeakMap<KmsOutput, KmsCursorState>();
 
 const DrmModeModeInfo = koffi.struct("drmModeModeInfo_kms", {
   clock: "uint32_t",
@@ -1364,6 +1393,199 @@ function setKmsFramebuffer(out: KmsOutput, framebufferId: number): void {
   }
 }
 
+function createKmsCursorBuffer(out: KmsOutput): KmsCursorBuffer {
+  const create = koffi.alloc(DrmModeCreateDumb, 1);
+  koffi.encode(create, DrmModeCreateDumb, {
+    height: CURSOR_BUFFER_SIZE,
+    width: CURSOR_BUFFER_SIZE,
+    bpp: 32,
+    flags: 0,
+    handle: 0,
+    pitch: 0,
+    size: 0n,
+  });
+  if (out.drmIoctl(out.fd, DRM_IOCTL_MODE_CREATE_DUMB, create) !== 0) {
+    koffi.free(create);
+    throw new Error("DRM_IOCTL_MODE_CREATE_DUMB failed for cursor");
+  }
+  const created = koffi.decode(create, DrmModeCreateDumb) as {
+    handle: number;
+    pitch: number;
+    size: bigint | number;
+  };
+  koffi.free(create);
+
+  const mapRequest = koffi.alloc(DrmModeMapDumb, 1);
+  koffi.encode(mapRequest, DrmModeMapDumb, {
+    handle: created.handle,
+    pad: 0,
+    offset: 0n,
+  });
+  if (out.drmIoctl(out.fd, DRM_IOCTL_MODE_MAP_DUMB, mapRequest) !== 0) {
+    koffi.free(mapRequest);
+    const destroy = koffi.alloc(DrmModeDestroyDumb, 1);
+    koffi.encode(destroy, DrmModeDestroyDumb, { handle: created.handle });
+    out.drmIoctl(out.fd, DRM_IOCTL_MODE_DESTROY_DUMB, destroy);
+    koffi.free(destroy);
+    throw new Error("DRM_IOCTL_MODE_MAP_DUMB failed for cursor");
+  }
+  const mapped = koffi.decode(mapRequest, DrmModeMapDumb) as {
+    offset: bigint | number;
+  };
+  koffi.free(mapRequest);
+  const size = Number(created.size);
+  return {
+    handle: created.handle,
+    pitch: created.pitch,
+    size,
+    map: mmap(
+      size,
+      PROT_READ | PROT_WRITE,
+      MAP_SHARED,
+      out.fd,
+      Number(mapped.offset),
+    ),
+  };
+}
+
+function destroyKmsCursorBuffer(out: KmsOutput, buffer: KmsCursorBuffer): void {
+  try {
+    munmap(buffer.map, buffer.size);
+  } catch {
+    // best effort
+  }
+  try {
+    const destroy = koffi.alloc(DrmModeDestroyDumb, 1);
+    koffi.encode(destroy, DrmModeDestroyDumb, { handle: buffer.handle });
+    out.drmIoctl(out.fd, DRM_IOCTL_MODE_DESTROY_DUMB, destroy);
+    koffi.free(destroy);
+  } catch {
+    // best effort
+  }
+}
+
+function kmsCursorState(out: KmsOutput): KmsCursorState {
+  const cached = kmsCursorStates.get(out);
+  if (cached) return cached;
+  const libdrm = loadLibdrm();
+  const state: KmsCursorState = {
+    supported: true,
+    visible: false,
+    buffer: null,
+    setCursor2: libdrm.func(
+      "int drmModeSetCursor2(int fd, uint32_t crtc_id, uint32_t bo_handle, uint32_t width, uint32_t height, int32_t hot_x, int32_t hot_y)",
+    ),
+    moveCursor: libdrm.func(
+      "int drmModeMoveCursor(int fd, uint32_t crtc_id, int x, int y)",
+    ),
+  };
+  kmsCursorStates.set(out, state);
+  return state;
+}
+
+function rejectKmsCursor(out: KmsOutput, state: KmsCursorState, result: number): false {
+  try {
+    state.setCursor2(out.fd, out.crtcId, 0, 0, 0, 0, 0);
+  } catch {
+    // best effort
+  }
+  state.supported = false;
+  state.visible = false;
+  if (state.buffer) {
+    destroyKmsCursorBuffer(out, state.buffer);
+    state.buffer = null;
+  }
+  console.warn(
+    `[kms] hardware cursor unavailable on ${out.connectorName}; using composited cursor (${result}, errno=${koffi.errno()})`,
+  );
+  return false;
+}
+
+/** Upload and position an ARGB8888 cursor using the output's legacy cursor plane. */
+export function setKmsCursor(
+  out: KmsOutput,
+  image: KmsCursorImage,
+  x: number,
+  y: number,
+): boolean {
+  if (
+    image.width < 1 ||
+    image.height < 1 ||
+    image.width > CURSOR_BUFFER_SIZE ||
+    image.height > CURSOR_BUFFER_SIZE ||
+    image.stride < image.width * 4
+  ) {
+    return false;
+  }
+  let state: KmsCursorState;
+  try {
+    state = kmsCursorState(out);
+    if (!state.supported) return false;
+    state.buffer ??= createKmsCursorBuffer(out);
+  } catch (error) {
+    console.warn(`[kms] hardware cursor setup failed on ${out.connectorName}:`, error);
+    return false;
+  }
+  const buffer = state.buffer;
+  if (!buffer) return false;
+  const staging = Buffer.alloc(buffer.size);
+  for (let row = 0; row < image.height; row++) {
+    staging.set(
+      image.pixels.subarray(row * image.stride, row * image.stride + image.width * 4),
+      row * buffer.pitch,
+    );
+  }
+  flushMmap(buffer.map, staging, buffer.size);
+  const set = Number(
+    state.setCursor2(
+      out.fd,
+      out.crtcId,
+      buffer.handle,
+      CURSOR_BUFFER_SIZE,
+      CURSOR_BUFFER_SIZE,
+      image.hotspotX,
+      image.hotspotY,
+    ),
+  );
+  if (set !== 0) return rejectKmsCursor(out, state, set);
+  const moved = Number(state.moveCursor(out.fd, out.crtcId, x, y));
+  if (moved !== 0) return rejectKmsCursor(out, state, moved);
+  if (!state.visible) {
+    console.log(`[kms] hardware cursor active on ${out.connectorName}`);
+  }
+  state.visible = true;
+  return true;
+}
+
+/** Move an already-uploaded hardware cursor without compositing a new frame. */
+export function moveKmsCursor(out: KmsOutput, x: number, y: number): boolean {
+  const state = kmsCursorStates.get(out);
+  if (!state?.supported || !state.visible) return false;
+  const moved = Number(state.moveCursor(out.fd, out.crtcId, x, y));
+  if (moved !== 0) return rejectKmsCursor(out, state, moved);
+  return true;
+}
+
+/** Hide the cursor plane for an inactive output or software fallback. */
+export function disableKmsCursor(out: KmsOutput): void {
+  const state = kmsCursorStates.get(out);
+  if (!state?.supported || !state.visible) return;
+  try {
+    state.setCursor2(out.fd, out.crtcId, 0, 0, 0, 0, 0);
+  } catch {
+    // best effort
+  }
+  state.visible = false;
+}
+
+function destroyKmsCursor(out: KmsOutput): void {
+  const state = kmsCursorStates.get(out);
+  if (!state) return;
+  disableKmsCursor(out);
+  kmsCursorStates.delete(out);
+  if (state.buffer) destroyKmsCursorBuffer(out, state.buffer);
+}
+
 /** Fill the dumb buffer with a solid color (XRGB8888). */
 export function fillKmsColor(out: KmsOutput, color: Rgba): void {
   const ab = koffi.view(out.map, out.size) as ArrayBuffer;
@@ -1392,6 +1614,7 @@ export function fillKmsColor(out: KmsOutput, color: Rgba): void {
 }
 
 export function closeKmsOutput(out: KmsOutput): void {
+  destroyKmsCursor(out);
   destroyPageFlipPresenter(out);
   const libdrm = loadLibdrm();
   const drmIoctl = libdrm.func("int drmIoctl(int fd, unsigned long request, void *arg)");

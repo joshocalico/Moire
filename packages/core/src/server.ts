@@ -12,6 +12,9 @@ import {
   fillKmsColor,
   presentKms,
   presentKmsFramebuffer,
+  setKmsCursor,
+  moveKmsCursor,
+  disableKmsCursor,
   openKmsOutput,
   openAdditionalKmsOutput,
   refreshKmsOutputModes,
@@ -23,6 +26,7 @@ import {
   type DrmHotplugMonitor,
   type KmsMode,
   type KmsOutput,
+  type KmsCursorImage,
   WaylandSocketServer,
   type WaylandClientConn,
   type WaylandChunk,
@@ -1017,6 +1021,9 @@ export class CompositorServer {
   /** Semantic cursor requested through wp_cursor_shape_device_v1. */
   private clientCursorShape: { session: ClientSession; shape: number } | null =
     null;
+  /** Active DRM cursor plane; null keeps cursor rendering in the scene. */
+  private hardwareCursor: { connectorId: number; imageKey: string } | null = null;
+  private fallbackCursorPixels = new Map<string, Uint8Array>();
   /** Resize edges under the pointer (compositor grip), for cursor fallback. */
   private hoverEdges = 0;
   private grab: InteractiveGrab | null = null;
@@ -1295,10 +1302,7 @@ export class CompositorServer {
         if (this.focusedToplevel?.session === session) this.focusedToplevel = null;
         if (this.pointerFocus?.session === session) this.pointerFocus = null;
         if (this.grab?.session === session) this.grab = null;
-        if (this.clientCursor?.session === session) this.clientCursor = null;
-        if (this.clientCursorShape?.session === session) {
-          this.clientCursorShape = null;
-        }
+        this.clearClientCursor(session);
         if (this.selection?.sourceSession === session) {
           this.clearSelection("cleared");
         }
@@ -1398,6 +1402,7 @@ export class CompositorServer {
       this.keymap = null;
     }
     if (this.kms) {
+      this.disableHardwareCursor();
       // A direct renderer target may currently be scanned out. Restore each
       // output's durable dumb FB before the renderer unregisters its GBM BOs.
       for (const output of this.outputs) {
@@ -3167,9 +3172,10 @@ export class CompositorServer {
     const kms = this.getKmsSize();
     const nx = Math.max(0, Math.min(kms.width - 1, this.cursorX + ev.dx));
     const ny = Math.max(0, Math.min(kms.height - 1, this.cursorY + ev.dy));
-    if (nx !== this.cursorX || ny !== this.cursorY) this.markDirty();
+    const moved = nx !== this.cursorX || ny !== this.cursorY;
     this.cursorX = nx;
     this.cursorY = ny;
+    if (moved && !this.syncHardwareCursor()) this.markDirty();
     if (this.drag) {
       this.updateSsdPointerHover(false);
       this.updateDragFocus(ev.timeMs);
@@ -3227,9 +3233,10 @@ export class CompositorServer {
       0,
       Math.min(kms.height - 1, Math.round(ev.y * (kms.height - 1))),
     );
-    if (nx !== this.cursorX || ny !== this.cursorY) this.markDirty();
+    const moved = nx !== this.cursorX || ny !== this.cursorY;
     this.cursorX = nx;
     this.cursorY = ny;
+    if (moved && !this.syncHardwareCursor()) this.markDirty();
     if (this.drag) {
       this.updateSsdPointerHover(false);
       this.updateDragFocus(ev.timeMs);
@@ -3645,21 +3652,19 @@ export class CompositorServer {
   }
 
   private updateHoverEdges(): void {
+    let next = 0;
     if (this.grab?.kind === "resize") {
-      this.hoverEdges = this.grab.edges;
-      return;
+      next = this.grab.edges;
+    } else if (!this.grab) {
+      const hit = this.hitTest(this.cursorX, this.cursorY);
+      const top = hit ? hit.session.toplevelFor(hit.surface.id) : null;
+      if (top && !top.maximized && !top.fullscreen) {
+        next = this.resizeEdgesAt(top, this.cursorX, this.cursorY);
+      }
     }
-    if (this.grab) {
-      this.hoverEdges = 0;
-      return;
-    }
-    const hit = this.hitTest(this.cursorX, this.cursorY);
-    const top = hit ? hit.session.toplevelFor(hit.surface.id) : null;
-    if (!top || top.maximized || top.fullscreen) {
-      this.hoverEdges = 0;
-      return;
-    }
-    this.hoverEdges = this.resizeEdgesAt(top, this.cursorX, this.cursorY);
+    if (next === this.hoverEdges) return;
+    this.hoverEdges = next;
+    if (!this.syncHardwareCursor()) this.markDirty();
   }
 
   private endGrab(): void {
@@ -4058,18 +4063,22 @@ export class CompositorServer {
   }
 
   private clearClientCursor(session?: ClientSession): void {
+    let changed = false;
     const cc = this.clientCursor;
     if (cc && (!session || cc.session === session)) {
       const prev = cc.session.surfaceById(cc.surfaceId);
       if (prev?.role === "cursor") prev.role = "none";
       this.clientCursor = null;
+      changed = true;
     }
     if (
       this.clientCursorShape &&
       (!session || this.clientCursorShape.session === session)
     ) {
       this.clientCursorShape = null;
+      changed = true;
     }
+    if (changed && !this.syncHardwareCursor()) this.markDirty();
   }
 
   /** wl_pointer.set_cursor — surface is drawn at the hotspot, never as a window. */
@@ -4102,13 +4111,14 @@ export class CompositorServer {
     surf.role = "cursor";
     this.clientCursor = { session, surfaceId, hotspotX, hotspotY };
     this.clientCursorShape = null;
+    if (!this.syncHardwareCursor()) this.markDirty();
   }
 
   setClientCursorShape(session: ClientSession, shape: number): void {
     if (this.pointerFocus?.session !== session) return;
     this.clearClientCursor(session);
     this.clientCursorShape = { session, shape };
-    this.markDirty();
+    if (!this.syncHardwareCursor()) this.markDirty();
   }
 
   private blitArgb(
@@ -4496,7 +4506,124 @@ export class CompositorServer {
     };
   }
 
+  private hardwareCursorImage(): {
+    image: KmsCursorImage;
+    key: string;
+    finish?: () => void;
+  } {
+    const clientCursor = this.clientCursor;
+    if (clientCursor) {
+      const surface = clientCursor.session.surfaceById(clientCursor.surfaceId);
+      if (surface?.pixels && surface.bufferWidth > 0 && surface.bufferHeight > 0) {
+        const scaleX = surface.bufferWidth / Math.max(1, surface.width);
+        const scaleY = surface.bufferHeight / Math.max(1, surface.height);
+        return {
+          key: `client:${clientCursor.session.clientId}:${surface.id}:${surface.revision}:${clientCursor.hotspotX}:${clientCursor.hotspotY}`,
+          image: {
+            pixels: surface.pixels,
+            width: surface.bufferWidth,
+            height: surface.bufferHeight,
+            stride: surface.stride,
+            hotspotX: Math.round(clientCursor.hotspotX * scaleX),
+            hotspotY: Math.round(clientCursor.hotspotY * scaleY),
+          },
+          finish: () => clientCursor.session.finishSurfaceFrame(surface),
+        };
+      }
+    }
+
+    const fallback = this.fallbackCursorShape();
+    const width = Math.max(1, ...fallback.shape.map((line) => line.length));
+    const height = fallback.shape.length;
+    const key = `fallback:${fallback.hotX}:${fallback.hotY}:${fallback.shape.join("|")}`;
+    let pixels = this.fallbackCursorPixels.get(key);
+    if (!pixels) {
+      pixels = new Uint8Array(width * height * 4);
+      const words = new Uint32Array(pixels.buffer);
+      for (let row = 0; row < height; row++) {
+        const line = fallback.shape[row]!;
+        for (let col = 0; col < line.length; col++) {
+          const ch = line[col]!;
+          if (ch !== " ") {
+            words[row * width + col] = ch === "X" ? 0xff000000 : 0xffffffff;
+          }
+        }
+      }
+      this.fallbackCursorPixels.set(key, pixels);
+    }
+    return {
+      key,
+      image: {
+        pixels,
+        width,
+        height,
+        stride: width * 4,
+        hotspotX: fallback.hotX,
+        hotspotY: fallback.hotY,
+      },
+    };
+  }
+
+  /** Synchronize the cursor plane; false keeps the existing software path. */
+  private syncHardwareCursor(): boolean {
+    const output =
+      this.outputs.find(
+        (candidate) =>
+          this.cursorX >= candidate.x &&
+          this.cursorY >= candidate.y &&
+          this.cursorX < candidate.x + outputLogicalWidth(candidate) &&
+          this.cursorY < candidate.y + outputLogicalHeight(candidate),
+      ) ?? this.outputs.find((candidate) => candidate.primary) ?? this.outputs[0];
+    if (!output) return false;
+    const logicalWidth = outputLogicalWidth(output);
+    const logicalHeight = outputLogicalHeight(output);
+    const physicalX = Math.round(
+      ((this.cursorX - output.x) * output.kms.width) / logicalWidth,
+    );
+    const physicalY = Math.round(
+      ((this.cursorY - output.y) * output.kms.height) / logicalHeight,
+    );
+    const descriptor = this.hardwareCursorImage();
+    const previous = this.hardwareCursor;
+    let active = false;
+    if (
+      previous?.connectorId === output.kms.connectorId &&
+      previous.imageKey === descriptor.key
+    ) {
+      active = moveKmsCursor(output.kms, physicalX, physicalY);
+    } else {
+      for (const candidate of this.outputs) {
+        if (candidate !== output) disableKmsCursor(candidate.kms);
+      }
+      active = setKmsCursor(
+        output.kms,
+        descriptor.image,
+        physicalX,
+        physicalY,
+      );
+      if (active) descriptor.finish?.();
+    }
+    if (active) {
+      this.hardwareCursor = {
+        connectorId: output.kms.connectorId,
+        imageKey: descriptor.key,
+      };
+      if (!previous) this.markDirty();
+      return true;
+    }
+    for (const candidate of this.outputs) disableKmsCursor(candidate.kms);
+    this.hardwareCursor = null;
+    if (previous) this.markDirty();
+    return false;
+  }
+
+  private disableHardwareCursor(): void {
+    for (const output of this.outputs) disableKmsCursor(output.kms);
+    this.hardwareCursor = null;
+  }
+
   private drawCursor(fb: Uint32Array, pitchPx: number, width: number, height: number): void {
+    if (this.syncHardwareCursor()) return;
     // Always prefer the client's wl_pointer.set_cursor surface (foot's theme
     // glyphs for arrow / resize / text / etc.). Fallback shapes only when the
     // client hasn't set one (or the buffer isn't ready yet).
@@ -4645,6 +4772,7 @@ export class CompositorServer {
   }
 
   private retainedCursorLayer(z: number): CompositionLayer | null {
+    if (this.syncHardwareCursor()) return null;
     const clientCursor = this.clientCursor;
     if (clientCursor) {
       const surface = clientCursor.session.surfaceById(clientCursor.surfaceId);
@@ -4675,19 +4803,12 @@ export class CompositorServer {
     const fallback = this.fallbackCursorShape();
     const width = Math.max(1, ...fallback.shape.map((line) => line.length));
     const height = fallback.shape.length;
-    const pixels = new Uint8Array(width * height * 4);
-    const words = new Uint32Array(pixels.buffer);
-    for (let row = 0; row < height; row++) {
-      const line = fallback.shape[row]!;
-      for (let col = 0; col < line.length; col++) {
-        const ch = line[col]!;
-        if (ch !== " ") words[row * width + col] = ch === "X" ? 0xff000000 : 0xffffffff;
-      }
-    }
+    const descriptor = this.hardwareCursorImage();
+    const pixels = descriptor.image.pixels;
     return {
       id: "cursor:fallback",
       z,
-      source: { pixels, width, height, stride: width * 4 },
+      source: { pixels, width, height, stride: width * 4, revision: 1 },
       destination: {
         x: (this.cursorX | 0) - fallback.hotX,
         y: (this.cursorY | 0) - fallback.hotY,

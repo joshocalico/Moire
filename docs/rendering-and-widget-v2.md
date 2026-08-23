@@ -132,6 +132,12 @@ former periodic full-screen rebuild when nothing changed.
   fallback. Mode changes and teardown cancel pending promises before replacing
   scanout resources. The dma-buf implicit fence orders rendering and scanout;
   use explicit/native fences where supported.
+- Cursor surfaces and Moire's semantic fallback shapes use the KMS cursor plane
+  when `drmModeSetCursor2` is accepted. Pointer motion then issues only a
+  per-output `drmModeMoveCursor`; cursor images are removed from retained and
+  flattened scenes, while unsupported devices keep the byte-identical software
+  path. The cursor BO is ARGB8888, fixed at the conventional 64×64 capability,
+  and logical coordinates are transformed into each output's physical space.
 - Allocate targets per physical output and rebuild them transactionally across
   mode/hotplug changes.
 - Add explicit/native fences where available, and complete physical
