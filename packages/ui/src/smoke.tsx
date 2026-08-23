@@ -37,6 +37,9 @@ import {
   ScrollArea,
   List,
   ListItem,
+  VirtualList,
+  Table,
+  TreeView,
   Grid,
   GridItem,
   ImageWidget,
@@ -1146,6 +1149,78 @@ function showcaseWidgetSmoke(): void {
     root.container.children.length > 0,
     "showcase widgets did not produce a scene",
   );
+  renderShell(root, null);
+}
+
+function advancedCollectionSmoke(): void {
+  const virtualRoot = createShellRoot();
+  const many = Array.from({ length: 10_000 }, (_, index) => `Row ${index}`);
+  renderShell(
+    virtualRoot,
+    <VirtualList
+      width={320}
+      height={100}
+      items={many}
+      itemHeight={20}
+      overscan={1}
+      renderItem={(item) => (
+        <Label text={item} width={300} height={20} fontSize={11} />
+      )}
+    />,
+  );
+  const countText = (node: SceneNode): number =>
+    (node.kind === "text" ? 1 : 0) +
+    node.children.reduce((sum, child) => sum + countText(child), 0);
+  assert.ok(
+    countText(virtualRoot.container) <= 8,
+    "VirtualList rendered offscreen rows",
+  );
+
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <Group width={720} height={360}>
+      <Table
+        width={420}
+        height={220}
+        columns={[
+          { id: "name", label: "Name", sortable: true, getValue: (row: { id: string; name: string; size: number }) => row.name },
+          { id: "size", label: "Size", width: 100, align: "right", sortable: true, getValue: (row: { id: string; name: string; size: number }) => row.size },
+        ]}
+        rows={[
+          { id: "b", name: "Beta", size: 20 },
+          { id: "a", name: "Alpha", size: 10 },
+        ]}
+        getRowKey={(row) => row.id}
+        sort={{ columnId: "name", direction: "ascending" }}
+        selectedKey="a"
+      />
+      <TreeView
+        x={440}
+        width={260}
+        height={220}
+        nodes={[
+          {
+            id: "project",
+            label: "Project",
+            icon: "folder",
+            children: [{ id: "readme", label: "README.md", icon: "file" }],
+          },
+        ]}
+        expandedIds={new Set(["project"])}
+        selectedId="readme"
+      />
+    </Group>,
+  );
+  const sceneText = (node: SceneNode): string[] => [
+    ...(node.kind === "text" && node.text ? [node.text] : []),
+    ...node.children.flatMap(sceneText),
+  ];
+  const texts = sceneText(root.container);
+  assert.ok(texts.indexOf("Alpha") < texts.indexOf("Beta"), "Table sort order was not reflected in rows");
+  assert.ok(texts.includes("README.md"), "TreeView did not flatten expanded children");
+  assert.ok(collectHits(root.container).length >= 5, "advanced collections lost interaction hits");
+  renderShell(virtualRoot, null);
   renderShell(root, null);
 }
 
@@ -2393,6 +2468,7 @@ async function main() {
   primitiveAndDialogRecipeSmoke();
   collectionRecipeSmoke();
   showcaseWidgetSmoke();
+  advancedCollectionSmoke();
   await terminalViewInteractionSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();

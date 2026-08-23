@@ -343,6 +343,119 @@ Note: `onSelect` is declared on the type but selection is owned by the app via `
 | `labelScrim` | `boolean` | desktop-over-wallpaper |
 | `interactive` | `boolean` | `true` |
 
+### `VirtualList`
+
+Fixed-height row virtualization over the shared `ScrollArea`. Only the visible
+range plus overscan is reconciled, while each row retains its absolute content
+position and the scrollbar represents the full collection.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | required |
+| `items` | `readonly T[]` | required |
+| `itemHeight` | `number` | required; clamped to at least `1` |
+| `renderItem` | `(item, index) => ReactNode` | required |
+| `getKey` | `(item, index) => string \| number` | row index |
+| `overscan` | `number` | `3` rows on each side |
+| `scrollY` | `number` | uncontrolled when omitted |
+| `onScroll` | `(scrollY) => void` | |
+| `scrollbar` | `boolean` | auto when overflowing |
+
+```tsx
+<VirtualList
+  width={480}
+  height={320}
+  items={results}
+  itemHeight={36}
+  getKey={(result) => result.id}
+  renderItem={(result) => <ResultRow result={result} />}
+/>
+```
+
+### `Table`
+
+Virtualized keyed rows with sortable headers. Sorting is controlled through
+`sort` / `onSortChange`; when the active column supplies `getValue`, the table
+orders a copy of the rows before virtualization.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | required |
+| `columns` | `readonly TableColumn<T>[]` | required |
+| `rows` | `readonly T[]` | required |
+| `getRowKey` | `(row, index) => string` | required |
+| `selectedKey` | `string \| null` | none |
+| `onSelect` | `(row, index) => void` | |
+| `onActivate` | `(row, index) => void` | double-click / Enter activation |
+| `sort` | `{ columnId, direction } \| null` | none |
+| `onSortChange` | `(sort) => void` | |
+| `headerHeight` | `number` | `34` |
+| `rowHeight` | `number` | `38` |
+| `striped` | `boolean` | `false` |
+| `emptyState` | `ReactNode` | blank body |
+
+`TableColumn<T>`:
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `id`, `label` | `string` | required |
+| `width` | `number` | equal share of remaining width |
+| `minWidth` | `number` | `48` |
+| `align` | `left \| right` | `left` |
+| `sortable` | `boolean` | `false` |
+| `getValue` | `(row) => string \| number` | empty cell; also supplies sort value |
+| `renderCell` | `(row, index, width) => ReactNode` | renderer-native text from `getValue` |
+
+```tsx
+<Table
+  width={720}
+  height={420}
+  columns={columns}
+  rows={files}
+  getRowKey={(file) => file.path}
+  selectedKey={selectedPath}
+  sort={sort}
+  onSortChange={setSort}
+  onSelect={(file) => setSelectedPath(file.path)}
+/>
+```
+
+### `TreeView`
+
+Virtualized hierarchy. Callers own the expanded-id set; rows provide arrow-key
+expand/collapse, a dedicated disclosure target, keyed selection, and branch
+double-click toggling.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | required |
+| `nodes` | `readonly TreeNode<T>[]` | required |
+| `expandedIds` | `ReadonlySet<string>` | required |
+| `onExpandedChange` | `(ids: ReadonlySet<string>) => void` | |
+| `selectedId` | `string \| null` | none |
+| `onSelect` | `(node) => void` | |
+| `onActivate` | `(node) => void` | leaf double-click / Enter activation |
+| `rowHeight` | `number` | `34` |
+| `indent` | `number` | `18` |
+
+`TreeNode<T>` fields are `id`, `label`, optional `icon`, `disabled`, `data`,
+and recursive `children`.
+
+```tsx
+<TreeView
+  width={320}
+  height={480}
+  nodes={workspace}
+  expandedIds={expanded}
+  onExpandedChange={setExpanded}
+  selectedId={selected}
+  onSelect={(node) => setSelected(node.id)}
+/>
+```
+
 ---
 
 ## Media and DnD

@@ -65,6 +65,20 @@ export type { ScrollAreaProps } from "./scroll.js";
 export { List, ListItem } from "./list.js";
 export type { ListProps, ListItemProps, ListItemSlot } from "./list.js";
 
+export { VirtualList } from "./virtual-list.js";
+export type { VirtualListProps } from "./virtual-list.js";
+
+export { Table } from "./table.js";
+export type {
+  TableProps,
+  TableColumn,
+  TableSort,
+  TableSortDirection,
+} from "./table.js";
+
+export { TreeView } from "./tree-view.js";
+export type { TreeViewProps, TreeNode } from "./tree-view.js";
+
 export { Grid, GridItem } from "./grid.js";
 export type { GridProps, GridItemProps } from "./grid.js";
 
