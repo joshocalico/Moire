@@ -267,7 +267,7 @@ async function main() {
   if (xwayland) {
     console.log(`X11:   DISPLAY=${xwayland.display} xeyes`);
   }
-  console.log(`Try:   WAYLAND_DISPLAY=${display} foot\n`);
+  console.log(`Try:   WAYLAND_DISPLAY=${display} moire-terminal\n`);
 
   await new Promise(() => {});
 }
