@@ -167,8 +167,26 @@ export type {
   OpenWithPickerProps,
 } from "./context-menu.js";
 
-export { Box, Row, Column } from "./layout.js";
-export type { BoxProps, RowProps, ColumnProps } from "./layout.js";
+export {
+  Box,
+  Row,
+  Column,
+  Horizontal,
+  Vertical,
+  Stack,
+  Measure,
+  useLayoutMetrics,
+} from "./layout.js";
+export type {
+  BoxProps,
+  RowProps,
+  ColumnProps,
+  StackProps,
+  StackAlignment,
+  MeasureProps,
+  LayoutMetrics,
+  FlexItemProps,
+} from "./layout.js";
 
 export {
   Label,

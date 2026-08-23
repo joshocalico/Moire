@@ -68,8 +68,17 @@ export {
   createMotionValue,
   useMotionValue,
   easeTo,
+  createTweenValue,
+  useTweenValue,
+  tweenTo,
+  useTween,
+  Tween,
   tickAllMotions,
   type MotionValue,
+  type TweenValue,
+  type TweenOptions,
+  type TweenEasing,
+  type TweenProps,
 } from "./motion.js";
 
 // Image loading
@@ -82,6 +91,11 @@ export {
   Box,
   Row,
   Column,
+  Horizontal,
+  Vertical,
+  Stack,
+  Measure,
+  useLayoutMetrics,
   Label,
   Surface,
   Panel,
@@ -152,6 +166,11 @@ export {
 } from "./widgets/index.js";
 export type {
   BoxProps,
+  LayoutMetrics,
+  FlexItemProps,
+  MeasureProps,
+  StackProps,
+  StackAlignment,
   LabelProps,
   ButtonProps,
   ButtonVariant,

@@ -27,23 +27,28 @@ defaults: flex layout can only inspect props declared on its direct children.
 | `width`, `height` | `number` | `0` |
 | `flexGrow`, `flexShrink` | `number` | |
 | `minWidth`, `minHeight` | `number` | |
+| `margin` | `number` | |
 | `children` | `ReactNode` | |
 
-### `Row` / `Column`
+### `Row` / `Column` (`Horizontal` / `Vertical` aliases)
 
 Flex containers (`ColumnProps` extends the same shape as `Row`).
+They remain backed by Yoga. Each allocated child box is published through
+layout context, so nested components can consume it with `Measure` or
+`useLayoutMetrics()` instead of repeating parent arithmetic.
 
 | Prop | Type | Default |
 | --- | --- | --- |
-| `width` | `number` | required |
-| `height` | `number` | |
+| `width`, `height` | `number` | nearest allocated box when omitted |
 | `x`, `y` | `number` | `0` |
 | `gap` | `number` | `8` |
 | `padding` | `number` | `0` |
 | `justify` | `start` \| `center` \| `end` \| `space-between` \| `space-around` | |
 | `align` | `start` \| `center` \| `end` \| `stretch` | Row: `center`, Column: `stretch` |
+| `wrap` | `boolean` | `false` |
 | `flexGrow`, `flexShrink` | `number` | |
 | `minWidth`, `minHeight` | `number` | |
+| `margin` | `number` | |
 | `children` | `ReactNode` | |
 
 ```tsx
@@ -51,6 +56,54 @@ Flex containers (`ColumnProps` extends the same shape as `Row`).
   <Box width={120} height={36}>{fixedSizeControl}</Box>
   <Box height={36} flexGrow={1}>{growingContent}</Box>
 </Row>
+```
+
+### `Measure`
+
+Render-prop bridge from a layout allocation to ordinary JSX. As a direct
+`Horizontal`/`Vertical` child it accepts the same flex item props and receives
+Yoga's computed `{ x, y, width, height }`.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` inside allocated box |
+| `width`, `height` | `number` | allocated box |
+| `flexGrow`, `flexShrink` | `number` | |
+| `minWidth`, `minHeight` | `number` | |
+| `margin` | `number` | |
+| `children` | `(metrics: LayoutMetrics) => ReactNode` | required |
+
+```tsx
+<Horizontal width={720} height={360} gap={12}>
+  <Measure width={220}>{({ width, height }) => (
+    <Sidebar width={width} height={height} />
+  )}</Measure>
+  <Measure flexGrow={1}>{({ width, height }) => (
+    <Canvas width={width} height={height} />
+  )}</Measure>
+</Horizontal>
+```
+
+### `Stack`
+
+Measured overlay composition for badges, scrims, artwork, and transitions.
+Unlike flow layout, stacking is intentionally a small bespoke algorithm:
+children share one box and are positioned by two alignment axes.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | nearest allocated box when omitted |
+| `alignX`, `alignY` | `start \| center \| end \| stretch` | `stretch` |
+| `flexGrow`, `flexShrink` | `number` | |
+| `minWidth`, `minHeight`, `margin` | `number` | |
+| `children` | `ReactNode` | painted in source order |
+
+```tsx
+<Stack width={320} height={180} alignX="end" alignY="start">
+  <ImageWidget width={320} height={180} src={preview} />
+  <Badge text="NEW" />
+</Stack>
 ```
 
 ### `SplitView`
@@ -778,6 +831,32 @@ default-assignment callbacks.
 ---
 
 ## Helpers
+
+### `Tween` / `useTween`
+
+Duration-based numeric animation driven by the shared window/compositor motion
+clock. `Tween` is a render-prop component; `useTween` is the hook form.
+Animations settle exactly on their target, and remain renderer-neutral.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `value` | `number` | required target |
+| `from` | `number` | target on first mount |
+| `duration` | `number` | `220` ms |
+| `easing` | `linear \| ease-in \| ease-out \| ease-in-out` | `ease-in-out` |
+| `children` | `(value: number) => ReactNode` | required |
+
+```tsx
+<Tween value={open ? 1 : 0} duration={180} easing="ease-out">
+  {(progress) => (
+    <Group opacity={progress}>{content}</Group>
+  )}
+</Tween>
+```
+
+`createTweenValue`, `useTweenValue`, and `tweenTo` expose the underlying
+controlled clock for component authors. Existing `MotionValue` / `easeTo`
+remain useful for spring-like exponential convergence.
 
 ### `usePalette()`
 

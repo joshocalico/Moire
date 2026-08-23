@@ -19,7 +19,11 @@ import {
 import {
   Application,
   Window,
+  Box,
   Column,
+  Horizontal,
+  Measure,
+  Stack,
   Label,
   Button,
   IconButton,
@@ -67,6 +71,7 @@ import {
   SplitView,
   Pagination,
   PropertyList,
+  createTweenValue,
   NavigationSidebar,
   SegmentedControl,
   RadioGroup,
@@ -140,6 +145,45 @@ function rendererSmoke(): void {
     "translucent rect on a clear frame must preserve premultiplied alpha",
   );
   assert.equal(collectHits(root.container).length, 1);
+}
+
+function declarativeLayoutAndTweenSmoke(): void {
+  const root = createShellRoot();
+  let fixedWidth = 0;
+  let growingWidth = 0;
+  renderShell(
+    root,
+    <Group width={400} height={180}>
+      <Horizontal width={400} height={60} gap={10}>
+        <Measure width={100}>{(box) => {
+          fixedWidth = box.width;
+          return <Rect width={box.width} height={box.height} fill={0xff27465c} />;
+        }}</Measure>
+        <Measure flexGrow={1}>{(box) => {
+          growingWidth = box.width;
+          return <Rect width={box.width} height={box.height} fill={0xff3b8f9f} />;
+        }}</Measure>
+      </Horizontal>
+      <Stack y={80} width={200} height={80} alignX="center" alignY="center">
+        <Box width={40} height={20}>
+          <Rect width={40} height={20} fill={0xffd59b52} />
+        </Box>
+      </Stack>
+    </Group>,
+  );
+  assert.equal(fixedWidth, 100);
+  assert.equal(growingWidth, 290, "Measure did not receive Yoga's remaining allocation");
+  const frame = new SoftwareRenderer().render(root.container, { width: 400, height: 180 });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[120 * frame.width + 100], 0xffd59b52, "Stack did not center its measured child");
+
+  const tween = createTweenValue(0);
+  tween.animateTo(100, { duration: 1000, easing: "linear" });
+  assert.equal(tween.tick(0.25), true);
+  assert.equal(tween.get(), 25);
+  assert.equal(tween.tick(0.75), false);
+  assert.equal(tween.get(), 100, "Tween did not settle exactly on its target");
+  renderShell(root, null);
 }
 
 function orderedSelection<Key>(
@@ -2568,6 +2612,7 @@ async function main() {
     return;
   }
   rendererSmoke();
+  declarativeLayoutAndTweenSmoke();
   selectionModelSmoke();
   await pointerModifierSmoke();
   buttonRecipeSmoke();
