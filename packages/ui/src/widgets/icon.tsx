@@ -23,6 +23,8 @@ export type IconName =
   | "close"
   | "chevron-up"
   | "chevron-down"
+  | "chevron-left"
+  | "chevron-right"
   | "remove";
 
 export type IconProps = {
@@ -53,6 +55,8 @@ const KNOWN: ReadonlySet<string> = new Set([
   "close",
   "chevron-up",
   "chevron-down",
+  "chevron-left",
+  "chevron-right",
   "remove",
 ]);
 
@@ -266,6 +270,19 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
           const y = top ? levels - index : index;
           const inset = index * 2 * pixel;
           return <Rect key={index} x={inset} y={y * pixel + Math.floor(size / 3)} width={Math.max(pixel, size - inset * 2)} height={pixel} fill={color} radius={pixel} />;
+        })}
+      </>
+    );
+  }
+  if (name === "chevron-left" || name === "chevron-right") {
+    const left = name === "chevron-left";
+    const levels = Math.max(3, Math.floor(size / 5));
+    return (
+      <>
+        {Array.from({ length: levels }, (_, index) => {
+          const x = left ? levels - index : index;
+          const inset = index * 2 * pixel;
+          return <Rect key={index} x={x * pixel + Math.floor(size / 3)} y={inset} width={pixel} height={Math.max(pixel, size - inset * 2)} fill={color} radius={pixel} />;
         })}
       </>
     );

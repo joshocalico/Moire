@@ -200,6 +200,19 @@ export type { DisclosureProps } from "./disclosure.js";
 export { ProgressRow } from "./progress-row.js";
 export type { ProgressRowProps } from "./progress-row.js";
 
+export { SplitView } from "./split-view.js";
+export type { SplitViewProps, SplitViewOrientation } from "./split-view.js";
+
+export { Pagination } from "./pagination.js";
+export type { PaginationProps } from "./pagination.js";
+
+export { PropertyList } from "./property-list.js";
+export type {
+  PropertyListProps,
+  PropertyListSection,
+  PropertyListItem,
+} from "./property-list.js";
+
 export { NavigationSidebar } from "./navigation-sidebar.js";
 export type {
   NavigationSidebarProps,

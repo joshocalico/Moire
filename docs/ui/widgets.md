@@ -53,6 +53,36 @@ Flex containers (`ColumnProps` extends the same shape as `Row`).
 </Row>
 ```
 
+### `SplitView`
+
+Controlled two-pane layout with clipping, a captured pointer divider, and
+Left/Right or Up/Down keyboard resizing. Home and End move to the configured
+minimums; Shift multiplies the keyboard step.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | required |
+| `orientation` | `horizontal \| vertical` | `horizontal` |
+| `firstSize` | `number` | required controlled pane size |
+| `onFirstSizeChange` | `(size: number) => void` | |
+| `minFirst`, `minSecond` | `number` | `80` |
+| `dividerSize` | `number` | `7` hit target |
+| `keyboardStep` | `number` | `12` |
+| `disabled` | `boolean` | `false` |
+| `first`, `second` | `ReactNode` | required pane content |
+
+```tsx
+<SplitView
+  width={760}
+  height={440}
+  firstSize={sidebarWidth}
+  onFirstSizeChange={setSidebarWidth}
+  first={<Inspector />}
+  second={<Canvas />}
+/>
+```
+
 ### `Surface` / `Panel`
 
 Filled background. `Panel` defaults fill to `pal.surface`; `Surface` to `pal.panel`.
@@ -560,6 +590,62 @@ and recursive `children`.
 />
 ```
 
+### `Pagination`
+
+Controlled, one-indexed page navigation. Large page ranges collapse to stable
+ellipsis tokens while keeping the first, last, current, and sibling pages.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `page` | `number` | required; clamped to range |
+| `pageCount` | `number` | required |
+| `onPageChange` | `(page: number) => void` | |
+| `siblingCount` | `number` | `1`, clamped `0..3` |
+| `showFirstLast` | `boolean` | `false` |
+| `size` | `small \| medium \| large` | `medium` |
+| `disabled` | `boolean` | `false` |
+
+```tsx
+<Pagination page={page} pageCount={42} onPageChange={setPage} />
+```
+
+### `PropertyList`
+
+Scrollable, sectioned key-value presentation for inspectors, metadata, and
+settings. Values may be renderer-native nodes, enabling badges, toggles,
+buttons, and other composed controls without a separate inspector renderer.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `x`, `y` | `number` | `0` |
+| `width`, `height` | `number` | required |
+| `sections` | `readonly PropertyListSection[]` | required |
+| `labelWidth` | `number` | `38%` of width |
+| `rowHeight` | `number` | `42` |
+| `descriptionRowHeight` | `number` | `58` |
+| `selectedId` | `string \| null` | none |
+| `onSelect` | `(item) => void` | |
+| `striped` | `boolean` | `false` |
+| `scrollbar` | `boolean` | auto |
+| `emptyState` | `ReactNode` | blank |
+
+`PropertyListSection` has `id`, optional `label`, and `items`.
+`PropertyListItem` has `id`, `label`, `value: ReactNode`, and optional
+`description`, `disabled`, and `onPress` fields.
+
+```tsx
+<PropertyList
+  width={520}
+  height={360}
+  sections={[{
+    id: "file",
+    label: "File",
+    items: [{ id: "name", label: "Name", value: file.name }],
+  }]}
+/>
+```
+
 ---
 
 ## Media and DnD
@@ -602,7 +688,7 @@ threshold/session behavior.
 
 Names: `folder`, `file`, `image`, `app`, `trash`, `home`, `desktop`,
 `downloads`, `up`, `grid`, `list`, `search`, `close`, `chevron-up`,
-`chevron-down`, and `remove`.
+`chevron-down`, `chevron-left`, `chevron-right`, and `remove`.
 
 Bundled files: `packages/ui/icons/<name>.png`.
 

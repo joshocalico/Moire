@@ -64,6 +64,9 @@ import {
   Tooltip,
   Disclosure,
   ProgressRow,
+  SplitView,
+  Pagination,
+  PropertyList,
   NavigationSidebar,
   SegmentedControl,
   RadioGroup,
@@ -1281,6 +1284,54 @@ function compositionWidgetSmoke(): void {
     0,
     "hidden tooltip content leaked through group opacity",
   );
+  renderShell(root, null);
+}
+
+function utilityWidgetSmoke(): void {
+  const root = createShellRoot();
+  let splitSize = 0;
+  renderShell(
+    root,
+    <Group width={700} height={560}>
+      <SplitView
+        width={640}
+        height={180}
+        firstSize={160}
+        onFirstSizeChange={(size) => { splitSize = size; }}
+        first={<Surface width={160} height={180}><Label x={12} y={12} text="Inspector" /></Surface>}
+        second={<Panel width={473} height={180}><Label x={12} y={12} text="Canvas" /></Panel>}
+      />
+      <PropertyList
+        y={200}
+        width={520}
+        height={220}
+        striped
+        sections={[{
+          id: "file",
+          label: "File",
+          items: [
+            { id: "name", label: "Name", value: "widgets.tsx" },
+            { id: "kind", label: "Kind", value: "TypeScript source", description: "Resolved from MIME metadata" },
+          ],
+        }]}
+      />
+      <Pagination y={450} page={4} pageCount={20} onPageChange={() => {}} />
+    </Group>,
+  );
+  const hits = collectHits(root.container);
+  const divider = hits.find((hit) => hit.focusId?.startsWith("split-view:"));
+  assert.ok(divider?.onPointerDown && divider.onPointerMove, "SplitView divider lost pointer capture handlers");
+  divider.onPointerDown({ x: 163, y: 40, localX: 3, localY: 40, ...NO_MODIFIERS });
+  divider.onPointerMove({ x: 203, y: 40, localX: 43, localY: 40, ...NO_MODIFIERS });
+  assert.equal(splitSize, 200, "SplitView did not preserve the pointer-down resize origin");
+  const sceneText = (node: SceneNode): string[] => [
+    ...(node.kind === "text" && node.text ? [node.text] : []),
+    ...node.children.flatMap(sceneText),
+  ];
+  const texts = sceneText(root.container);
+  assert.ok(texts.includes("TypeScript source"), "PropertyList value was not rendered");
+  assert.ok(texts.includes("4") && texts.includes("…"), "Pagination did not condense a large range");
+  assert.ok(hits.length >= 8, "utility widgets lost expected interaction surfaces");
   renderShell(root, null);
 }
 
@@ -2530,6 +2581,7 @@ async function main() {
   showcaseWidgetSmoke();
   advancedCollectionSmoke();
   compositionWidgetSmoke();
+  utilityWidgetSmoke();
   await terminalViewInteractionSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
