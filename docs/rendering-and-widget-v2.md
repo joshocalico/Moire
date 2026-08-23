@@ -201,6 +201,23 @@ arbitrary shaders.
 - Direct-scanout an eligible opaque fullscreen dmabuf when no higher layer or
   effect requires composition.
 
+### R6 — adaptive cursor presentation
+
+- Keep logical cursor shape, hotspot, animation, scale, and position independent
+  from how the cursor is finally presented.
+- Prefer a KMS hardware cursor plane for ordinary interaction, with automatic
+  software-scene fallback when an output rejects the image or an active
+  compositor effect must transform the pointer.
+- Negotiate cursor size and pixel-format limits per output, including HiDPI,
+  rotation, and transitions between outputs with different capabilities.
+- Move cursor-plane updates into atomic KMS commits where supported so cursor
+  state and page flips can share one presentation timeline.
+- Give screenshots, recording, and remote-desktop paths an explicit policy:
+  either request software composition or receive cursor image/position metadata
+  for independent low-latency presentation.
+- Cover animated cursors, whole-screen transforms, magnification, fades, and
+  multi-output capture in cursor-presentation conformance tests.
+
 ## Widget styling queue
 
 The existing widgets are reusable behavior wrapped around too much internal
