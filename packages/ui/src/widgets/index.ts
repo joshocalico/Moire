@@ -210,3 +210,14 @@ export type {
   RichTextLine,
   RichTextRun,
 } from "./rich-text.js";
+
+export { TerminalView } from "./terminal-view.js";
+export type {
+  TerminalViewProps,
+  TerminalCursor,
+  TerminalGridMetrics,
+} from "./terminal-view.js";
+export { measureTerminalGrid } from "./terminal-view.js";
+
+export { StatusBar } from "./status-bar.js";
+export type { StatusBarProps } from "./status-bar.js";

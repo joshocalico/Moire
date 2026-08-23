@@ -229,10 +229,16 @@ fill.
 
 `RichTextView` is the renderer-native styled-text surface. It lays out ordered
 runs with per-run foreground, background, weight, and font family inside a
-shared scrolling viewport, with optional line numbers. `CodeView` is a thin
+shared scrolling viewport, with optional line numbers and controlled scroll.
+`CodeView` is a thin
 syntax-highlighting adapter over that primitive rather than a separate text
 renderer. The same rich-text model is intended to back terminal output,
 diagnostics, logs, and future selectable or linked text.
+
+`TerminalView` composes rich text with focus, a blinking caret, terminal-grid
+measurement, and a Tab-capturing input surface. It deliberately does not own a
+process or ANSI parser. `StatusBar` is the matching low-emphasis application
+strip and is equally usable by Files, editors, inspectors, and terminal apps.
 
 ---
 

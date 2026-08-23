@@ -30,6 +30,9 @@ export type RichTextViewProps = {
   radius?: number;
   stroke?: number;
   strokeWidth?: number;
+  scrollY?: number;
+  onScroll?: (scrollY: number) => void;
+  scrollbar?: boolean;
 };
 
 /** Styled text runs with one shared renderer-native layout and scroll model. */
@@ -64,6 +67,9 @@ export function RichTextView(props: RichTextViewProps): ReactNode {
         height={props.height}
         contentHeight={contentHeight}
         fill={0x00000000}
+        scrollY={props.scrollY}
+        onScroll={props.onScroll}
+        scrollbar={props.scrollbar}
       >
         {props.lines.map((line, lineIndex) => {
           let cursorX = padding + gutter;

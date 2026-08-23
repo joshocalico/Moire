@@ -571,7 +571,11 @@ export class Window {
 
   private handleKey(ev: UiKeyEvent): void {
     if (this.closed) return;
-    if ((ev.type === "down" || ev.type === "repeat") && ev.code === 15) {
+    if (
+      (ev.type === "down" || ev.type === "repeat") &&
+      ev.code === 15 &&
+      !this.focusedHit?.captureTab
+    ) {
       this.moveFocus(ev.modifiers.shift);
       return;
     }

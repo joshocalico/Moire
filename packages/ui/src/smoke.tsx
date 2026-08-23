@@ -66,6 +66,7 @@ import {
   Spinner,
   EmptyState,
   CodeView,
+  TerminalView,
   type PlatformPopupOpts,
   type PlatformWindow,
 } from "./index.js";
@@ -1142,6 +1143,47 @@ function showcaseWidgetSmoke(): void {
     "showcase widgets did not produce a scene",
   );
   renderShell(root, null);
+}
+
+async function terminalViewInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Terminal view smoke", width: 360, height: 180 });
+  const keys: number[] = [];
+  win.setContent(
+    <TerminalView
+      width={360}
+      height={180}
+      lines={[
+        {
+          id: "prompt",
+          runs: [
+            { text: "moire", color: 0xff55c7d9, fontWeight: "medium" },
+            { text: " $ pnpm smoke", color: 0xffdce5eb },
+          ],
+        },
+      ]}
+      cursor={{ line: 0, column: 19 }}
+      autoFocus
+      onKeyDown={(event) => keys.push(event.code)}
+    />,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectKey({
+    type: "down",
+    code: 15,
+    key: "Tab",
+    text: "\t",
+    modifiers: NO_MODIFIERS,
+    timeMs: 1,
+  });
+  assert.deepEqual(keys, [15], "terminal surface should capture Tab as input");
+  win.destroy();
+  backend.disconnect();
 }
 
 async function collectionFocusRecipeSmoke(): Promise<void> {
@@ -2347,6 +2389,7 @@ async function main() {
   primitiveAndDialogRecipeSmoke();
   collectionRecipeSmoke();
   showcaseWidgetSmoke();
+  await terminalViewInteractionSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
   await searchFieldInteractionSmoke();

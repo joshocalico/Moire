@@ -135,6 +135,9 @@ export {
   Spinner,
   EmptyState,
   RichTextView,
+  TerminalView,
+  measureTerminalGrid,
+  StatusBar,
   CodeView,
 } from "./widgets/index.js";
 export type {
@@ -238,6 +241,10 @@ export type {
   RichTextViewProps,
   RichTextLine,
   RichTextRun,
+  TerminalViewProps,
+  TerminalCursor,
+  TerminalGridMetrics,
+  StatusBarProps,
   CodeViewProps,
   CodeLanguage,
 } from "./widgets/index.js";

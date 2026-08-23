@@ -19,3 +19,8 @@ surface.
 
 The showcase intentionally uses ordinary JSX. It should not gain privileged
 knowledge of Wayland or a rendering backend.
+
+Composition is part of its contract: content-specific surfaces should expose
+the smaller general primitive below them. For example, `CodeView` tokenizes
+into `RichTextView`, while `TerminalView` adds caret and keyboard semantics to
+the same rich-text viewport.

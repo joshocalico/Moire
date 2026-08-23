@@ -74,6 +74,8 @@ type HostPointerProps = {
   data?: unknown;
   onDropHoverChange?: (hovering: boolean) => void;
   focusable?: boolean;
+  /** Deliver Tab to this focused surface instead of moving widget focus. */
+  captureTab?: boolean;
   autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
@@ -156,6 +158,7 @@ export type SceneNode = {
   onContextMenu?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
   focusable?: boolean;
+  captureTab?: boolean;
   autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
@@ -189,6 +192,7 @@ export type HitRegion = {
   onContextMenu?: HitHandler;
   onWheel?: (ev: HitPointerEvent) => void;
   focusable?: boolean;
+  captureTab?: boolean;
   autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
@@ -239,6 +243,7 @@ function makeNode(
     onContextMenu: props.onContextMenu as HitHandler | undefined,
     onWheel: props.onWheel as ((ev: HitPointerEvent) => void) | undefined,
     focusable: props.focusable as boolean | undefined,
+    captureTab: props.captureTab as boolean | undefined,
     autoFocus: props.autoFocus as boolean | undefined,
     focusId: props.focusId as string | undefined,
     onFocusChange: props.onFocusChange as
@@ -330,6 +335,7 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
     node.onWheel = props.onWheel as ((ev: HitPointerEvent) => void) | undefined;
   }
   if ("focusable" in props) node.focusable = props.focusable as boolean | undefined;
+  if ("captureTab" in props) node.captureTab = props.captureTab as boolean | undefined;
   if ("autoFocus" in props) node.autoFocus = props.autoFocus as boolean | undefined;
   if ("focusId" in props) node.focusId = props.focusId as string | undefined;
   if ("onFocusChange" in props) {
@@ -614,6 +620,7 @@ export function collectHits(node: SceneNode, out: HitRegion[] = []): HitRegion[]
       onContextMenu: node.onContextMenu,
       onWheel: node.onWheel,
       focusable: node.focusable,
+      captureTab: node.captureTab,
       autoFocus: node.autoFocus,
       focusId: node.focusId ?? node.id,
       onFocusChange: node.onFocusChange,
