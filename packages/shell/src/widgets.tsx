@@ -9,6 +9,7 @@ export {
   Icon,
   ScrollArea,
   TextField,
+  SearchField,
   Pressable,
   Surface,
   Separator as Divider,
@@ -20,6 +21,7 @@ export {
   type IconProps,
   type ScrollAreaProps,
   type TextFieldProps,
+  type SearchFieldProps,
   type PressableProps,
   type SurfaceProps,
 } from "@moire/ui";

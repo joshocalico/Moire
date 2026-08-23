@@ -33,6 +33,7 @@ import {
   Grid,
   GridItem,
   TextField,
+  SearchField,
   PathBar,
   CollectionItem,
   ContextMenuTrigger,
@@ -175,6 +176,71 @@ function buttonRecipeSmoke(): void {
     medium.leadingIcon.base.size,
     "Button artwork slots should receive the recipe's semantic icon style",
   );
+}
+
+function textFieldRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const medium = theme.recipes.textField.medium;
+  const fill = 0xff342a52;
+  const invalidStroke = 0xffff6b8a;
+  const customTheme = {
+    ...theme,
+    name: "text-field-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      textField: {
+        ...theme.recipes.textField,
+        medium: {
+          ...medium,
+          root: {
+            ...medium.root,
+            base: { ...medium.root.base, fill, radius: 0 },
+            states: {
+              ...medium.root.states,
+              invalid: { stroke: invalidStroke },
+            },
+          },
+          metrics: { ...medium.metrics, height: 38 },
+        },
+      },
+    },
+  };
+  let leadingSize = 0;
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <TextField
+        x={2}
+        y={2}
+        width={116}
+        value="Recipe"
+        focused
+        invalid
+        leading={(style) => {
+          leadingSize = style.size;
+          return <Rect width={style.size} height={style.size} fill={style.color} />;
+        }}
+      />
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 122,
+    height: 44,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[4 * frame.width + 4], fill);
+  assert.equal(
+    words[2 * frame.width + 12],
+    invalidStroke,
+    "TextField should combine focus geometry with the later invalid color state",
+  );
+  assert.equal(
+    words[41 * frame.width + 4],
+    0,
+    "TextField should take its implicit height from the selected recipe",
+  );
+  assert.equal(leadingSize, medium.leadingIcon.base.size);
 }
 
 function collectionRecipeSmoke(): void {
@@ -451,6 +517,53 @@ async function textFieldInteractionSmoke(): Promise<void> {
     timeMs: 7,
   });
   assert.equal(focused, "first");
+
+  win.destroy();
+  backend.disconnect();
+}
+
+async function searchFieldInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Search field smoke", width: 220, height: 60 });
+  let query = "Needle";
+  let cleared = 0;
+  win.setContent(() => (
+    <SearchField
+      x={10}
+      y={10}
+      width={200}
+      value={query}
+      onChange={(value) => {
+        query = value;
+      }}
+      onClear={() => {
+        cleared++;
+      }}
+    />
+  ));
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectPointer({
+    type: "down",
+    x: 192,
+    y: 26,
+    button: "left",
+    timeMs: 1,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 192,
+    y: 26,
+    button: "left",
+    timeMs: 2,
+  });
+  assert.equal(query, "", "SearchField clear affordance should clear its value");
+  assert.equal(cleared, 1);
 
   win.destroy();
   backend.disconnect();
@@ -986,9 +1099,11 @@ async function main() {
   process.env.MOIRE_UI_PLATFORM = "headless";
   rendererSmoke();
   buttonRecipeSmoke();
+  textFieldRecipeSmoke();
   collectionRecipeSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
+  await searchFieldInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();
   await interactionOwnershipSmoke();

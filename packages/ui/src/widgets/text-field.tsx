@@ -8,15 +8,28 @@ import {
   type HitKeyEvent,
   type HitPointerEvent,
 } from "@moire/react-host";
-import { themePalette } from "../theme.js";
+import {
+  resolveStatefulStyle,
+  useWidgetTheme,
+  type ButtonSize,
+  type WidgetIconStyle,
+  type WidgetState,
+} from "../widget-theme.js";
+
+export type TextFieldSlot =
+  | ReactNode
+  | ((style: WidgetIconStyle) => ReactNode);
 
 export type TextFieldProps = {
   x?: number;
   y?: number;
   width: number;
   height?: number;
+  size?: ButtonSize;
   value: string;
   placeholder?: string;
+  leading?: TextFieldSlot;
+  trailing?: TextFieldSlot;
   onChange?: (value: string) => void;
   onSubmit?: (value: string) => void;
   onCancel?: () => void;
@@ -31,15 +44,17 @@ export type TextFieldProps = {
   readOnly?: boolean;
 };
 
-const PAD_X = 10;
-const FONT_SIZE = 13;
-
-function cursorFromX(value: string, localX: number): number {
-  const target = Math.max(0, localX - PAD_X);
+function cursorFromX(
+  value: string,
+  localX: number,
+  textX: number,
+  fontSize: number,
+): number {
+  const target = Math.max(0, localX - textX);
   let best = 0;
   let bestDistance = Number.POSITIVE_INFINITY;
   for (let index = 0; index <= value.length; index++) {
-    const x = measureText(value.slice(0, index), FONT_SIZE / 14);
+    const x = measureText(value.slice(0, index), fontSize / 14);
     const distance = Math.abs(x - target);
     if (distance < bestDistance) {
       best = index;
@@ -49,24 +64,69 @@ function cursorFromX(value: string, localX: number): number {
   return best;
 }
 
+function renderSlot(slot: TextFieldSlot, style: WidgetIconStyle): ReactNode {
+  return typeof slot === "function" ? slot(style) : slot;
+}
+
 export function TextField(props: TextFieldProps): ReactNode {
-  const pal = themePalette();
+  const theme = useWidgetTheme();
+  const recipe = theme.recipes.textField[props.size ?? "medium"];
   const generatedId = useId();
-  const h = props.height ?? 32;
+  const height = props.height ?? recipe.metrics.height;
   const [internallyFocused, setInternallyFocused] = useState(false);
   const [cursor, setCursor] = useState(props.value.length);
   const focused = props.focused ?? internallyFocused;
-  const lineH = measureTextBounds("Mg", { fontSize: FONT_SIZE }).height;
+  const states: WidgetState[] = [];
+  if (focused) states.push("focused");
+  if (props.invalid) states.push("invalid");
+  if (props.disabled) states.push("disabled");
+  const root = resolveStatefulStyle(recipe.root, ...states);
+  const textStyle = resolveStatefulStyle(
+    recipe.text,
+    props.disabled ? "disabled" : "rest",
+  );
+  const placeholderStyle = resolveStatefulStyle(
+    recipe.placeholder,
+    props.disabled ? "disabled" : "rest",
+  );
+  const iconStates: WidgetState[] = [];
+  if (focused) iconStates.push("focused");
+  if (props.disabled) iconStates.push("disabled");
+  const leadingStyle = resolveStatefulStyle(
+    recipe.leadingIcon,
+    ...iconStates,
+  );
+  const trailingStyle = resolveStatefulStyle(
+    recipe.trailingIcon,
+    ...iconStates,
+  );
+  const lineHeight = measureTextBounds("Mg", {
+    fontSize: textStyle.fontSize,
+    fontWeight: textStyle.fontWeight,
+  }).height;
+  const leadingWidth = props.leading
+    ? leadingStyle.size + recipe.metrics.slotGap
+    : 0;
+  const trailingWidth = props.trailing
+    ? trailingStyle.size + recipe.metrics.slotGap
+    : 0;
+  const textX = recipe.metrics.paddingX + leadingWidth;
 
   useEffect(() => {
     setCursor((current) => Math.min(current, props.value.length));
   }, [props.value]);
 
-  const available = Math.max(1, props.width - PAD_X * 2);
+  const available = Math.max(
+    1,
+    props.width - textX - trailingWidth - recipe.metrics.paddingX,
+  );
   let visibleStart = 0;
   while (
     visibleStart < cursor &&
-    measureText(props.value.slice(visibleStart, cursor), FONT_SIZE / 14) >
+    measureText(
+      props.value.slice(visibleStart, cursor),
+      textStyle.fontSize / 14,
+    ) >
       available - 2
   ) {
     visibleStart++;
@@ -74,22 +134,19 @@ export function TextField(props: TextFieldProps): ReactNode {
   let visibleValue = props.value.slice(visibleStart);
   while (
     visibleValue.length > 0 &&
-    measureText(visibleValue, FONT_SIZE / 14) > available
+    measureText(visibleValue, textStyle.fontSize / 14) > available
   ) {
     visibleValue = visibleValue.slice(0, -1);
   }
   const shown =
     props.value.length > 0 ? visibleValue : (props.placeholder ?? "");
-  const textColor = props.disabled
-    ? pal.muted
-    : props.value.length > 0
-      ? pal.text
-      : pal.muted;
+  const shownStyle =
+    props.value.length > 0 ? textStyle : placeholderStyle;
   const caretX =
-    PAD_X +
+    textX +
     measureText(
       props.value.slice(visibleStart, cursor),
-      FONT_SIZE / 14,
+      textStyle.fontSize / 14,
     );
 
   const replaceValue = (next: string, nextCursor: number) => {
@@ -152,7 +209,11 @@ export function TextField(props: TextFieldProps): ReactNode {
   };
 
   const handlePress = (event: HitPointerEvent) => {
-    if (!props.disabled) setCursor(cursorFromX(props.value, event.localX));
+    if (!props.disabled) {
+      setCursor(
+        cursorFromX(props.value, event.localX, textX, textStyle.fontSize),
+      );
+    }
   };
 
   return (
@@ -160,18 +221,18 @@ export function TextField(props: TextFieldProps): ReactNode {
       x={props.x ?? 0}
       y={props.y ?? 0}
       width={props.width}
-      height={h}
+      height={height}
       clip
     >
       <Rect
         x={0}
         y={0}
         width={props.width}
-        height={h}
-        fill={pal.surface}
-        radius={pal.radiusSm}
-        stroke={props.invalid ? pal.danger : focused ? pal.focusRing : pal.borderSubtle}
-        strokeWidth={focused ? 2 : 1}
+        height={height}
+        fill={root.fill}
+        radius={root.radius}
+        stroke={root.stroke}
+        strokeWidth={root.strokeWidth}
         focusable={!props.disabled}
         autoFocus={props.autoFocus}
         focusId={`text-field:${generatedId}`}
@@ -183,21 +244,45 @@ export function TextField(props: TextFieldProps): ReactNode {
         onKeyDown={handleKey}
         onPress={handlePress}
       />
+      {props.leading ? (
+        <Group
+          x={recipe.metrics.paddingX}
+          y={Math.floor((height - leadingStyle.size) / 2)}
+          width={leadingStyle.size}
+          height={leadingStyle.size}
+        >
+          {renderSlot(props.leading, leadingStyle)}
+        </Group>
+      ) : null}
       <Text
-        x={PAD_X}
-        y={Math.floor((h - lineH) / 2)}
+        x={textX}
+        y={Math.floor((height - lineHeight) / 2)}
         text={shown}
-        color={textColor}
-        fontSize={FONT_SIZE}
+        color={shownStyle.color}
+        fontSize={shownStyle.fontSize}
+        fontWeight={shownStyle.fontWeight}
       />
       {focused && !props.disabled ? (
         <Rect
-          x={Math.min(props.width - PAD_X, caretX)}
-          y={Math.floor((h - lineH) / 2) - 1}
-          width={1}
-          height={lineH + 2}
-          fill={pal.text}
+          x={Math.min(
+            props.width - recipe.metrics.paddingX - trailingWidth,
+            caretX,
+          )}
+          y={Math.floor((height - lineHeight) / 2) - 1}
+          width={recipe.caret.width}
+          height={lineHeight + 2}
+          fill={recipe.caret.fill}
         />
+      ) : null}
+      {props.trailing ? (
+        <Group
+          x={props.width - recipe.metrics.paddingX - trailingStyle.size}
+          y={Math.floor((height - trailingStyle.size) / 2)}
+          width={trailingStyle.size}
+          height={trailingStyle.size}
+        >
+          {renderSlot(props.trailing, trailingStyle)}
+        </Group>
       ) : null}
     </Group>
   );

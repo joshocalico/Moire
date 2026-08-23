@@ -11,7 +11,7 @@ import {
   ListItem,
   ScrollArea,
   Surface,
-  TextField,
+  SearchField,
 } from "./widgets.js";
 
 export type LauncherProps = {
@@ -132,7 +132,7 @@ export function Launcher(props: LauncherProps): ReactNode {
           fontSize={16}
           fontWeight="medium"
         />
-        <TextField
+        <SearchField
           x={PAD}
           y={SEARCH_Y}
           width={listW}

@@ -16,7 +16,7 @@ import { Button } from "./button.js";
 import { Icon, type IconName } from "./icon.js";
 import { Pressable } from "./pressable.js";
 import { ScrollArea } from "./scroll.js";
-import { TextField } from "./text-field.js";
+import { SearchField } from "./search-field.js";
 import { easeTo, useMotionValue } from "../motion.js";
 
 function LayerSurface(props: {
@@ -536,7 +536,7 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
           color={pal.muted}
           fontSize={12}
         />
-        <TextField
+        <SearchField
           x={20}
           y={88}
           width={width - 40}

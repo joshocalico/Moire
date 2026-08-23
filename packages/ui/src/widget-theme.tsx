@@ -18,6 +18,7 @@ export type WidgetState =
   | "pressed"
   | "focused"
   | "disabled"
+  | "invalid"
   | "selected"
   | "danger";
 
@@ -105,6 +106,20 @@ export type CollectionItemRecipe = {
   outline: StatefulStyle<WidgetBoxStyle>;
 };
 
+export type TextFieldRecipe = {
+  root: StatefulStyle<WidgetBoxStyle>;
+  text: StatefulStyle<WidgetTextStyle>;
+  placeholder: StatefulStyle<WidgetTextStyle>;
+  leadingIcon: StatefulStyle<WidgetIconStyle>;
+  trailingIcon: StatefulStyle<WidgetIconStyle>;
+  caret: { fill: number; width: number };
+  metrics: {
+    height: number;
+    paddingX: number;
+    slotGap: number;
+  };
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -137,6 +152,7 @@ export type WidgetTheme = {
     listItem: Record<ButtonSize, ListItemRecipe>;
     gridItem: Record<ButtonSize, GridItemRecipe>;
     collectionItem: CollectionItemRecipe;
+    textField: Record<ButtonSize, TextFieldRecipe>;
   };
 };
 
@@ -444,6 +460,72 @@ function collectionItemRecipe(palette: ThemePalette): CollectionItemRecipe {
   };
 }
 
+function textFieldRecipe(
+  size: ButtonSize,
+  palette: ThemePalette,
+): TextFieldRecipe {
+  const metrics = {
+    small: { height: 28, paddingX: 8, slotGap: 6, fontSize: 12, iconSize: 14 },
+    medium: { height: 32, paddingX: 10, slotGap: 8, fontSize: 13, iconSize: 16 },
+    large: { height: 40, paddingX: 12, slotGap: 8, fontSize: 14, iconSize: 18 },
+  }[size];
+  const disabledText = { disabled: { color: palette.muted } };
+  return {
+    root: {
+      base: {
+        fill: palette.surface,
+        radius: palette.radiusSm,
+        stroke: palette.borderSubtle,
+        strokeWidth: 1,
+      },
+      states: {
+        focused: { stroke: palette.focusRing, strokeWidth: 2 },
+        invalid: { stroke: palette.danger },
+        disabled: {
+          fill: withAlpha(palette.surface, 0x80),
+          stroke: withAlpha(palette.borderSubtle, 0x80),
+        },
+      },
+    },
+    text: {
+      base: {
+        color: palette.text,
+        fontSize: metrics.fontSize,
+        fontWeight: "regular",
+      },
+      states: disabledText,
+    },
+    placeholder: {
+      base: {
+        color: palette.muted,
+        fontSize: metrics.fontSize,
+        fontWeight: "regular",
+      },
+      states: disabledText,
+    },
+    leadingIcon: {
+      base: { color: palette.muted, size: metrics.iconSize },
+      states: {
+        focused: { color: palette.accent },
+        disabled: { color: palette.muted },
+      },
+    },
+    trailingIcon: {
+      base: { color: palette.muted, size: metrics.iconSize },
+      states: {
+        focused: { color: palette.text },
+        disabled: { color: palette.muted },
+      },
+    },
+    caret: { fill: palette.text, width: 1 },
+    metrics: {
+      height: metrics.height,
+      paddingX: metrics.paddingX,
+      slotGap: metrics.slotGap,
+    },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -465,6 +547,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   const iconButton = {} as WidgetTheme["recipes"]["iconButton"];
   const listItem = {} as WidgetTheme["recipes"]["listItem"];
   const gridItem = {} as WidgetTheme["recipes"]["gridItem"];
+  const textField = {} as WidgetTheme["recipes"]["textField"];
   for (const variant of variants) {
     button[variant] = {} as Record<ButtonSize, ButtonRecipe>;
     for (const size of sizes) {
@@ -480,6 +563,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   for (const size of sizes) {
     listItem[size] = listItemRecipe(size, palette);
     gridItem[size] = gridItemRecipe(size, palette);
+    textField[size] = textFieldRecipe(size, palette);
   }
   return {
     name: `${theme.name}-widgets`,
@@ -511,6 +595,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       listItem,
       gridItem,
       collectionItem: collectionItemRecipe(palette),
+      textField,
     },
   };
 }

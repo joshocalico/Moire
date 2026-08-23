@@ -251,11 +251,15 @@ Recipes are plain data and remain renderer-neutral.
 
 The first vertical slices are active. `WidgetThemeProvider` supplies foundation
 color/type/space/radius/motion/elevation data plus recipe matrices for Button,
-IconButton, ListItem, GridItem, and semantic CollectionItem outlines. Buttons
+IconButton, ListItem, GridItem, TextField, and semantic CollectionItem
+outlines. Buttons
 consume root, label/icon, metrics, rim, and named artwork-slot styles from that
 context. List and grid cells keep persistent selection/drop layers separate
 from animated hover/press feedback; focus/drag outlines remain owned by the
 headless CollectionItem behavior but resolve their paint through the theme.
+TextField resolves root, typography, caret, metrics, validation/focus state,
+and leading/trailing slots from the same context; SearchField composes those
+slots without duplicating editing behavior.
 Explicit legacy colors remain compatibility escape hatches. Headless
 conformance cases prove a subtree recipe can materially change each rendered
 control without a component fork.
@@ -272,9 +276,10 @@ control without a component fork.
 Button exposes leading/trailing artwork slots, IconButton exposes one centered
 artwork slot, and ListItem exposes a recipe-sized leading slot. Slot callbacks
 receive semantic icon style data while callers remain free to replace the
-renderer-neutral subtree. Button, IconButton, Pressable, List/ListItem,
-Grid/GridItem, and CollectionItem use JSX; the remaining monolithic widget
-module is next in the presentation migration.
+renderer-neutral subtree. Button, IconButton, Pressable, Icon,
+TextField/SearchField, List/ListItem, Grid/GridItem, and CollectionItem use
+JSX; the remaining monolithic widget module is next in the presentation
+migration.
 
 ### W3 — primitive completeness
 

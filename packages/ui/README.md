@@ -78,6 +78,9 @@ selection, interaction feedback, typography, leading artwork, metrics, and the
 selection indicator. GridItem recipes own selection/drop surfaces, interaction,
 label/scrim treatment, and icon metrics. CollectionItem keeps focus, activation,
 context-menu, and drag semantics headless while its focus/drop outline is
-recipe-painted. Software and EGL consume the same resulting scene.
+recipe-painted. TextField recipes own input surfaces, state strokes,
+typography, caret, metrics, and named leading/trailing slots; SearchField is a
+composition of those primitives with reusable search and clear affordances.
+Software and EGL consume the same resulting scene.
 
 Hard rule: `widgets/`, `font/`, `layout/` never import Wayland/koffi.

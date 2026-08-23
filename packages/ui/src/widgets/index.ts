@@ -68,6 +68,7 @@ export type {
   ListItemRecipe,
   GridItemRecipe,
   CollectionItemRecipe,
+  TextFieldRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";
@@ -107,7 +108,10 @@ export { Tabs } from "./tabs.js";
 export type { TabsProps } from "./tabs.js";
 
 export { TextField } from "./text-field.js";
-export type { TextFieldProps } from "./text-field.js";
+export type { TextFieldProps, TextFieldSlot } from "./text-field.js";
+
+export { SearchField } from "./search-field.js";
+export type { SearchFieldProps } from "./search-field.js";
 
 export { Breadcrumbs, PathBar } from "./breadcrumbs.js";
 export type {

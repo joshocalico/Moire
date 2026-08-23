@@ -129,7 +129,9 @@ text, Left/Right, Home/End, Backspace/Delete, Enter, and Escape.
 | --- | --- | --- |
 | `width` | `number` | required |
 | `value` | `string` | required |
+| `size` | `small \| medium \| large` | `medium` |
 | `placeholder` | `string` | |
+| `leading`, `trailing` | node or styled slot callback | |
 | `onChange` | `(value: string) => void` | |
 | `onSubmit` | `(value: string) => void` | |
 | `onCancel` | `() => void` | |
@@ -138,6 +140,11 @@ text, Left/Right, Home/End, Backspace/Delete, Enter, and Escape.
 | `autoFocus` | `boolean` | focus once when mounted |
 | `invalid` | `boolean` | danger validation stroke |
 | `disabled`, `readOnly` | `boolean` | |
+
+`SearchField` composes the same editor with theme-sized search and clear
+slots. It preserves the `TextField` keyboard/focus contract, clears through
+`onChange("")`, and can additionally report `onClear`. Launch and Open With use
+this shared control rather than maintaining local search-field paint.
 
 ### `Breadcrumbs` / `PathBar`
 
