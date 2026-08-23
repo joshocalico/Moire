@@ -201,8 +201,10 @@ and Files persistence remain application concerns.
 The Open With picker now provides search, Up/Down/Enter/Escape keyboard
 navigation, Recommended and Other Applications sections, standard
 freedesktop PNG icons with a fallback, explicit default state and assignment,
-scrolling, and useful empty/search states. Theme-inherited SVG icon support,
-launch failure feedback, and a route to manage file associations remain.
+scrolling, and useful empty/search states. The shared `Icon` now accepts
+runtime-rasterized symbolic SVG paths; full
+freedesktop theme inheritance, launch failure feedback, and a route to manage
+file associations remain.
 
 The context-action contract should grow from the process-local baseline into a
 versioned plugin host. Context must distinguish selected items, current folder,
@@ -236,10 +238,11 @@ actions/drags. It should additionally support:
 
 ## Widget library roadmap
 
-Layout follow-up: let flex containers consume a widget's resolved intrinsic
-size (not only explicit element props), so composed custom widgets such as an
-icon-only `IconButton` can participate in `Row`/`Column` without restating
-their recipe dimensions at each call site.
+Layout allocation is now published from Yoga through `Measure` and
+`useLayoutMetrics`, with application-oriented `Horizontal`/`Vertical` flows
+and a measured overlay `Stack`. Components no longer need parent arithmetic to
+consume flexible space. A future ergonomic layer may still register intrinsic
+recipe sizes automatically when a direct child omits all size/flex props.
 
 Once this widget list is exhausted, migrate the compositor-owned desktop icon
 presentation into standard persistent React state/components. The compositor
