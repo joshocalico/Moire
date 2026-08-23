@@ -69,6 +69,7 @@ export type {
   GridItemRecipe,
   CollectionItemRecipe,
   TextFieldRecipe,
+  TabsRecipe,
 } from "../widget-theme.js";
 
 export { ScrollArea } from "./scroll.js";
@@ -105,7 +106,7 @@ export type {
 } from "./interaction.js";
 
 export { Tabs } from "./tabs.js";
-export type { TabsProps } from "./tabs.js";
+export type { TabsProps, TabItem, TabSlot } from "./tabs.js";
 
 export { TextField } from "./text-field.js";
 export type { TextFieldProps, TextFieldSlot } from "./text-field.js";

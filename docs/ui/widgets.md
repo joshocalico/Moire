@@ -169,9 +169,15 @@ Edit action and swaps to an autofocus `TextField`; Enter validates through
 | `tabs` | `string[]` | required |
 | `active` | `number` | required |
 | `onChange` | `(index) => void` | |
-| `height` | `number` | `32` |
+| `height` | `number` | selected recipe height |
+| `size` | `small \| medium \| large` | `medium` |
+| `disabled` | `boolean` | `false` |
 
-Active tab: accent underline (not a full teal slab).
+Each entry may remain a string or use `{ id, label, leading?, disabled? }` for
+stable identity, a theme-sized artwork slot, and per-tab availability. Active
+tabs use an accent underline rather than a full slab. Tabs are focusable and
+support Left/Right/Home/End navigation, skipping disabled entries, plus
+Enter/Space activation.
 
 ### `Dialog` / `Menu` / `MenuItem`
 

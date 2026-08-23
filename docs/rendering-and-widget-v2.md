@@ -251,7 +251,7 @@ Recipes are plain data and remain renderer-neutral.
 
 The first vertical slices are active. `WidgetThemeProvider` supplies foundation
 color/type/space/radius/motion/elevation data plus recipe matrices for Button,
-IconButton, ListItem, GridItem, TextField, and semantic CollectionItem
+IconButton, ListItem, GridItem, TextField, Tabs, and semantic CollectionItem
 outlines. Buttons
 consume root, label/icon, metrics, rim, and named artwork-slot styles from that
 context. List and grid cells keep persistent selection/drop layers separate
@@ -277,8 +277,8 @@ Button exposes leading/trailing artwork slots, IconButton exposes one centered
 artwork slot, and ListItem exposes a recipe-sized leading slot. Slot callbacks
 receive semantic icon style data while callers remain free to replace the
 renderer-neutral subtree. Button, IconButton, Pressable, Icon,
-TextField/SearchField, List/ListItem, Grid/GridItem, and CollectionItem use
-JSX; the remaining monolithic widget module is next in the presentation
+TextField/SearchField, Tabs, List/ListItem, Grid/GridItem, and CollectionItem
+use JSX; the remaining monolithic widget module is next in the presentation
 migration.
 
 ### W3 — primitive completeness

@@ -81,6 +81,9 @@ context-menu, and drag semantics headless while its focus/drop outline is
 recipe-painted. TextField recipes own input surfaces, state strokes,
 typography, caret, metrics, and named leading/trailing slots; SearchField is a
 composition of those primitives with reusable search and clear affordances.
+Tabs recipes own the strip, interaction/focus states, typography, optional
+artwork, indicator, divider, and size metrics while the widget retains keyboard
+selection semantics.
 Software and EGL consume the same resulting scene.
 
 Hard rule: `widgets/`, `font/`, `layout/` never import Wayland/koffi.

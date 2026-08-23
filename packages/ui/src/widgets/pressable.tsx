@@ -2,7 +2,12 @@
  * Pressable — interactive container with eased hover/press fill motion.
  */
 import React, { useRef, type ReactNode } from "react";
-import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
+import {
+  Group,
+  Rect,
+  type HitKeyEvent,
+  type HitPointerEvent,
+} from "@moire/react-host";
 import { easeTo, useMotionValue } from "../motion.js";
 import { useWidgetTheme } from "../widget-theme.js";
 
@@ -25,6 +30,11 @@ export type PressableProps = {
   onDoublePress?: () => void;
   onContextMenu?: (event: HitPointerEvent) => void;
   disabled?: boolean;
+  focusable?: boolean;
+  autoFocus?: boolean;
+  focusId?: string;
+  onFocusChange?: (focused: boolean) => void;
+  onKeyDown?: (event: HitKeyEvent) => void;
 };
 
 function lerpChannel(a: number, b: number, t: number): number {
@@ -131,6 +141,11 @@ export function Pressable(props: PressableProps): ReactNode {
         }
         onPress={props.disabled ? undefined : handlePress}
         onContextMenu={props.disabled ? undefined : props.onContextMenu}
+        focusable={!props.disabled && props.focusable}
+        autoFocus={props.autoFocus}
+        focusId={props.focusId}
+        onFocusChange={props.onFocusChange}
+        onKeyDown={props.disabled ? undefined : props.onKeyDown}
       />
       {props.indicatorColor != null && !props.disabled ? (
         <Rect

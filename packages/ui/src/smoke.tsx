@@ -34,6 +34,7 @@ import {
   GridItem,
   TextField,
   SearchField,
+  Tabs,
   PathBar,
   CollectionItem,
   ContextMenuTrigger,
@@ -241,6 +242,66 @@ function textFieldRecipeSmoke(): void {
     "TextField should take its implicit height from the selected recipe",
   );
   assert.equal(leadingSize, medium.leadingIcon.base.size);
+}
+
+function tabsRecipeSmoke(): void {
+  const theme = createWidgetTheme();
+  const medium = theme.recipes.tabs.medium;
+  const rootFill = 0xff2d2946;
+  const indicatorFill = 0xffffb347;
+  const customTheme = {
+    ...theme,
+    name: "tabs-recipe-smoke",
+    recipes: {
+      ...theme.recipes,
+      tabs: {
+        ...theme.recipes.tabs,
+        medium: {
+          ...medium,
+          root: { ...medium.root, fill: rootFill, radius: 0 },
+          indicator: { ...medium.indicator, fill: indicatorFill, radius: 0 },
+          metrics: {
+            ...medium.metrics,
+            height: 38,
+            indicatorHeight: 3,
+          },
+        },
+      },
+    },
+  };
+  let slotSize = 0;
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <WidgetThemeProvider theme={customTheme}>
+      <Tabs
+        x={2}
+        y={2}
+        width={120}
+        tabs={[
+          {
+            id: "one",
+            label: "One",
+            leading: (style) => {
+              slotSize = style.size;
+              return <Rect width={style.size} height={style.size} fill={style.color} />;
+            },
+          },
+          { id: "two", label: "Two" },
+        ]}
+        active={0}
+      />
+    </WidgetThemeProvider>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 126,
+    height: 44,
+  });
+  const words = new Uint32Array(frame.pixels.buffer);
+  assert.equal(words[4 * frame.width + 4], rootFill);
+  assert.equal(words[38 * frame.width + 20], indicatorFill);
+  assert.equal(words[41 * frame.width + 4], 0);
+  assert.equal(slotSize, medium.icon.base.size);
 }
 
 function collectionRecipeSmoke(): void {
@@ -564,6 +625,77 @@ async function searchFieldInteractionSmoke(): Promise<void> {
   });
   assert.equal(query, "", "SearchField clear affordance should clear its value");
   assert.equal(cleared, 1);
+
+  win.destroy();
+  backend.disconnect();
+}
+
+async function tabsInteractionSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Tabs smoke", width: 240, height: 60 });
+  let active = 0;
+  win.setContent(
+    <Tabs
+      x={10}
+      y={10}
+      width={220}
+      tabs={[
+        { id: "first", label: "First" },
+        { id: "disabled", label: "Disabled", disabled: true },
+        { id: "third", label: "Third" },
+      ]}
+      active={active}
+      onChange={(index) => {
+        active = index;
+      }}
+    />,
+  );
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectPointer({
+    type: "down",
+    x: 46,
+    y: 25,
+    button: "left",
+    timeMs: 1,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 46,
+    y: 25,
+    button: "left",
+    timeMs: 2,
+  });
+  assert.equal(active, 0);
+  platformWindow.injectKey({
+    type: "down",
+    code: 106,
+    key: "ArrowRight",
+    modifiers: NO_MODIFIERS,
+    timeMs: 3,
+  });
+  assert.equal(active, 2, "Tabs arrow navigation should skip disabled items");
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 120,
+    y: 25,
+    button: "left",
+    timeMs: 4,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 120,
+    y: 25,
+    button: "left",
+    timeMs: 5,
+  });
+  assert.equal(active, 2, "Disabled tabs should not activate");
 
   win.destroy();
   backend.disconnect();
@@ -1100,10 +1232,12 @@ async function main() {
   rendererSmoke();
   buttonRecipeSmoke();
   textFieldRecipeSmoke();
+  tabsRecipeSmoke();
   collectionRecipeSmoke();
   await collectionFocusRecipeSmoke();
   await textFieldInteractionSmoke();
   await searchFieldInteractionSmoke();
+  await tabsInteractionSmoke();
   await pathBarInteractionSmoke();
   await openWithPickerInteractionSmoke();
   await interactionOwnershipSmoke();

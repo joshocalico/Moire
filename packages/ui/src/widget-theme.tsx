@@ -120,6 +120,22 @@ export type TextFieldRecipe = {
   };
 };
 
+export type TabsRecipe = {
+  root: WidgetBoxStyle;
+  tab: StatefulStyle<WidgetBoxStyle>;
+  label: StatefulStyle<WidgetTextStyle>;
+  icon: StatefulStyle<WidgetIconStyle>;
+  indicator: WidgetBoxStyle;
+  divider: { fill: number; height: number };
+  metrics: {
+    height: number;
+    paddingX: number;
+    gap: number;
+    indicatorHeight: number;
+    indicatorInsetX: number;
+  };
+};
+
 export type WidgetFoundations = {
   palette: ThemePalette;
   type: typeof TYPE_ROLES;
@@ -153,6 +169,7 @@ export type WidgetTheme = {
     gridItem: Record<ButtonSize, GridItemRecipe>;
     collectionItem: CollectionItemRecipe;
     textField: Record<ButtonSize, TextFieldRecipe>;
+    tabs: Record<ButtonSize, TabsRecipe>;
   };
 };
 
@@ -526,6 +543,80 @@ function textFieldRecipe(
   };
 }
 
+function tabsRecipe(size: ButtonSize, palette: ThemePalette): TabsRecipe {
+  const metrics = {
+    small: {
+      height: 28,
+      paddingX: 8,
+      gap: 6,
+      fontSize: 12,
+      iconSize: 14,
+      indicatorHeight: 2,
+      indicatorInsetX: 8,
+    },
+    medium: {
+      height: 34,
+      paddingX: 10,
+      gap: 8,
+      fontSize: 13,
+      iconSize: 16,
+      indicatorHeight: 2,
+      indicatorInsetX: 10,
+    },
+    large: {
+      height: 40,
+      paddingX: 12,
+      gap: 8,
+      fontSize: 14,
+      iconSize: 18,
+      indicatorHeight: 3,
+      indicatorInsetX: 12,
+    },
+  }[size];
+  return {
+    root: { fill: palette.surface, radius: palette.radiusSm },
+    tab: {
+      base: { fill: 0x00000000, radius: palette.radiusSm },
+      states: {
+        hover: { fill: withAlpha(palette.hover, 0xb0) },
+        pressed: { fill: withAlpha(palette.pressed, 0xd0) },
+        focused: { stroke: palette.focusRing, strokeWidth: 1 },
+        disabled: { fill: 0x00000000, stroke: undefined, strokeWidth: 0 },
+      },
+    },
+    label: {
+      base: {
+        color: palette.muted,
+        fontSize: metrics.fontSize,
+        fontWeight: "regular",
+      },
+      states: {
+        selected: { color: palette.accent, fontWeight: "medium" },
+        disabled: { color: withAlpha(palette.muted, 0x80) },
+      },
+    },
+    icon: {
+      base: { color: palette.muted, size: metrics.iconSize },
+      states: {
+        selected: { color: palette.accent },
+        disabled: { color: withAlpha(palette.muted, 0x80) },
+      },
+    },
+    indicator: {
+      fill: palette.accentLine,
+      radius: Math.ceil(metrics.indicatorHeight / 2),
+    },
+    divider: { fill: palette.border, height: 1 },
+    metrics: {
+      height: metrics.height,
+      paddingX: metrics.paddingX,
+      gap: metrics.gap,
+      indicatorHeight: metrics.indicatorHeight,
+      indicatorInsetX: metrics.indicatorInsetX,
+    },
+  };
+}
+
 export function resolveStatefulStyle<T extends object>(
   style: StatefulStyle<T>,
   ...states: WidgetState[]
@@ -548,6 +639,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   const listItem = {} as WidgetTheme["recipes"]["listItem"];
   const gridItem = {} as WidgetTheme["recipes"]["gridItem"];
   const textField = {} as WidgetTheme["recipes"]["textField"];
+  const tabs = {} as WidgetTheme["recipes"]["tabs"];
   for (const variant of variants) {
     button[variant] = {} as Record<ButtonSize, ButtonRecipe>;
     for (const size of sizes) {
@@ -564,6 +656,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
     listItem[size] = listItemRecipe(size, palette);
     gridItem[size] = gridItemRecipe(size, palette);
     textField[size] = textFieldRecipe(size, palette);
+    tabs[size] = tabsRecipe(size, palette);
   }
   return {
     name: `${theme.name}-widgets`,
@@ -596,6 +689,7 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
       gridItem,
       collectionItem: collectionItemRecipe(palette),
       textField,
+      tabs,
     },
   };
 }
