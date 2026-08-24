@@ -19,6 +19,8 @@ export class Application {
   private windows: Window[] = [];
   private running = false;
   private readonly platformKind: "wayland" | "headless";
+  private wakePending = true;
+  private wakeResolver: (() => void) | null = null;
 
   constructor(opts: ApplicationOpts = {}) {
     this.platformKind = opts.platform ?? resolvePlatformKind();
@@ -26,6 +28,7 @@ export class Application {
 
   addWindow(win: Window): void {
     this.windows.push(win);
+    win.onInvalidated(() => this.wake());
   }
 
   async run(): Promise<void> {
@@ -57,7 +60,10 @@ export class Application {
         this.quit();
         break;
       }
-      await sleep(8);
+      // Native input, frame callbacks, React commits and timers wake this
+      // loop directly. The timeout is only a liveness fallback for future
+      // backends, not the animation clock.
+      await this.waitForWake(1_000);
     }
 
     for (const w of this.windows) w.destroy();
@@ -67,9 +73,35 @@ export class Application {
 
   quit(): void {
     this.running = false;
+    this.wake();
   }
-}
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  private wake(): void {
+    if (this.wakeResolver) {
+      const resolve = this.wakeResolver;
+      this.wakeResolver = null;
+      resolve();
+      return;
+    }
+    this.wakePending = true;
+  }
+
+  private waitForWake(timeoutMs: number): Promise<void> {
+    if (this.wakePending) {
+      this.wakePending = false;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.wakeResolver === finish) this.wakeResolver = null;
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      this.wakeResolver = finish;
+    });
+  }
 }

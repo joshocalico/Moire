@@ -145,8 +145,12 @@ export function copyFromDmabuf(
   return { pixels, stride: plane.stride };
 }
 
-export function closeDmabufPlanes(planes: DmabufPlane[]): void {
+export function closeDmabufPlanes(
+  planes: DmabufPlane[],
+  gbm?: GbmDevice | null,
+): void {
   for (const p of planes) {
+    gbm?.releaseImport(p.fd);
     try {
       closeFd(p.fd);
     } catch {

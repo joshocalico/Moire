@@ -18,6 +18,31 @@ importers:
         specifier: ^3.2.1
         version: 3.2.1
 
+  apps/benchmark:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../packages/prefs
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   apps/compositor:
     dependencies:
       '@moire/app-discovery':
@@ -29,12 +54,12 @@ importers:
       '@moire/dbus':
         specifier: workspace:*
         version: link:../../packages/dbus
-      '@moire/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
       '@moire/prefs':
         specifier: workspace:*
         version: link:../../packages/prefs
+      '@moire/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@moire/shell':
         specifier: workspace:*
         version: link:../../packages/shell
@@ -207,18 +232,6 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/dbus:
-    devDependencies:
-      '@types/node':
-        specifier: ^22.10.0
-        version: 22.20.1
-      tsx:
-        specifier: ^4.19.2
-        version: 4.23.0
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-
   packages/core:
     dependencies:
       '@moire/prefs':
@@ -243,6 +256,18 @@ importers:
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/dbus:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

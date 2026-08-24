@@ -145,6 +145,50 @@ export type PlatformPopupOpts = {
   grab?: boolean;
 };
 
+export type UiPresentationMode = "auto" | "egl" | "shm";
+
+export type UiFrameEvent =
+  | {
+      type: "submitted";
+      commitId: number;
+      transport: "dmabuf" | "shm" | "headless";
+      submittedAtMs: number;
+      copyMs: number;
+      damagedPixels: number;
+      totalPixels: number;
+    }
+  | {
+      type: "compositor-frame";
+      commitId: number;
+      timestampMs: number;
+      receivedAtMs: number;
+      /** A newer draw was coalesced behind this frame callback. */
+      retrySuggested?: boolean;
+    }
+  | {
+      type: "presented";
+      commitId: number;
+      timestampNs: bigint;
+      refreshNs: number;
+      sequence: bigint;
+      flags: number;
+      receivedAtMs: number;
+    }
+  | {
+      type: "discarded";
+      commitId: number;
+      receivedAtMs: number;
+    }
+  | {
+      type: "buffer-release";
+      commitId: number;
+      transport: "dmabuf" | "shm";
+      latencyMs: number;
+      receivedAtMs: number;
+      /** A retained frame was deferred until this transport slot reopened. */
+      retrySuggested?: boolean;
+    };
+
 export interface PlatformWindow {
   setTitle(title: string): void;
   setSize(w: number, h: number): void;
@@ -154,10 +198,13 @@ export interface PlatformWindow {
   present(pixels: Uint8Array, width: number, height: number): void;
   /** Consume a renderer-neutral retained scene when acceleration is active. */
   presentScene?(scene: RetainedSceneFrame): boolean;
+  /** Select this window's backing transport without changing renderer APIs. */
+  setPresentationMode(mode: UiPresentationMode): void;
   onConfigure(cb: (w: number, h: number) => void): void;
   onClose(cb: () => void): void;
   onPointer(cb: (ev: UiPointerEvent) => void): void;
   onKey(cb: (ev: UiKeyEvent) => void): void;
+  onFrame(cb: (ev: UiFrameEvent) => void): void;
   destroy(): void;
 }
 
@@ -167,9 +214,33 @@ export interface PlatformBackend {
   createWindow(opts: PlatformWindowOpts): PlatformWindow;
   /** Optional native popup surface (xdg_popup on Wayland). */
   createPopup?(opts: PlatformPopupOpts): PlatformWindow;
+  /** Runtime facts from the backend actually serving this application. */
+  getDiagnostics(): PlatformDiagnostics;
   pump(): void;
   disconnect(): void;
 }
+
+export type PlatformDiagnostics = {
+  platform: string;
+  displayServer: string;
+  transport: string;
+  presentation: "retained-egl-dmabuf" | "software-egl-dmabuf" | "software-shm" | "headless";
+  requestedAcceleration: string;
+  accelerated: boolean;
+  display?: string;
+  renderNode?: string;
+  eglVendor?: string;
+  eglVersion?: string;
+  glVendor?: string;
+  glRenderer?: string;
+  glVersion?: string;
+  fallbackReason?: string;
+  capabilities: readonly string[];
+  retainedFrames: number;
+  softwareFrames: number;
+  dmabufFrames: number;
+  shmFrames: number;
+};
 
 /** A single item in a drag-and-drop transfer. */
 export type UiDataTransferItem = {

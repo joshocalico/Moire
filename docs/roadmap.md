@@ -4,13 +4,18 @@ Status of the Moire desktop relative to day-0 and near-term work. Dates are not 
 
 ## Shipped (post-`v0.2.0`)
 
+Moire Bench exposes the active client presentation path, GL/EGL identity,
+client/compositor CPU, frame-callback and presentation-time telemetry, SHM
+copy/release costs, advertised Wayland globals, and a repeatable
+retained-scene workload from a native Moire application.
+
 Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper expansion.
 
 | Area | Status |
 | --- | --- |
 | Wayland compositor + SSD | Shipped — stack compositing, server decorations |
 | Session (`moire-session`) | Shipped — D-Bus, native Terminal, Files; Files registered for `inode/directory`; no Nautilus |
-| `@moire/ui` toolkit | Shipped — measured border-box flow/stack layout, split panes, duration tweens, controls, virtualized list/table/tree, property lists, pagination, runtime SVG symbolic icons, DnD, and feedback |
+| `@moire/ui` toolkit | Shipped — measured border-box flow/stack layout, split panes, duration tweens, controls, virtualized list/table/tree, charts, property lists, pagination, runtime SVG symbolic icons, DnD, and feedback |
 | Theme tokens + atmosphere wallpaper | Shipped — cached paint, ambient drift, prefs override |
 | Settings (Appearance / Sound) | Shipped — live `applySettings`, wallpaper presets |
 | Moire Files | Shipped — richer navigation/selection hierarchy, grid/list, Open With, context actions, Wayland DnD |

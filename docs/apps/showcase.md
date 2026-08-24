@@ -37,6 +37,8 @@ top-layer menus; the focus sample verifies trapped traversal and declarative
 shortcuts; the overlay sample exercises sheets, confirmation, toast lifetime,
 modality, and Escape dismissal. The layout/motion sample demonstrates
 `Horizontal`/`Vertical` flow, content `Inset`, allocated-size `Measure`, overlay
-`Stack`, and duration/easing `Tween`. Each public sample has a matching prop table in
+`Stack`, and duration/easing `Tween`. The chart gallery compares interactive
+line, area, grouped and stacked bars, scatter, donut, radial, sparkline, and
+heatmap compositions under the same palette and data model. Each public sample has a matching prop table in
 [`ui/widgets.md`](../ui/widgets.md); the Code tab is illustrative usage rather
 than a substitute for that API reference.

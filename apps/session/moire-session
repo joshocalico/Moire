@@ -76,6 +76,9 @@ session_inner() {
   ln -sfn "$ROOT/apps/showcase/moire-showcase" "$HOME/.local/bin/moire-showcase"
   cp "$ROOT/apps/showcase/moire-showcase.desktop" \
     "$data_home/applications/moire-showcase.desktop"
+  ln -sfn "$ROOT/apps/benchmark/moire-benchmark" "$HOME/.local/bin/moire-benchmark"
+  cp "$ROOT/apps/benchmark/moire-benchmark.desktop" \
+    "$data_home/applications/moire-benchmark.desktop"
   ln -sfn "$ROOT/apps/terminal/moire-terminal" "$HOME/.local/bin/moire-terminal"
   cp "$ROOT/apps/terminal/moire-terminal.desktop" \
     "$data_home/applications/moire-terminal.desktop"

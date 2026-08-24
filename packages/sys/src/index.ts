@@ -31,6 +31,7 @@ export {
   type KmsMode,
   type KmsOutputRefresh,
   type KmsCursorImage,
+  type KmsPresentationFeedback,
   type Rgba,
 } from "./kms.js";
 export {

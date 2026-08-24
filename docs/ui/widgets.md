@@ -216,12 +216,13 @@ Filled background. `Panel` defaults fill to `pal.surface`; `Surface` to `pal.pan
 | Prop | Type | Default |
 | --- | --- | --- |
 | `x`, `y` | `number` | `0` |
+| `translateX`, `translateY` | `number \| AnimationValue` | `0` |
 | `width` | `number` | required |
 | `height` | `number` | required |
 | `fill` | `number` | theme |
 | `radius`, `stroke`, `strokeWidth` | `number` | optional |
 | `elevation` | `none` \| `low` \| `medium` \| `high` | `none` |
-| `opacity` | `number` | `1` |
+| `opacity` | `number \| AnimationValue` | `1` |
 | `clip` | `boolean` | `false` |
 | `onPress` | `() => void` | |
 | `children` | `ReactNode` | |
@@ -1058,13 +1059,217 @@ default-assignment callbacks.
 
 ---
 
+## Data visualization
+
+The chart family shares `ChartSeries` (`id`, optional `label`/`color`, and
+`points`) and `ChartPoint` (`x`, `y`, optional `label`). Series colors fall back
+to the active widget palette. Cartesian charts share axes, grid, legend,
+nearest-point hover feedback, crosshair, and value formatting.
+
+### `LineChart` / `AreaChart` / `ScatterChart`
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `width`, `height` | `number` | required |
+| `series` | `readonly ChartSeries[]` | required |
+| `showAxes`, `showGrid` | `boolean` | `true` |
+| `showLegend` | `boolean` | series count greater than one |
+| `interactive` | `boolean` | `true` |
+| `yMin`, `yMax` | `number` | inferred from finite values |
+| `formatValue` | `(value: number) => string` | compact numeric format |
+| `onHover` | `(hover: ChartHover \| null) => void` | optional |
+| `lineWidth` | `number` | `2` (`LineChart`, `AreaChart`) |
+| `showPoints` | `boolean` | `true` (`LineChart`, `AreaChart`) |
+| `fillOpacity` | `number` | `0.22` (`AreaChart`) |
+| `pointRadius` | `number` | `4` (`ScatterChart`) |
+
+Use line charts for ordered change, area when magnitude and trend both matter,
+and scatter when each observation's relationship or outlier status matters.
+
+```tsx
+<LineChart
+  width={720}
+  height={260}
+  series={[{
+    id: "cpu",
+    label: "CPU",
+    points: samples.map((y, x) => ({ x, y })),
+  }]}
+  formatValue={(value) => `${value.toFixed(1)}%`}
+/>
+```
+
+### `BarChart` / `StackedBarChart`
+
+These accept the shared Cartesian props plus `barRadius?: number` (default
+`3`). `BarChart` places peer series beside one another. `StackedBarChart`
+accumulates non-negative values in each category.
+
+Use grouped bars for direct peer comparison and stacked bars when both the
+whole and its contribution breakdown matter. Avoid stacking when precise
+comparison between interior segments is the primary question.
+
+### `Sparkline`
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `width`, `height` | `number` | required |
+| `values` | `readonly number[]` | required |
+| `color` | `ARGB number` | theme accent |
+| `fill` | `boolean` | `false` |
+| `lineWidth` | `number` | `2` |
+
+Sparklines intentionally omit axes, legends, and interaction. Use them beside
+a primary metric where the surrounding text supplies scale and meaning.
+
+### `DonutChart`
+
+`DonutDatum` has `id`, `label`, `value`, and optional `color`.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `width`, `height` | `number` | required |
+| `data` | `readonly DonutDatum[]` | required |
+| `innerRadius` | ratio `0…0.9` | `0.58` |
+| `showLegend` | `boolean` | `true` |
+| `formatValue` | `(value: number) => string` | compact numeric format |
+
+Use for a small composition with a meaningful total. Prefer bars when there
+are many slices or small differences must be compared precisely.
+
+### `RadialChart`
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `width`, `height` | `number` | required |
+| `value` | `number` | required |
+| `max` | `number` | `1` |
+| `label` | `string` | optional |
+| `color`, `trackColor` | `ARGB number` | theme accent / border |
+| `thickness` | `number` | proportional |
+| `formatValue` | `(value, max) => string` | percentage |
+
+Use for one bounded progress, utilization, or score value—not a time series or
+multi-metric comparison.
+
+### `HeatmapChart`
+
+`HeatmapCell` has `row`, `column`, and numeric `value`.
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `width`, `height` | `number` | required |
+| `cells` | `readonly HeatmapCell[]` | required |
+| `min`, `max` | `number` | inferred |
+| `lowColor`, `highColor` | `ARGB number` | surface / accent |
+| `showLabels` | `boolean` | `true` |
+| `formatValue` | `(value: number) => string` | compact numeric format |
+
+Use when two categorical dimensions define a matrix and color intensity makes
+clusters, gaps, or periodic patterns easier to see.
+
+### `ChartLegend`
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `width` | `number` | required |
+| `series` | `readonly Pick<ChartSeries, "id" \| "label" \| "color">[]` | required |
+| `x`, `y` | `number` | `0` |
+
+The standalone legend is useful when several coordinated charts share one
+series vocabulary. Individual charts otherwise own their legend automatically.
+
+---
+
 ## Helpers
+
+### `useAnimatedValue`
+
+Declaratively eases toward a target while keeping intermediate values out of
+React. Pass its `AnimationValue` directly to `Surface.translateX`,
+`Surface.translateY`, or `Surface.opacity`.
+
+| Argument / option | Type | Default |
+| --- | --- | --- |
+| `target` | `number` | required |
+| `initialValue` | `number` | target on first mount |
+| `duration` | `number` | `220` ms |
+| `easing` | `linear \| ease-in \| ease-out \| ease-in-out` | `ease-in-out` |
+
+```tsx
+const opacity = useAnimatedValue(visible ? 1 : 0, {
+  initialValue: 0,
+  duration: 180,
+  easing: "ease-out",
+});
+
+<Surface opacity={opacity} width={240} height={120} />
+```
+
+### `useLoop`
+
+Declarative repeating presentation motion. The returned `AnimationValue` is
+passed directly to `Surface.translateX` or `Surface.translateY`; its clock is
+paced by compositor frame callbacks, and advancing it does not rerender or
+reconcile React. Layout remains fixed while painting and hit testing observe
+the live transform.
+
+| Option | Type | Default |
+| --- | --- | --- |
+| `from`, `to` | `number` | required |
+| `duration` | `number` | `1000` ms per journey |
+| `easing` | `linear \| ease-in \| ease-out \| ease-in-out` | `ease-in-out` |
+| `repeat` | `mirror \| loop` | `mirror` |
+| `playing` | `boolean` | `true` |
+
+```tsx
+const x = useLoop({
+  from: 12,
+  to: width - 72,
+  duration: 1800,
+  repeat: "mirror",
+  playing: !paused,
+});
+
+<Surface translateX={x} width={60} height={36} />
+```
+
+Use this path for continuous paint-only motion. `createLoopValue` offers the
+same clock outside React and must be disposed by its owner.
+
+### `useOscillation`
+
+A true sinusoidal presentation value, useful for ambient motion, breathing,
+scanner paths, and coordinated Lissajous-style movement. Like `useLoop`, it is
+read directly by the renderer and does not reconcile React on each frame.
+
+| Option | Type | Default |
+| --- | --- | --- |
+| `from`, `to` | `number` | required extrema |
+| `period` | `number` | `2000` ms for a full cycle |
+| `phase` | `number` | `0` radians |
+| `playing` | `boolean` | `true` |
+
+```tsx
+const x = useOscillation({ from: 12, to: width - 72, period: 3200 });
+const y = useOscillation({
+  from: 12,
+  to: height - 48,
+  period: 4700,
+  phase: Math.PI / 2,
+});
+
+<Surface translateX={x} translateY={y} width={60} height={36} />
+```
 
 ### `Tween` / `useTween`
 
 Duration-based numeric animation driven by the shared window/compositor motion
 clock. `Tween` is a render-prop component; `useTween` is the hook form.
-Animations settle exactly on their target, and remain renderer-neutral.
+Animations settle exactly on their target, and remain renderer-neutral. Since
+the resolved number is consumed during render, this compatibility API
+reconciles while moving; prefer `useLoop` and live presentation props where a
+layout-independent animation can bypass React.
 
 | Prop | Type | Default |
 | --- | --- | --- |

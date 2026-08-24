@@ -82,6 +82,9 @@ import {
   Pagination,
   PropertyList,
   createTweenValue,
+  createLoopValue,
+  tickMotionFrame,
+  useLoop,
   NavigationSidebar,
   SegmentedControl,
   RadioGroup,
@@ -91,6 +94,15 @@ import {
   EmptyState,
   CodeView,
   TerminalView,
+  LineChart,
+  AreaChart,
+  BarChart,
+  StackedBarChart,
+  ScatterChart,
+  Sparkline,
+  DonutChart,
+  RadialChart,
+  HeatmapChart,
   installUiFonts,
   type PlatformPopupOpts,
   type PlatformWindow,
@@ -108,6 +120,41 @@ const NO_MODIFIERS = {
   alt: false,
   meta: false,
 } as const;
+
+function chartWidgetSmoke(): void {
+  const series = [
+    { id: "first", label: "First", points: [1, 3, 2, 5].map((y, x) => ({ x, y })) },
+    { id: "second", label: "Second", points: [2, 2, 4, 3].map((y, x) => ({ x, y })) },
+  ];
+  const root = createShellRoot();
+  renderShell(root, (
+    <Group width={640} height={620}>
+      <LineChart width={300} height={140} series={series} />
+      <AreaChart x={320} width={300} height={140} series={[series[0]!]} />
+      <BarChart y={150} width={300} height={140} series={series} />
+      <StackedBarChart x={320} y={150} width={300} height={140} series={series} />
+      <ScatterChart y={300} width={300} height={140} series={[series[0]!]} />
+      <DonutChart x={320} y={300} width={300} height={140} data={[
+        { id: "a", label: "A", value: 3 },
+        { id: "b", label: "B", value: 2 },
+      ]} />
+      <Sparkline y={450} width={190} height={60} values={[1, 4, 2, 5, 3]} fill />
+      <RadialChart x={210} y={450} width={100} height={100} value={0.72} />
+      <HeatmapChart x={330} y={450} width={280} height={120} cells={[
+        { row: "A", column: "1", value: 2 },
+        { row: "A", column: "2", value: 8 },
+        { row: "B", column: "1", value: 5 },
+        { row: "B", column: "2", value: 9 },
+      ]} />
+    </Group>
+  ));
+  const images = (node: SceneNode): number =>
+    (node.kind === "image" ? 1 : 0) + node.children.reduce((sum, child) => sum + images(child), 0);
+  assert.ok(images(root.container) >= 8, "chart family should emit cached image layers");
+  assert.ok(collectHits(root.container).length >= 7, "interactive charts should expose hover regions");
+  const frame = new SoftwareRenderer().render(root.container, { width: 640, height: 620 });
+  assert.ok(frame.pixels.some((value) => value !== 0), "chart family should paint visible marks");
+}
 
 function rendererSmoke(): void {
   const root = createShellRoot();
@@ -277,6 +324,14 @@ async function hoverLayoutReconciliationSmoke(): Promise<void> {
   win.tick();
   const platformWindow = backend.getWindows()[0];
   assert.ok(platformWindow);
+  const beforeEmptyMove = win.getPerformanceSnapshot().reconciledFrames;
+  platformWindow.injectPointer({ type: "move", x: 170, y: 150, timeMs: 0 });
+  win.tick();
+  assert.equal(
+    win.getPerformanceSnapshot().reconciledFrames,
+    beforeEmptyMove,
+    "pointer motion over inert content should not reconcile React",
+  );
   platformWindow.injectPointer({ type: "move", x: 20, y: 90, timeMs: 1 });
   assert.equal(enters, 1, "hover target did not receive its initial enter");
   setExpanded(false);
@@ -284,6 +339,39 @@ async function hoverLayoutReconciliationSmoke(): Promise<void> {
   win.tick();
   assert.equal(leaves, 1, "layout moving a hovered target did not conceal its hover surface");
   assert.equal(enters, 1, "layout reconciliation manufactured a duplicate pointer enter");
+  win.destroy();
+  backend.disconnect();
+}
+
+async function presentationMotionBypassesReactSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Presentation motion", width: 80, height: 40 });
+
+  function Harness(): ReactNode {
+    const x = useLoop({
+      from: 0,
+      to: 40,
+      duration: 100,
+      easing: "linear",
+    });
+    return <Surface translateX={x} width={20} height={20} fill={0xffd59b52} />;
+  }
+
+  win.setContent(<Harness />);
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const first = win.getPerformanceSnapshot();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  win.tick();
+  const second = win.getPerformanceSnapshot();
+  assert.ok(second.frames > first.frames, "live motion did not present another frame");
+  assert.equal(
+    second.reconciledFrames,
+    first.reconciledFrames,
+    "presentation-only motion reconciled the React tree",
+  );
   win.destroy();
   backend.disconnect();
 }
@@ -329,6 +417,29 @@ function declarativeLayoutAndTweenSmoke(): void {
   assert.equal(tween.get(), 25);
   assert.equal(tween.tick(0.75), false);
   assert.equal(tween.get(), 100, "Tween did not settle exactly on its target");
+
+  const loop = createLoopValue({
+    from: 0,
+    to: 100,
+    duration: 1_000,
+    easing: "linear",
+  });
+  renderShell(
+    root,
+    <Group width={200} height={40} translateX={loop}>
+      <Rect width={20} height={20} fill={0xffd59b52} onPress={() => {}} />
+    </Group>,
+  );
+  const retainedRenderer = new RetainedSceneRenderer();
+  const before = retainedRenderer.render(root.container, { width: 200, height: 40 });
+  const motion = tickMotionFrame(0.5);
+  const after = retainedRenderer.render(root.container, { width: 200, height: 40 });
+  assert.equal(motion.presentationChanged, true);
+  assert.equal(motion.requiresReconcile, false, "live transforms should bypass React");
+  assert.equal(before.layers[0]?.destination.x, 0);
+  assert.equal(after.layers[0]?.destination.x, 50);
+  assert.equal(collectHits(root.container)[0]?.x, 50, "live transforms must move hit regions");
+  loop.dispose();
   renderShell(root, null);
 }
 
@@ -3022,6 +3133,7 @@ async function main() {
   if (process.env.MOIRE_UI_SMOKE === "animation") {
     await timerDrivenRedrawSmoke();
     await hoverLayoutReconciliationSmoke();
+    await presentationMotionBypassesReactSmoke();
     console.log("[ui/smoke:animation] ok");
     return;
   }
@@ -3054,6 +3166,7 @@ async function main() {
   await clippedTextCompositionSmoke();
   await timerDrivenRedrawSmoke();
   await hoverLayoutReconciliationSmoke();
+  await presentationMotionBypassesReactSmoke();
   declarativeLayoutAndTweenSmoke();
   boxModelAndTextLayoutSmoke();
   softShadowSmoke();
@@ -3073,6 +3186,7 @@ async function main() {
   advancedCollectionSmoke();
   compositionWidgetSmoke();
   utilityWidgetSmoke();
+  chartWidgetSmoke();
   await terminalViewInteractionSmoke();
   await collectionFocusRecipeSmoke();
   await focusScopeAndShortcutSmoke();

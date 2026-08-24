@@ -32,6 +32,13 @@ runuser -u moire -- bash -lc "cd '$DST' && pnpm install --frozen-lockfile" \
 install -d -o moire -g moire -m 700 "$RUNTIME"
 chmod +x "$DST/apps/session/moire-session"
 
+if [[ -r /tmp/moire-session.pid ]]; then
+  read -r OLD_SESSION_PID < /tmp/moire-session.pid || true
+  if [[ "${OLD_SESSION_PID:-}" =~ ^[0-9]+$ ]]; then
+    kill -- "-$OLD_SESSION_PID" 2>/dev/null || true
+    kill "$OLD_SESSION_PID" 2>/dev/null || true
+  fi
+fi
 pkill -u moire -f 'tsx src/main.ts' 2>/dev/null || true
 pkill -u moire -f 'moire-session' 2>/dev/null || true
 pkill -u moire -f 'dbus-run-session' 2>/dev/null || true
@@ -59,6 +66,7 @@ setsid runuser -u moire -- env \
   MOIRE_COMPOSITOR="pnpm --dir $DST --filter @moire/compositor exec tsx src/main.ts" \
   bash -c "cd $DST && exec ./apps/session/moire-session" \
   </dev/null >>/tmp/moire-session.log 2>&1 &
+echo "$!" >/tmp/moire-session.pid
 
 sleep 3
 echo "=== session ==="

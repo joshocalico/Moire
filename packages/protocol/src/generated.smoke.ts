@@ -5,6 +5,8 @@ import {
   wlRegistry,
   wlShm,
   wlSurface,
+  wpPresentation,
+  wpPresentationFeedback,
   xdgPositioner,
 } from "./generated.js";
 
@@ -20,7 +22,9 @@ function registryBindUsesGenericNewIdLayout(): void {
   assert.deepEqual(decodeHeader(message.data), {
     objectId: 2,
     opcode: 0,
-    size: 36,
+    // 8-byte header + uint + string length + 16-byte padded payload +
+    // version + new_id.
+    size: 40,
   });
   const reader = new MessageReader(message.data, []);
   assert.equal(reader.uint(), 7);
@@ -66,8 +70,35 @@ function xmlMetadataIsRetained(): void {
   assert.equal(xdgPositioner.requests.setReactive.since, 3);
 }
 
+function presentationTimeRoundTrips(): void {
+  const request = wpPresentation.requests.feedback.encode(14, 22, 31);
+  const requestReader = new MessageReader(request.data, []);
+  assert.equal(requestReader.object(), 22);
+  assert.equal(requestReader.newId(), 31);
+
+  const event = new MessageBuilder()
+    .uint(0)
+    .uint(52)
+    .uint(125_000_000)
+    .uint(16_666_667)
+    .uint(0)
+    .uint(900)
+    .uint(wpPresentationFeedback.enums.kind.vsync)
+    .build(31, wpPresentationFeedback.events.presented.opcode);
+  assert.deepEqual(wpPresentationFeedback.events.presented.decode(event.data), {
+    tvSecHi: 0,
+    tvSecLo: 52,
+    tvNsec: 125_000_000,
+    refresh: 16_666_667,
+    seqHi: 0,
+    seqLo: 900,
+    flags: 1,
+  });
+}
+
 registryBindUsesGenericNewIdLayout();
 fileDescriptorsStayOutOfBand();
 fixedAndNullableArgumentsRoundTrip();
 xmlMetadataIsRetained();
+presentationTimeRoundTrips();
 console.log("generated Wayland protocol smoke: ok");

@@ -5,6 +5,9 @@ import type {
   PlatformBackend,
   PlatformWindow,
   PlatformWindowOpts,
+  PlatformDiagnostics,
+  UiFrameEvent,
+  UiPresentationMode,
   UiKeyEvent,
   UiPointerEvent,
 } from "../../platform.js";
@@ -23,6 +26,25 @@ export class HeadlessPlatform implements PlatformBackend {
     // Deliver initial configure asynchronously so Window can subscribe first.
     queueMicrotask(() => w.emitConfigure(opts.width, opts.height));
     return w;
+  }
+
+  getDiagnostics(): PlatformDiagnostics {
+    return {
+      platform: "headless",
+      displayServer: "none",
+      transport: "in-memory",
+      presentation: "headless",
+      requestedAcceleration: process.env.MOIRE_UI_ACCELERATION ?? "auto",
+      accelerated: false,
+      capabilities: [],
+      retainedFrames: 0,
+      softwareFrames: this.windows.reduce(
+        (total, window) => total + window.presentedFrames,
+        0,
+      ),
+      dmabufFrames: 0,
+      shmFrames: 0,
+    };
   }
 
   pump(): void {
@@ -50,9 +72,12 @@ export class HeadlessWindow implements PlatformWindow {
   private closeCbs: Array<() => void> = [];
   private pointerCbs: Array<(ev: UiPointerEvent) => void> = [];
   private keyCbs: Array<(ev: UiKeyEvent) => void> = [];
+  private frameCbs: Array<(ev: UiFrameEvent) => void> = [];
   private alive = true;
+  private nextCommitId = 1;
   /** Number of synthetic interactive move requests, exposed for tests. */
   moveRequests = 0;
+  presentedFrames = 0;
 
   constructor(opts: PlatformWindowOpts) {
     this.title = opts.title;
@@ -74,11 +99,46 @@ export class HeadlessWindow implements PlatformWindow {
     if (this.alive) this.moveRequests++;
   }
 
+  setPresentationMode(_mode: UiPresentationMode): void {
+    // The in-memory backend has one transport.
+  }
+
   present(pixels: Uint8Array, width: number, height: number): void {
     if (!this.alive) return;
     this.width = width;
     this.height = height;
     this.lastFrame = Uint8Array.from(pixels);
+    this.presentedFrames++;
+    const commitId = this.nextCommitId++;
+    const submittedAtMs = performance.now();
+    this.emitFrame({
+      type: "submitted",
+      commitId,
+      transport: "headless",
+      submittedAtMs,
+      copyMs: 0,
+      damagedPixels: width * height,
+      totalPixels: width * height,
+    });
+    queueMicrotask(() => {
+      if (!this.alive) return;
+      const receivedAtMs = performance.now();
+      this.emitFrame({
+        type: "compositor-frame",
+        commitId,
+        timestampMs: receivedAtMs,
+        receivedAtMs,
+      });
+      this.emitFrame({
+        type: "presented",
+        commitId,
+        timestampNs: process.hrtime.bigint(),
+        refreshNs: 0,
+        sequence: BigInt(commitId),
+        flags: 0,
+        receivedAtMs,
+      });
+    });
   }
 
   onConfigure(cb: (w: number, h: number) => void): void {
@@ -95,6 +155,14 @@ export class HeadlessWindow implements PlatformWindow {
 
   onKey(cb: (ev: UiKeyEvent) => void): void {
     this.keyCbs.push(cb);
+  }
+
+  onFrame(cb: (ev: UiFrameEvent) => void): void {
+    this.frameCbs.push(cb);
+  }
+
+  private emitFrame(ev: UiFrameEvent): void {
+    for (const cb of this.frameCbs) cb(ev);
   }
 
   emitConfigure(w: number, h: number): void {
@@ -119,6 +187,7 @@ export class HeadlessWindow implements PlatformWindow {
     this.closeCbs = [];
     this.pointerCbs = [];
     this.keyCbs = [];
+    this.frameCbs = [];
   }
 
   getTitle(): string {

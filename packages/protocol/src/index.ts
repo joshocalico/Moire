@@ -182,6 +182,8 @@ export const CORE_GLOBALS = {
   wl_seat: 5,
   wl_output: 3,
   wl_data_device_manager: 3,
+  /** Correlates surface commits with actual compositor presentation. */
+  wp_presentation: 1,
   /** Middle-click primary selection, separate from the clipboard. */
   zwp_primary_selection_device_manager_v1: 1,
   xdg_wm_base: 3,

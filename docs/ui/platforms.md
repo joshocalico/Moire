@@ -34,14 +34,18 @@ Path: `packages/ui/src/platforms/wayland/index.ts`.
   `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY`, ancillary-FD transport, object IDs,
   framing and dispatch. It does not load libwayland.
 - Request encoders, event decoders, opcodes, versions, enums and destructor
-  metadata are generated from `wayland.xml`, stable xdg-shell, xdg-decoration
-  and linux-dmabuf XML into `@moire/protocol/generated`. The generated code
+  metadata are generated from `wayland.xml`, stable xdg-shell and
+  presentation-time, xdg-decoration, and linux-dmabuf XML into
+  `@moire/protocol/generated`. The generated code
   targets Moire's own `MessageBuilder`/`MessageReader` wire runtime.
 - `xdg_toplevel` with `zwp_linux_dmabuf_v1` ARGB8888 presentation when a
   render node and surfaceless EGL are available.
 - A small GBM target pool follows `wl_buffer.release`; an exhausted pool falls
   back to `wl_shm` rather than stalling the application loop.
 - `wl_shm` ARGB8888 remains the deterministic fallback.
+- Every native commit requests `wl_surface.frame`; `wp_presentation` feedback
+  supplies the authoritative scanout timestamp and DRM sequence. SHM
+  `wl_buffer.release` is measured as reuse latency, never misreported as FPS.
 - Seat pointer (incl. axis → wheel) and keyboard.
 - `wl_data_device_manager`: drag sources with labeled icon surfaces; drop receive into `DropTarget` sinks.
 - Fixed-size windows set min=max size so the compositor does not force a large default slot.

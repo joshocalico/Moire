@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Moire Bench
+Comment=Inspect Moire's renderer and measure live UI performance
+Exec=moire-benchmark
+Icon=applications-system
+Terminal=false
+Categories=Development;System;
+StartupNotify=false

@@ -29,6 +29,8 @@ import {
   wlShm,
   wlShmPool,
   wlSurface,
+  wpPresentation,
+  wpPresentationFeedback,
   xdgPopup,
   xdgPositioner,
   xdgSurface,
@@ -73,10 +75,13 @@ import {
   modifiersFromPressed,
   type DndCapable,
   type PlatformBackend,
+  type PlatformDiagnostics,
   type PlatformPopupOpts,
   type PlatformWindow,
   type PlatformWindowOpts,
   type UiKeyEvent,
+  type UiFrameEvent,
+  type UiPresentationMode,
   type UiPointerEvent,
   type PointerButton,
 } from "../../platform.js";
@@ -150,6 +155,13 @@ const EV = {
   data_offer_offer: wlDataOffer.events.offer.opcode,
   data_offer_source_actions: wlDataOffer.events.sourceActions.opcode,
   data_offer_action: wlDataOffer.events.action.opcode,
+  presentation_clock_id: wpPresentation.events.clockId.opcode,
+  presentation_feedback_sync_output:
+    wpPresentationFeedback.events.syncOutput.opcode,
+  presentation_feedback_presented:
+    wpPresentationFeedback.events.presented.opcode,
+  presentation_feedback_discarded:
+    wpPresentationFeedback.events.discarded.opcode,
 } as const;
 
 /** DnD action bitmask constants. */
@@ -167,11 +179,15 @@ type ShmSlot = {
   width: number;
   height: number;
   busy: boolean;
+  commitId: number;
+  submittedAtMs: number;
 };
 
 type DmabufSlot = {
   frameId: string;
   bufferId: number;
+  commitId: number;
+  submittedAtMs: number;
 };
 
 function waylandSocketPath(): string {
@@ -220,9 +236,16 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private compositorId = 0;
   private shmId = 0;
   private dmabufId = 0;
+  private presentationId = 0;
   private eglPresenter: EglOutputScaler | null = null;
   private eglFd = -1;
   private eglPresentationFailed = false;
+  private renderNode: string | undefined;
+  private fallbackReason: string | undefined;
+  private retainedFrames = 0;
+  private softwareFrames = 0;
+  private dmabufFrames = 0;
+  private shmFrames = 0;
   private wmBaseId = 0;
   private decoManagerId = 0;
   private seatId = 0;
@@ -304,6 +327,13 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     this.compositorId = this.bindGlobal("wl_compositor", 4);
     this.shmId = this.bindGlobal("wl_shm", 1);
     this.handlers.set(this.shmId, () => {});
+    if (this.globals.has("wp_presentation")) {
+      this.presentationId = this.bindGlobal("wp_presentation", 1);
+      this.handlers.set(this.presentationId, (opcode, r) => {
+        if (opcode !== EV.presentation_clock_id) return;
+        wpPresentation.events.clockId.decodeReader(r);
+      });
+    }
     if (this.globals.has("zwp_linux_dmabuf_v1")) {
       this.dmabufId = this.bindGlobal("zwp_linux_dmabuf_v1", 4);
       this.handlers.set(this.dmabufId, (opcode, r) => {
@@ -909,6 +939,51 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     // WaylandClientConn polls recvmsg on its timer.
   }
 
+  getDiagnostics(): PlatformDiagnostics {
+    const info = this.eglPresenter?.info;
+    const accelerated = Boolean(this.eglPresenter && !this.eglPresentationFailed);
+    return {
+      platform: "linux",
+      displayServer: "wayland",
+      transport: "moire-typescript-wire",
+      presentation: accelerated
+        ? this.retainedFrames > 0 || this.softwareFrames === 0
+          ? "retained-egl-dmabuf"
+          : "software-egl-dmabuf"
+        : "software-shm",
+      requestedAcceleration: process.env.MOIRE_UI_ACCELERATION ?? "auto",
+      accelerated,
+      display: process.env.WAYLAND_DISPLAY ?? "wayland-0",
+      renderNode: this.renderNode,
+      eglVendor: info?.eglVendor,
+      eglVersion: info?.eglVersion,
+      glVendor: info?.glVendor,
+      glRenderer: info?.glRenderer,
+      glVersion: info?.glVersion,
+      fallbackReason: this.fallbackReason,
+      capabilities: [...this.globals.keys()].sort(),
+      retainedFrames: this.retainedFrames,
+      softwareFrames: this.softwareFrames,
+      dmabufFrames: this.dmabufFrames,
+      shmFrames: this.shmFrames,
+    };
+  }
+
+  noteRetainedDmabufFrame(): void {
+    this.retainedFrames++;
+    this.dmabufFrames++;
+  }
+
+  noteSoftwareDmabufFrame(): void {
+    this.softwareFrames++;
+    this.dmabufFrames++;
+  }
+
+  noteSoftwareShmFrame(): void {
+    this.softwareFrames++;
+    this.shmFrames++;
+  }
+
   disconnect(): void {
     for (const w of [...this.windows]) w.destroy();
     this.windows.clear();
@@ -926,7 +1001,10 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     const mode = (process.env.MOIRE_UI_ACCELERATION ?? "auto")
       .trim()
       .toLowerCase();
-    if (mode === "software" || mode === "shm" || mode === "off") return;
+    if (mode === "software" || mode === "shm" || mode === "off") {
+      this.fallbackReason = `acceleration disabled by MOIRE_UI_ACCELERATION=${mode}`;
+      return;
+    }
     const candidates = process.env.MOIRE_RENDER_NODE
       ? [process.env.MOIRE_RENDER_NODE]
       : ["/dev/dri/renderD128", "/dev/dri/renderD129"];
@@ -937,6 +1015,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         try {
           this.eglPresenter = new EglOutputScaler(fd);
           this.eglFd = fd;
+          this.renderNode = candidate;
+          this.fallbackReason = undefined;
           console.log(
             `[ui/wayland] retained EGL/dmabuf presentation on ${candidate} (${this.eglPresenter.info.glRenderer})`,
           );
@@ -950,6 +1030,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       }
     }
     const detail = lastError instanceof Error ? lastError.message : String(lastError);
+    this.fallbackReason = detail;
     if (mode === "dmabuf" || mode === "egl" || mode === "on") {
       console.warn(`[ui/wayland] requested dmabuf acceleration unavailable: ${detail}`);
     } else {
@@ -977,6 +1058,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       // Keep the presenter alive so already-exported targets can receive their
       // wl_buffer.release events, but avoid retry/log storms on every tick.
       this.eglPresentationFailed = true;
+      this.fallbackReason = error instanceof Error ? error.message : String(error);
       return null;
     }
   }
@@ -994,8 +1076,13 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         error,
       );
       this.eglPresentationFailed = true;
+      this.fallbackReason = error instanceof Error ? error.message : String(error);
       return null;
     }
+  }
+
+  clientAccelerationAvailable(): boolean {
+    return Boolean(this.eglPresenter && !this.eglPresentationFailed);
   }
 
   createDmabufBuffer(
@@ -1066,6 +1153,10 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
   getShmId(): number {
     return this.shmId;
+  }
+
+  getPresentationId(): number {
+    return this.presentationId;
   }
 
   getWmBaseId(): number {
@@ -1270,6 +1361,16 @@ class WaylandWindow implements PlatformWindow {
   private closeCbs: Array<() => void> = [];
   private pointerCbs: Array<(ev: UiPointerEvent) => void> = [];
   private keyCbs: Array<(ev: UiKeyEvent) => void> = [];
+  private frameCbs: Array<(ev: UiFrameEvent) => void> = [];
+  private readonly pendingFrameCallbacks = new Set<number>();
+  private readonly pendingPresentationFeedbacks = new Set<number>();
+  /** wl_surface.frame is the submission gate: never queue more than one. */
+  private framePending = false;
+  /** A draw requested while gated; retry once the compositor grants a frame. */
+  private retryAfterFrame = false;
+  private nextCommitId = 1;
+  private presentationMode: UiPresentationMode = "auto";
+  private retainedBackpressured = false;
   private alive = true;
   private readonly decorated: boolean;
 
@@ -1515,19 +1616,25 @@ class WaylandWindow implements PlatformWindow {
     for (const cb of this.configureCbs) cb(this.width, this.height);
   }
 
+  setPresentationMode(mode: UiPresentationMode): void {
+    this.presentationMode = mode;
+  }
+
   present(pixels: Uint8Array, width: number, height: number): void {
     if (!this.alive || !this.configured) return;
+    if (this.framePending) {
+      this.retryAfterFrame = true;
+      return;
+    }
     this.width = width;
     this.height = height;
     const channel = `surface-${this.surfaceId}`;
-    const accelerated = this.platform.renderClientFrame(
-      channel,
-      pixels,
-      width,
-      height,
-    );
+    const accelerated = this.presentationMode === "shm"
+      ? null
+      : this.platform.renderClientFrame(channel, pixels, width, height);
     if (accelerated) {
       this.commitAcceleratedFrame(accelerated, width, height);
+      this.platform.noteSoftwareDmabufFrame();
       return;
     }
     const stride = width * 4;
@@ -1538,21 +1645,38 @@ class WaylandWindow implements PlatformWindow {
     } else if (slot.width !== width || slot.height !== height) {
       this.recreateBuffer(slot, width, height, stride);
     }
+    const copyStartedAt = performance.now();
     flushMmap(slot.map, pixels, size);
+    const copyMs = performance.now() - copyStartedAt;
     slot.busy = true;
-    this.commitBuffer(slot.bufferId, width, height);
+    const commit = this.commitBuffer(slot.bufferId, width, height, "shm", copyMs);
+    slot.commitId = commit.commitId;
+    slot.submittedAtMs = commit.submittedAtMs;
+    this.platform.noteSoftwareShmFrame();
   }
 
   presentScene(scene: RetainedSceneFrame): boolean {
     if (!this.alive || !this.configured) return false;
+    if (this.presentationMode === "shm") return false;
+    if (this.framePending) {
+      this.retryAfterFrame = true;
+      return true;
+    }
     const accelerated = this.platform.renderClientComposition(
       `surface-${this.surfaceId}`,
       scene,
     );
-    if (!accelerated) return false;
+    if (!accelerated) {
+      if (this.platform.clientAccelerationAvailable()) {
+        this.retainedBackpressured = true;
+        return true;
+      }
+      return false;
+    }
     this.width = scene.width;
     this.height = scene.height;
     this.commitAcceleratedFrame(accelerated, scene.width, scene.height);
+    this.platform.noteRetainedDmabufFrame();
     return true;
   }
 
@@ -1564,17 +1688,107 @@ class WaylandWindow implements PlatformWindow {
     let slot = this.dmabufSlots.get(frame.id);
     if (!slot) {
       const frameId = frame.id;
-      const bufferId = this.platform.createDmabufBuffer(frame, () =>
-        this.platform.releaseClientFrame(frameId),
-      );
-      slot = { frameId, bufferId };
+      const bufferId = this.platform.createDmabufBuffer(frame, () => {
+        const released = this.dmabufSlots.get(frameId);
+        const receivedAtMs = performance.now();
+        this.platform.releaseClientFrame(frameId);
+        const retrySuggested = this.retainedBackpressured;
+        this.retainedBackpressured = false;
+        if (released?.commitId) {
+          this.emitFrame({
+            type: "buffer-release",
+            commitId: released.commitId,
+            transport: "dmabuf",
+            latencyMs: Math.max(0, receivedAtMs - released.submittedAtMs),
+            receivedAtMs,
+            retrySuggested,
+          });
+        }
+      });
+      slot = { frameId, bufferId, commitId: 0, submittedAtMs: 0 };
       this.dmabufSlots.set(frameId, slot);
     }
-    this.commitBuffer(slot.bufferId, width, height);
+    const commit = this.commitBuffer(slot.bufferId, width, height, "dmabuf", 0);
+    slot.commitId = commit.commitId;
+    slot.submittedAtMs = commit.submittedAtMs;
   }
 
-  private commitBuffer(bufferId: number, width: number, height: number): void {
+  private commitBuffer(
+    bufferId: number,
+    width: number,
+    height: number,
+    transport: "dmabuf" | "shm",
+    copyMs: number,
+  ): { commitId: number; submittedAtMs: number } {
     const p = this.platform;
+    const commitId = this.nextCommitId++;
+    // All entry points coalesce while this is true. Keeping this invariant at
+    // the protocol boundary prevents unrelated application wakes from ever
+    // building a wl_surface.frame callback backlog.
+    this.framePending = true;
+    const frameCallbackId = p.allocId();
+    this.pendingFrameCallbacks.add(frameCallbackId);
+    p.setHandler(frameCallbackId, (opcode, r) => {
+      if (opcode !== EV.callback_done) return;
+      const { callbackData } = wlCallback.events.done.decodeReader(r);
+      this.pendingFrameCallbacks.delete(frameCallbackId);
+      p.clearHandler(frameCallbackId);
+      this.framePending = false;
+      const retrySuggested = this.retryAfterFrame;
+      this.retryAfterFrame = false;
+      this.emitFrame({
+        type: "compositor-frame",
+        commitId,
+        timestampMs: callbackData,
+        receivedAtMs: performance.now(),
+        retrySuggested,
+      });
+    });
+    p.sendMessage(
+      wlSurface.requests.frame.encode(this.surfaceId, frameCallbackId),
+    );
+    const presentationId = p.getPresentationId();
+    if (presentationId) {
+      const feedbackId = p.allocId();
+      this.pendingPresentationFeedbacks.add(feedbackId);
+      p.setHandler(feedbackId, (opcode, r) => {
+        if (opcode === EV.presentation_feedback_sync_output) {
+          wpPresentationFeedback.events.syncOutput.decodeReader(r);
+          return;
+        }
+        const receivedAtMs = performance.now();
+        if (opcode === EV.presentation_feedback_presented) {
+          const event = wpPresentationFeedback.events.presented.decodeReader(r);
+          const seconds =
+            (BigInt(event.tvSecHi) << 32n) | BigInt(event.tvSecLo);
+          const sequence =
+            (BigInt(event.seqHi) << 32n) | BigInt(event.seqLo);
+          this.emitFrame({
+            type: "presented",
+            commitId,
+            timestampNs: seconds * 1_000_000_000n + BigInt(event.tvNsec),
+            refreshNs: event.refresh,
+            sequence,
+            flags: event.flags,
+            receivedAtMs,
+          });
+        } else if (opcode === EV.presentation_feedback_discarded) {
+          wpPresentationFeedback.events.discarded.decodeReader(r);
+          this.emitFrame({ type: "discarded", commitId, receivedAtMs });
+        } else {
+          return;
+        }
+        this.pendingPresentationFeedbacks.delete(feedbackId);
+        p.clearHandler(feedbackId);
+      });
+      p.sendMessage(
+        wpPresentation.requests.feedback.encode(
+          presentationId,
+          this.surfaceId,
+          feedbackId,
+        ),
+      );
+    }
     // Window geometry = content box (excludes SSD); matches buffer for our clients.
     p.sendMessage(
       xdgSurface.requests.setWindowGeometry.encode(
@@ -1592,6 +1806,17 @@ class WaylandWindow implements PlatformWindow {
       wlSurface.requests.damage.encode(this.surfaceId, 0, 0, width, height),
     );
     p.sendMessage(wlSurface.requests.commit.encode(this.surfaceId));
+    const submittedAtMs = performance.now();
+    this.emitFrame({
+      type: "submitted",
+      commitId,
+      transport,
+      submittedAtMs,
+      copyMs,
+      damagedPixels: width * height,
+      totalPixels: width * height,
+    });
+    return { commitId, submittedAtMs };
   }
 
   onConfigure(cb: (w: number, h: number) => void): void {
@@ -1620,6 +1845,14 @@ class WaylandWindow implements PlatformWindow {
     this.keyCbs.push(cb);
   }
 
+  onFrame(cb: (ev: UiFrameEvent) => void): void {
+    this.frameCbs.push(cb);
+  }
+
+  private emitFrame(ev: UiFrameEvent): void {
+    for (const cb of this.frameCbs) cb(ev);
+  }
+
   emitPointer(ev: UiPointerEvent): void {
     for (const cb of this.pointerCbs) cb(ev);
   }
@@ -1643,6 +1876,12 @@ class WaylandWindow implements PlatformWindow {
       p.clearHandler(slot.bufferId);
     }
     this.dmabufSlots.clear();
+    for (const id of this.pendingFrameCallbacks) p.clearHandler(id);
+    for (const id of this.pendingPresentationFeedbacks) p.clearHandler(id);
+    this.pendingFrameCallbacks.clear();
+    this.pendingPresentationFeedbacks.clear();
+    this.framePending = false;
+    this.retryAfterFrame = false;
     p.dropClientChannel(`surface-${this.surfaceId}`);
     if (this.popupId) {
       p.sendMessage(xdgPopup.requests.destroy.encode(this.popupId));
@@ -1665,6 +1904,7 @@ class WaylandWindow implements PlatformWindow {
     this.closeCbs = [];
     this.pointerCbs = [];
     this.keyCbs = [];
+    this.frameCbs = [];
   }
 
   private allocSlot(size: number): ShmSlot {
@@ -1693,7 +1933,19 @@ class WaylandWindow implements PlatformWindow {
     p.setHandler(bufferId, (opcode) => {
       if (opcode === EV.buffer_release) {
         const s = this.slots.find((x) => x.bufferId === bufferId);
-        if (s) s.busy = false;
+        if (s) {
+          s.busy = false;
+          const receivedAtMs = performance.now();
+          if (s.commitId) {
+            this.emitFrame({
+              type: "buffer-release",
+              commitId: s.commitId,
+              transport: "shm",
+              latencyMs: Math.max(0, receivedAtMs - s.submittedAtMs),
+              receivedAtMs,
+            });
+          }
+        }
       }
     });
     const slot: ShmSlot = {
@@ -1705,6 +1957,8 @@ class WaylandWindow implements PlatformWindow {
       width,
       height,
       busy: false,
+      commitId: 0,
+      submittedAtMs: 0,
     };
     this.slots.push(slot);
     return slot;
@@ -1744,7 +1998,19 @@ class WaylandWindow implements PlatformWindow {
       ),
     );
     p.setHandler(slot.bufferId, (opcode) => {
-      if (opcode === EV.buffer_release) slot.busy = false;
+      if (opcode === EV.buffer_release) {
+        slot.busy = false;
+        const receivedAtMs = performance.now();
+        if (slot.commitId) {
+          this.emitFrame({
+            type: "buffer-release",
+            commitId: slot.commitId,
+            transport: "shm",
+            latencyMs: Math.max(0, receivedAtMs - slot.submittedAtMs),
+            receivedAtMs,
+          });
+        }
+      }
     });
   }
 

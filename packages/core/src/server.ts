@@ -27,6 +27,7 @@ import {
   type KmsMode,
   type KmsOutput,
   type KmsCursorImage,
+  type KmsPresentationFeedback,
   WaylandSocketServer,
   type WaylandClientConn,
   type WaylandChunk,
@@ -111,6 +112,8 @@ const OP = {
   surface_set_buffer_transform: 7,
   surface_set_buffer_scale: 8,
   surface_damage_buffer: 9,
+  presentation_destroy: 0,
+  presentation_feedback: 1,
   output_release: 0,
   buffer_destroy: 0,
   subcompositor_destroy: 0,
@@ -308,6 +311,10 @@ const EV = {
   drm_format: 1,
   drm_authenticated: 2,
   drm_capabilities: 3,
+  presentation_clock_id: 0,
+  presentation_feedback_sync_output: 0,
+  presentation_feedback_presented: 1,
+  presentation_feedback_discarded: 2,
 } as const;
 
 const WL_SEAT_CAPABILITY_POINTER = 1;
@@ -543,6 +550,14 @@ type SurfaceState = {
   bufferOffsetX: number;
   bufferOffsetY: number;
   frameCallbacks: number[];
+  /** Feedback objects requested for the next surface commit. */
+  pendingPresentationFeedbacks: number[];
+  /** Feedback objects attached to the latest unpresented commit. */
+  presentationFeedbacks: number[];
+  /** Feedback for a frame already composited and awaiting output completion. */
+  readyPresentationFeedbacks: number[];
+  /** Set when this surface contributed to the frame awaiting scanout. */
+  presentationReady: boolean;
   mapped: boolean;
   /** wl_output object ids for which wl_surface.enter has been sent. */
   enteredOutputIds: Set<number>;
@@ -1043,6 +1058,9 @@ export class CompositorServer {
    * Set by markDirty() on commits, pointer motion, shell clock, etc.
    */
   private needsComposite = true;
+  private compositeWakeResolver: (() => void) | null = null;
+  /** Absolute output cadence; avoids accumulating setTimeout rounding drift. */
+  private nextCompositeDeadlineMs = 0;
   /** Bottom → top paint/focus order for mapped toplevels. */
   private stack: { session: ClientSession; surfaceId: number }[] = [];
   /** Stable taskbar order, independent of focus-driven stack reordering. */
@@ -1366,6 +1384,8 @@ export class CompositorServer {
 
   stop(): void {
     this.running = false;
+    this.compositeWakeResolver?.();
+    this.compositeWakeResolver = null;
     this.drmHotplugMonitor?.stop();
     this.drmHotplugMonitor = null;
     if (this.displayProbeTimer) {
@@ -4685,6 +4705,9 @@ export class CompositorServer {
   /** Request a composite + present on the next loop tick. */
   markDirty(): void {
     this.needsComposite = true;
+    const wake = this.compositeWakeResolver;
+    this.compositeWakeResolver = null;
+    wake?.();
   }
 
   private async loop(): Promise<void> {
@@ -4692,19 +4715,62 @@ export class CompositorServer {
       this.prefsWatcher?.poll();
       if (this.shell?.needsRepaint?.()) this.markDirty();
       if (this.needsComposite) {
+        const budget = this.frameBudgetMs();
+        const now = monotonicMs();
+        if (this.nextCompositeDeadlineMs > now) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, this.nextCompositeDeadlineMs - now)
+          );
+          continue;
+        }
         this.needsComposite = false;
+        const startedAt = monotonicMs();
+        // Advance an absolute deadline instead of sleeping for "remaining"
+        // time after each frame. Timer overshoot is recovered by the next
+        // interval rather than permanently lowering a 60 Hz output to ~56 Hz.
+        this.nextCompositeDeadlineMs =
+          this.nextCompositeDeadlineMs < startedAt - budget
+            ? startedAt + budget
+            : this.nextCompositeDeadlineMs + budget;
         try {
           await this.composite();
         } catch (err) {
           console.error("[composite]", err);
           this.markDirty();
         }
-        await new Promise((r) => setTimeout(r, 16));
       } else {
-        // Idle — no wallpaper fill / flushMmap / presentKms.
-        await new Promise((r) => setTimeout(r, 50));
+        // Idle — native commits and shell invalidation wake us directly.
+        await this.waitForCompositeWork(1_000);
       }
     }
+  }
+
+  private frameBudgetMs(): number {
+    const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0];
+    const mode = primary?.kms.modes.find(
+      (candidate) => candidate.id === primary.kms.currentModeId,
+    );
+    return mode?.refreshMilliHz
+      ? 1_000_000 / mode.refreshMilliHz
+      : 1000 / 60;
+  }
+
+  private waitForCompositeWork(timeoutMs: number): Promise<void> {
+    if (this.needsComposite || !this.running) return Promise.resolve();
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.compositeWakeResolver === finish) {
+          this.compositeWakeResolver = null;
+        }
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      this.compositeWakeResolver = finish;
+    });
   }
 
   /** Paint mapped xdg_popup surfaces above chrome and release their buffers. */
@@ -4763,15 +4829,7 @@ export class CompositorServer {
           );
         }
       }
-      for (const cbId of surf.frameCallbacks) {
-        client.sendCallbackDone(cbId, monotonicMs());
-        client.deleteId(cbId);
-      }
-      surf.frameCallbacks = [];
-      for (const bufId of surf.releaseBuffers) {
-        client.sendBufferRelease(bufId);
-      }
-      surf.releaseBuffers = [];
+      client.finishSurfaceFrame(surf);
     }
     return painted;
   }
@@ -4789,6 +4847,38 @@ export class CompositorServer {
       return false;
     }
     return true;
+  }
+
+  private finishPresentationFeedback(
+    feedback?: KmsPresentationFeedback,
+  ): void {
+    const now = process.hrtime.bigint();
+    const resolved = feedback ?? {
+      sequence: 0,
+      seconds: Number(now / 1_000_000_000n),
+      nanoseconds: Number(now % 1_000_000_000n),
+      vsync: false,
+      hardwareClock: false,
+      hardwareCompletion: false,
+    };
+    const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0];
+    const mode = primary?.kms.modes.find(
+      (candidate) => candidate.id === primary.kms.currentModeId,
+    );
+    const refreshNs = mode?.refreshMilliHz
+      ? Math.max(1, Math.round(1_000_000_000_000 / mode.refreshMilliHz))
+      : 0;
+    for (const client of this.clients) {
+      for (const surface of client.surfaces()) {
+        if (!surface.presentationReady) continue;
+        surface.presentationReady = false;
+        const feedbackIds = surface.readyPresentationFeedbacks;
+        surface.readyPresentationFeedbacks = [];
+        for (const feedbackId of feedbackIds) {
+          client.sendPresentationPresented(feedbackId, resolved, refreshNs);
+        }
+      }
+    }
   }
 
   private retainedCursorLayer(z: number): CompositionLayer | null {
@@ -5212,7 +5302,11 @@ export class CompositorServer {
     renderer.beginComposition!(scene);
     let frameRenderMs = monotonicMs() - outputPhaseStartedMs;
     let framePresentMs = 0;
-    const pendingPresents: Promise<number>[] = [];
+    const pendingPresents: Promise<{
+      duration: number;
+      feedback?: KmsPresentationFeedback;
+      primary: boolean;
+    }>[] = [];
     for (const output of this.outputs) {
       const outputStartedMs = monotonicMs();
       const physical = output.kms;
@@ -5244,13 +5338,20 @@ export class CompositorServer {
               rendered.framebufferId,
               this.readiness ?? undefined,
             ).then(
-              () => monotonicMs() - presentStartedMs,
+              (feedback) => ({
+                duration: monotonicMs() - presentStartedMs,
+                feedback,
+                primary: output.primary,
+              }),
               (error) => {
                 console.error(
                   `[composite] retained present ${physical.connectorName}:`,
                   error,
                 );
-                return monotonicMs() - presentStartedMs;
+                return {
+                  duration: monotonicMs() - presentStartedMs,
+                  primary: output.primary,
+                };
               },
             ),
           );
@@ -5264,9 +5365,14 @@ export class CompositorServer {
       }
       frameRenderMs += renderedMs - outputStartedMs;
     }
-    framePresentMs += (await Promise.all(pendingPresents)).reduce(
-      (total, duration) => total + duration,
+    const presented = await Promise.all(pendingPresents);
+    framePresentMs += presented.reduce(
+      (total, result) => total + result.duration,
       0,
+    );
+    this.finishPresentationFeedback(
+      presented.find((result) => result.primary)?.feedback ??
+        presented[0]?.feedback,
     );
     this.profileFrames++;
     this.profileSceneMs += sceneFinishedMs - frameStartedMs;
@@ -5411,15 +5517,7 @@ export class CompositorServer {
             }
           }
 
-          for (const cbId of surf.frameCallbacks) {
-            client.sendCallbackDone(cbId, monotonicMs());
-            client.deleteId(cbId);
-          }
-          surf.frameCallbacks = [];
-          for (const bufId of surf.releaseBuffers) {
-            client.sendBufferRelease(bufId);
-          }
-          surf.releaseBuffers = [];
+          client.finishSurfaceFrame(surf);
         }
 
         // SSD chrome in the same stack slot as the window (not a global overlay).
@@ -5493,7 +5591,11 @@ export class CompositorServer {
       // separate from per-output crop/scale/readback work.
       let frameRenderMs = monotonicMs() - outputPhaseStartedMs;
       let framePresentMs = 0;
-      const pendingPresents: Promise<number>[] = [];
+      const pendingPresents: Promise<{
+        duration: number;
+        feedback?: KmsPresentationFeedback;
+        primary: boolean;
+      }>[] = [];
       // Crop/scale the logical desktop into each physical output through the
       // selected backend. EGL currently reads into the stable dumb scanout;
       // direct GBM scanout is the next presentation step, not a scene change.
@@ -5530,13 +5632,20 @@ export class CompositorServer {
                 rendered.framebufferId,
                 this.readiness ?? undefined,
               ).then(
-                () => monotonicMs() - presentStartedMs,
+                (feedback) => ({
+                  duration: monotonicMs() - presentStartedMs,
+                  feedback,
+                  primary: output.primary,
+                }),
                 (error) => {
                   console.error(
                     `[composite] presentKms ${physical.connectorName}:`,
                     error,
                   );
-                  return monotonicMs() - presentStartedMs;
+                  return {
+                    duration: monotonicMs() - presentStartedMs,
+                    primary: output.primary,
+                  };
                 },
               ),
             );
@@ -5553,9 +5662,14 @@ export class CompositorServer {
         }
         frameRenderMs += renderedMs - outputStartedMs;
       }
-      framePresentMs += (await Promise.all(pendingPresents)).reduce(
-        (total, duration) => total + duration,
+      const presented = await Promise.all(pendingPresents);
+      framePresentMs += presented.reduce(
+        (total, result) => total + result.duration,
         0,
+      );
+      this.finishPresentationFeedback(
+        presented.find((result) => result.primary)?.feedback ??
+          presented[0]?.feedback,
       );
       this.profileFrames++;
       this.profileSceneMs += sceneFinishedMs - frameStartedMs;
@@ -5834,6 +5948,12 @@ class ClientSession {
       this.sendBufferRelease(bufId);
     }
     surf.releaseBuffers = [];
+    // Frame callbacks deliberately precede output completion. Keep this
+    // commit's feedback separate so a prompt next client commit cannot
+    // discard feedback for pixels already included in the output frame.
+    surf.readyPresentationFeedbacks.push(...surf.presentationFeedbacks);
+    surf.presentationFeedbacks = [];
+    surf.presentationReady = surf.readyPresentationFeedbacks.length > 0;
   }
 
   getBuffer(id: number): BufferState | null {
@@ -5875,7 +5995,9 @@ class ClientSession {
       } else if (obj.iface === "wl_buffer") {
         const buf = obj.data?.buffer as BufferState | undefined;
         if (buf?.kind === "shm") this.releasePool(buf.pool, false);
-        if (buf?.kind === "dmabuf") closeDmabufPlanes(buf.planes);
+        if (buf?.kind === "dmabuf") {
+          closeDmabufPlanes(buf.planes, this.server.getGbm());
+        }
       } else if (obj.iface === "zwp_linux_buffer_params_v1") {
         const params = obj.data?.params as DmabufParamsState | undefined;
         if (params && !params.created) closeDmabufPlanes(params.planes);
@@ -6192,6 +6314,13 @@ class ClientSession {
       case "wp_viewport":
         this.handleViewport(obj, opcode, r);
         break;
+      case "wp_presentation":
+        this.handlePresentation(obj, opcode, r);
+        break;
+      case "wp_presentation_feedback":
+        // Feedback objects have no requests and are destroyed by their
+        // terminal presented/discarded event.
+        break;
       case "wp_cursor_shape_manager_v1":
         this.handleCursorShapeManager(opcode, r);
         break;
@@ -6306,6 +6435,10 @@ class ClientSession {
       this.send(id, EV.shm_format, (b) => b.uint(WL_SHM_FORMAT_XRGB8888));
     } else if (iface === "zwp_linux_dmabuf_v1") {
       this.sendDmabufFormats(id);
+    } else if (iface === "wp_presentation") {
+      // Linux CLOCK_MONOTONIC. DRM page-flip timestamps and our fallback
+      // process.hrtime clock share this monotonic domain.
+      this.send(id, EV.presentation_clock_id, (b) => b.uint(1));
     } else if (iface === "wl_seat") {
       // Do not send seat_name — some clients (weston-simple-shm) lack that listener.
       const caps = this.server.getKeymap()
@@ -6857,6 +6990,32 @@ class ClientSession {
     }
   }
 
+  private handlePresentation(
+    obj: WlObject,
+    opcode: number,
+    r: MessageReader,
+  ): void {
+    if (opcode === OP.presentation_destroy) {
+      this.destroyObject(obj.id);
+      return;
+    }
+    if (opcode !== OP.presentation_feedback) return;
+    const surfaceId = r.object();
+    const feedbackId = r.newId();
+    this.objects.set(feedbackId, {
+      id: feedbackId,
+      iface: "wp_presentation_feedback",
+      version: 1,
+      data: { surfaceId },
+    });
+    const surface = this.surfaceById(surfaceId);
+    if (!surface) {
+      this.sendPresentationDiscarded(feedbackId);
+      return;
+    }
+    surface.pendingPresentationFeedbacks.push(feedbackId);
+  }
+
   private handleXdgActivation(opcode: number, r: MessageReader): void {
     if (opcode === OP.activation_get_token) {
       const id = r.newId();
@@ -7399,6 +7558,10 @@ class ClientSession {
         bufferOffsetX: 0,
         bufferOffsetY: 0,
         frameCallbacks: [],
+        pendingPresentationFeedbacks: [],
+        presentationFeedbacks: [],
+        readyPresentationFeedbacks: [],
+        presentationReady: false,
         mapped: false,
         enteredOutputIds: new Set(),
         x: 0,
@@ -7640,6 +7803,14 @@ class ClientSession {
       this.objects.set(cbId, { id: cbId, iface: "wl_callback", version: 1 });
       surface.frameCallbacks.push(cbId);
     } else if (opcode === OP.surface_commit) {
+      // A new commit supersedes only a previous commit which has not yet been
+      // composited. Feedback already moved to readyPresentationFeedbacks must
+      // survive until the output presentation completes.
+      for (const feedbackId of surface.presentationFeedbacks) {
+        this.sendPresentationDiscarded(feedbackId);
+      }
+      surface.presentationFeedbacks = surface.pendingPresentationFeedbacks;
+      surface.pendingPresentationFeedbacks = [];
       // xwayland_shell serial is double-buffered — apply on every commit,
       // including the buffer-less association commit from Xwayland.
       for (const o of this.objects.values()) {
@@ -7774,7 +7945,18 @@ class ClientSession {
       } else if (surface.role === "popup") {
         this.server.dismissPopup(this, surface.id, false);
       }
+      for (const feedbackId of [
+        ...surface.pendingPresentationFeedbacks,
+        ...surface.presentationFeedbacks,
+        ...surface.readyPresentationFeedbacks,
+      ]) {
+        this.sendPresentationDiscarded(feedbackId);
+      }
+      surface.pendingPresentationFeedbacks = [];
+      surface.presentationFeedbacks = [];
+      surface.readyPresentationFeedbacks = [];
       this.finishSurfaceFrame(surface);
+      surface.presentationReady = false;
       this.clearSurfaceOutputs(surface);
       surface.pixels = null;
       this.destroyObject(obj.id);
@@ -8058,6 +8240,37 @@ class ClientSession {
     this.send(id, EV.buffer_release, () => {});
   }
 
+  sendPresentationPresented(
+    id: number,
+    feedback: KmsPresentationFeedback,
+    refreshNs: number,
+  ): void {
+    if (!this.objects.has(id)) return;
+    const seconds = BigInt(Math.max(0, Math.floor(feedback.seconds)));
+    const sequence = BigInt(Math.max(0, Math.floor(feedback.sequence)));
+    const flags =
+      (feedback.vsync ? 1 : 0) |
+      (feedback.hardwareClock ? 2 : 0) |
+      (feedback.hardwareCompletion ? 4 : 0);
+    this.send(id, EV.presentation_feedback_presented, (b) =>
+      b
+        .uint(Number((seconds >> 32n) & 0xffffffffn))
+        .uint(Number(seconds & 0xffffffffn))
+        .uint(feedback.nanoseconds)
+        .uint(refreshNs)
+        .uint(Number((sequence >> 32n) & 0xffffffffn))
+        .uint(Number(sequence & 0xffffffffn))
+        .uint(flags),
+    );
+    this.deleteId(id);
+  }
+
+  sendPresentationDiscarded(id: number): void {
+    if (!this.objects.has(id)) return;
+    this.send(id, EV.presentation_feedback_discarded, () => {});
+    this.deleteId(id);
+  }
+
   deleteId(id: number): void {
     this.objects.delete(id);
     this.send(WL_DISPLAY_ID, EV.display_delete_id, (b) => b.uint(id));
@@ -8297,7 +8510,7 @@ class ClientSession {
       if (buf?.kind === "shm") {
         this.releasePool(buf.pool, false);
       } else if (buf?.kind === "dmabuf") {
-        closeDmabufPlanes(buf.planes);
+        closeDmabufPlanes(buf.planes, this.server.getGbm());
         buf.planes = [];
       }
     } else if (obj?.iface === "zwp_linux_buffer_params_v1") {

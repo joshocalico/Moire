@@ -79,6 +79,8 @@ export class GbmDevice {
   ) => unknown;
   private readonly boUnmap: (bo: unknown, mapData: unknown) => void;
   private readonly deviceDestroy: (device: unknown) => void;
+  /** Imported wl_buffer BOs keyed by their compositor-owned dma-buf fd. */
+  private readonly importedBos = new Map<number, unknown>();
   private mapFailLogged = false;
 
   constructor(drmFd: number, ownedFd: number | null = null) {
@@ -143,6 +145,18 @@ export class GbmDevice {
     },
     into?: Uint8Array | null,
   ): GbmMappedPixels | null {
+    const cached = this.importedBos.get(args.fd);
+    if (cached) {
+      const mapped = this.mapImportedBo(cached, args, into);
+      if (mapped) return mapped;
+      this.importedBos.delete(args.fd);
+      try {
+        this.boDestroy(cached);
+      } catch {
+        // Re-import below.
+      }
+    }
+
     const usageFlags = [
       GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR,
       GBM_BO_USE_RENDERING,
@@ -158,8 +172,6 @@ export class GbmDevice {
       for (const kind of ["FD", "FD_MODIFIER"] as const) {
         const fdBuf = koffi.alloc(GbmImportFdData, 1);
         const modBuf = koffi.alloc(GbmImportFdModifierData, 1);
-        const strideOut = koffi.alloc("uint32_t", 1);
-        const mapDataOut = koffi.alloc("void *", 1);
         let bo: unknown = null;
         try {
           let importType: number;
@@ -192,48 +204,11 @@ export class GbmDevice {
           bo = this.createBoImport(this.device, importType, importBuf, usage);
           const boAddr = BigInt(koffi.address(bo));
           if (boAddr === 0n) continue;
-
-          const mapPtr = this.boMap(
-            bo,
-            0,
-            0,
-            args.width,
-            args.height,
-            GBM_BO_TRANSFER_READ,
-            strideOut,
-            mapDataOut,
-          );
-          const mapAddr = BigInt(koffi.address(mapPtr));
-          if (mapAddr === 0n || mapAddr === 0xffffffffffffffffn) continue;
-
-          const stride =
-            (koffi.decode(strideOut, "uint32_t") as number) || args.stride;
-          const byteLen = stride * args.height;
-          const view = new Uint8Array(
-            koffi.view(mapPtr, byteLen) as ArrayBuffer,
-          );
-          // Reject all-zero maps (Parallels/virgl mmap illusion).
-          let nonzero = false;
-          for (let i = 0; i < Math.min(byteLen, 4096); i++) {
-            if (view[i] !== 0) {
-              nonzero = true;
-              break;
-            }
-          }
-          if (!nonzero && byteLen > 0) {
-            const mapData = koffi.decode(mapDataOut, "void *");
-            this.boUnmap(bo, mapData);
-            continue;
-          }
-
-          const pixels =
-            into && into.byteLength === byteLen
-              ? into
-              : new Uint8Array(byteLen);
-          pixels.set(view);
-          const mapData = koffi.decode(mapDataOut, "void *");
-          this.boUnmap(bo, mapData);
-          return { pixels, stride };
+          const mapped = this.mapImportedBo(bo, args, into);
+          if (!mapped) continue;
+          this.importedBos.set(args.fd, bo);
+          bo = null;
+          return mapped;
         } catch {
           // try next combination
         } finally {
@@ -247,8 +222,6 @@ export class GbmDevice {
           }
           freePtr(fdBuf);
           freePtr(modBuf);
-          freePtr(strideOut);
-          freePtr(mapDataOut);
         }
       }
     }
@@ -262,7 +235,73 @@ export class GbmDevice {
     return null;
   }
 
+  private mapImportedBo(
+    bo: unknown,
+    args: { width: number; height: number; stride: number },
+    into?: Uint8Array | null,
+  ): GbmMappedPixels | null {
+    const strideOut = koffi.alloc("uint32_t", 1);
+    const mapDataOut = koffi.alloc("void *", 1);
+    let mapData: unknown = null;
+    try {
+      const mapPtr = this.boMap(
+        bo,
+        0,
+        0,
+        args.width,
+        args.height,
+        GBM_BO_TRANSFER_READ,
+        strideOut,
+        mapDataOut,
+      );
+      const mapAddr = BigInt(koffi.address(mapPtr));
+      if (mapAddr === 0n || mapAddr === 0xffffffffffffffffn) return null;
+      mapData = koffi.decode(mapDataOut, "void *");
+      const stride =
+        (koffi.decode(strideOut, "uint32_t") as number) || args.stride;
+      const byteLen = stride * args.height;
+      const view = new Uint8Array(koffi.view(mapPtr, byteLen) as ArrayBuffer);
+      let nonzero = byteLen === 0;
+      for (let index = 0; index < Math.min(byteLen, 4096); index++) {
+        if (view[index] !== 0) {
+          nonzero = true;
+          break;
+        }
+      }
+      if (!nonzero) return null;
+      const pixels = into?.byteLength === byteLen
+        ? into
+        : new Uint8Array(byteLen);
+      pixels.set(view);
+      return { pixels, stride };
+    } finally {
+      if (mapData) this.boUnmap(bo, mapData);
+      freePtr(strideOut);
+      freePtr(mapDataOut);
+    }
+  }
+
+  /** Release a cached import before its compositor-owned dma-buf fd closes. */
+  releaseImport(fd: number): void {
+    const bo = this.importedBos.get(fd);
+    if (!bo) return;
+    this.importedBos.delete(fd);
+    try {
+      this.boDestroy(bo);
+    } catch {
+      // best effort
+    }
+  }
+
   destroy(): void {
+    for (const bo of this.importedBos.values()) {
+      try {
+        this.boDestroy(bo);
+      } catch {
+        // best effort
+      }
+    }
+    this.importedBos.clear();
     try {
       this.deviceDestroy(this.device);
     } catch {

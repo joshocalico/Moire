@@ -35,6 +35,9 @@ const NoEventPriority = 0;
 
 export type SceneKind = "group" | "rect" | "text" | "image";
 
+/** A numeric presentation value which may be advanced without a React commit. */
+export type LiveNumber = number | { get(): number };
+
 export type HitPointerEvent = {
   /** Absolute position in the root framebuffer. */
   x: number;
@@ -101,10 +104,12 @@ type HostPointerProps = {
 export type GroupProps = HostPointerProps & {
   x?: number;
   y?: number;
+  translateX?: LiveNumber;
+  translateY?: LiveNumber;
   width?: number;
   height?: number;
   clip?: boolean;
-  opacity?: number;
+  opacity?: LiveNumber;
   children?: ReactNode;
 };
 
@@ -148,7 +153,7 @@ export type ImageProps = {
   imagePixels: Uint8Array;
   imageWidth: number;
   imageHeight: number;
-  opacity?: number;
+  opacity?: LiveNumber;
 };
 
 export type SceneNode = {
@@ -156,6 +161,9 @@ export type SceneNode = {
   id: string;
   x: number;
   y: number;
+  /** Paint-only transforms: excluded from layout, resolved for paint and hits. */
+  translateX?: LiveNumber;
+  translateY?: LiveNumber;
   width: number;
   height: number;
   fill?: number;
@@ -250,6 +258,8 @@ function makeNode(
     id: `n${nextId++}`,
     x: Number(props.x ?? 0),
     y: Number(props.y ?? 0),
+    translateX: props.translateX as LiveNumber | undefined,
+    translateY: props.translateY as LiveNumber | undefined,
     width: Number(props.width ?? 0),
     height: Number(props.height ?? 0),
     fill: props.fill as number | undefined,
@@ -264,7 +274,7 @@ function makeNode(
     imagePixels: props.imagePixels as Uint8Array | undefined,
     imageWidth: props.imageWidth != null ? Number(props.imageWidth) : undefined,
     imageHeight: props.imageHeight != null ? Number(props.imageHeight) : undefined,
-    opacity: props.opacity != null ? Number(props.opacity) : undefined,
+    opacity: props.opacity as LiveNumber | undefined,
     scale: props.scale != null ? Number(props.scale) : undefined,
     fontSize: props.fontSize != null ? Number(props.fontSize) : undefined,
     fontWeight: props.fontWeight as string | undefined,
@@ -315,6 +325,12 @@ function measureNodeText(text: string, style: TextDrawStyle): { width: number; h
 function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   if ("x" in props) node.x = Number(props.x ?? 0);
   if ("y" in props) node.y = Number(props.y ?? 0);
+  if ("translateX" in props) {
+    node.translateX = props.translateX as LiveNumber | undefined;
+  }
+  if ("translateY" in props) {
+    node.translateY = props.translateY as LiveNumber | undefined;
+  }
   if ("width" in props) node.width = Number(props.width ?? 0);
   if ("height" in props) node.height = Number(props.height ?? 0);
   if ("fill" in props) node.fill = props.fill as number | undefined;
@@ -338,7 +354,7 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
     node.imageHeight = props.imageHeight != null ? Number(props.imageHeight) : undefined;
   }
   if ("opacity" in props) {
-    node.opacity = props.opacity != null ? Number(props.opacity) : undefined;
+    node.opacity = props.opacity as LiveNumber | undefined;
   }
   if ("scale" in props) {
     node.scale = props.scale != null ? Number(props.scale) : undefined;
@@ -637,13 +653,18 @@ export function renderShell(root: ShellRoot, element: ReactNode): void {
   }
 }
 
+function resolveLiveNumber(value: LiveNumber | undefined, fallback = 0): number {
+  if (value == null) return fallback;
+  return typeof value === "number" ? value : value.get();
+}
+
 function absPos(node: SceneNode): { x: number; y: number } {
-  let x = node.x;
-  let y = node.y;
+  let x = node.x + resolveLiveNumber(node.translateX);
+  let y = node.y + resolveLiveNumber(node.translateY);
   let p = node.parent;
   while (p) {
-    x += p.x;
-    y += p.y;
+    x += p.x + resolveLiveNumber(p.translateX);
+    y += p.y + resolveLiveNumber(p.translateY);
     p = p.parent;
   }
   return { x, y };
@@ -739,8 +760,13 @@ function renderSoftwareFrame(
   root: SceneNode,
   fbW: number,
   fbH: number,
+  reusablePixels?: Uint8Array,
 ): SoftwareFrame {
-  const pixels = new Uint8Array(fbW * fbH * 4);
+  const requiredBytes = fbW * fbH * 4;
+  const pixels = reusablePixels?.byteLength === requiredBytes
+    ? reusablePixels
+    : new Uint8Array(requiredBytes);
+  pixels.fill(0);
   const fb = new Uint32Array(pixels.buffer);
   const pitchPx = fbW;
 
@@ -770,10 +796,10 @@ function renderSoftwareFrame(
       const childBounds = visualBounds(child);
       if (!childBounds) continue;
       const translated = {
-        x0: child.x + childBounds.x0,
-        y0: child.y + childBounds.y0,
-        x1: child.x + childBounds.x1,
-        y1: child.y + childBounds.y1,
+        x0: child.x + resolveLiveNumber(child.translateX) + childBounds.x0,
+        y0: child.y + resolveLiveNumber(child.translateY) + childBounds.y0,
+        x1: child.x + resolveLiveNumber(child.translateX) + childBounds.x1,
+        y1: child.y + resolveLiveNumber(child.translateY) + childBounds.y1,
       };
       bounds = bounds
         ? {
@@ -905,15 +931,16 @@ function renderSoftwareFrame(
         node.imagePixels,
         node.imageWidth,
         node.imageHeight,
-        node.opacity,
+        node.opacity == null ? undefined : resolveLiveNumber(node.opacity),
       );
     }
 
     if (
       node.kind === "group" &&
-      (node.clip || (node.opacity != null && node.opacity !== 1))
+      (node.clip || (node.opacity != null && resolveLiveNumber(node.opacity) !== 1))
     ) {
-      if ((node.opacity ?? 1) <= 0) return;
+      const nodeOpacity = resolveLiveNumber(node.opacity, 1);
+      if (nodeOpacity <= 0) return;
       const bounds = node.clip
         ? { x0: 0, y0: 0, x1: node.width, y1: node.height }
         : visualBounds(node);
@@ -925,7 +952,15 @@ function renderSoftwareFrame(
       if (layerW === 0 || layerH === 0) return;
       const layer = new Uint32Array(layerW * layerH);
       for (const c of node.children) {
-        paint(c, layer, layerW, layerH, layerW, c.x - layerX, c.y - layerY);
+        paint(
+          c,
+          layer,
+          layerW,
+          layerH,
+          layerW,
+          c.x + resolveLiveNumber(c.translateX) - layerX,
+          c.y + resolveLiveNumber(c.translateY) - layerY,
+        );
       }
       blitPixels(
         target,
@@ -938,24 +973,254 @@ function renderSoftwareFrame(
         layerW,
         layerW,
         layerH,
-        node.opacity,
+        nodeOpacity,
       );
       return;
     }
     for (const c of node.children) {
-      paint(c, target, targetW, targetH, targetPitch, x + c.x, y + c.y);
+      paint(
+        c,
+        target,
+        targetW,
+        targetH,
+        targetPitch,
+        x + c.x + resolveLiveNumber(c.translateX),
+        y + c.y + resolveLiveNumber(c.translateY),
+      );
     }
   };
-  paint(root, fb, fbW, fbH, pitchPx, root.x, root.y);
+  paint(
+    root,
+    fb,
+    fbW,
+    fbH,
+    pitchPx,
+    root.x + resolveLiveNumber(root.translateX),
+    root.y + resolveLiveNumber(root.translateY),
+  );
   return { pixels, width: fbW, height: fbH };
 }
 
 /** Deterministic CPU implementation of the backend-neutral scene renderer. */
 export class SoftwareRenderer implements RendererBackend<SoftwareFrame> {
   readonly id = "software";
+  private pixels: Uint8Array | undefined;
 
   render(root: SceneNode, viewport: RenderViewport): SoftwareFrame {
-    return renderSoftwareFrame(root, viewport.width, viewport.height);
+    const frame = renderSoftwareFrame(
+      root,
+      viewport.width,
+      viewport.height,
+      this.pixels,
+    );
+    this.pixels = frame.pixels;
+    return frame;
+  }
+}
+
+/**
+ * CPU compositor for the same retained layers consumed by EGL. Static text,
+ * strokes and images therefore keep their raster-cache benefits when a client
+ * falls back to wl_shm; only layer composition is repeated for each frame.
+ */
+export class RetainedSoftwareRenderer {
+  readonly id = "retained-software";
+  private pixels: Uint8Array | undefined;
+
+  render(scene: RetainedSceneFrame): SoftwareFrame {
+    const requiredBytes = scene.width * scene.height * 4;
+    const pixels = this.pixels?.byteLength === requiredBytes
+      ? this.pixels
+      : new Uint8Array(requiredBytes);
+    const target = new Uint32Array(pixels.buffer);
+    target.fill(scene.clearColor >>> 0);
+
+    for (const layer of scene.layers) {
+      compositeRetainedLayer(target, scene.width, scene.height, layer);
+    }
+
+    this.pixels = pixels;
+    return { pixels, width: scene.width, height: scene.height };
+  }
+}
+
+function compositeRetainedLayer(
+  target: Uint32Array,
+  targetWidth: number,
+  targetHeight: number,
+  layer: RetainedLayer,
+): void {
+  const destination = layer.destination;
+  if (
+    destination.width <= 0 ||
+    destination.height <= 0 ||
+    layer.sourceWidth <= 0 ||
+    layer.sourceHeight <= 0
+  ) return;
+
+  const clipX0 = layer.clip ? Math.floor(layer.clip.x) : 0;
+  const clipY0 = layer.clip ? Math.floor(layer.clip.y) : 0;
+  const clipX1 = layer.clip
+    ? Math.ceil(layer.clip.x + layer.clip.width)
+    : targetWidth;
+  const clipY1 = layer.clip
+    ? Math.ceil(layer.clip.y + layer.clip.height)
+    : targetHeight;
+  const bounds = {
+    x0: Math.max(0, clipX0),
+    y0: Math.max(0, clipY0),
+    x1: Math.min(targetWidth, clipX1),
+    y1: Math.min(targetHeight, clipY1),
+  };
+  if (bounds.x1 <= bounds.x0 || bounds.y1 <= bounds.y0) return;
+
+  if (layer.dropShadow && (layer.dropShadow.color >>> 24) > 0) {
+    fillRoundedBoxShadow(
+      target,
+      targetWidth,
+      targetWidth,
+      targetHeight,
+      destination.x,
+      destination.y,
+      destination.width,
+      destination.height,
+      Math.max(0, layer.cornerRadius ?? 0),
+      layer.dropShadow,
+      bounds,
+    );
+  }
+
+  const x0 = Math.max(bounds.x0, Math.floor(destination.x));
+  const y0 = Math.max(bounds.y0, Math.floor(destination.y));
+  const x1 = Math.min(bounds.x1, Math.ceil(destination.x + destination.width));
+  const y1 = Math.min(bounds.y1, Math.ceil(destination.y + destination.height));
+  const opacity = Math.max(0, Math.min(1, layer.opacity ?? 1));
+  const radius = Math.max(0, layer.cornerRadius ?? 0);
+  const source = new Uint32Array(
+    layer.pixels.buffer,
+    layer.pixels.byteOffset,
+    Math.floor(layer.pixels.byteLength / 4),
+  );
+  const sourcePitch = Math.floor(layer.sourceStride / 4);
+
+  // Solid layers dominate widget scenes. Preserve the software renderer's
+  // direct-fill performance instead of routing every pixel through the
+  // general scaled texture sampler.
+  if (
+    layer.sourceWidth === 1 &&
+    layer.sourceHeight === 1 &&
+    opacity === 1 &&
+    (source[0]! >>> 24) === 0xff &&
+    x0 === Math.floor(destination.x) &&
+    y0 === Math.floor(destination.y) &&
+    x1 === Math.ceil(destination.x + destination.width) &&
+    y1 === Math.ceil(destination.y + destination.height)
+  ) {
+    if (radius > 0) {
+      fillRoundedRect(
+        target,
+        targetWidth,
+        targetWidth,
+        targetHeight,
+        destination.x,
+        destination.y,
+        destination.width,
+        destination.height,
+        radius,
+        source[0]!,
+      );
+    } else {
+      fillRect(
+        target,
+        targetWidth,
+        targetWidth,
+        targetHeight,
+        destination.x,
+        destination.y,
+        destination.width,
+        destination.height,
+        source[0]!,
+      );
+    }
+    return;
+  }
+
+  // Text, strokes and unscaled images are already rasterized at destination
+  // size. Avoid repeated coordinate division in the generic scaling loop.
+  if (
+    radius === 0 &&
+    Number.isInteger(destination.x) &&
+    Number.isInteger(destination.y) &&
+    destination.width === layer.sourceWidth &&
+    destination.height === layer.sourceHeight
+  ) {
+    const originX = destination.x | 0;
+    const originY = destination.y | 0;
+    for (let y = y0; y < y1; y++) {
+      const sourceRow = (y - originY) * sourcePitch;
+      const targetRow = y * targetWidth;
+      for (let x = x0; x < x1; x++) {
+        const pixel = source[sourceRow + x - originX]!;
+        if ((pixel >>> 24) === 0) continue;
+        blendPremultiplied(
+          target,
+          targetRow + x,
+          (pixel >>> 16) & 0xff,
+          (pixel >>> 8) & 0xff,
+          pixel & 0xff,
+          (pixel >>> 24) & 0xff,
+          opacity,
+        );
+      }
+    }
+    return;
+  }
+
+  for (let y = y0; y < y1; y++) {
+    const sourceY = Math.min(
+      layer.sourceHeight - 1,
+      Math.max(
+        0,
+        Math.floor(
+          ((y + 0.5 - destination.y) * layer.sourceHeight) /
+            destination.height,
+        ),
+      ),
+    );
+    for (let x = x0; x < x1; x++) {
+      const coverage = radius > 0
+        ? roundedRectCoverage(
+            x + 0.5,
+            y + 0.5,
+            destination.x,
+            destination.y,
+            destination.width,
+            destination.height,
+            radius,
+          )
+        : 1;
+      if (coverage <= 0) continue;
+      const sourceX = Math.min(
+        layer.sourceWidth - 1,
+        Math.max(
+          0,
+          Math.floor(
+            ((x + 0.5 - destination.x) * layer.sourceWidth) /
+              destination.width,
+          ),
+        ),
+      );
+      const pixel = source[sourceY * sourcePitch + sourceX]!;
+      blendPremultiplied(
+        target,
+        y * targetWidth + x,
+        (pixel >>> 16) & 0xff,
+        (pixel >>> 8) & 0xff,
+        pixel & 0xff,
+        (pixel >>> 24) & 0xff,
+        opacity * coverage,
+      );
+    }
   }
 }
 
@@ -1064,9 +1329,9 @@ export class RetainedSceneRenderer
       inheritedOpacity: number,
       inheritedClip?: RetainedClip,
     ): void => {
-      const x = parentX + node.x;
-      const y = parentY + node.y;
-      const opacity = inheritedOpacity * (node.opacity ?? 1);
+      const x = parentX + node.x + resolveLiveNumber(node.translateX);
+      const y = parentY + node.y + resolveLiveNumber(node.translateY);
+      const opacity = inheritedOpacity * resolveLiveNumber(node.opacity, 1);
       if (opacity <= 0) return;
       const clip =
         node.kind === "group" && node.clip
@@ -1569,6 +1834,7 @@ function fillRoundedBoxShadow(
   height: number,
   radius: number,
   shadow: BoxShadow,
+  clip?: { x0: number; y0: number; x1: number; y1: number },
 ): void {
   const blur = Math.max(0, shadow.blurRadius);
   const spread = Math.max(0, shadow.spread ?? 0);
@@ -1580,10 +1846,10 @@ function fillRoundedBoxShadow(
   const shadowHeight = height + spread * 2;
   const shadowRadius = radius + spread;
   const extent = Math.ceil(blur);
-  const x0 = Math.max(0, Math.floor(shadowX - extent));
-  const y0 = Math.max(0, Math.floor(shadowY - extent));
-  const x1 = Math.min(fbW, Math.ceil(shadowX + shadowWidth + extent));
-  const y1 = Math.min(fbH, Math.ceil(shadowY + shadowHeight + extent));
+  const x0 = Math.max(clip?.x0 ?? 0, Math.floor(shadowX - extent));
+  const y0 = Math.max(clip?.y0 ?? 0, Math.floor(shadowY - extent));
+  const x1 = Math.min(clip?.x1 ?? fbW, Math.ceil(shadowX + shadowWidth + extent));
+  const y1 = Math.min(clip?.y1 ?? fbH, Math.ceil(shadowY + shadowHeight + extent));
   const sigma = Math.max(0.5, blur / 3);
   const denominator = 2 * sigma * sigma;
 

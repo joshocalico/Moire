@@ -2025,6 +2025,116 @@ export const wlTouch = {
   },
 } as const;
 
+export const wpPresentation = {
+  name: "wp_presentation",
+  version: 2,
+  requests: {
+    destroy: {
+      opcode: 0,
+      since: 1,
+      destructor: true,
+      encode(targetId: number): EncodedWaylandMessage {
+        const builder = new MessageBuilder();
+        return builder.build(targetId, 0);
+      },
+    },
+    feedback: {
+      opcode: 1,
+      since: 1,
+      destructor: false,
+      encode(targetId: number, surface: number, callback: number): EncodedWaylandMessage {
+        const builder = new MessageBuilder();
+        builder.object(surface);
+        builder.newId(callback);
+        return builder.build(targetId, 1);
+      },
+    },
+  },
+  events: {
+    clockId: {
+      opcode: 0,
+      since: 1,
+      decodeReader(reader: MessageReader) {
+        return {
+          clkId: reader.uint(),
+        };
+      },
+      decode(data: Buffer, fds: number[] = []) {
+        const reader = new MessageReader(data, fds);
+        return this.decodeReader(reader);
+      },
+    },
+  },
+  enums: {
+    error: {
+      invalidTimestamp: 0,
+      invalidFlag: 1,
+    },
+  },
+} as const;
+
+export const wpPresentationFeedback = {
+  name: "wp_presentation_feedback",
+  version: 2,
+  requests: {
+  },
+  events: {
+    syncOutput: {
+      opcode: 0,
+      since: 1,
+      decodeReader(reader: MessageReader) {
+        return {
+          output: reader.object(),
+        };
+      },
+      decode(data: Buffer, fds: number[] = []) {
+        const reader = new MessageReader(data, fds);
+        return this.decodeReader(reader);
+      },
+    },
+    presented: {
+      opcode: 1,
+      since: 1,
+      decodeReader(reader: MessageReader) {
+        return {
+          tvSecHi: reader.uint(),
+          tvSecLo: reader.uint(),
+          tvNsec: reader.uint(),
+          refresh: reader.uint(),
+          seqHi: reader.uint(),
+          seqLo: reader.uint(),
+          flags: reader.uint(),
+        };
+      },
+      decode(data: Buffer, fds: number[] = []) {
+        const reader = new MessageReader(data, fds);
+        return this.decodeReader(reader);
+      },
+    },
+    discarded: {
+      opcode: 2,
+      since: 1,
+      decodeReader(reader: MessageReader) {
+        void reader;
+        return {};
+      },
+      decode(data: Buffer, fds: number[] = []) {
+        void data;
+        void fds;
+        return {};
+      },
+    },
+  },
+  enums: {
+    kind: {
+      vsync: 1,
+      hwClock: 2,
+      hwCompletion: 4,
+      zeroCopy: 8,
+    },
+  },
+} as const;
+
 export const xdgPopup = {
   name: "xdg_popup",
   version: 7,
@@ -3079,6 +3189,8 @@ export const WAYLAND_INTERFACES = {
   wlSubsurface,
   wlSurface,
   wlTouch,
+  wpPresentation,
+  wpPresentationFeedback,
   xdgPopup,
   xdgPositioner,
   xdgSurface,

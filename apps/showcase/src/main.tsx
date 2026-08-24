@@ -30,6 +30,15 @@ import {
   EmptyState,
   Tabs,
   CodeView,
+  LineChart,
+  AreaChart,
+  BarChart,
+  StackedBarChart,
+  ScatterChart,
+  Sparkline,
+  DonutChart,
+  RadialChart,
+  HeatmapChart,
   TerminalView,
   Tooltip,
   Disclosure,
@@ -258,6 +267,32 @@ const SAMPLES: Sample[] = [
 />`,
   },
   {
+    id: "charts",
+    title: "Charts",
+    description: "Interactive Cartesian, categorical, radial, and density visualizations",
+    section: "Data",
+    code: `const activity = [{
+  id: "cpu",
+  label: "CPU",
+  points: samples.map((value, index) => ({ x: index, y: value })),
+}];
+
+<LineChart
+  width={720}
+  height={260}
+  series={activity}
+  showAxes
+  showGrid
+  showLegend
+  formatValue={(value) => \`${"${value.toFixed(1)}"}%\`}
+  onHover={(point) => setInspector(point)}
+/>
+
+<StackedBarChart width={720} height={260} series={workloads} />
+<DonutChart width={360} height={220} data={memoryKinds} />
+<HeatmapChart width={360} height={220} cells={frameDensity} />`,
+  },
+  {
     id: "tree",
     title: "Tree view",
     description: "Expandable hierarchy with keyed selection",
@@ -464,6 +499,10 @@ const GUIDANCE: Record<string, SampleGuidance> = {
     about: "Table combines virtualized keyed rows with controlled, accessible sort headers.",
     when: "Use when several comparable attributes matter and column scanning aids decisions.",
   },
+  charts: {
+    about: "Charts share one data model, palette, axis rhythm, legend language, and hover feedback across Cartesian, categorical, radial, and density views.",
+    when: "Use a line or area for change, bars for category comparison, scatter for relationship, donut for a small composition, radial for one bounded value, and heatmaps for two-dimensional density.",
+  },
   tree: {
     about: "TreeView flattens an owned expansion model into a virtualized navigable hierarchy.",
     when: "Use for folders, outlines, scene graphs, or nested resources with stable identities.",
@@ -525,6 +564,23 @@ const SECTIONS: NavigationSidebarSection[] = [
             : "file",
   })),
 }));
+
+function ChartCard(props: {
+  width: number;
+  height: number;
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+}): ReactNode {
+  const pal = themePalette();
+  return (
+    <Surface width={props.width} height={props.height} fill={pal.panel} radius={10} stroke={pal.borderSubtle} strokeWidth={1} clip>
+      <Label x={14} y={10} width={props.width - 28} height={16} text={props.title} fontSize={11} fontWeight="medium" overflow="ellipsis" maxLines={1} />
+      <Label x={14} y={27} width={props.width - 28} height={13} text={props.subtitle} color={pal.muted} fontSize={8} overflow="ellipsis" maxLines={1} />
+      <Surface x={8} y={44} width={props.width - 16} height={props.height - 52} fill={0x00000000}>{props.children}</Surface>
+    </Surface>
+  );
+}
 
 function Preview(props: {
   sample: Sample;
@@ -808,6 +864,77 @@ function Preview(props: {
         striped
       />
     );
+  } else if (props.sample.id === "charts") {
+    const galleryWidth = Math.min(780, contentW);
+    const cardWidth = Math.floor((galleryWidth - 12) / 2);
+    const cardHeight = 220;
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
+    const throughput = [
+      { id: "egl", label: "EGL", points: [42, 51, 49, 63, 72, 84].map((y, index) => ({ x: months[index]!, y })) },
+      { id: "shm", label: "SHM", points: [38, 40, 43, 41, 46, 48].map((y, index) => ({ x: months[index]!, y })) },
+    ];
+    const frameBudget = [
+      { id: "scene", label: "Scene", points: [4.2, 3.8, 3.5, 3.2, 3.0, 2.8].map((y, index) => ({ x: months[index]!, y })) },
+    ];
+    const workloads = [
+      { id: "ui", label: "UI", points: [18, 24, 20, 31, 29, 36].map((y, index) => ({ x: months[index]!, y })) },
+      { id: "composite", label: "Composite", points: [12, 16, 15, 19, 22, 25].map((y, index) => ({ x: months[index]!, y })) },
+      { id: "idle", label: "Idle", points: [30, 20, 25, 16, 18, 11].map((y, index) => ({ x: months[index]!, y })) },
+    ];
+    const scatter = [{ id: "frames", label: "Frames", points: [
+      { x: 1, y: 54 }, { x: 2, y: 57 }, { x: 3, y: 55 }, { x: 4, y: 59 },
+      { x: 5, y: 58 }, { x: 6, y: 60 }, { x: 7, y: 58 }, { x: 8, y: 59 },
+    ] }];
+    const heatCells = ["Mon", "Tue", "Wed", "Thu", "Fri"].flatMap((row, rowIndex) =>
+      ["09", "12", "15", "18", "21"].map((column, columnIndex) => ({
+        row,
+        column,
+        value: ((rowIndex + 2) * (columnIndex + 3) * 11) % 100,
+      })),
+    );
+    content = (
+      <Column width={galleryWidth} gap={12}>
+        <Row width={galleryWidth} height={cardHeight} gap={12} align="stretch">
+          <ChartCard width={cardWidth} height={cardHeight} title="Throughput" subtitle="Line · hover to inspect">
+            <LineChart width={cardWidth - 16} height={cardHeight - 52} series={throughput} />
+          </ChartCard>
+          <ChartCard width={cardWidth} height={cardHeight} title="Frame budget" subtitle="Area · time-series emphasis">
+            <AreaChart width={cardWidth - 16} height={cardHeight - 52} series={frameBudget} fillOpacity={0.28} />
+          </ChartCard>
+        </Row>
+        <Row width={galleryWidth} height={cardHeight} gap={12} align="stretch">
+          <ChartCard width={cardWidth} height={cardHeight} title="Renderer comparison" subtitle="Grouped bars">
+            <BarChart width={cardWidth - 16} height={cardHeight - 52} series={throughput} />
+          </ChartCard>
+          <ChartCard width={cardWidth} height={cardHeight} title="CPU composition" subtitle="Stacked bars">
+            <StackedBarChart width={cardWidth - 16} height={cardHeight - 52} series={workloads} />
+          </ChartCard>
+        </Row>
+        <Row width={galleryWidth} height={cardHeight} gap={12} align="stretch">
+          <ChartCard width={cardWidth} height={cardHeight} title="Frame distribution" subtitle="Scatter · relationship and outliers">
+            <ScatterChart width={cardWidth - 16} height={cardHeight - 52} series={scatter} showLegend={false} />
+          </ChartCard>
+          <ChartCard width={cardWidth} height={cardHeight} title="Memory ownership" subtitle="Donut · small composition">
+            <DonutChart width={cardWidth - 16} height={cardHeight - 52} data={[
+              { id: "textures", label: "Textures", value: 46 },
+              { id: "scene", label: "Scene", value: 27 },
+              { id: "runtime", label: "Runtime", value: 19 },
+              { id: "other", label: "Other", value: 8 },
+            ]} />
+          </ChartCard>
+        </Row>
+        <Row width={galleryWidth} height={cardHeight} gap={12} align="stretch">
+          <ChartCard width={cardWidth} height={cardHeight} title="Activity density" subtitle="Heatmap · two-dimensional intensity">
+            <HeatmapChart width={cardWidth - 16} height={cardHeight - 52} cells={heatCells} />
+          </ChartCard>
+          <ChartCard width={cardWidth} height={cardHeight} title="Compact indicators" subtitle="Radial progress and sparklines">
+            <RadialChart x={10} y={5} width={128} height={128} value={0.78} label="Frame budget" />
+            <Sparkline x={150} y={20} width={cardWidth - 184} height={42} values={[18, 22, 19, 28, 31, 29, 38, 35]} fill />
+            <Sparkline x={150} y={84} width={cardWidth - 184} height={42} values={[44, 41, 39, 36, 37, 33, 31, 29]} />
+          </ChartCard>
+        </Row>
+      </Column>
+    );
   } else if (props.sample.id === "tree") {
     content = (
       <TreeView
@@ -1028,7 +1155,7 @@ function Preview(props: {
   };
 
   return (
-    <ScrollArea width={props.width} height={props.height} contentHeight={Math.max(props.height, 820)}>
+    <ScrollArea width={props.width} height={props.height} contentHeight={Math.max(props.height, props.sample.id === "charts" ? 1240 : 820)}>
       <Column x={32} y={28} width={contentW} gap={18}>
         <Label text={props.sample.title} fontSize={20} fontWeight="bold" width={contentW} height={28} />
         <Label text={props.sample.description} color={pal.muted} fontSize={12} width={contentW} height={36} wrap lineGap={3} overflow="ellipsis" maxLines={2} />

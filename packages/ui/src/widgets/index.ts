@@ -323,3 +323,32 @@ export { measureTerminalGrid } from "./terminal-view.js";
 
 export { StatusBar } from "./status-bar.js";
 export type { StatusBarProps } from "./status-bar.js";
+
+export {
+  LineChart,
+  AreaChart,
+  BarChart,
+  StackedBarChart,
+  ScatterChart,
+  Sparkline,
+  DonutChart,
+  RadialChart,
+  HeatmapChart,
+  ChartLegend,
+} from "./chart.js";
+export type {
+  ChartPoint,
+  ChartSeries,
+  ChartHover,
+  CartesianChartProps,
+  LineChartProps,
+  AreaChartProps,
+  BarChartProps,
+  ScatterChartProps,
+  SparklineProps,
+  DonutDatum,
+  DonutChartProps,
+  RadialChartProps,
+  HeatmapCell,
+  HeatmapChartProps,
+} from "./chart.js";

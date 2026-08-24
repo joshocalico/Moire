@@ -73,6 +73,7 @@ const TS_RESERVED = new Set([
 const DEFAULT_XML = [
   "/usr/share/wayland/wayland.xml",
   "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml",
+  "/usr/share/wayland-protocols/stable/presentation-time/presentation-time.xml",
   "/usr/share/wayland-protocols/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml",
   "/usr/share/wayland-protocols/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml",
 ];

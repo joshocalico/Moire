@@ -35,9 +35,19 @@ const DrmEventContext = koffi.struct("drmEventContext_moire", {
 
 type PendingPageFlip = {
   output: KmsOutput;
-  resolve: () => void;
+  resolve: (feedback: KmsPresentationFeedback) => void;
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
+};
+
+/** Timestamp and sequence reported by DRM for a completed scanout update. */
+export type KmsPresentationFeedback = {
+  sequence: number;
+  seconds: number;
+  nanoseconds: number;
+  vsync: boolean;
+  hardwareClock: boolean;
+  hardwareCompletion: boolean;
 };
 
 type KmsPageFlipDevicePresenter = {
@@ -1271,16 +1281,23 @@ function pageFlipPresenter(
   presenter.callback = koffi.register(
     (
       _fd: number,
-      _sequence: number,
-      _seconds: number,
-      _microseconds: number,
+      sequence: number,
+      seconds: number,
+      microseconds: number,
       crtcId: number,
     ) => {
       const pending = presenter.pending.get(crtcId);
       if (!pending) return;
       presenter.pending.delete(crtcId);
       clearTimeout(pending.timeout);
-      pending.resolve();
+      pending.resolve({
+        sequence,
+        seconds,
+        nanoseconds: microseconds * 1_000,
+        vsync: true,
+        hardwareClock: true,
+        hardwareCompletion: true,
+      });
     },
     koffi.pointer(DrmPageFlipHandler2),
   );
@@ -1312,9 +1329,9 @@ async function tryPageFlip(
   out: KmsOutput,
   framebufferId: number,
   readiness?: LinuxReadinessDispatcher,
-): Promise<boolean> {
+): Promise<KmsPresentationFeedback | null> {
   const presenter = pageFlipPresenter(out, readiness);
-  if (presenter.support.get(out) === false) return false;
+  if (presenter.support.get(out) === false) return null;
   if (presenter.pending.has(out.crtcId)) {
     throw new Error(`DRM page flip already pending on ${out.connectorName}`);
   }
@@ -1332,10 +1349,10 @@ async function tryPageFlip(
       `[kms] page flips unavailable on ${out.connectorName}; retaining SetCrtc fallback (${queued})`,
     );
     presenter.support.set(out, false);
-    return false;
+    return null;
   }
   const wasSupported = presenter.support.get(out) === true;
-  await new Promise<void>((resolve, reject) => {
+  const feedback = await new Promise<KmsPresentationFeedback>((resolve, reject) => {
     const timeout = setTimeout(() => {
       presenter.pending.delete(out.crtcId);
       reject(new Error(`DRM page flip timed out on ${out.connectorName}`));
@@ -1346,7 +1363,7 @@ async function tryPageFlip(
     console.log(`[kms] page-flip presentation ready on ${out.connectorName}`);
   }
   presenter.support.set(out, true);
-  return true;
+  return feedback;
 }
 
 function destroyPageFlipPresenter(out: KmsOutput): void {
@@ -1380,12 +1397,21 @@ export async function presentKmsFramebuffer(
   out: KmsOutput,
   framebufferId: number,
   readiness?: LinuxReadinessDispatcher,
-): Promise<void> {
-  if (
-    framebufferId !== out.fbId &&
-    (await tryPageFlip(out, framebufferId, readiness))
-  ) return;
+): Promise<KmsPresentationFeedback> {
+  if (framebufferId !== out.fbId) {
+    const feedback = await tryPageFlip(out, framebufferId, readiness);
+    if (feedback) return feedback;
+  }
   setKmsFramebuffer(out, framebufferId);
+  const now = process.hrtime.bigint();
+  return {
+    sequence: 0,
+    seconds: Number(now / 1_000_000_000n),
+    nanoseconds: Number(now % 1_000_000_000n),
+    vsync: false,
+    hardwareClock: false,
+    hardwareCompletion: false,
+  };
 }
 
 function setKmsFramebuffer(out: KmsOutput, framebufferId: number): void {

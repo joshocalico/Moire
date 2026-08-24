@@ -6,6 +6,7 @@ import {
   Text,
   measureTextBounds,
   type HitPressEvent,
+  type LiveNumber,
 } from "@moire/react-host";
 import { useWidgetTheme } from "../widget-theme.js";
 import {
@@ -192,6 +193,9 @@ registerIntrinsicSize(Label, intrinsicTextSize);
 export type SurfaceProps = {
   x?: number;
   y?: number;
+  /** Paint-only motion which does not disturb layout or reconcile React. */
+  translateX?: LiveNumber;
+  translateY?: LiveNumber;
   width: number;
   height: number;
   fill?: number;
@@ -199,7 +203,7 @@ export type SurfaceProps = {
   stroke?: number;
   strokeWidth?: number;
   elevation?: "none" | "low" | "medium" | "high";
-  opacity?: number;
+  opacity?: LiveNumber;
   clip?: boolean;
   children?: ReactNode;
   onPress?: () => void;
@@ -217,6 +221,8 @@ export function Surface(props: SurfaceProps): ReactNode {
     <Group
       x={props.x ?? 0}
       y={props.y ?? 0}
+      translateX={props.translateX}
+      translateY={props.translateY}
       width={props.width}
       height={props.height}
       opacity={props.opacity}

@@ -5,6 +5,7 @@ import {
   hitRegionContains,
   renderShell,
   RetainedSceneRenderer,
+  RetainedSoftwareRenderer,
   SoftwareRenderer,
   type HitRegion,
   type HitKeyEvent,
@@ -13,13 +14,56 @@ import {
 } from "@moire/react-host";
 import type {
   PlatformBackend,
+  PlatformDiagnostics,
   PlatformWindow,
   UiKeyEvent,
+  UiFrameEvent,
+  UiPresentationMode,
   UiPointerEvent,
 } from "./platform.js";
-import { tickAllMotions } from "./motion.js";
+import { getMotionActivity, tickMotionFrame } from "./motion.js";
 
 export type WindowSize = { width: number; height: number };
+
+export type WindowPerformanceSnapshot = {
+  width: number;
+  height: number;
+  frames: number;
+  retainedFrames: number;
+  softwareFrames: number;
+  /** Component-tree commits; presentation-only frames deliberately skip this. */
+  reconciledFrames: number;
+  framesPerSecond: number;
+  submittedFramesPerSecond: number;
+  compositorFrames: number;
+  compositorFramesPerSecond: number;
+  presentedFrames: number;
+  presentedFramesPerSecond: number;
+  discardedFrames: number;
+  dmabufFrames: number;
+  shmFrames: number;
+  lastTransport: "dmabuf" | "shm" | "headless" | null;
+  displayRefreshHz: number;
+  lastFrameMs: number;
+  averageFrameMs: number;
+  lastSceneMs: number;
+  averageSceneMs: number;
+  lastRasterMs: number;
+  averageRasterMs: number;
+  lastSubmitMs: number;
+  averageSubmitMs: number;
+  lastCopyMs: number;
+  averageCopyMs: number;
+  lastBufferReleaseMs: number;
+  averageBufferReleaseMs: number;
+  lastDamagePercent: number;
+  averageDamagePercent: number;
+  presentationFrameMsP50: number;
+  presentationFrameMsP95: number;
+  averagePresentationLatencyMs: number;
+  presentationLatencyMsP95: number;
+  lastLayerCount: number;
+};
 
 /**
  * Most recently mounted window, used by `hitTestDropData` to resolve DnD
@@ -60,6 +104,32 @@ export function requestActiveWindowRedraw(): void {
 }
 
 export type WindowContent = ReactNode | ((size: WindowSize) => ReactNode);
+
+type TimedSample = { sourceMs: number; receivedAtMs: number };
+
+function average(samples: readonly number[]): number {
+  return samples.length > 0
+    ? samples.reduce((total, sample) => total + sample, 0) / samples.length
+    : 0;
+}
+
+function measuredRate(samples: TimedSample[], now: number): number {
+  while (samples[0] && samples[0].receivedAtMs < now - 1_500) samples.shift();
+  if (samples.length < 2) return 0;
+  const elapsed = samples.at(-1)!.sourceMs - samples[0]!.sourceMs;
+  return elapsed > 0 ? ((samples.length - 1) * 1_000) / elapsed : 0;
+}
+
+function retainSample(samples: number[], value: number, limit = 120): void {
+  samples.push(value);
+  if (samples.length > limit) samples.splice(0, samples.length - limit);
+}
+
+function percentile(samples: readonly number[], ratio: number): number {
+  if (samples.length === 0) return 0;
+  const sorted = [...samples].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio))]!;
+}
 
 export type PopupOptions = {
   x: number;
@@ -106,7 +176,7 @@ export class Window {
       // Timer/promise-driven React state (Spinner, async loading, progress)
       // commits outside tickFrame(). Schedule a present without requiring an
       // unrelated pointer/key event to wake the visual state up.
-      if (!this.renderingRoot) this.dirty = true;
+      if (!this.renderingRoot) this.invalidate();
     },
   });
   private platformWin: PlatformWindow | null = null;
@@ -114,14 +184,54 @@ export class Window {
   private readonly popups = new Set<Window>();
   private hits: HitRegion[] = [];
   private dirty = true;
+  /** React/component tree changed; false means the committed scene is reusable. */
+  private reconcileDirty = true;
   /** Suppress invalidation caused by the explicit renderShell call in tick. */
   private renderingRoot = false;
   private closed = false;
   private readonly onCloseCallbacks = new Set<() => void>();
+  private readonly invalidationCallbacks = new Set<() => void>();
+  private readonly compositorFrameCallbacks = new Set<
+    (timestampMs: number) => void
+  >();
+  private animationsActive = false;
   /** Current Wayland/headless presentation path consumes software frames. */
   private readonly renderer = new SoftwareRenderer();
   /** Primitive-layer renderer offered to accelerated platform windows first. */
   private readonly retainedRenderer = new RetainedSceneRenderer();
+  /** Cached-layer compositor used when the platform declines acceleration. */
+  private readonly retainedSoftwareRenderer = new RetainedSoftwareRenderer();
+  private frameCount = 0;
+  private retainedFrameCount = 0;
+  private softwareFrameCount = 0;
+  private reconciledFrameCount = 0;
+  private lastFrameMs = 0;
+  private lastLayerCount = 0;
+  private compositorFrameCount = 0;
+  private presentedFrameCount = 0;
+  private discardedFrameCount = 0;
+  private dmabufFrameCount = 0;
+  private shmFrameCount = 0;
+  private lastTransport: "dmabuf" | "shm" | "headless" | null = null;
+  private displayRefreshHz = 0;
+  private lastSceneMs = 0;
+  private lastRasterMs = 0;
+  private lastSubmitMs = 0;
+  private lastCopyMs = 0;
+  private lastBufferReleaseMs = 0;
+  private lastDamagePercent = 0;
+  private readonly pendingSubmissionTimes = new Map<number, number>();
+  private readonly recentSubmitTimes: TimedSample[] = [];
+  private readonly recentCompositorTimes: TimedSample[] = [];
+  private readonly recentPresentationTimes: TimedSample[] = [];
+  private readonly recentFrameDurations: number[] = [];
+  private readonly recentSceneDurations: number[] = [];
+  private readonly recentRasterDurations: number[] = [];
+  private readonly recentSubmitDurations: number[] = [];
+  private readonly recentCopyDurations: number[] = [];
+  private readonly recentBufferReleaseDurations: number[] = [];
+  private readonly recentDamagePercents: number[] = [];
+  private readonly recentPresentationLatencies: number[] = [];
   private focusedId: string | null = null;
   private focusedHit: HitRegion | null = null;
   private readonly consumedAutoFocusIds = new Set<string>();
@@ -160,7 +270,7 @@ export class Window {
 
   setContent(node: WindowContent): void {
     this.content = node;
-    this.dirty = true;
+    this.invalidate();
   }
 
   setTitle(title: string): void {
@@ -173,12 +283,91 @@ export class Window {
     this.onCloseCallbacks.add(cb);
   }
 
+  /** Application-loop hook: fires whenever this window needs another tick. */
+  onInvalidated(cb: () => void): () => void {
+    this.invalidationCallbacks.add(cb);
+    return () => this.invalidationCallbacks.delete(cb);
+  }
+
+  private invalidate(reconcile = true): void {
+    this.dirty = true;
+    if (reconcile) this.reconcileDirty = true;
+    for (const callback of this.invalidationCallbacks) callback();
+  }
+
+  /** Subscribe to compositor frame opportunities (Wayland wl_surface.frame). */
+  onCompositorFrame(cb: (timestampMs: number) => void): () => void {
+    this.compositorFrameCallbacks.add(cb);
+    return () => this.compositorFrameCallbacks.delete(cb);
+  }
+
   getWidth(): number {
     return this.width;
   }
 
   getHeight(): number {
     return this.height;
+  }
+
+  getPlatformDiagnostics(): PlatformDiagnostics | null {
+    return this.backend?.getDiagnostics() ?? null;
+  }
+
+  getPerformanceSnapshot(): WindowPerformanceSnapshot {
+    const now = performance.now();
+    const submittedFramesPerSecond = measuredRate(this.recentSubmitTimes, now);
+    const compositorFramesPerSecond = measuredRate(
+      this.recentCompositorTimes,
+      now,
+    );
+    const presentedFramesPerSecond = measuredRate(
+      this.recentPresentationTimes,
+      now,
+    );
+    const presentationIntervals = this.recentPresentationTimes
+      .slice(1)
+      .map((sample, index) =>
+        sample.sourceMs - this.recentPresentationTimes[index]!.sourceMs,
+      )
+      .filter((interval) => interval > 0);
+    return {
+      width: this.width,
+      height: this.height,
+      frames: this.frameCount,
+      retainedFrames: this.retainedFrameCount,
+      softwareFrames: this.softwareFrameCount,
+      reconciledFrames: this.reconciledFrameCount,
+      framesPerSecond: submittedFramesPerSecond,
+      submittedFramesPerSecond,
+      compositorFrames: this.compositorFrameCount,
+      compositorFramesPerSecond,
+      presentedFrames: this.presentedFrameCount,
+      presentedFramesPerSecond,
+      discardedFrames: this.discardedFrameCount,
+      dmabufFrames: this.dmabufFrameCount,
+      shmFrames: this.shmFrameCount,
+      lastTransport: this.lastTransport,
+      displayRefreshHz: this.displayRefreshHz,
+      lastFrameMs: this.lastFrameMs,
+      averageFrameMs: average(this.recentFrameDurations),
+      lastSceneMs: this.lastSceneMs,
+      averageSceneMs: average(this.recentSceneDurations),
+      lastRasterMs: this.lastRasterMs,
+      averageRasterMs: average(this.recentRasterDurations),
+      lastSubmitMs: this.lastSubmitMs,
+      averageSubmitMs: average(this.recentSubmitDurations),
+      lastCopyMs: this.lastCopyMs,
+      averageCopyMs: average(this.recentCopyDurations),
+      lastBufferReleaseMs: this.lastBufferReleaseMs,
+      averageBufferReleaseMs: average(this.recentBufferReleaseDurations),
+      lastDamagePercent: this.lastDamagePercent,
+      averageDamagePercent: average(this.recentDamagePercents),
+      presentationFrameMsP50: percentile(presentationIntervals, 0.5),
+      presentationFrameMsP95: percentile(presentationIntervals, 0.95),
+      averagePresentationLatencyMs: average(this.recentPresentationLatencies),
+      presentationLatencyMsP95: percentile(this.recentPresentationLatencies, 0.95),
+      lastLayerCount: this.lastLayerCount,
+    };
   }
 
   isClosed(): boolean {
@@ -204,6 +393,11 @@ export class Window {
     this.platformWin?.beginMove();
   }
 
+  setPresentationMode(mode: UiPresentationMode): void {
+    this.platformWin?.setPresentationMode(mode);
+    this.requestRedraw();
+  }
+
   private attachPlatformWindow(
     pw: PlatformWindow,
     makeActive: boolean,
@@ -215,10 +409,10 @@ export class Window {
       if (nextW !== this.width || nextH !== this.height) {
         this.width = nextW;
         this.height = nextH;
-        this.dirty = true;
+        this.invalidate();
       } else {
         // Still need a first paint after configure ack.
-        this.dirty = true;
+        this.invalidate();
       }
     });
     pw.onClose(() => {
@@ -227,6 +421,7 @@ export class Window {
     });
     pw.onPointer((ev) => this.handlePointer(ev));
     pw.onKey((ev) => this.handleKey(ev));
+    pw.onFrame((ev) => this.handleFrameEvent(ev));
     if (makeActive) activeWindowForHitTest = this;
   }
 
@@ -244,6 +439,8 @@ export class Window {
       resizable: false,
     });
     popup.backend = backend;
+    // Wake the application loop for the popup without rebuilding the parent.
+    popup.onInvalidated(() => this.invalidate(false));
     popup.setContent(opts.content);
     const platformPopup = backend.createPopup({
       parent,
@@ -327,22 +524,40 @@ export class Window {
     const now = Date.now();
     const dt = Math.min((now - this.lastTickMs) / 1000, 0.1);
     this.lastTickMs = now;
-    if (advanceMotions && tickAllMotions(dt)) {
+    const motion = advanceMotions
+      ? tickMotionFrame(dt)
+      : { active: false, presentationChanged: false, requiresReconcile: false };
+    this.animationsActive = motion.active;
+    if (motion.presentationChanged || motion.requiresReconcile) {
       this.dirty = true;
-      for (const popup of this.popups) popup.dirty = true;
+      if (motion.requiresReconcile) this.reconcileDirty = true;
+      for (const popup of this.popups) {
+        popup.dirty = true;
+        if (motion.requiresReconcile) popup.reconcileDirty = true;
+      }
     }
 
     if (!this.dirty) return;
     this.dirty = false;
-    const tree =
-      typeof this.content === "function"
-        ? this.content({ width: this.width, height: this.height })
-        : this.content;
-    this.renderingRoot = true;
-    try {
-      renderShell(this.root, tree);
-    } finally {
-      this.renderingRoot = false;
+    const frameStartedAt = performance.now();
+    const shouldReconcile = this.reconcileDirty;
+    this.reconcileDirty = false;
+    if (shouldReconcile) {
+      this.reconciledFrameCount++;
+      const tree =
+        typeof this.content === "function"
+          ? this.content({ width: this.width, height: this.height })
+          : this.content;
+      this.renderingRoot = true;
+      try {
+        renderShell(this.root, tree);
+      } finally {
+        this.renderingRoot = false;
+      }
+      // A motion may have mounted or resumed inside this commit. It has not
+      // participated in the pre-render tick yet, but must request the next
+      // compositor frame so it can begin without a timer or React state loop.
+      if (advanceMotions) this.animationsActive = getMotionActivity().active;
     }
     // Rendering may synchronously finish a closing popup and destroy this
     // platform window. Do not present through a handle invalidated mid-frame.
@@ -351,23 +566,151 @@ export class Window {
       width: this.width,
       height: this.height,
     };
+    // Live transforms affect pointer geometry even though layout is unchanged.
     this.refreshHits();
+    const sceneFinishedAt = performance.now();
+    const sceneMs = sceneFinishedAt - frameStartedAt;
     if (platformWin.presentScene) {
+      const rasterStartedAt = performance.now();
       const retained = this.retainedRenderer.render(this.root.container, viewport);
-      if (platformWin.presentScene(retained)) return;
+      this.lastLayerCount = retained.layers.length;
+      const submitStartedAt = performance.now();
+      if (platformWin.presentScene(retained)) {
+        this.recordRenderedFrame(
+          "retained",
+          frameStartedAt,
+          sceneMs,
+          submitStartedAt - rasterStartedAt,
+          performance.now() - submitStartedAt,
+        );
+        return;
+      }
+      const frame = this.retainedSoftwareRenderer.render(retained);
+      const rasterMs = performance.now() - rasterStartedAt;
+      const softwareSubmitStartedAt = performance.now();
+      platformWin.present(frame.pixels, frame.width, frame.height);
+      this.recordRenderedFrame(
+        "software",
+        frameStartedAt,
+        sceneMs,
+        rasterMs,
+        performance.now() - softwareSubmitStartedAt,
+      );
+      return;
     }
+    const rasterStartedAt = performance.now();
     const frame = this.renderer.render(this.root.container, viewport);
+    const rasterMs = performance.now() - rasterStartedAt;
+    const submitStartedAt = performance.now();
     platformWin.present(frame.pixels, frame.width, frame.height);
+    this.recordRenderedFrame(
+      "software",
+      frameStartedAt,
+      sceneMs,
+      rasterMs,
+      performance.now() - submitStartedAt,
+    );
+  }
+
+  private handleFrameEvent(ev: UiFrameEvent): void {
+    if (ev.type === "submitted") {
+      this.frameCount++;
+      this.lastTransport = ev.transport;
+      if (ev.transport === "dmabuf") this.dmabufFrameCount++;
+      if (ev.transport === "shm") this.shmFrameCount++;
+      this.lastCopyMs = ev.copyMs;
+      retainSample(this.recentCopyDurations, ev.copyMs);
+      this.lastDamagePercent = ev.totalPixels > 0
+        ? (ev.damagedPixels / ev.totalPixels) * 100
+        : 0;
+      retainSample(this.recentDamagePercents, this.lastDamagePercent);
+      this.pendingSubmissionTimes.set(ev.commitId, ev.submittedAtMs);
+      if (this.pendingSubmissionTimes.size > 240) {
+        const oldest = this.pendingSubmissionTimes.keys().next().value as
+          | number
+          | undefined;
+        if (oldest != null) this.pendingSubmissionTimes.delete(oldest);
+      }
+      this.recentSubmitTimes.push({
+        sourceMs: ev.submittedAtMs,
+        receivedAtMs: ev.submittedAtMs,
+      });
+      return;
+    }
+    if (ev.type === "compositor-frame") {
+      this.compositorFrameCount++;
+      this.recentCompositorTimes.push({
+        sourceMs: ev.timestampMs,
+        receivedAtMs: ev.receivedAtMs,
+      });
+      for (const callback of this.compositorFrameCallbacks) {
+        callback(ev.timestampMs);
+      }
+      if (this.animationsActive || ev.retrySuggested) this.invalidate(false);
+      return;
+    }
+    if (ev.type === "presented") {
+      this.presentedFrameCount++;
+      const wholeMs = ev.timestampNs / 1_000_000n;
+      const fractionalMs = ev.timestampNs % 1_000_000n;
+      this.recentPresentationTimes.push({
+        sourceMs: Number(wholeMs) + Number(fractionalMs) / 1_000_000,
+        receivedAtMs: ev.receivedAtMs,
+      });
+      this.displayRefreshHz = ev.refreshNs > 0
+        ? 1_000_000_000 / ev.refreshNs
+        : this.displayRefreshHz;
+      const submittedAtMs = this.pendingSubmissionTimes.get(ev.commitId);
+      if (submittedAtMs != null) {
+        retainSample(
+          this.recentPresentationLatencies,
+          Math.max(0, ev.receivedAtMs - submittedAtMs),
+        );
+        this.pendingSubmissionTimes.delete(ev.commitId);
+      }
+      return;
+    }
+    if (ev.type === "discarded") {
+      this.discardedFrameCount++;
+      this.pendingSubmissionTimes.delete(ev.commitId);
+      return;
+    }
+    this.lastBufferReleaseMs = ev.latencyMs;
+    retainSample(this.recentBufferReleaseDurations, ev.latencyMs);
+    if (ev.retrySuggested) this.invalidate(false);
+  }
+
+  private recordRenderedFrame(
+    renderer: "retained" | "software",
+    startedAt: number,
+    sceneMs: number,
+    rasterMs: number,
+    submitMs: number,
+  ): void {
+    const duration = performance.now() - startedAt;
+    if (renderer === "retained") this.retainedFrameCount++;
+    else this.softwareFrameCount++;
+    this.lastFrameMs = duration;
+    this.lastSceneMs = sceneMs;
+    this.lastRasterMs = rasterMs;
+    this.lastSubmitMs = submitMs;
+    retainSample(this.recentFrameDurations, duration);
+    retainSample(this.recentSceneDurations, sceneMs);
+    retainSample(this.recentRasterDurations, rasterMs);
+    retainSample(this.recentSubmitDurations, submitMs);
   }
 
   requestRedraw(): void {
-    this.dirty = true;
+    this.invalidate();
   }
 
   destroy(): void {
     for (const popup of [...this.popups]) popup.destroy();
     this.popups.clear();
     this.closed = true;
+    this.compositorFrameCallbacks.clear();
+    this.invalidationCallbacks.clear();
+    this.pendingSubmissionTimes.clear();
     this.focusedHit?.onFocusChange?.(false);
     this.focusedHit = null;
     this.focusedId = null;
@@ -394,7 +737,7 @@ export class Window {
       this.renderingRoot = false;
     }
     this.refreshHits();
-    this.dirty = true;
+    this.invalidate();
   }
 
   private refreshHits(): void {
@@ -420,7 +763,7 @@ export class Window {
     if (autoFocusCandidate?.focusId) {
       this.consumedAutoFocusIds.add(autoFocusCandidate.focusId);
       this.changeFocus(autoFocusCandidate);
-      this.dirty = true;
+      this.invalidate();
       return;
     }
     if (activeScopeId && this.focusedHit?.focusScopeId !== activeScopeId) {
@@ -429,7 +772,7 @@ export class Window {
       );
       if (firstInScope) {
         this.changeFocus(firstInScope);
-        this.dirty = true;
+        this.invalidate();
         return;
       }
     }
@@ -461,7 +804,7 @@ export class Window {
     this.hoverHit?.onPointerLeave?.(this.makeEvArgs(this.hoverHit, ev));
     this.hoverHit = next;
     next?.onPointerEnter?.(this.makeEvArgs(next, ev));
-    this.dirty = true;
+    this.invalidate();
   }
 
   private activeTrappedScopeId(): string | null {
@@ -550,8 +893,8 @@ export class Window {
         // than re-hit-testing at the live position.
         if (this.capturedHit.onPointerMove) {
           this.capturedHit.onPointerMove(this.makeEvArgs(this.capturedHit, ev));
+          this.flushAndDirty();
         }
-        this.dirty = true;
         return;
       }
       const newHover = this.findTopHit(
@@ -581,8 +924,6 @@ export class Window {
       }
       if (changed) {
         this.flushAndDirty();
-      } else {
-        this.dirty = true;
       }
       return;
     }
@@ -606,8 +947,6 @@ export class Window {
         this.flushAndDirty();
       } else if (focusChanged) {
         this.flushAndDirty();
-      } else {
-        this.dirty = true;
       }
       return;
     }
