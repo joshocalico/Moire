@@ -111,6 +111,16 @@ export type RectProps = HostPointerProps & {
   radius?: number;
   stroke?: number;
   strokeWidth?: number;
+  shadow?: BoxShadow;
+};
+
+/** Renderer-neutral outer shadow for elevated rectangular surfaces. */
+export type BoxShadow = {
+  color: number;
+  blurRadius: number;
+  offsetX?: number;
+  offsetY?: number;
+  spread?: number;
 };
 
 export type TextProps = {
@@ -146,6 +156,7 @@ export type SceneNode = {
   radius?: number;
   stroke?: number;
   strokeWidth?: number;
+  shadow?: BoxShadow;
   color?: number;
   text?: string;
   clip?: boolean;
@@ -240,6 +251,7 @@ function makeNode(
     stroke: props.stroke as number | undefined,
     strokeWidth:
       props.strokeWidth != null ? Number(props.strokeWidth) : undefined,
+    shadow: props.shadow as BoxShadow | undefined,
     color: props.color as number | undefined,
     text: props.text as string | undefined,
     clip: props.clip as boolean | undefined,
@@ -308,6 +320,7 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
     node.strokeWidth =
       props.strokeWidth != null ? Number(props.strokeWidth) : undefined;
   }
+  if ("shadow" in props) node.shadow = props.shadow as BoxShadow | undefined;
   if ("color" in props) node.color = props.color as number | undefined;
   if ("text" in props) node.text = props.text as string | undefined;
   if ("clip" in props) node.clip = props.clip as boolean | undefined;
@@ -448,7 +461,9 @@ const hostConfig = {
   getRootHostContext: (): HostContext => ({}),
   getChildHostContext: (parent: HostContext): HostContext => parent,
   prepareForCommit: () => null,
-  resetAfterCommit: () => {},
+  resetAfterCommit: (container: SceneNode) => {
+    rootCommitListeners.get(container)?.();
+  },
   createInstance(type: string, props: Record<string, unknown>): SceneNode {
     const kind = (
       type === "image" || type === "rect" || type === "text" ? type : "group"
@@ -572,14 +587,22 @@ function removeChild(parent: SceneNode, child: SceneNode): void {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const reconciler = Reconciler(hostConfig as any);
 
+const rootCommitListeners = new WeakMap<SceneNode, () => void>();
+
 export type ShellRoot = {
   container: SceneNode;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fiber: any;
 };
 
-export function createShellRoot(): ShellRoot {
+export type ShellRootOptions = {
+  /** Called when React commits state outside an explicit renderShell call. */
+  onCommit?: () => void;
+};
+
+export function createShellRoot(options: ShellRootOptions = {}): ShellRoot {
   const container = makeNode("group", { x: 0, y: 0, width: 0, height: 0 });
+  if (options.onCommit) rootCommitListeners.set(container, options.onCommit);
   const fiber = reconciler.createContainer(
     container,
     LegacyRoot,
@@ -715,6 +738,61 @@ function renderSoftwareFrame(
   const fb = new Uint32Array(pixels.buffer);
   const pitchPx = fbW;
 
+  type PaintBounds = { x0: number; y0: number; x1: number; y1: number };
+  const visualBounds = (node: SceneNode): PaintBounds | null => {
+    let bounds: PaintBounds | null =
+      node.kind === "rect" || node.kind === "image"
+        ? { x0: 0, y0: 0, x1: node.width, y1: node.height }
+        : node.kind === "text"
+          // Glyph bearings and antialias coverage can extend just outside the
+          // measured advance box. Preserve that fringe in opacity layers.
+          ? { x0: -2, y0: -2, x1: node.width + 2, y1: node.height + 2 }
+          : null;
+    if (node.kind === "rect" && node.shadow) {
+      const spread = Math.max(0, node.shadow.spread ?? 0);
+      const extent = Math.max(0, node.shadow.blurRadius) + spread;
+      const offsetX = node.shadow.offsetX ?? 0;
+      const offsetY = node.shadow.offsetY ?? 0;
+      bounds = {
+        x0: Math.min(bounds?.x0 ?? 0, offsetX - extent),
+        y0: Math.min(bounds?.y0 ?? 0, offsetY - extent),
+        x1: Math.max(bounds?.x1 ?? node.width, node.width + offsetX + extent),
+        y1: Math.max(bounds?.y1 ?? node.height, node.height + offsetY + extent),
+      };
+    }
+    for (const child of node.children) {
+      const childBounds = visualBounds(child);
+      if (!childBounds) continue;
+      const translated = {
+        x0: child.x + childBounds.x0,
+        y0: child.y + childBounds.y0,
+        x1: child.x + childBounds.x1,
+        y1: child.y + childBounds.y1,
+      };
+      bounds = bounds
+        ? {
+            x0: Math.min(bounds.x0, translated.x0),
+            y0: Math.min(bounds.y0, translated.y0),
+            x1: Math.max(bounds.x1, translated.x1),
+            y1: Math.max(bounds.y1, translated.y1),
+          }
+        : translated;
+    }
+    if (node.kind === "group" && node.clip) {
+      if (!bounds) return null;
+      const clipped = {
+        x0: Math.max(0, bounds.x0),
+        y0: Math.max(0, bounds.y0),
+        x1: Math.min(node.width, bounds.x1),
+        y1: Math.min(node.height, bounds.y1),
+      };
+      return clipped.x1 > clipped.x0 && clipped.y1 > clipped.y0
+        ? clipped
+        : null;
+    }
+    return bounds;
+  };
+
   const paint = (
     node: SceneNode,
     target: Uint32Array,
@@ -727,6 +805,20 @@ function renderSoftwareFrame(
     if (node.kind === "rect") {
       const radius = Math.max(0, node.radius ?? 0);
       const strokeWidth = Math.max(0, node.strokeWidth ?? 1);
+      if (node.shadow && (node.shadow.color >>> 24) > 0) {
+        fillRoundedBoxShadow(
+          target,
+          targetPitch,
+          targetW,
+          targetH,
+          x,
+          y,
+          node.width,
+          node.height,
+          radius,
+          node.shadow,
+        );
+      }
       if (node.fill != null) {
         if (radius > 0) {
           fillRoundedRect(
@@ -811,25 +903,35 @@ function renderSoftwareFrame(
       );
     }
 
-    if (node.kind === "group" && node.clip) {
-      const clipW = Math.max(0, node.width | 0);
-      const clipH = Math.max(0, node.height | 0);
-      if (clipW === 0 || clipH === 0) return;
-      const layer = new Uint32Array(clipW * clipH);
+    if (
+      node.kind === "group" &&
+      (node.clip || (node.opacity != null && node.opacity !== 1))
+    ) {
+      if ((node.opacity ?? 1) <= 0) return;
+      const bounds = node.clip
+        ? { x0: 0, y0: 0, x1: node.width, y1: node.height }
+        : visualBounds(node);
+      if (!bounds) return;
+      const layerX = Math.floor(bounds.x0);
+      const layerY = Math.floor(bounds.y0);
+      const layerW = Math.max(0, Math.ceil(bounds.x1) - layerX);
+      const layerH = Math.max(0, Math.ceil(bounds.y1) - layerY);
+      if (layerW === 0 || layerH === 0) return;
+      const layer = new Uint32Array(layerW * layerH);
       for (const c of node.children) {
-        paint(c, layer, clipW, clipH, clipW, c.x, c.y);
+        paint(c, layer, layerW, layerH, layerW, c.x - layerX, c.y - layerY);
       }
       blitPixels(
         target,
         targetPitch,
         targetW,
         targetH,
-        x,
-        y,
+        x + layerX,
+        y + layerY,
         layer,
-        clipW,
-        clipW,
-        clipH,
+        layerW,
+        layerW,
+        layerH,
         node.opacity,
       );
       return;
@@ -1137,6 +1239,81 @@ function roundedRectCoverage(
   const cy = py < y + r ? y + r : y + h - r;
   const distance = Math.hypot(px - cx, py - cy);
   return Math.max(0, Math.min(1, r + 0.5 - distance));
+}
+
+function roundedRectSignedDistance(
+  px: number,
+  py: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): number {
+  const r = clampedRadius(width, height, radius);
+  const halfW = width / 2;
+  const halfH = height / 2;
+  const qx = Math.abs(px - (x + halfW)) - Math.max(0, halfW - r);
+  const qy = Math.abs(py - (y + halfH)) - Math.max(0, halfH - r);
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) +
+    Math.min(Math.max(qx, qy), 0) - r;
+}
+
+/**
+ * Analytic blurred outer shadow. This keeps elevation backend-neutral while
+ * avoiding a framebuffer-sized convolution in the software renderer.
+ */
+function fillRoundedBoxShadow(
+  fb: Uint32Array,
+  pitchPx: number,
+  fbW: number,
+  fbH: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+  shadow: BoxShadow,
+): void {
+  const blur = Math.max(0, shadow.blurRadius);
+  const spread = Math.max(0, shadow.spread ?? 0);
+  const offsetX = shadow.offsetX ?? 0;
+  const offsetY = shadow.offsetY ?? 0;
+  const shadowX = x + offsetX - spread;
+  const shadowY = y + offsetY - spread;
+  const shadowWidth = width + spread * 2;
+  const shadowHeight = height + spread * 2;
+  const shadowRadius = radius + spread;
+  const extent = Math.ceil(blur);
+  const x0 = Math.max(0, Math.floor(shadowX - extent));
+  const y0 = Math.max(0, Math.floor(shadowY - extent));
+  const x1 = Math.min(fbW, Math.ceil(shadowX + shadowWidth + extent));
+  const y1 = Math.min(fbH, Math.ceil(shadowY + shadowHeight + extent));
+  const sigma = Math.max(0.5, blur / 3);
+  const denominator = 2 * sigma * sigma;
+
+  for (let py = y0; py < y1; py++) {
+    for (let px = x0; px < x1; px++) {
+      // The opaque surface paints over this area immediately afterwards.
+      if (roundedRectCoverage(px + 0.5, py + 0.5, x, y, width, height, radius) >= 1) {
+        continue;
+      }
+      const distance = roundedRectSignedDistance(
+        px + 0.5,
+        py + 0.5,
+        shadowX,
+        shadowY,
+        shadowWidth,
+        shadowHeight,
+        shadowRadius,
+      );
+      const coverage = distance <= 0
+        ? 1
+        : Math.exp(-(distance * distance) / denominator);
+      if (coverage < 0.002) continue;
+      blendCoverageColor(fb, py * pitchPx + px, shadow.color, coverage);
+    }
+  }
 }
 
 function fillRoundedRect(

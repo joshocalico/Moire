@@ -51,7 +51,7 @@ export type BannerProps = {
 export function Banner(props: BannerProps): ReactNode {
   const theme = useWidgetTheme();
   const pal = theme.foundations.palette;
-  const height = props.height ?? 64;
+  const height = props.height ?? (props.message ? 70 : 56);
   const accent = toneColor(props.tone ?? "accent", pal);
   return (
     <Surface x={props.x} y={props.y} width={props.width} height={height} fill={pal.surface} radius={theme.foundations.radii.medium} stroke={pal.borderSubtle} strokeWidth={theme.foundations.borders.control} elevation="low">
@@ -61,7 +61,7 @@ export function Banner(props: BannerProps): ReactNode {
           {props.icon ? <Box width={20} height={20}><Icon name={props.icon} size={20} color={accent} symbolic /></Box> : null}
           <Vertical flexGrow={1} gap={2} justify="center">
             <TextBlock height={18} text={props.title} color={pal.text} fontSize={13} fontWeight="medium" verticalAlign="center" overflow="ellipsis" maxLines={1} />
-            {props.message ? <TextBlock height={16} text={props.message} color={pal.muted} fontSize={11} verticalAlign="center" overflow="ellipsis" maxLines={1} /> : null}
+            {props.message ? <TextBlock height={30} text={props.message} color={pal.muted} fontSize={11} wrap lineGap={2} verticalAlign="center" overflow="ellipsis" maxLines={2} /> : null}
           </Vertical>
           {props.action ? <Align width={108} alignX="stretch" alignY="center">{props.action}</Align> : null}
         </Horizontal>
@@ -110,14 +110,14 @@ export function EmptyState(props: EmptyStateProps): ReactNode {
   const theme = useWidgetTheme();
   const pal = theme.foundations.palette;
   const contentWidth = Math.max(1, Math.min(360, props.width - 32));
-  const contentHeight = (props.icon ? 56 : 0) + 24 + (props.message ? 28 : 0) + (props.action ? 46 : 0);
+  const contentHeight = (props.icon ? 56 : 0) + 24 + (props.message ? 44 : 0) + (props.action ? 46 : 0);
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       <Center width={props.width} height={props.height}>
         <Vertical width={contentWidth} height={contentHeight} gap={8} align="center">
           {props.icon ? <Box width={48} height={48}><Icon name={props.icon} size={48} color={pal.muted} symbolic /></Box> : null}
           <TextBlock width={contentWidth} height={24} text={props.title} color={pal.text} fontSize={15} fontWeight="medium" horizontalAlign="center" verticalAlign="center" overflow="ellipsis" maxLines={1} />
-          {props.message ? <TextBlock width={contentWidth} height={20} text={props.message} color={pal.muted} fontSize={11} horizontalAlign="center" verticalAlign="center" overflow="ellipsis" maxLines={1} /> : null}
+          {props.message ? <TextBlock width={contentWidth} height={36} text={props.message} color={pal.muted} fontSize={11} horizontalAlign="center" verticalAlign="center" wrap lineGap={3} overflow="ellipsis" maxLines={2} /> : null}
           {props.action ? <Box width={140} height={36}>{props.action}</Box> : null}
         </Vertical>
       </Center>
@@ -133,7 +133,7 @@ registerIntrinsicSize(Badge, (props) => {
 
 registerIntrinsicSize(Banner, (props) => ({
   width: props.width,
-  height: props.height ?? 64,
+  height: props.height ?? (props.message ? 70 : 56),
 }));
 
 registerIntrinsicSize(Spinner, (props) => {

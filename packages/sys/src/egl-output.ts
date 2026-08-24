@@ -73,6 +73,7 @@ const UNIT_QUAD_TEX_COORDS = new Float32Array([
 ]);
 
 const DRM_FORMAT_XRGB8888 = 0x34325258;
+const DRM_FORMAT_ARGB8888 = 0x34325241;
 const GBM_BO_USE_SCANOUT = 1 << 0;
 const GBM_BO_USE_RENDERING = 1 << 2;
 const GBM_BO_USE_LINEAR = 1 << 4;
@@ -152,6 +153,18 @@ export type EglDirectPresent = {
   stride: number;
   width: number;
   height: number;
+};
+
+/** A renderer-owned dma-buf suitable for a Wayland wl_buffer. */
+export type EglClientPresent = {
+  /** Stable for the lifetime of the underlying GBM BO. */
+  id: string;
+  fd: number;
+  width: number;
+  height: number;
+  stride: number;
+  format: number;
+  modifier: bigint;
 };
 
 export type EglCompositionLayer = {
@@ -314,6 +327,21 @@ type DirectOutputPool = {
   lastRendered: DirectOutputTarget | null;
 };
 
+type ClientTarget = EglClientPresent & {
+  bo: unknown;
+  image: unknown;
+  texture: number;
+  framebuffer: number;
+  busy: boolean;
+};
+
+type ClientTargetPool = {
+  channel: string;
+  key: string;
+  retired: boolean;
+  targets: ClientTarget[];
+};
+
 export class EglOutputScaler {
   readonly info: EglOutputInfo;
 
@@ -421,6 +449,9 @@ export class EglOutputScaler {
   private sceneClearColor: number | null = null;
   private activeDamage: DamageRect | null = null;
   private readonly directTargets = new Map<string, DirectOutputPool>();
+  private readonly clientTargets = new Map<string, ClientTargetPool>();
+  private readonly currentClientPool = new Map<string, string>();
+  private nextClientTargetId = 1;
   private compositionFrame = 0;
   private sourceWidth = 0;
   private sourceHeight = 0;
@@ -2102,6 +2133,213 @@ void main() {
     this.gbmBoDestroy(target.bo);
   }
 
+  private createClientTarget(
+    channel: string,
+    width: number,
+    height: number,
+  ): ClientTarget {
+    if (!this.info.eglExtensions.includes("EGL_EXT_image_dma_buf_import")) {
+      throw new Error("EGL_EXT_image_dma_buf_import is unavailable");
+    }
+
+    let bo: unknown = null;
+    let image: unknown = null;
+    let texture = 0;
+    let framebuffer = 0;
+    let fd = -1;
+    try {
+      // Linear is intentionally requested for the first client transport
+      // tranche: it is accepted by the compositor's advertised dmabuf
+      // feedback and leaves the CPU snapshot fallback viable.
+      bo = this.gbmBoCreate(
+        this.gbmDevice,
+        width,
+        height,
+        DRM_FORMAT_ARGB8888,
+        GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR,
+      );
+      if (pointerAddress(bo) === 0n) {
+        throw new Error("gbm_bo_create client target failed");
+      }
+      const stride = Number(this.gbmBoGetStride(bo));
+      const format = Number(this.gbmBoGetFormat(bo));
+      const modifier = BigInt(this.gbmBoGetModifier(bo) as bigint | number);
+      fd = Number(this.gbmBoGetFd(bo));
+      if (stride < width * 4 || fd < 0) {
+        throw new Error("GBM client target has invalid stride or dma-buf fd");
+      }
+
+      const imageAttributes = new Int32Array([
+        EGL_WIDTH,
+        width,
+        EGL_HEIGHT,
+        height,
+        EGL_LINUX_DRM_FOURCC_EXT,
+        format,
+        EGL_DMA_BUF_PLANE0_FD_EXT,
+        fd,
+        EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+        0,
+        EGL_DMA_BUF_PLANE0_PITCH_EXT,
+        stride,
+        EGL_NONE,
+      ]);
+      image = this.eglCreateImage(
+        this.display,
+        null,
+        EGL_LINUX_DMA_BUF_EXT,
+        null,
+        imageAttributes,
+      );
+      if (pointerAddress(image) === 0n) {
+        throw new Error("eglCreateImageKHR client dma-buf failed");
+      }
+
+      const glGenTextures = this.gl.func(
+        "void glGenTextures(int n, _Out_ unsigned int *textures)",
+      ) as NativeFunction;
+      const glGenFramebuffers = this.gl.func(
+        "void glGenFramebuffers(int n, _Out_ unsigned int *framebuffers)",
+      ) as NativeFunction;
+      texture = uintOut((out) => void glGenTextures(1, out));
+      framebuffer = uintOut((out) => void glGenFramebuffers(1, out));
+      this.configureTexture(texture);
+      this.glBindTexture(GL_TEXTURE_2D, texture);
+      this.glEglImageTargetTexture(GL_TEXTURE_2D, image);
+      this.bindColorTarget(framebuffer, texture);
+
+      return {
+        id: `${channel}:${this.nextClientTargetId++}`,
+        fd,
+        width,
+        height,
+        stride,
+        format,
+        modifier,
+        bo,
+        image,
+        texture,
+        framebuffer,
+        busy: false,
+      };
+    } catch (error) {
+      if (framebuffer) {
+        this.glDeleteFramebuffers(1, new Uint32Array([framebuffer]));
+      }
+      if (texture) this.glDeleteTextures(1, new Uint32Array([texture]));
+      if (pointerAddress(image) !== 0n) {
+        this.eglDestroyImage(this.display, image);
+      }
+      if (fd >= 0) closeFd(fd);
+      if (pointerAddress(bo) !== 0n) this.gbmBoDestroy(bo);
+      throw error;
+    }
+  }
+
+  private destroyClientTarget(target: ClientTarget): void {
+    this.glDeleteFramebuffers(1, new Uint32Array([target.framebuffer]));
+    this.glDeleteTextures(1, new Uint32Array([target.texture]));
+    this.eglDestroyImage(this.display, target.image);
+    closeFd(target.fd);
+    this.gbmBoDestroy(target.bo);
+  }
+
+  private collectClientPool(pool: ClientTargetPool): void {
+    if (!pool.retired || pool.targets.some((target) => target.busy)) return;
+    for (const target of pool.targets) this.destroyClientTarget(target);
+    this.clientTargets.delete(pool.key);
+  }
+
+  /**
+   * Upload a software scene once, then present it from a renderer-owned GBM
+   * BO. This is the transport bridge for native Wayland clients; a future
+   * retained-scene EGL renderer can paint into the same targets directly.
+   *
+   * Returns null when all three targets are still held by the compositor so
+   * callers can fall back to wl_shm without stalling the UI thread.
+   */
+  renderClientFrame(
+    channel: string,
+    pixels: Uint8Array,
+    width: number,
+    height: number,
+  ): EglClientPresent | null {
+    if (this.destroyed) throw new Error("EGL output scaler is destroyed");
+    const key = `${channel}:${width}x${height}`;
+    const previousKey = this.currentClientPool.get(channel);
+    if (previousKey && previousKey !== key) {
+      const previous = this.clientTargets.get(previousKey);
+      if (previous) {
+        previous.retired = true;
+        this.collectClientPool(previous);
+      }
+    }
+    this.currentClientPool.set(channel, key);
+
+    let pool = this.clientTargets.get(key);
+    if (!pool) {
+      pool = { channel, key, retired: false, targets: [] };
+      this.clientTargets.set(key, pool);
+    }
+    let target = pool.targets.find((candidate) => !candidate.busy);
+    if (!target && pool.targets.length < 3) {
+      target = this.createClientTarget(channel, width, height);
+      pool.targets.push(target);
+    }
+    if (!target) return null;
+
+    this.beginFrame(pixels, width, height);
+    this.paintOutput(
+      {
+        id: channel,
+        x: 0,
+        y: 0,
+        width,
+        height,
+        targetWidth: width,
+        targetHeight: height,
+      },
+      target.texture,
+      target.framebuffer,
+      false,
+    );
+    this.glFlush();
+    target.busy = true;
+    return {
+      id: target.id,
+      fd: target.fd,
+      width: target.width,
+      height: target.height,
+      stride: target.stride,
+      format: target.format,
+      modifier: target.modifier,
+    };
+  }
+
+  /** Mark a client target reusable after wl_buffer.release. */
+  releaseClientFrame(id: string): void {
+    for (const pool of this.clientTargets.values()) {
+      const target = pool.targets.find((candidate) => candidate.id === id);
+      if (!target) continue;
+      target.busy = false;
+      this.collectClientPool(pool);
+      return;
+    }
+  }
+
+  /** Retire every target belonging to a destroyed Wayland surface. */
+  dropClientChannel(channel: string): void {
+    this.currentClientPool.delete(channel);
+    for (const pool of this.clientTargets.values()) {
+      if (pool.channel !== channel) continue;
+      // The wl_buffer objects are destroyed before this call. Moire snapshots
+      // buffers during commit, so no server-side GPU access remains here.
+      for (const target of pool.targets) target.busy = false;
+      pool.retired = true;
+      this.collectClientPool(pool);
+    }
+  }
+
   /** Render into a DRM-registered GBM BO without CPU readback. */
   renderOutputDirect(output: EglDirectOutput): EglDirectPresent {
     const target = this.directTargetFor(output, true);
@@ -2205,6 +2443,11 @@ void main() {
         for (const target of pool.targets) this.destroyDirectTarget(target);
       }
       this.directTargets.clear();
+      for (const pool of this.clientTargets.values()) {
+        for (const target of pool.targets) this.destroyClientTarget(target);
+      }
+      this.clientTargets.clear();
+      this.currentClientPool.clear();
       const textures = [
         this.sourceTexture,
         this.targetTexture,

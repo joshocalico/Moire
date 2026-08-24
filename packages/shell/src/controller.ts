@@ -176,6 +176,12 @@ export type ShellBridge = {
     cursorY: number,
     label: string,
   ): void;
+  /** Revisioned drag preview used by retained compositor backends. */
+  dragRaster(
+    cursorX: number,
+    cursorY: number,
+    label: string,
+  ): ShellRasterSurface | null;
   /** Label for an in-progress desktop icon drag, if any. */
   desktopDragLabel?(): string | null;
   /**
@@ -501,6 +507,7 @@ export function createShell(
     w: number;
     h: number;
   } | null = null;
+  let dragChipRevision = 0;
   const DESKTOP_DRAG_THRESHOLD = 8;
 
   const updateDesktopSelection = (
@@ -1440,6 +1447,120 @@ export function createShell(
     desktopDirty = true;
   };
 
+  const buildDragRaster = (
+    cursorX: number,
+    cursorY: number,
+    label: string,
+  ): ShellRasterSurface | null => {
+    const text = label.length > 24 ? label.slice(0, 23) + "…" : label;
+    const desktopPreview = desktopDrag ?? desktopDragReturn;
+    const isDesktopDrag = desktopPreview?.label === label;
+    let dirEntry = false;
+    if (isDesktopDrag) {
+      try {
+        dirEntry = fs
+          .statSync(path.join(desktopDir(), desktopPreview.name))
+          .isDirectory();
+      } catch {
+        // The file may have moved while the return animation is completing.
+      }
+    }
+    const padX = 12;
+    const padY = 8;
+    const plainW = Math.max(
+      72,
+      Math.round(measureText(text, 13 / 14) + padX * 2 + 28),
+    );
+    const w = isDesktopDrag ? DESKTOP_ITEM_W : plainW;
+    const h = isDesktopDrag ? DESKTOP_ITEM_H : 36;
+    const cacheKey = `${text}|${isDesktopDrag}|${dirEntry}`;
+    if (!dragChipCache || dragChipCache.key !== cacheKey) {
+      const pal = themePalette();
+      renderShell(
+        dragChipRoot,
+        isDesktopDrag
+          ? createElement(
+              Group,
+              { x: 0, y: 0, width: w, height: h },
+              createElement(GridItem, {
+                width: w,
+                height: h,
+                label: text,
+                iconSize: ICON_SIZE,
+                labelScrim: true,
+                interactive: false,
+                icon: createElement(Icon, {
+                  name: dirEntry ? "folder" : "file",
+                  size: ICON_SIZE,
+                  color: dirEntry ? pal.accent : pal.text,
+                }),
+              }),
+            )
+          : createElement(
+              Group,
+              { x: 0, y: 0, width: w, height: h },
+              createElement(Rect, {
+                width: w,
+                height: h,
+                fill: (pal.surface & 0x00ffffff) | 0xf0000000,
+              }),
+              createElement(Rect, {
+                width: w,
+                height: 1,
+                fill: pal.rimLight,
+              }),
+              createElement(Rect, {
+                width: 3,
+                height: h,
+                fill: pal.accentLine,
+              }),
+              createElement(Label, {
+                x: padX + 4,
+                y: padY,
+                text,
+                color: pal.text,
+                fontSize: 13,
+                fontWeight: "medium",
+              }),
+            ),
+      );
+      const painted = rasterize(dragChipRoot.container, w, h);
+      dragChipCache = { key: cacheKey, pixels: painted.pixels, w, h };
+      dragChipRevision++;
+    }
+
+    let x = (cursorX | 0) + 14;
+    let y = (cursorY | 0) + 12;
+    if (desktopDrag) {
+      x = (cursorX | 0) - desktopDrag.grabX;
+      y = (cursorY | 0) - desktopDrag.grabY;
+    } else if (desktopDragReturn) {
+      const animation = desktopDragReturn;
+      const progress = Math.min(
+        1,
+        Math.max(0, (Date.now() - animation.startedMs) / animation.durationMs),
+      );
+      if (progress >= 1) {
+        desktopDragReturn = null;
+        desktopDirty = true;
+        return null;
+      }
+      const eased = 1 - Math.pow(1 - progress, 3);
+      x = Math.round(animation.fromX + (animation.originX - animation.fromX) * eased);
+      y = Math.round(animation.fromY + (animation.originY - animation.fromY) * eased);
+    }
+    return {
+      id: "shell:drag-preview",
+      pixels: dragChipCache.pixels,
+      width: dragChipCache.w,
+      height: dragChipCache.h,
+      stride: dragChipCache.w * 4,
+      revision: dragChipRevision,
+      x,
+      y,
+    };
+  };
+
   return {
     setPrimaryOutput(next) {
       if (
@@ -2350,6 +2471,10 @@ export function createShell(
         dy = Math.round(anim.fromY + (anim.originY - anim.fromY) * eased);
       }
       blitStrip(fb, pitchPx, _width, _height, dx, dy, chip.pixels, chip.w, chip.h);
+    },
+
+    dragRaster(cursorX, cursorY, label) {
+      return buildDragRaster(cursorX, cursorY, label);
     },
 
     desktopDragLabel: () =>

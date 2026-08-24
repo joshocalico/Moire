@@ -791,6 +791,12 @@ export type CompositorShell = {
     cursorY: number,
     label: string,
   ): void;
+  /** Revisioned shell drag preview for retained compositor backends. */
+  dragRaster?(
+    cursorX: number,
+    cursorY: number,
+    label: string,
+  ): ShellRasterSurface | null;
   desktopDragLabel?(): string | null;
   /**
    * URI payload + label for the desktop icon currently mid local-reposition
@@ -3176,7 +3182,14 @@ export class CompositorServer {
     const moved = nx !== this.cursorX || ny !== this.cursorY;
     this.cursorX = nx;
     this.cursorY = ny;
-    if (moved && !this.syncHardwareCursor()) this.markDirty();
+    if (moved) {
+      const cursorPlaneActive = this.syncHardwareCursor();
+      // A hardware cursor can move without repainting the scene, but drag
+      // previews remain compositor layers and must track every motion.
+      if (!cursorPlaneActive || this.drag || this.shell?.desktopDragLabel?.()) {
+        this.markDirty();
+      }
+    }
     if (this.drag) {
       this.updateSsdPointerHover(false);
       this.updateDragFocus(ev.timeMs);
@@ -3237,7 +3250,12 @@ export class CompositorServer {
     const moved = nx !== this.cursorX || ny !== this.cursorY;
     this.cursorX = nx;
     this.cursorY = ny;
-    if (moved && !this.syncHardwareCursor()) this.markDirty();
+    if (moved) {
+      const cursorPlaneActive = this.syncHardwareCursor();
+      if (!cursorPlaneActive || this.drag || this.shell?.desktopDragLabel?.()) {
+        this.markDirty();
+      }
+    }
     if (this.drag) {
       this.updateSsdPointerHover(false);
       this.updateDragFocus(ev.timeMs);
@@ -4764,8 +4782,9 @@ export class CompositorServer {
       !this.shell?.desktopRaster ||
       !this.shell.chromeRaster ||
       !this.shell.ssdRaster ||
-      (this.drag != null && this.drag.iconId == null) ||
-      (this.drag == null && this.shell.desktopDragLabel?.() != null)
+      (((this.drag != null && this.drag.iconId == null) ||
+        (this.drag == null && this.shell.desktopDragLabel?.() != null)) &&
+        !this.shell.dragRaster)
     ) {
       return false;
     }
@@ -4881,6 +4900,31 @@ export class CompositorServer {
         opacity: 0.92,
         sampling: "nearest",
       };
+    }
+
+    const label = drag?.label || this.shell?.desktopDragLabel?.() || null;
+    if (label && this.shell?.dragRaster) {
+      const raster = this.shell.dragRaster(this.cursorX, this.cursorY, label);
+      if (raster) {
+        return {
+          id: raster.id,
+          z,
+          source: {
+            pixels: raster.pixels,
+            width: raster.width,
+            height: raster.height,
+            stride: raster.stride,
+            revision: raster.revision,
+          },
+          destination: {
+            x: raster.x,
+            y: raster.y,
+            width: raster.width,
+            height: raster.height,
+          },
+          sampling: "nearest",
+        };
+      }
     }
     return null;
   }

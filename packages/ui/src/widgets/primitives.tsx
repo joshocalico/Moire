@@ -67,10 +67,27 @@ function wrapParagraph(text: string, width: number, style: TextMeasureStyle): st
     const candidate = line ? `${line} ${word}` : word;
     if (!line || lineWidth(candidate, style) <= width) {
       line = candidate;
-      continue;
+      if (lineWidth(line, style) <= width) continue;
     }
-    lines.push(line);
-    line = word;
+    if (line && line !== word) lines.push(line);
+    const characters = Array.from(word);
+    line = "";
+    while (characters.length > 0) {
+      let low = 1;
+      let high = characters.length;
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if (lineWidth(characters.slice(0, middle).join(""), style) <= width) {
+          low = middle;
+        } else {
+          high = middle - 1;
+        }
+      }
+      const take = Math.max(1, low);
+      const fragment = characters.splice(0, take).join("");
+      if (characters.length > 0) lines.push(fragment);
+      else line = fragment;
+    }
   }
   if (line) lines.push(line);
   return lines;
@@ -195,7 +212,6 @@ export function Surface(props: SurfaceProps): ReactNode {
   const elevation = props.elevation && props.elevation !== "none"
     ? theme.foundations.elevation[props.elevation]
     : null;
-  const shadowSpread = elevation ? Math.max(1, Math.round(elevation.blur / 4)) : 0;
   const shadowAlpha = elevation ? Math.round(elevation.opacity * 255) : 0;
   return (
     <Group
@@ -205,27 +221,22 @@ export function Surface(props: SurfaceProps): ReactNode {
       height={props.height}
       opacity={props.opacity}
     >
-      {elevation ? (
-        <Rect
-          x={-shadowSpread}
-          y={elevation.offsetY - shadowSpread}
-          width={props.width + shadowSpread * 2}
-          height={props.height + shadowSpread * 2}
-          fill={(shadowAlpha << 24) >>> 0}
-          radius={(props.radius ?? palette.radiusMd) + shadowSpread}
-        />
-      ) : null}
+      <Rect
+        width={props.width}
+        height={props.height}
+        fill={props.fill ?? palette.panel}
+        radius={props.radius}
+        stroke={props.stroke}
+        strokeWidth={props.strokeWidth}
+        shadow={elevation ? {
+          color: (shadowAlpha << 24) >>> 0,
+          blurRadius: elevation.blur,
+          offsetY: elevation.offsetY,
+        } : undefined}
+        onPress={props.onPress}
+        onContextMenu={props.onContextMenu}
+      />
       <Group width={props.width} height={props.height} clip={props.clip}>
-        <Rect
-          width={props.width}
-          height={props.height}
-          fill={props.fill ?? palette.panel}
-          radius={props.radius}
-          stroke={props.stroke}
-          strokeWidth={props.strokeWidth}
-          onPress={props.onPress}
-          onContextMenu={props.onContextMenu}
-        />
         {props.children}
       </Group>
     </Group>

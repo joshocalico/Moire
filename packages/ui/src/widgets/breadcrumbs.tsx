@@ -145,7 +145,7 @@ export function PathBar(props: PathBarProps): ReactNode {
 
   return (
     <Horizontal x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={h} gap={gap} align="center">
-      <Measure flexGrow={1} minWidth={1}>{({ width }) => editing ? (
+      <Measure flexGrow={1} minWidth={1} height={h}>{({ width }) => editing ? (
         <TextField
           width={width}
           height={h}

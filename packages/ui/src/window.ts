@@ -100,12 +100,21 @@ export class Window {
   private width: number;
   private height: number;
   private content: WindowContent = null;
-  private root: ShellRoot = createShellRoot();
+  private root: ShellRoot = createShellRoot({
+    onCommit: () => {
+      // Timer/promise-driven React state (Spinner, async loading, progress)
+      // commits outside tickFrame(). Schedule a present without requiring an
+      // unrelated pointer/key event to wake the visual state up.
+      if (!this.renderingRoot) this.dirty = true;
+    },
+  });
   private platformWin: PlatformWindow | null = null;
   private backend: PlatformBackend | null = null;
   private readonly popups = new Set<Window>();
   private hits: HitRegion[] = [];
   private dirty = true;
+  /** Suppress invalidation caused by the explicit renderShell call in tick. */
+  private renderingRoot = false;
   private closed = false;
   private readonly onCloseCallbacks = new Set<() => void>();
   /** Current Wayland/headless presentation path consumes software frames. */
@@ -116,6 +125,8 @@ export class Window {
 
   // Pointer state
   private hoverHit: HitRegion | null = null;
+  /** Last known pointer geometry, used to reconcile hover after layout moves. */
+  private lastPointerEvent: UiPointerEvent | null = null;
   private downPos: { x: number; y: number } | null = null;
   /**
    * The hit region that received the last `down`, held until `up`. Move/up
@@ -324,7 +335,12 @@ export class Window {
       typeof this.content === "function"
         ? this.content({ width: this.width, height: this.height })
         : this.content;
-    renderShell(this.root, tree);
+    this.renderingRoot = true;
+    try {
+      renderShell(this.root, tree);
+    } finally {
+      this.renderingRoot = false;
+    }
     // Rendering may synchronously finish a closing popup and destroy this
     // platform window. Do not present through a handle invalidated mid-frame.
     if (this.closed || this.platformWin !== platformWin) return;
@@ -363,13 +379,19 @@ export class Window {
       typeof this.content === "function"
         ? this.content({ width: this.width, height: this.height })
         : this.content;
-    renderShell(this.root, tree);
+    this.renderingRoot = true;
+    try {
+      renderShell(this.root, tree);
+    } finally {
+      this.renderingRoot = false;
+    }
     this.refreshHits();
     this.dirty = true;
   }
 
   private refreshHits(): void {
     this.hits = collectHits(this.root.container);
+    this.reconcileHoverAfterLayout();
     const activeScopeId = this.activeTrappedScopeId();
     const presentAutoFocusIds = new Set(
       this.hits
@@ -412,6 +434,26 @@ export class Window {
         (hit) => hit.focusable && hit.focusId === this.focusedId,
       ) ?? null;
     if (!this.focusedHit) this.focusedId = null;
+  }
+
+  private reconcileHoverAfterLayout(): void {
+    const ev = this.lastPointerEvent;
+    if (!ev || this.capturedHit) return;
+    const next = this.findTopHit(
+      ev.x,
+      ev.y,
+      (hit) => !!(hit.onPointerEnter || hit.onPointerLeave || hit.onPointerMove),
+    );
+    if (next?.focusId === this.hoverHit?.focusId) {
+      // Refresh the callbacks and geometry without manufacturing a leave/enter
+      // pair for every React commit.
+      this.hoverHit = next;
+      return;
+    }
+    this.hoverHit?.onPointerLeave?.(this.makeEvArgs(this.hoverHit, ev));
+    this.hoverHit = next;
+    next?.onPointerEnter?.(this.makeEvArgs(next, ev));
+    this.dirty = true;
   }
 
   private activeTrappedScopeId(): string | null {
@@ -491,6 +533,7 @@ export class Window {
 
   private handlePointer(ev: UiPointerEvent): void {
     if (this.closed) return;
+    this.lastPointerEvent = ev;
 
     if (ev.type === "move") {
       if (this.capturedHit) {
@@ -509,7 +552,7 @@ export class Window {
         (h) => !!(h.onPointerEnter || h.onPointerLeave || h.onPointerMove),
       );
       let changed = false;
-      if (newHover !== this.hoverHit) {
+      if (newHover?.focusId !== this.hoverHit?.focusId) {
         if (this.hoverHit?.onPointerLeave) {
           this.hoverHit.onPointerLeave(this.makeEvArgs(this.hoverHit, ev));
           changed = true;
@@ -519,6 +562,10 @@ export class Window {
           newHover.onPointerEnter(this.makeEvArgs(newHover, ev));
           changed = true;
         }
+      } else if (newHover) {
+        // Hit regions are re-collected after every commit; retain the latest
+        // callbacks without treating object identity as a hover transition.
+        this.hoverHit = newHover;
       }
       if (newHover?.onPointerMove) {
         newHover.onPointerMove(this.makeEvArgs(newHover, ev));

@@ -226,9 +226,10 @@ Filled background. `Panel` defaults fill to `pal.surface`; `Surface` to `pal.pan
 | `onPress` | `() => void` | |
 | `children` | `ReactNode` | |
 
-`elevation` is a semantic request. The software renderer currently paints a
-lightweight fallback shadow; accelerated backends may implement the same level
-with richer effects without changing widget JSX.
+`elevation` is a semantic request. It resolves to the backend-neutral `Rect`
+box-shadow contract; the software renderer uses an analytic soft shadow while
+accelerated backends can execute the same blur/offset token without changing
+widget JSX.
 
 ### `FocusRing`
 
@@ -296,7 +297,8 @@ Hit target with eased hover/press fills (`pal.hover` / `pal.pressed`).
 
 Non-interactive hover help composed around an existing fixed-size trigger. The
 tooltip fades through the shared motion system and does not steal clicks from
-its child control.
+its child control. Labels reflow to as many as three lines when the measured
+width reaches the tooltip-width cap.
 
 | Prop | Type | Default |
 | --- | --- | --- |
@@ -573,7 +575,7 @@ the content is mounted in a clipped region only while expanded.
 | `description` | `string` | |
 | `expanded` | `boolean` | required |
 | `onExpandedChange` | `(expanded: boolean) => void` | |
-| `headerHeight` | `number` | `40`, or `52` with description |
+| `headerHeight` | `number` | `40`, or `60` with a two-line description |
 | `contentHeight` | `number` | required |
 | `disabled` | `boolean` | `false` |
 | `children` | `ReactNode` | expanded content |

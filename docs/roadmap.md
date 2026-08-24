@@ -27,14 +27,16 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 
 | Item | Notes |
 | --- | --- |
-| DnD polish | Stronger drop highlights; explicit move vs copy chooser; verify GTK `text/uri-list` peers |
+| DnD polish | Retained drag previews now follow hardware-cursor motion without a software fallback; next explicit move vs copy chooser and GTK `text/uri-list` verification |
 | Icon set | Runtime SVG symbolic baseline shipped; next freedesktop theme resolution and richer app/file artwork |
 | Files UX | Keyed grid/list multi-selection and keyboard nav shipped; next rubber-band, type-to-select, thumbnails, conflict UI |
 | MIME / actions | Content magic matching, external plugin discovery, richer app icons |
 | Launcher | Icons from `.desktop`, categories, pinned apps |
-| Performance | CPU composite still hot; reduce idle dirty from atmosphere when possible |
-| Flexible compositor rendering | In progress — selectable software/EGL output, composition effects contract, timings; next layered GLES + GBM scanout |
+| Performance | Retained desktop/drag layers avoid full-frame software fallback; next reduce idle atmosphere damage and add frame pacing |
+| Flexible compositor rendering | In progress — selectable software/EGL output, composition effects contract, timings, layered GLES + GBM scanout |
+| Accelerated native clients | In progress — pooled EGL/GBM dma-buf presentation with SHM fallback; next direct retained-scene primitives, glyph/image atlases, then compositor zero-copy import |
 | Widget styling v2 | In progress — semantic recipes and foundations now cover radius, borders, density, focus, opacity, motion, and elevation; shared overlay/focus/select/dialog/toast primitives and their live showcase tranche are shipped; next state/theme matrices and remaining chrome migration |
+| App UI audit | Settings display controls now use shared Select/SegmentedControl widgets; migrate Settings (the last app using raw `createElement`) to JSX and continue replacing app-local sizing with intrinsic layout |
 | Text input / IME | Implement `zwp_text_input_v3` with a real input-method broker; do not advertise a no-op global |
 
 ## Medium term

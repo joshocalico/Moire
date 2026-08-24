@@ -23,7 +23,7 @@ export type DisclosureProps = {
 export function Disclosure(props: DisclosureProps): ReactNode {
   const theme = useWidgetTheme();
   const pal = theme.foundations.palette;
-  const headerHeight = props.headerHeight ?? (props.description ? 52 : 40);
+  const headerHeight = props.headerHeight ?? (props.description ? 60 : 40);
   const height = headerHeight + (props.expanded ? props.contentHeight : 0);
   return (
     <Surface
@@ -55,7 +55,7 @@ export function Disclosure(props: DisclosureProps): ReactNode {
               </Box>
               <Vertical flexGrow={1} gap={2} justify="center">
                 <TextBlock height={16} text={props.title} color={props.disabled ? pal.muted : pal.text} fontSize={12} fontWeight="medium" verticalAlign="center" overflow="ellipsis" maxLines={1} />
-                {props.description ? <TextBlock height={14} text={props.description} color={pal.muted} fontSize={10} verticalAlign="center" overflow="ellipsis" maxLines={1} /> : null}
+                {props.description ? <TextBlock height={28} text={props.description} color={pal.muted} fontSize={10} wrap lineGap={2} verticalAlign="center" overflow="ellipsis" maxLines={2} /> : null}
               </Vertical>
             </Horizontal>
           </Inset>
@@ -72,7 +72,7 @@ export function Disclosure(props: DisclosureProps): ReactNode {
 }
 
 registerIntrinsicSize(Disclosure, (props) => {
-  const headerHeight = props.headerHeight ?? (props.description ? 52 : 40);
+  const headerHeight = props.headerHeight ?? (props.description ? 60 : 40);
   return {
     width: props.width,
     height: headerHeight + (props.expanded ? props.contentHeight : 0),

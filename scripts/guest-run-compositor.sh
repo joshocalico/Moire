@@ -11,6 +11,7 @@ UID_MOIRE=$(id -u moire)
 RUNTIME=/home/moire/.moire-runtime
 RENDERER="${MOIRE_RENDERER:-auto}"
 EGL_PRESENT="${MOIRE_EGL_PRESENT:-auto}"
+UI_ACCELERATION="${MOIRE_UI_ACCELERATION:-software}"
 
 # Free DRM master (gdm comes back after reboot)
 systemctl stop gdm3 2>/dev/null || true
@@ -54,6 +55,7 @@ setsid runuser -u moire -- env \
   GDK_BACKEND=wayland \
   MOIRE_RENDERER="$RENDERER" \
   MOIRE_EGL_PRESENT="$EGL_PRESENT" \
+  MOIRE_UI_ACCELERATION="$UI_ACCELERATION" \
   MOIRE_COMPOSITOR="pnpm --dir $DST --filter @moire/compositor exec tsx src/main.ts" \
   bash -c "cd $DST && exec ./apps/session/moire-session" \
   </dev/null >>/tmp/moire-session.log 2>&1 &

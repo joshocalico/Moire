@@ -48,6 +48,7 @@ export function Dialog(props: DialogProps): ReactNode {
             <Horizontal gap={theme.foundations.space.sm} align="center">
               <TextBlock
                 flexGrow={1}
+                flexShrink={1}
                 text={props.title}
                 color={recipe.title.color}
                 fontSize={recipe.title.fontSize}

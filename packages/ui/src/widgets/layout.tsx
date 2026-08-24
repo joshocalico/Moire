@@ -144,7 +144,12 @@ export function Measure(props: MeasureProps): ReactNode {
   );
 }
 
-function collectFlexChildren(children: ReactNode, theme: WidgetTheme): {
+function collectFlexChildren(
+  children: ReactNode,
+  theme: WidgetTheme,
+  direction: "row" | "column",
+  align: "start" | "center" | "end" | "stretch",
+): {
   specs: FlexChildSpec[];
   elements: ReactElement[];
 } {
@@ -159,9 +164,18 @@ function collectFlexChildren(children: ReactNode, theme: WidgetTheme): {
           theme,
         )
       : undefined;
+    const stretchesCrossAxis =
+      (props.alignSelf ?? align) === "stretch";
     specs.push({
-      width: props.width ?? intrinsic?.width,
-      height: props.height ?? intrinsic?.height,
+      // An intrinsic cross-axis size is a measurement hint, not an implicit
+      // fixed size. Supplying it to a stretching flow prevents prose and
+      // other responsive surfaces from receiving the parent's real width.
+      width: props.width ?? (
+        direction === "column" && stretchesCrossAxis ? undefined : intrinsic?.width
+      ),
+      height: props.height ?? (
+        direction === "row" && stretchesCrossAxis ? undefined : intrinsic?.height
+      ),
       flexGrow: props.flexGrow ?? (child.type === Spacer ? 1 : undefined),
       flexShrink: props.flexShrink,
       minWidth: props.minWidth,
@@ -197,7 +211,13 @@ function FlexLayout(
   const allocated = useLayoutMetrics();
   const width = props.width ?? allocated?.width ?? 0;
   const height = props.height ?? allocated?.height;
-  const { specs, elements } = collectFlexChildren(props.children, theme);
+  const align = props.align ?? (props.direction === "row" ? "center" : "stretch");
+  const { specs, elements } = collectFlexChildren(
+    props.children,
+    theme,
+    props.direction,
+    align,
+  );
   const laid = layoutFlex(
     {
       direction: props.direction,
@@ -206,7 +226,7 @@ function FlexLayout(
       gap: props.gap ?? 8,
       padding: props.padding ?? 0,
       justify: props.justify,
-      align: props.align ?? (props.direction === "row" ? "center" : "stretch"),
+      align,
       wrap: props.wrap,
     },
     specs,

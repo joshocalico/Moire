@@ -240,6 +240,12 @@ try {
   assert.equal(groupDrag?.label, "2 items");
   assert.match(groupDrag?.uri ?? "", /Alpha\.txt/);
   assert.match(groupDrag?.uri ?? "", /Beta\.txt/);
+  const dragFrameA = shell.dragRaster(100, 40, groupDrag?.label ?? "");
+  const dragFrameB = shell.dragRaster(140, 70, groupDrag?.label ?? "");
+  assert.ok(dragFrameA && dragFrameB, "desktop drag did not expose a retained layer");
+  assert.equal(dragFrameB.x - dragFrameA.x, 40);
+  assert.equal(dragFrameB.y - dragFrameA.y, 30);
+  assert.equal(dragFrameA.pixels.byteLength, dragFrameA.width * dragFrameA.height * 4);
   shell.finishDesktopDrag?.(true, 200, 40);
   const movedLayout = loadDesktopLayout();
   assert.equal(movedLayout["Alpha.txt"]?.x, 188);

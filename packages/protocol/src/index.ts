@@ -11,6 +11,11 @@ export type WaylandHeader = {
   size: number;
 };
 
+export type EncodedWaylandMessage = {
+  data: Buffer;
+  fds: number[];
+};
+
 export function decodeHeader(buf: Buffer, offset = 0): WaylandHeader {
   const objectId = buf.readUInt32LE(offset);
   const sizeOpcode = buf.readUInt32LE(offset + 4);
@@ -93,7 +98,7 @@ export class MessageBuilder {
     return this;
   }
 
-  build(objectId: number, opcode: number): { data: Buffer; fds: number[] } {
+  build(objectId: number, opcode: number): EncodedWaylandMessage {
     const body = Buffer.concat(this.parts);
     const size = WL_HEADER_SIZE + body.length;
     const header = encodeHeader(objectId, opcode, size);
@@ -133,6 +138,10 @@ export class MessageReader {
     const v = this.buf.readInt32LE(this.offset);
     this.offset += 4;
     return v;
+  }
+
+  fixed(): number {
+    return this.int() / 256;
   }
 
   object(): number {

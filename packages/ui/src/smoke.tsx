@@ -189,6 +189,74 @@ async function clippedTextCompositionSmoke(): Promise<void> {
   }
 }
 
+async function timerDrivenRedrawSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Timer redraw", width: 48, height: 48 });
+  win.setContent(<Spinner x={12} y={12} size={24} />);
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow?.lastFrame);
+  const firstFrame = platformWindow.lastFrame;
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  win.tick();
+  assert.notEqual(
+    platformWindow.lastFrame,
+    firstFrame,
+    "timer-driven React commits must schedule a new frame without input",
+  );
+  win.destroy();
+  backend.disconnect();
+}
+
+async function hoverLayoutReconciliationSmoke(): Promise<void> {
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const win = new Window({ title: "Hover layout", width: 180, height: 160 });
+  let setExpanded: (expanded: boolean) => void = () => {
+    throw new Error("hover harness did not mount");
+  };
+  let enters = 0;
+  let leaves = 0;
+
+  function Harness(): ReactNode {
+    const [expanded, updateExpanded] = useState(true);
+    setExpanded = updateExpanded;
+    return (
+      <Column width={180} height={160} gap={0}>
+        <Box height={expanded ? 80 : 20} />
+        <Box height={30}>
+          <Rect
+            width={120}
+            height={30}
+            fill={0xff304050}
+            onPointerEnter={() => { enters++; }}
+            onPointerLeave={() => { leaves++; }}
+          />
+        </Box>
+      </Column>
+    );
+  }
+
+  win.setContent(<Harness />);
+  win.mount(backend);
+  await Promise.resolve();
+  win.tick();
+  const platformWindow = backend.getWindows()[0];
+  assert.ok(platformWindow);
+  platformWindow.injectPointer({ type: "move", x: 20, y: 90, timeMs: 1 });
+  assert.equal(enters, 1, "hover target did not receive its initial enter");
+  setExpanded(false);
+  await Promise.resolve();
+  win.tick();
+  assert.equal(leaves, 1, "layout moving a hovered target did not conceal its hover surface");
+  assert.equal(enters, 1, "layout reconciliation manufactured a duplicate pointer enter");
+  win.destroy();
+  backend.disconnect();
+}
+
 function declarativeLayoutAndTweenSmoke(): void {
   const root = createShellRoot();
   let fixedWidth = 0;
@@ -277,6 +345,54 @@ function boxModelAndTextLayoutSmoke(): void {
       : node.children.map(findText).find(Boolean) ?? null;
   const centered = findText(root.container);
   assert.ok(centered && centered.x > 0 && centered.y > 0, "TextBlock did not align inside its box");
+
+  const wrappedLineCount = (width: number, text: string): number => {
+    renderShell(
+      root,
+      <Column width={width} height={80}>
+        <TextBlock height={80} text={text} wrap lineGap={2} overflow="clip" />
+      </Column>,
+    );
+    const count = (node: SceneNode): number =>
+      (node.kind === "text" ? 1 : 0) +
+      node.children.reduce((total, child) => total + count(child), 0);
+    return count(root.container);
+  };
+  const narrowLines = wrappedLineCount(72, "Renderer neutral prose follows its allocated width");
+  const wideLines = wrappedLineCount(220, "Renderer neutral prose follows its allocated width");
+  assert.ok(narrowLines > wideLines, "TextBlock did not reflow when its parent allocation changed");
+  assert.ok(
+    wrappedLineCount(36, "supercalifragilistic") > 1,
+    "TextBlock did not break an unspaced token at its allocated width",
+  );
+  renderShell(root, null);
+}
+
+function softShadowSmoke(): void {
+  const root = createShellRoot();
+  renderShell(
+    root,
+    <Group width={64} height={64}>
+      <Rect
+        x={20}
+        y={18}
+        width={24}
+        height={24}
+        fill={0xff405060}
+        radius={6}
+        shadow={{ color: 0x70000000, blurRadius: 9, offsetY: 3 }}
+      />
+    </Group>,
+  );
+  const frame = new SoftwareRenderer().render(root.container, { width: 64, height: 64 });
+  const pixels = new Uint32Array(frame.pixels.buffer);
+  const softEdge = pixels[45 * frame.width + 18]!;
+  const farEdge = pixels[51 * frame.width + 18]!;
+  assert.ok((softEdge >>> 24) > 0, "box shadow did not extend beyond the elevated rect");
+  assert.ok(
+    (farEdge >>> 24) < (softEdge >>> 24),
+    "box shadow did not decay across its blur radius",
+  );
   renderShell(root, null);
 }
 
@@ -1098,6 +1214,10 @@ function primitiveAndDialogRecipeSmoke(): void {
     name: "primitive-dialog-recipe-smoke",
     foundations: {
       ...theme.foundations,
+      elevation: {
+        ...theme.foundations.elevation,
+        high: { ...theme.foundations.elevation.high, opacity: 0 },
+      },
       palette: {
         ...theme.foundations.palette,
         panel: surfaceFill,
@@ -1994,14 +2114,14 @@ async function dialogInteractionSmoke(): Promise<void> {
   assert.ok(platformWindow);
   platformWindow.injectPointer({
     type: "down",
-    x: 174,
+    x: 162,
     y: 30,
     button: "left",
     timeMs: 1,
   });
   platformWindow.injectPointer({
     type: "up",
-    x: 174,
+    x: 162,
     y: 30,
     button: "left",
     timeMs: 2,
@@ -2863,7 +2983,15 @@ async function main() {
   if (process.env.MOIRE_UI_SMOKE === "text") {
     rendererSmoke();
     await clippedTextCompositionSmoke();
+    boxModelAndTextLayoutSmoke();
+    softShadowSmoke();
     console.log("[ui/smoke:text] ok");
+    return;
+  }
+  if (process.env.MOIRE_UI_SMOKE === "animation") {
+    await timerDrivenRedrawSmoke();
+    await hoverLayoutReconciliationSmoke();
+    console.log("[ui/smoke:animation] ok");
     return;
   }
   if (process.env.MOIRE_UI_SMOKE === "image") {
@@ -2893,8 +3021,11 @@ async function main() {
   }
   rendererSmoke();
   await clippedTextCompositionSmoke();
+  await timerDrivenRedrawSmoke();
+  await hoverLayoutReconciliationSmoke();
   declarativeLayoutAndTweenSmoke();
   boxModelAndTextLayoutSmoke();
+  softShadowSmoke();
   intrinsicControlLayoutSmoke();
   symbolicSvgIconSmoke();
   selectionModelSmoke();

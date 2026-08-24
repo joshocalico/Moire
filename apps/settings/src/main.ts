@@ -17,6 +17,9 @@ import {
   ProgressBar,
   ScrollArea,
   Surface,
+  OverlayHost,
+  Select,
+  SegmentedControl,
   themePalette,
   setUiScaleFactor,
   getUiScaleFactor,
@@ -274,10 +277,6 @@ function SettingsApp(
   const refreshModes = parsedModes.filter(
     (mode) => mode.resolution === selectedResolution,
   );
-  const resolutionRows: string[][] = [];
-  for (let index = 0; index < resolutions.length; index += 2) {
-    resolutionRows.push(resolutions.slice(index, index + 2));
-  }
   const arrangementItems: DisplayArrangementItem[] = connectedOutputs.map(
     (output) => ({
       id: output.id,
@@ -292,10 +291,7 @@ function SettingsApp(
   const selectedOutput =
     connectedOutputs.find((output) => output.id === selectedOutputId) ??
     connectedOutputs[0];
-  const resolutionListH = Math.max(
-    1,
-    resolutionRows.length * (btnH + Math.round(6 * ui)),
-  );
+  const resolutionControlH = btnH;
   const displaySectionCount =
     1 +
     (connectedOutputs.length > 0 ? 1 : 0) +
@@ -313,8 +309,8 @@ function SettingsApp(
     (selectedOutput ? btnH : 0) +
     (pendingDisplayLayout ? btnH : 0) +
     labelH +
-    (props.display ? resolutionListH : labelH) +
-    (props.display ? Math.round(18 * ui) + Math.round(32 * ui) : 0) +
+    (props.display ? resolutionControlH : labelH) +
+    (props.display ? Math.round(18 * ui) + btnH : 0) +
     (props.display
       ? pendingDisplayMode
         ? Math.round(62 * ui)
@@ -350,6 +346,19 @@ function SettingsApp(
           `Display change failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       });
+  };
+
+  const requestResolution = (resolution: string) => {
+    setSelectedResolution(resolution);
+    const candidates = parsedModes
+      .filter((mode) => mode.resolution === resolution)
+      .sort((a, b) => {
+        if (a.id === displayPreferred) return -1;
+        if (b.id === displayPreferred) return 1;
+        return b.refreshMilliHz - a.refreshMilliHz;
+      });
+    const target = candidates[0];
+    if (target) requestDisplayMode(target.id);
   };
 
   const confirmDisplayMode = () => {
@@ -415,25 +424,31 @@ function SettingsApp(
   };
 
   return createElement(
-    Surface,
+    OverlayHost,
     {
-      x: 0,
-      y: 0,
       width: props.width,
       height: props.height,
-      fill: pal.panel,
     },
     createElement(
-      Column,
+      Surface,
       {
         x: 0,
         y: 0,
         width: props.width,
-        height: bodyH + pad * 2,
-        padding: pad,
-        gap: Math.round(12 * ui),
+        height: props.height,
+        fill: pal.panel,
       },
-      createElement(Label, {
+      createElement(
+        Column,
+        {
+          x: 0,
+          y: 0,
+          width: props.width,
+          height: bodyH + pad * 2,
+          padding: pad,
+          gap: Math.round(12 * ui),
+        },
+        createElement(Label, {
         text: "Settings",
         fontSize: 22,
         fontWeight: "bold",
@@ -553,7 +568,7 @@ function SettingsApp(
             Column,
             {
               width: innerW,
-              height: bodyMin,
+              height: scrollContentH,
               minHeight: bodyMin,
               gap: Math.round(10 * ui),
             },
@@ -620,26 +635,23 @@ function SettingsApp(
                     width: Math.round(48 * ui),
                     height: labelH,
                   }),
-                  ...[120, 150, 180, 210, 240].map((scale120) =>
-                    createElement(Button, {
-                      key: `scale-${scale120}`,
-                      width: Math.round(62 * ui),
-                      height: btnH,
+                  createElement(SegmentedControl, {
+                    width: Math.max(1, Math.min(Math.round(360 * ui), innerW - Math.round(54 * ui))),
+                    height: btnH,
+                    options: [120, 150, 180, 210, 240].map((scale120) => ({
+                      id: String(scale120),
                       label: `${Math.round((scale120 / 120) * 100)}%`,
-                      variant:
-                        selectedOutput.scale120 === scale120
-                          ? "primary"
-                          : "secondary",
                       disabled: pendingDisplayLayout != null,
-                      onPress: () => requestDisplayLayout(
+                    })),
+                    value: String(selectedOutput.scale120),
+                    onChange: (value) => requestDisplayLayout(
                         connectedOutputs.map((output) =>
                           output.id === selectedOutput.id
-                            ? { ...output, scale120 }
+                            ? { ...output, scale120: Number(value) }
                             : output,
                         ),
                       ),
-                    }),
-                  ),
+                  }),
                 )
               : null,
             pendingDisplayLayout
@@ -675,43 +687,23 @@ function SettingsApp(
               height: labelH,
             }),
             props.display
-              ? createElement(
-                  Column,
-                  {
-                    width: Math.min(Math.round(380 * ui), innerW),
-                    height: resolutionListH,
-                    gap: Math.round(6 * ui),
-                  },
-                  ...resolutionRows.map((row, rowIndex) =>
-                      createElement(
-                        Row,
-                        {
-                          key: `resolution-${rowIndex}`,
-                          width: Math.min(Math.round(368 * ui), innerW),
-                          height: btnH,
-                          gap: Math.round(6 * ui),
-                        },
-                        ...row.map((resolution) => {
-                          const isCurrent =
-                            resolution === resolutionForMode(displayMode);
-                          const isPreferred =
-                            resolution ===
-                            resolutionForMode(displayPreferred);
-                          return createElement(Button, {
-                            key: resolution,
-                            width: Math.round(178 * ui),
-                            height: btnH,
-                            label: `${resolution.replace("x", " × ")}${isCurrent ? " · Current" : isPreferred ? " · Preferred" : ""}`,
-                            variant:
-                              selectedResolution === resolution
-                                ? "primary"
-                                : "secondary",
-                            onPress: () => setSelectedResolution(resolution),
-                          });
-                        }),
-                      ),
-                    ),
-                )
+              ? createElement(Select, {
+                  width: Math.min(Math.round(380 * ui), innerW),
+                  height: resolutionControlH,
+                  viewportWidth: props.width,
+                  viewportHeight: props.height,
+                  maxMenuHeight: Math.min(Math.round(360 * ui), props.height - Math.round(80 * ui)),
+                  options: resolutions.map((resolution) => {
+                    const current = resolution === resolutionForMode(displayMode);
+                    const preferred = resolution === resolutionForMode(displayPreferred);
+                    return {
+                      id: resolution,
+                      label: `${resolution.replace("x", " × ")}${current ? " · Current" : preferred ? " · Preferred" : ""}`,
+                    };
+                  }),
+                  value: selectedResolution,
+                  onChange: requestResolution,
+                })
               : createElement(Label, {
                   text: "Display service unavailable",
                   color: pal.muted,
@@ -727,25 +719,21 @@ function SettingsApp(
                 })
               : null,
             props.display
-              ? createElement(
-                  Row,
-                  {
-                    width: Math.min(Math.round(380 * ui), innerW),
-                    height: Math.round(32 * ui),
-                    gap: Math.round(6 * ui),
-                  },
-                  ...refreshModes.map((mode) =>
-                    createElement(Button, {
-                      key: mode.id,
-                      width: Math.round(86 * ui),
-                      height: Math.round(32 * ui),
-                      label: refreshLabel(mode.refreshMilliHz),
-                      variant:
-                        displayMode === mode.id ? "primary" : "secondary",
-                      onPress: () => requestDisplayMode(mode.id),
-                    }),
-                  ),
-                )
+              ? createElement(Select, {
+                  width: Math.min(Math.round(220 * ui), innerW),
+                  height: btnH,
+                  viewportWidth: props.width,
+                  viewportHeight: props.height,
+                  options: refreshModes.map((mode) => ({
+                    id: mode.id,
+                    label: refreshLabel(mode.refreshMilliHz),
+                  })),
+                  value: refreshModes.some((mode) => mode.id === displayMode)
+                    ? displayMode
+                    : refreshModes[0]?.id,
+                  disabled: refreshModes.length <= 1,
+                  onChange: requestDisplayMode,
+                })
               : null,
             pendingDisplayMode
               ? createElement(
@@ -882,6 +870,7 @@ function SettingsApp(
           onPress: props.onQuit,
         }),
       ),
+    ),
     ),
   );
 }

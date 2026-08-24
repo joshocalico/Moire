@@ -6,11 +6,14 @@ SRC=/media/psf/moire
 DST=/home/moire/moire
 RUNTIME=/home/moire/.moire-runtime
 SAMPLE="${1:-}"
+UI_ACCELERATION="${MOIRE_UI_ACCELERATION:-software}"
 
 rsync -a --delete --exclude node_modules "$SRC/packages/ui/" "$DST/packages/ui/"
 rsync -a --delete --exclude node_modules "$SRC/packages/react-host/" "$DST/packages/react-host/"
+rsync -a --delete --exclude node_modules "$SRC/packages/sys/" "$DST/packages/sys/"
+rsync -a --delete --exclude node_modules "$SRC/packages/protocol/" "$DST/packages/protocol/"
 rsync -a --delete --exclude node_modules "$SRC/apps/showcase/" "$DST/apps/showcase/"
-chown -R moire:moire "$DST/packages/ui" "$DST/packages/react-host" "$DST/apps/showcase"
+chown -R moire:moire "$DST/packages/ui" "$DST/packages/react-host" "$DST/packages/sys" "$DST/packages/protocol" "$DST/apps/showcase"
 
 pkill -u moire -f '@moire/showcase' 2>/dev/null || true
 pkill -u moire -f 'apps/showcase' 2>/dev/null || true
@@ -28,6 +31,7 @@ setsid runuser -u moire -- env \
   HOME=/home/moire \
   LANG=C.UTF-8 \
   MOIRE_UI_PLATFORM=wayland \
+  MOIRE_UI_ACCELERATION="$UI_ACCELERATION" \
   bash -lc "cd '$DST' && pnpm --filter @moire/showcase start -- ${args[*]}" \
   </dev/null >>/tmp/moire-showcase.log 2>&1 &
 

@@ -28,7 +28,8 @@ export function Tooltip(props: TooltipProps): ReactNode {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bounds = measureTextBounds(props.label, { fontSize: 10 });
   const tipWidth = props.tooltipWidth ?? Math.max(60, Math.min(260, bounds.width + 18));
-  const tipHeight = 28;
+  const estimatedLines = Math.max(1, Math.min(3, Math.ceil(bounds.width / Math.max(1, tipWidth - 18))));
+  const tipHeight = estimatedLines === 1 ? 28 : 14 + estimatedLines * 14;
   const offset = props.offset ?? 7;
   const placement = props.placement ?? "top";
   const tipX = placement === "left"
@@ -87,15 +88,18 @@ export function Tooltip(props: TooltipProps): ReactNode {
         opacity={opacity.get() / 100}
       >
         <TextBlock
-          width={tipWidth}
+          x={8}
+          width={tipWidth - 16}
           height={tipHeight}
           text={props.label}
           color={pal.text}
           fontSize={10}
           horizontalAlign="center"
           verticalAlign="center"
+          wrap
+          lineGap={2}
           overflow="ellipsis"
-          maxLines={1}
+          maxLines={estimatedLines}
         />
       </Surface>
     </Group>

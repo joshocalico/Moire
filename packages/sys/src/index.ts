@@ -72,6 +72,7 @@ export {
   type EglScaleOutput,
   type EglDirectOutput,
   type EglDirectPresent,
+  type EglClientPresent,
   type EglCompositionLayer,
   type EglCompositionScene,
 } from "./egl-output.js";

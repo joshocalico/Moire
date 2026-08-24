@@ -82,6 +82,35 @@ try {
     );
   }
 
+  const clientChannel = "egl-client-conformance";
+  const clientFrames = [
+    scaler.renderClientFrame(clientChannel, source, width, height),
+    scaler.renderClientFrame(clientChannel, source, width, height),
+    scaler.renderClientFrame(clientChannel, source, width, height),
+  ];
+  assert.ok(clientFrames.every(Boolean), "client target pool did not allocate");
+  assert.equal(
+    scaler.renderClientFrame(clientChannel, source, width, height),
+    null,
+    "client target pool reused a compositor-owned frame",
+  );
+  const firstClientFrame = clientFrames[0]!;
+  assert.ok(firstClientFrame.fd >= 0, "client target did not export a dma-buf fd");
+  assert.ok(firstClientFrame.stride >= width * 4, "client target stride is invalid");
+  scaler.releaseClientFrame(firstClientFrame.id);
+  const recycledClientFrame = scaler.renderClientFrame(
+    clientChannel,
+    source,
+    width,
+    height,
+  );
+  assert.equal(
+    recycledClientFrame?.id,
+    firstClientFrame.id,
+    "released client target was not recycled",
+  );
+  scaler.dropClientChannel(clientChannel);
+
   const sceneWidth = 6;
   const sceneHeight = 4;
   const tile = new Uint8Array([

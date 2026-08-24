@@ -1028,16 +1028,16 @@ function Preview(props: {
   };
 
   return (
-    <ScrollArea width={props.width} height={props.height} contentHeight={Math.max(props.height, 700)}>
+    <ScrollArea width={props.width} height={props.height} contentHeight={Math.max(props.height, 820)}>
       <Column x={32} y={28} width={contentW} gap={18}>
         <Label text={props.sample.title} fontSize={20} fontWeight="bold" width={contentW} height={28} />
-        <Label text={props.sample.description} color={pal.muted} fontSize={12} width={contentW} height={22} />
-        <Surface width={contentW} height={122} fill={pal.panel} radius={10} stroke={pal.borderSubtle} strokeWidth={1}>
+        <Label text={props.sample.description} color={pal.muted} fontSize={12} width={contentW} height={36} wrap lineGap={3} overflow="ellipsis" maxLines={2} />
+        <Surface width={contentW} height={158} fill={pal.panel} radius={10} stroke={pal.borderSubtle} strokeWidth={1}>
           <Label x={16} y={12} text="ABOUT" color={pal.accent} fontSize={9} fontWeight="medium" width={90} height={16} />
-          <Label x={16} y={30} text={guidance.about} color={pal.text} fontSize={11} width={contentW - 32} height={20} />
-          <Separator x={16} y={58} width={contentW - 32} color={pal.borderSubtle} />
-          <Label x={16} y={70} text="WHEN TO USE" color={pal.accent} fontSize={9} fontWeight="medium" width={100} height={16} />
-          <Label x={16} y={90} text={guidance.when} color={pal.muted} fontSize={11} width={contentW - 32} height={20} />
+          <Label x={16} y={30} text={guidance.about} color={pal.text} fontSize={11} width={contentW - 32} height={42} wrap lineGap={3} overflow="ellipsis" maxLines={3} />
+          <Separator x={16} y={78} width={contentW - 32} color={pal.borderSubtle} />
+          <Label x={16} y={90} text="WHEN TO USE" color={pal.accent} fontSize={9} fontWeight="medium" width={100} height={16} />
+          <Label x={16} y={110} text={guidance.when} color={pal.muted} fontSize={11} width={contentW - 32} height={38} wrap lineGap={3} overflow="ellipsis" maxLines={3} />
         </Surface>
         <Separator width={contentW} />
         {content}

@@ -8,12 +8,39 @@ import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import {
-  MessageBuilder,
   MessageReader,
   WL_HEADER_SIZE,
   decodeHeader,
+  type EncodedWaylandMessage,
 } from "@moire/protocol";
 import {
+  wlBuffer,
+  wlCallback,
+  wlCompositor,
+  wlDataDevice,
+  wlDataDeviceManager,
+  wlDataOffer,
+  wlDataSource,
+  wlDisplay,
+  wlKeyboard,
+  wlPointer,
+  wlRegistry,
+  wlSeat,
+  wlShm,
+  wlShmPool,
+  wlSurface,
+  xdgPopup,
+  xdgPositioner,
+  xdgSurface,
+  xdgToplevel,
+  xdgWmBase,
+  zwpLinuxBufferParamsV1,
+  zwpLinuxDmabufV1,
+  zxdgDecorationManagerV1,
+  zxdgToplevelDecorationV1,
+} from "@moire/protocol/generated";
+import {
+  EglOutputScaler,
   WaylandClientConn,
   assertLinux,
   closeFd,
@@ -21,9 +48,13 @@ import {
   getLibc,
   mmap,
   munmap,
+  openPath,
   MAP_SHARED,
+  O_CLOEXEC,
+  O_RDWR,
   PROT_READ,
   PROT_WRITE,
+  type EglClientPresent,
   type WaylandChunk,
 } from "@moire/sys";
 import { createElement } from "react";
@@ -65,115 +96,64 @@ import { GridItem } from "../../widgets/grid.js";
 import { ListItem } from "../../widgets/list.js";
 
 const WL_DISPLAY_ID = 1;
-const WL_SHM_FORMAT_ARGB8888 = 0;
+const WL_SHM_FORMAT_ARGB8888 = wlShm.enums.format.argb8888;
 const BTN_LEFT = 0x110;
 const BTN_RIGHT = 0x111;
 const BTN_MIDDLE = 0x112;
-const KEY_PRESSED = 1;
-const XDG_DECORATION_MODE_CLIENT = 1;
-const XDG_DECORATION_MODE_SERVER = 2;
-const XDG_ANCHOR_TOP_LEFT = 5;
-const XDG_CONSTRAINT_SLIDE_X = 1;
-const XDG_CONSTRAINT_SLIDE_Y = 2;
-
-const OP = {
-  display_sync: 0,
-  display_get_registry: 1,
-  registry_bind: 0,
-  compositor_create_surface: 0,
-  shm_create_pool: 0,
-  shm_pool_create_buffer: 0,
-  shm_pool_destroy: 1,
-  surface_destroy: 0,
-  surface_attach: 1,
-  surface_damage: 2,
-  surface_commit: 6,
-  buffer_destroy: 0,
-  seat_get_pointer: 0,
-  seat_get_keyboard: 1,
-  xdg_wm_base_create_positioner: 1,
-  xdg_wm_base_get_xdg_surface: 2,
-  xdg_wm_base_pong: 3,
-  xdg_surface_destroy: 0,
-  xdg_surface_get_toplevel: 1,
-  xdg_surface_get_popup: 2,
-  xdg_surface_set_window_geometry: 3,
-  xdg_surface_ack_configure: 4,
-  xdg_toplevel_destroy: 0,
-  xdg_toplevel_set_title: 2,
-  xdg_toplevel_set_app_id: 3,
-  xdg_toplevel_move: 5,
-  xdg_toplevel_set_max_size: 7,
-  xdg_toplevel_set_min_size: 8,
-  xdg_positioner_destroy: 0,
-  xdg_positioner_set_size: 1,
-  xdg_positioner_set_anchor_rect: 2,
-  xdg_positioner_set_anchor: 3,
-  xdg_positioner_set_gravity: 4,
-  xdg_positioner_set_constraint_adjustment: 5,
-  xdg_popup_destroy: 0,
-  xdg_popup_grab: 1,
-  xdg_decoration_manager_get_toplevel_decoration: 1,
-  xdg_toplevel_decoration_set_mode: 1,
-  // wl_data_device_manager
-  data_device_manager_create_data_source: 0,
-  data_device_manager_get_data_device: 1,
-  // wl_data_source
-  data_source_offer: 0,
-  data_source_destroy: 1,
-  data_source_set_actions: 2,
-  // wl_data_device
-  data_device_start_drag: 0,
-  data_device_release: 2,
-  // wl_data_offer
-  data_offer_accept: 0,
-  data_offer_receive: 1,
-  data_offer_destroy: 2,
-  data_offer_finish: 3,
-  data_offer_set_actions: 4,
-} as const;
+const KEY_PRESSED = wlKeyboard.enums.keyState.pressed;
+const XDG_DECORATION_MODE_CLIENT =
+  zxdgToplevelDecorationV1.enums.mode.clientSide;
+const XDG_DECORATION_MODE_SERVER =
+  zxdgToplevelDecorationV1.enums.mode.serverSide;
+const XDG_ANCHOR_TOP_LEFT = xdgPositioner.enums.anchor.topLeft;
+const XDG_CONSTRAINT_SLIDE_X =
+  xdgPositioner.enums.constraintAdjustment.slideX;
+const XDG_CONSTRAINT_SLIDE_Y =
+  xdgPositioner.enums.constraintAdjustment.slideY;
 
 const EV = {
-  display_error: 0,
-  display_delete_id: 1,
-  registry_global: 0,
-  callback_done: 0,
-  buffer_release: 0,
-  seat_capabilities: 0,
-  pointer_enter: 0,
-  pointer_leave: 1,
-  pointer_motion: 2,
-  pointer_button: 3,
-  pointer_axis: 4,
-  keyboard_keymap: 0,
-  keyboard_key: 3,
-  xdg_wm_base_ping: 0,
-  xdg_surface_configure: 0,
-  xdg_toplevel_configure: 0,
-  xdg_toplevel_close: 1,
-  xdg_popup_configure: 0,
-  xdg_popup_done: 1,
+  display_error: wlDisplay.events.error.opcode,
+  display_delete_id: wlDisplay.events.deleteId.opcode,
+  registry_global: wlRegistry.events.global.opcode,
+  callback_done: wlCallback.events.done.opcode,
+  buffer_release: wlBuffer.events.release.opcode,
+  linux_dmabuf_format: zwpLinuxDmabufV1.events.format.opcode,
+  linux_dmabuf_modifier: zwpLinuxDmabufV1.events.modifier.opcode,
+  seat_capabilities: wlSeat.events.capabilities.opcode,
+  pointer_enter: wlPointer.events.enter.opcode,
+  pointer_leave: wlPointer.events.leave.opcode,
+  pointer_motion: wlPointer.events.motion.opcode,
+  pointer_button: wlPointer.events.button.opcode,
+  pointer_axis: wlPointer.events.axis.opcode,
+  keyboard_keymap: wlKeyboard.events.keymap.opcode,
+  keyboard_key: wlKeyboard.events.key.opcode,
+  xdg_wm_base_ping: xdgWmBase.events.ping.opcode,
+  xdg_surface_configure: xdgSurface.events.configure.opcode,
+  xdg_toplevel_configure: xdgToplevel.events.configure.opcode,
+  xdg_toplevel_close: xdgToplevel.events.close.opcode,
+  xdg_popup_configure: xdgPopup.events.configure.opcode,
+  xdg_popup_done: xdgPopup.events.popupDone.opcode,
   // wl_data_source events (compositor → client/source)
-  data_source_send: 1,
-  data_source_cancelled: 2,
-  data_source_dnd_drop_performed: 3,
-  data_source_dnd_finished: 4,
+  data_source_send: wlDataSource.events.send.opcode,
+  data_source_cancelled: wlDataSource.events.cancelled.opcode,
+  data_source_dnd_drop_performed: wlDataSource.events.dndDropPerformed.opcode,
+  data_source_dnd_finished: wlDataSource.events.dndFinished.opcode,
   // wl_data_device events (compositor → client/target)
-  data_device_data_offer: 0,
-  data_device_enter: 1,
-  data_device_leave: 2,
-  data_device_motion: 3,
-  data_device_drop: 4,
-  data_device_selection: 5,
+  data_device_data_offer: wlDataDevice.events.dataOffer.opcode,
+  data_device_enter: wlDataDevice.events.enter.opcode,
+  data_device_leave: wlDataDevice.events.leave.opcode,
+  data_device_motion: wlDataDevice.events.motion.opcode,
+  data_device_drop: wlDataDevice.events.drop.opcode,
+  data_device_selection: wlDataDevice.events.selection.opcode,
   // wl_data_offer events (compositor → client)
-  data_offer_offer: 0,
-  data_offer_source_actions: 1,
-  data_offer_action: 2,
+  data_offer_offer: wlDataOffer.events.offer.opcode,
+  data_offer_source_actions: wlDataOffer.events.sourceActions.opcode,
+  data_offer_action: wlDataOffer.events.action.opcode,
 } as const;
 
 /** DnD action bitmask constants. */
-const WL_DND_ACTION_COPY = 1;
-const WL_DND_ACTION_MOVE = 2;
+const WL_DND_ACTION_COPY = wlDataDeviceManager.enums.dndAction.copy;
+const WL_DND_ACTION_MOVE = wlDataDeviceManager.enums.dndAction.move;
 
 type GlobalInfo = { name: number; iface: string; version: number };
 
@@ -186,6 +166,11 @@ type ShmSlot = {
   width: number;
   height: number;
   busy: boolean;
+};
+
+type DmabufSlot = {
+  frameId: string;
+  bufferId: number;
 };
 
 function waylandSocketPath(): string {
@@ -211,10 +196,6 @@ function memfdCreate(size: number): number {
   return fd;
 }
 
-function readFixed(r: MessageReader): number {
-  return r.int() / 256;
-}
-
 function buttonName(code: number): PointerButton | undefined {
   if (code === BTN_LEFT) return "left";
   if (code === BTN_RIGHT) return "right";
@@ -237,6 +218,10 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private registryId = 0;
   private compositorId = 0;
   private shmId = 0;
+  private dmabufId = 0;
+  private eglPresenter: EglOutputScaler | null = null;
+  private eglFd = -1;
+  private eglPresentationFailed = false;
   private wmBaseId = 0;
   private decoManagerId = 0;
   private seatId = 0;
@@ -292,36 +277,48 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
     this.handlers.set(WL_DISPLAY_ID, (opcode, r) => {
       if (opcode === EV.display_error) {
-        r.object();
-        const code = r.uint();
-        const msg = r.string();
-        console.error(`[ui/wayland] display.error code=${code} ${msg}`);
+        const event = wlDisplay.events.error.decodeReader(r);
+        console.error(
+          `[ui/wayland] display.error code=${event.code} ${event.message}`,
+        );
       } else if (opcode === EV.display_delete_id) {
-        r.uint();
+        wlDisplay.events.deleteId.decodeReader(r);
       }
     });
 
     this.registryId = this.allocId();
     this.handlers.set(this.registryId, (opcode, r) => {
       if (opcode !== EV.registry_global) return;
-      const name = r.uint();
-      const iface = r.string()!;
-      const version = r.uint();
+      const event = wlRegistry.events.global.decodeReader(r);
+      const name = event.name;
+      const iface = event.interfaceValue!;
+      const version = event.version;
       this.globals.set(iface, { name, iface, version });
     });
-    this.send(WL_DISPLAY_ID, OP.display_get_registry, (b) =>
-      b.newId(this.registryId),
+    this.sendMessage(
+      wlDisplay.requests.getRegistry.encode(WL_DISPLAY_ID, this.registryId),
     );
     await this.roundtrip();
 
     this.compositorId = this.bindGlobal("wl_compositor", 4);
     this.shmId = this.bindGlobal("wl_shm", 1);
     this.handlers.set(this.shmId, () => {});
+    if (this.globals.has("zwp_linux_dmabuf_v1")) {
+      this.dmabufId = this.bindGlobal("zwp_linux_dmabuf_v1", 4);
+      this.handlers.set(this.dmabufId, (opcode, r) => {
+        if (opcode === EV.linux_dmabuf_format) {
+          zwpLinuxDmabufV1.events.format.decodeReader(r);
+        } else if (opcode === EV.linux_dmabuf_modifier) {
+          zwpLinuxDmabufV1.events.modifier.decodeReader(r);
+        }
+      });
+      this.tryCreateEglPresenter();
+    }
     this.wmBaseId = this.bindGlobal("xdg_wm_base", 3);
     this.handlers.set(this.wmBaseId, (opcode, r) => {
       if (opcode === EV.xdg_wm_base_ping) {
-        const serial = r.uint();
-        this.send(this.wmBaseId, OP.xdg_wm_base_pong, (b) => b.uint(serial));
+        const { serial } = xdgWmBase.events.ping.decodeReader(r);
+        this.sendMessage(xdgWmBase.requests.pong.encode(this.wmBaseId, serial));
       }
     });
     if (this.globals.has("zxdg_decoration_manager_v1")) {
@@ -332,11 +329,11 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       this.seatId = this.bindGlobal("wl_seat", 5);
       this.handlers.set(this.seatId, (opcode, r) => {
         if (opcode !== EV.seat_capabilities) return;
-        const caps = r.uint();
+        const { capabilities: caps } = wlSeat.events.capabilities.decodeReader(r);
         if ((caps & 1) !== 0 && !this.pointerId) {
           this.pointerId = this.allocId();
-          this.send(this.seatId, OP.seat_get_pointer, (b) =>
-            b.newId(this.pointerId),
+          this.sendMessage(
+            wlSeat.requests.getPointer.encode(this.seatId, this.pointerId),
           );
           this.handlers.set(this.pointerId, (op, rr) =>
             this.handlePointer(op, rr),
@@ -344,8 +341,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         }
         if ((caps & 2) !== 0 && !this.keyboardId) {
           this.keyboardId = this.allocId();
-          this.send(this.seatId, OP.seat_get_keyboard, (b) =>
-            b.newId(this.keyboardId),
+          this.sendMessage(
+            wlSeat.requests.getKeyboard.encode(this.seatId, this.keyboardId),
           );
           this.handlers.set(this.keyboardId, (op, rr) =>
             this.handleKeyboard(op, rr),
@@ -359,10 +356,12 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       this.dataDeviceManagerId = this.bindGlobal("wl_data_device_manager", 3);
       this.handlers.set(this.dataDeviceManagerId, () => {});
       this.dataDeviceId = this.allocId();
-      this.send(
-        this.dataDeviceManagerId,
-        OP.data_device_manager_get_data_device,
-        (b) => b.newId(this.dataDeviceId).object(this.seatId),
+      this.sendMessage(
+        wlDataDeviceManager.requests.getDataDevice.encode(
+          this.dataDeviceManagerId,
+          this.dataDeviceId,
+          this.seatId,
+        ),
       );
       this.handlers.set(this.dataDeviceId, (op, rr) =>
         this.handleDataDevice(op, rr),
@@ -411,7 +410,9 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     if (!this.conn || !this.dataDeviceManagerId || !this.dataDeviceId) return;
     if (this.activeDrag) {
       try {
-        this.send(this.activeDrag.sourceId, OP.data_source_destroy, () => {});
+        this.sendMessage(
+          wlDataSource.requests.destroy.encode(this.activeDrag.sourceId),
+        );
       } catch {
         /* ok */
       }
@@ -424,16 +425,19 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     }
 
     const sourceId = this.allocId();
-    this.send(
-      this.dataDeviceManagerId,
-      OP.data_device_manager_create_data_source,
-      (b) => b.newId(sourceId),
+    this.sendMessage(
+      wlDataDeviceManager.requests.createDataSource.encode(
+        this.dataDeviceManagerId,
+        sourceId,
+      ),
     );
     for (const mime of mimeTypes) {
-      this.send(sourceId, OP.data_source_offer, (b) => b.string(mime));
+      this.sendMessage(wlDataSource.requests.offer.encode(sourceId, mime));
     }
     const actions = WL_DND_ACTION_COPY | WL_DND_ACTION_MOVE;
-    this.send(sourceId, OP.data_source_set_actions, (b) => b.uint(actions));
+    this.sendMessage(
+      wlDataSource.requests.setActions.encode(sourceId, actions),
+    );
 
     const chipLabel = (label && label.trim()) || "Item";
     const iconSurfaceId = this.createDragIconSurface(chipLabel, preview);
@@ -445,12 +449,14 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     );
 
     // start_drag(source, origin, icon, serial)
-    this.send(this.dataDeviceId, OP.data_device_start_drag, (b) =>
-      b
-        .object(sourceId)
-        .object(this.pointerSurfaceId)
-        .object(iconSurfaceId)
-        .uint(serial),
+    this.sendMessage(
+      wlDataDevice.requests.startDrag.encode(
+        this.dataDeviceId,
+        sourceId,
+        this.pointerSurfaceId,
+        iconSurfaceId,
+        serial,
+      ),
     );
     console.log(
       `[ui/dnd] startDrag source=${sourceId} icon=${iconSurfaceId} label=${chipLabel} serial=${serial}`,
@@ -553,8 +559,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     const size = stride * chipH;
 
     const surfaceId = this.allocId();
-    this.send(this.compositorId, OP.compositor_create_surface, (b) =>
-      b.newId(surfaceId),
+    this.sendMessage(
+      wlCompositor.requests.createSurface.encode(this.compositorId, surfaceId),
     );
 
     const fd = memfdCreate(size);
@@ -562,26 +568,33 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     flushMmap(map, pixels, size);
 
     const poolId = this.allocId();
-    this.send(this.shmId, OP.shm_create_pool, (b) =>
-      b.newId(poolId).fd(fd).int(size),
+    this.sendMessage(
+      wlShm.requests.createPool.encode(this.shmId, poolId, fd, size),
     );
     const bufferId = this.allocId();
-    this.send(poolId, OP.shm_pool_create_buffer, (b) =>
-      b
-        .newId(bufferId)
-        .int(0)
-        .int(chipW)
-        .int(chipH)
-        .int(stride)
-        .uint(WL_SHM_FORMAT_ARGB8888),
+    this.sendMessage(
+      wlShmPool.requests.createBuffer.encode(
+        poolId,
+        bufferId,
+        0,
+        chipW,
+        chipH,
+        stride,
+        WL_SHM_FORMAT_ARGB8888,
+      ),
     );
-    this.send(surfaceId, OP.surface_attach, (b) =>
-      b.object(bufferId).int(-hotspotX).int(-hotspotY),
+    this.sendMessage(
+      wlSurface.requests.attach.encode(
+        surfaceId,
+        bufferId,
+        -hotspotX,
+        -hotspotY,
+      ),
     );
-    this.send(surfaceId, OP.surface_damage, (b) =>
-      b.int(0).int(0).int(chipW).int(chipH),
+    this.sendMessage(
+      wlSurface.requests.damage.encode(surfaceId, 0, 0, chipW, chipH),
     );
-    this.send(surfaceId, OP.surface_commit, () => {});
+    this.sendMessage(wlSurface.requests.commit.encode(surfaceId));
 
     // Keep map alive for the duration of the drag (compositor may read async).
     (this as unknown as { _dragIconMaps?: unknown[] })._dragIconMaps ??= [];
@@ -599,7 +612,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private destroyDragIcon(surfaceId: number): void {
     if (!surfaceId) return;
     try {
-      this.send(surfaceId, OP.surface_destroy, () => {});
+      this.sendMessage(wlSurface.requests.destroy.encode(surfaceId));
     } catch {
       /* ok */
     }
@@ -633,8 +646,9 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     sourceId: number,
   ): void {
     if (opcode === EV.data_source_send) {
-      const mime = r.string() ?? "";
-      const fd = r.fd();
+      const event = wlDataSource.events.send.decodeReader(r);
+      const mime = event.mimeType ?? "";
+      const fd = event.fd;
       const drag = this.activeDrag;
       if (drag?.sourceId !== sourceId) {
         console.warn(
@@ -671,7 +685,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         this.destroyDragIcon(this.activeDrag.iconSurfaceId);
         this.activeDrag = null;
         this.handlers.delete(sourceId);
-        this.send(sourceId, OP.data_source_destroy, () => {});
+        this.sendMessage(wlDataSource.requests.destroy.encode(sourceId));
         notifyDragEnded();
       }
     } else if (opcode === EV.data_source_dnd_drop_performed) {
@@ -685,17 +699,15 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
   private handleDataDevice(opcode: number, r: MessageReader): void {
     if (opcode === EV.data_device_data_offer) {
-      const offerId = r.uint();
+      const { id: offerId } = wlDataDevice.events.dataOffer.decodeReader(r);
       this.incomingOffer = { offerId, mimes: [], serial: 0, x: 0, y: 0 };
       this.handlers.set(offerId, (op, rr) =>
         this.handleIncomingOffer(op, rr, offerId),
       );
     } else if (opcode === EV.data_device_enter) {
-      const serial = r.uint();
-      r.object(); // surface
-      const x = readFixed(r);
-      const y = readFixed(r);
-      const offerId = r.object();
+      const event = wlDataDevice.events.enter.decodeReader(r);
+      const { serial, x, y } = event;
+      const offerId = event.id ?? 0;
       if (this.incomingOffer && this.incomingOffer.offerId === offerId) {
         this.incomingOffer.serial = serial;
         this.incomingOffer.x = x;
@@ -709,22 +721,29 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           preferredDropMimes().find((m) => offer.mimes.includes(m)) ??
           offer.mimes[0] ??
           "text/uri-list";
-        this.send(offer.offerId, OP.data_offer_accept, (b) =>
-          b.uint(serial).string(preferred),
+        this.sendMessage(
+          wlDataOffer.requests.accept.encode(offer.offerId, serial, preferred),
         );
         const actions = WL_DND_ACTION_COPY | WL_DND_ACTION_MOVE;
-        this.send(offer.offerId, OP.data_offer_set_actions, (b) =>
-          b.uint(actions).uint(WL_DND_ACTION_MOVE),
+        this.sendMessage(
+          wlDataOffer.requests.setActions.encode(
+            offer.offerId,
+            actions,
+            WL_DND_ACTION_MOVE,
+          ),
         );
         updateActiveWindowDropHover(x, y);
       }
       notifyDropHover(true);
     } else if (opcode === EV.data_device_leave) {
+      wlDataDevice.events.leave.decodeReader(r);
       notifyDropHover(false);
       clearActiveWindowDropHover();
       if (this.incomingOffer) {
         try {
-          this.send(this.incomingOffer.offerId, OP.data_offer_destroy, () => {});
+          this.sendMessage(
+            wlDataOffer.requests.destroy.encode(this.incomingOffer.offerId),
+          );
         } catch {
           /* ok */
         }
@@ -732,15 +751,14 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         this.incomingOffer = null;
       }
     } else if (opcode === EV.data_device_motion) {
-      r.uint(); // time
-      const x = readFixed(r);
-      const y = readFixed(r);
+      const { x, y } = wlDataDevice.events.motion.decodeReader(r);
       if (this.incomingOffer) {
         this.incomingOffer.x = x;
         this.incomingOffer.y = y;
         updateActiveWindowDropHover(x, y);
       }
     } else if (opcode === EV.data_device_drop) {
+      wlDataDevice.events.drop.decodeReader(r);
       const offer = this.incomingOffer;
       // Drop ends the hover gesture immediately. Payload transfer and the
       // filesystem operation may finish later and must not keep the target
@@ -759,12 +777,12 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           const text = buf.toString("utf8");
           notifyDrop(text, offer.mimes.length ? offer.mimes : [mime], offer.x, offer.y);
           try {
-            this.send(offer.offerId, OP.data_offer_finish, () => {});
+            this.sendMessage(wlDataOffer.requests.finish.encode(offer.offerId));
           } catch {
             /* ok */
           }
           try {
-            this.send(offer.offerId, OP.data_offer_destroy, () => {});
+            this.sendMessage(wlDataOffer.requests.destroy.encode(offer.offerId));
           } catch {
             /* ok */
           }
@@ -778,12 +796,12 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           // This is still a terminal DnD path. Finish/destroy the offer so
           // the source receives dnd_finished and can release its drag icon.
           try {
-            this.send(offer.offerId, OP.data_offer_finish, () => {});
+            this.sendMessage(wlDataOffer.requests.finish.encode(offer.offerId));
           } catch {
             /* ok */
           }
           try {
-            this.send(offer.offerId, OP.data_offer_destroy, () => {});
+            this.sendMessage(wlDataOffer.requests.destroy.encode(offer.offerId));
           } catch {
             /* ok */
           }
@@ -791,7 +809,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           this.incomingOffer = null;
         });
     } else if (opcode === EV.data_device_selection) {
-      r.object(); // offer id (clipboard selection — not used by widgets yet)
+      wlDataDevice.events.selection.decodeReader(r);
     }
   }
 
@@ -801,7 +819,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     offerId: number,
   ): void {
     if (opcode === EV.data_offer_offer) {
-      const mime = r.string() ?? "";
+      const { mimeType: mime = "" } = wlDataOffer.events.offer.decodeReader(r);
       if (this.incomingOffer?.offerId === offerId && mime) {
         this.incomingOffer.mimes.push(mime);
       }
@@ -809,7 +827,11 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       opcode === EV.data_offer_source_actions ||
       opcode === EV.data_offer_action
     ) {
-      r.uint();
+      if (opcode === EV.data_offer_source_actions) {
+        wlDataOffer.events.sourceActions.decodeReader(r);
+      } else {
+        wlDataOffer.events.action.decodeReader(r);
+      }
     }
   }
 
@@ -829,8 +851,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         }
         const readFd = pfds.readInt32LE(0);
         const writeFd = pfds.readInt32LE(4);
-        this.send(offerId, OP.data_offer_receive, (b) =>
-          b.string(mime).fd(writeFd),
+        this.sendMessage(
+          wlDataOffer.requests.receive.encode(offerId, mime, writeFd),
         );
         try {
           closeFd(writeFd);
@@ -889,8 +911,123 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   disconnect(): void {
     for (const w of [...this.windows]) w.destroy();
     this.windows.clear();
+    this.eglPresenter?.destroy();
+    this.eglPresenter = null;
+    if (this.eglFd >= 0) {
+      closeFd(this.eglFd);
+      this.eglFd = -1;
+    }
     this.conn?.close();
     this.conn = null;
+  }
+
+  private tryCreateEglPresenter(): void {
+    const mode = (process.env.MOIRE_UI_ACCELERATION ?? "software")
+      .trim()
+      .toLowerCase();
+    if (mode === "software" || mode === "shm" || mode === "off") return;
+    const candidates = process.env.MOIRE_RENDER_NODE
+      ? [process.env.MOIRE_RENDER_NODE]
+      : ["/dev/dri/renderD128", "/dev/dri/renderD129"];
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+      try {
+        const fd = openPath(candidate, O_RDWR | O_CLOEXEC);
+        try {
+          this.eglPresenter = new EglOutputScaler(fd);
+          this.eglFd = fd;
+          console.log(
+            `[ui/wayland] dmabuf presentation on ${candidate} (${this.eglPresenter.info.glRenderer})`,
+          );
+          return;
+        } catch (error) {
+          closeFd(fd);
+          lastError = error;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    const detail = lastError instanceof Error ? lastError.message : String(lastError);
+    if (mode === "dmabuf" || mode === "egl" || mode === "on") {
+      console.warn(`[ui/wayland] requested dmabuf acceleration unavailable: ${detail}`);
+    } else {
+      console.log(`[ui/wayland] dmabuf acceleration unavailable; using wl_shm (${detail})`);
+    }
+  }
+
+  renderClientFrame(
+    channel: string,
+    pixels: Uint8Array,
+    width: number,
+    height: number,
+  ): EglClientPresent | null {
+    if (this.eglPresentationFailed) return null;
+    try {
+      return this.eglPresenter?.renderClientFrame(
+        channel,
+        pixels,
+        width,
+        height,
+      ) ?? null;
+    } catch (error) {
+      console.warn("[ui/wayland] EGL client frame failed; using wl_shm:", error);
+      // A format/driver failure is not expected to heal during this session.
+      // Keep the presenter alive so already-exported targets can receive their
+      // wl_buffer.release events, but avoid retry/log storms on every tick.
+      this.eglPresentationFailed = true;
+      return null;
+    }
+  }
+
+  createDmabufBuffer(
+    frame: EglClientPresent,
+    onRelease: () => void,
+  ): number {
+    if (!this.dmabufId) throw new Error("linux-dmabuf is not bound");
+    const paramsId = this.allocId();
+    this.sendMessage(
+      zwpLinuxDmabufV1.requests.createParams.encode(this.dmabufId, paramsId),
+    );
+    this.handlers.set(paramsId, () => {});
+    const modifierHi = Number((frame.modifier >> 32n) & 0xffffffffn);
+    const modifierLo = Number(frame.modifier & 0xffffffffn);
+    this.sendMessage(
+      zwpLinuxBufferParamsV1.requests.add.encode(
+        paramsId,
+        frame.fd,
+        0,
+        0,
+        frame.stride,
+        modifierHi,
+        modifierLo,
+      ),
+    );
+    const bufferId = this.allocId();
+    this.sendMessage(
+      zwpLinuxBufferParamsV1.requests.createImmed.encode(
+        paramsId,
+        bufferId,
+        frame.width,
+        frame.height,
+        frame.format,
+        0,
+      ),
+    );
+    this.sendMessage(zwpLinuxBufferParamsV1.requests.destroy.encode(paramsId));
+    this.handlers.delete(paramsId);
+    this.handlers.set(bufferId, (opcode) => {
+      if (opcode === EV.buffer_release) onRelease();
+    });
+    return bufferId;
+  }
+
+  releaseClientFrame(id: string): void {
+    this.eglPresenter?.releaseClientFrame(id);
+  }
+
+  dropClientChannel(channel: string): void {
+    this.eglPresenter?.dropClientChannel(channel);
   }
 
   registerSurface(surfaceId: number, win: WaylandWindow): void {
@@ -929,17 +1066,10 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     return this.lastPointerSerial;
   }
 
-  send(
-    objectId: number,
-    opcode: number,
-    build: (b: MessageBuilder) => void,
-    fds: number[] = [],
-  ): void {
+  /** Send a request whose opcode and wire layout came from protocol XML. */
+  sendMessage(message: EncodedWaylandMessage, fds: number[] = []): void {
     if (!this.conn) return;
-    const b = new MessageBuilder();
-    build(b);
-    const { data, fds: more } = b.build(objectId, opcode);
-    this.conn.send(data, [...fds, ...more]);
+    this.conn.send(message.data, [...fds, ...message.fds]);
   }
 
   setHandler(
@@ -965,7 +1095,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           done?.();
         }
       });
-      this.send(WL_DISPLAY_ID, OP.display_sync, (b) => b.newId(cb));
+      this.sendMessage(wlDisplay.requests.sync.encode(WL_DISPLAY_ID, cb));
     });
   }
 
@@ -974,9 +1104,15 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     if (!g) throw new Error(`Wayland global missing: ${iface}`);
     const id = this.allocId();
     const ver = Math.min(version, g.version);
-    this.send(this.registryId, OP.registry_bind, (b) => {
-      b.uint(g.name).string(iface).uint(ver).newId(id);
-    });
+    this.sendMessage(
+      wlRegistry.requests.bind.encode(
+        this.registryId,
+        g.name,
+        iface,
+        ver,
+        id,
+      ),
+    );
     return id;
   }
 
@@ -1007,12 +1143,13 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     const now = Date.now();
     const modifiers = modifiersFromPressed(this.pressedKeys);
     if (opcode === EV.pointer_enter) {
-      const serial = r.uint();
-      const surfaceId = r.object();
+      const event = wlPointer.events.enter.decodeReader(r);
+      const serial = event.serial;
+      const surfaceId = event.surface;
       this.lastPointerSerial = serial;
       this.pointerSurfaceId = surfaceId;
-      this.pointerX = readFixed(r);
-      this.pointerY = readFixed(r);
+      this.pointerX = event.surfaceX;
+      this.pointerY = event.surfaceY;
       this.pointerFocus = this.surfaceToWindow.get(surfaceId) ?? null;
       this.pointerFocus?.emitPointer({
         type: "move",
@@ -1022,13 +1159,12 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         timeMs: now,
       });
     } else if (opcode === EV.pointer_leave) {
-      r.uint();
-      r.object();
+      wlPointer.events.leave.decodeReader(r);
       this.pointerFocus = null;
     } else if (opcode === EV.pointer_motion) {
-      r.uint();
-      this.pointerX = readFixed(r);
-      this.pointerY = readFixed(r);
+      const event = wlPointer.events.motion.decodeReader(r);
+      this.pointerX = event.surfaceX;
+      this.pointerY = event.surfaceY;
       this.pointerFocus?.emitPointer({
         type: "move",
         x: this.pointerX,
@@ -1037,10 +1173,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         timeMs: now,
       });
     } else if (opcode === EV.pointer_button) {
-      const serial = r.uint();
-      r.uint();
-      const button = r.uint();
-      const state = r.uint();
+      const event = wlPointer.events.button.decodeReader(r);
+      const { serial, button, state } = event;
       this.lastPointerSerial = serial;
       this.pointerFocus?.emitPointer({
         type: state === 1 ? "down" : "up",
@@ -1051,10 +1185,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         timeMs: now,
       });
     } else if (opcode === EV.pointer_axis) {
-      r.uint(); // time
-      const axis = r.uint(); // 0 = vertical, 1 = horizontal
-      const value = readFixed(r); // scroll amount in surface coordinates
-      if (axis === 0) {
+      const { axis, value } = wlPointer.events.axis.decodeReader(r);
+      if (axis === wlPointer.enums.axis.verticalScroll) {
         // Vertical scroll: positive = down (matches DOM deltaY convention)
         this.pointerFocus?.emitPointer({
           type: "wheel",
@@ -1070,9 +1202,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
   private handleKeyboard(opcode: number, r: MessageReader): void {
     if (opcode === EV.keyboard_keymap) {
-      r.uint();
-      const fd = r.fd();
-      r.uint();
+      const { fd } = wlKeyboard.events.keymap.decodeReader(r);
       try {
         closeFd(fd);
       } catch {
@@ -1081,10 +1211,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       return;
     }
     if (opcode === EV.keyboard_key) {
-      r.uint();
-      r.uint();
-      const key = r.uint();
-      const state = r.uint();
+      const { key, state } = wlKeyboard.events.key.decodeReader(r);
       const repeat = state === KEY_PRESSED && this.pressedKeys.has(key);
       if (state === KEY_PRESSED) this.pressedKeys.add(key);
       else this.pressedKeys.delete(key);
@@ -1120,6 +1247,7 @@ class WaylandWindow implements PlatformWindow {
   private readonly popupOpts: PlatformPopupOpts | null;
   private configured = false;
   private slots: ShmSlot[] = [];
+  private dmabufSlots = new Map<string, DmabufSlot>();
   private configureCbs: Array<(w: number, h: number) => void> = [];
   private closeCbs: Array<() => void> = [];
   private pointerCbs: Array<(ev: UiPointerEvent) => void> = [];
@@ -1147,21 +1275,28 @@ class WaylandWindow implements PlatformWindow {
   create(): void {
     const p = this.platform;
     this.surfaceId = p.allocId();
-    p.send(p.getCompositorId(), OP.compositor_create_surface, (b) =>
-      b.newId(this.surfaceId),
+    p.sendMessage(
+      wlCompositor.requests.createSurface.encode(
+        p.getCompositorId(),
+        this.surfaceId,
+      ),
     );
     p.registerSurface(this.surfaceId, this);
 
     this.xdgSurfaceId = p.allocId();
-    p.send(p.getWmBaseId(), OP.xdg_wm_base_get_xdg_surface, (b) =>
-      b.newId(this.xdgSurfaceId).object(this.surfaceId),
+    p.sendMessage(
+      xdgWmBase.requests.getXdgSurface.encode(
+        p.getWmBaseId(),
+        this.xdgSurfaceId,
+        this.surfaceId,
+      ),
     );
     p.setHandler(this.xdgSurfaceId, (opcode, r) => {
       if (opcode === EV.xdg_surface_configure) {
-        const serial = r.uint();
+        const { serial } = xdgSurface.events.configure.decodeReader(r);
         this.configured = true;
-        p.send(this.xdgSurfaceId, OP.xdg_surface_ack_configure, (b) =>
-          b.uint(serial),
+        p.sendMessage(
+          xdgSurface.requests.ackConfigure.encode(this.xdgSurfaceId, serial),
         );
         for (const cb of this.configureCbs) cb(this.width, this.height);
       }
@@ -1169,19 +1304,21 @@ class WaylandWindow implements PlatformWindow {
 
     if (this.popupOpts) {
       this.createPopupRole();
-      p.send(this.surfaceId, OP.surface_commit, () => {});
+      p.sendMessage(wlSurface.requests.commit.encode(this.surfaceId));
       return;
     }
 
     this.toplevelId = p.allocId();
-    p.send(this.xdgSurfaceId, OP.xdg_surface_get_toplevel, (b) =>
-      b.newId(this.toplevelId),
+    p.sendMessage(
+      xdgSurface.requests.getToplevel.encode(
+        this.xdgSurfaceId,
+        this.toplevelId,
+      ),
     );
     p.setHandler(this.toplevelId, (opcode, r) => {
       if (opcode === EV.xdg_toplevel_configure) {
-        const w = r.int();
-        const h = r.int();
-        r.array();
+        const { width: w, height: h } =
+          xdgToplevel.events.configure.decodeReader(r);
         if (!this.resizable) {
           // Moire initially configures new toplevels to 800×600; min==max then
           // reconfigures to our preferred size. Ignore mismatched interim hints.
@@ -1203,38 +1340,52 @@ class WaylandWindow implements PlatformWindow {
           this.height = this.preferredH;
         }
       } else if (opcode === EV.xdg_toplevel_close) {
+        xdgToplevel.events.close.decodeReader(r);
         for (const cb of this.closeCbs) cb();
       }
     });
 
-    p.send(this.toplevelId, OP.xdg_toplevel_set_title, (b) =>
-      b.string(this.title),
+    p.sendMessage(
+      xdgToplevel.requests.setTitle.encode(this.toplevelId, this.title),
     );
-    p.send(this.toplevelId, OP.xdg_toplevel_set_app_id, (b) =>
-      b.string(this.appId),
+    p.sendMessage(
+      xdgToplevel.requests.setAppId.encode(this.toplevelId, this.appId),
     );
     // Ask for our preferred size. Fixed windows use min==max so Moire
     // reconfigures away from its default 800×600 slot hint.
-    p.send(this.toplevelId, OP.xdg_toplevel_set_min_size, (b) =>
-      b.int(this.preferredW).int(this.preferredH),
+    p.sendMessage(
+      xdgToplevel.requests.setMinSize.encode(
+        this.toplevelId,
+        this.preferredW,
+        this.preferredH,
+      ),
     );
     if (this.resizable) {
-      p.send(this.toplevelId, OP.xdg_toplevel_set_max_size, (b) =>
-        b.int(0).int(0),
+      p.sendMessage(
+        xdgToplevel.requests.setMaxSize.encode(this.toplevelId, 0, 0),
       );
     } else {
-      p.send(this.toplevelId, OP.xdg_toplevel_set_max_size, (b) =>
-        b.int(this.preferredW).int(this.preferredH),
+      p.sendMessage(
+        xdgToplevel.requests.setMaxSize.encode(
+          this.toplevelId,
+          this.preferredW,
+          this.preferredH,
+        ),
       );
     }
     const decoMgr = p.getDecoManagerId();
     if (decoMgr) {
       const decoId = p.allocId();
-      p.send(decoMgr, OP.xdg_decoration_manager_get_toplevel_decoration, (b) =>
-        b.newId(decoId).object(this.toplevelId),
+      p.sendMessage(
+        zxdgDecorationManagerV1.requests.getToplevelDecoration.encode(
+          decoMgr,
+          decoId,
+          this.toplevelId,
+        ),
       );
-      p.send(decoId, OP.xdg_toplevel_decoration_set_mode, (b) =>
-        b.uint(
+      p.sendMessage(
+        zxdgToplevelDecorationV1.requests.setMode.encode(
+          decoId,
           this.decorated
             ? XDG_DECORATION_MODE_SERVER
             : XDG_DECORATION_MODE_CLIENT,
@@ -1244,7 +1395,7 @@ class WaylandWindow implements PlatformWindow {
         // configure — mode already requested
       });
     }
-    p.send(this.surfaceId, OP.surface_commit, () => {});
+    p.sendMessage(wlSurface.requests.commit.encode(this.surfaceId));
   }
 
   private createPopupRole(): void {
@@ -1253,52 +1404,77 @@ class WaylandWindow implements PlatformWindow {
     if (!opts || !(parent instanceof WaylandWindow)) return;
     const p = this.platform;
     this.positionerId = p.allocId();
-    p.send(p.getWmBaseId(), OP.xdg_wm_base_create_positioner, (b) =>
-      b.newId(this.positionerId),
+    p.sendMessage(
+      xdgWmBase.requests.createPositioner.encode(
+        p.getWmBaseId(),
+        this.positionerId,
+      ),
     );
-    p.send(this.positionerId, OP.xdg_positioner_set_size, (b) =>
-      b.int(this.width).int(this.height),
+    p.sendMessage(
+      xdgPositioner.requests.setSize.encode(
+        this.positionerId,
+        this.width,
+        this.height,
+      ),
     );
-    p.send(this.positionerId, OP.xdg_positioner_set_anchor_rect, (b) =>
-      b.int(opts.anchorX).int(opts.anchorY).int(1).int(1),
+    p.sendMessage(
+      xdgPositioner.requests.setAnchorRect.encode(
+        this.positionerId,
+        opts.anchorX,
+        opts.anchorY,
+        1,
+        1,
+      ),
     );
-    p.send(this.positionerId, OP.xdg_positioner_set_anchor, (b) =>
-      b.uint(XDG_ANCHOR_TOP_LEFT),
+    p.sendMessage(
+      xdgPositioner.requests.setAnchor.encode(
+        this.positionerId,
+        XDG_ANCHOR_TOP_LEFT,
+      ),
     );
-    p.send(this.positionerId, OP.xdg_positioner_set_gravity, (b) =>
-      b.uint(XDG_ANCHOR_TOP_LEFT),
+    p.sendMessage(
+      xdgPositioner.requests.setGravity.encode(
+        this.positionerId,
+        XDG_ANCHOR_TOP_LEFT,
+      ),
     );
-    p.send(
-      this.positionerId,
-      OP.xdg_positioner_set_constraint_adjustment,
-      (b) => b.uint(XDG_CONSTRAINT_SLIDE_X | XDG_CONSTRAINT_SLIDE_Y),
+    p.sendMessage(
+      xdgPositioner.requests.setConstraintAdjustment.encode(
+        this.positionerId,
+        XDG_CONSTRAINT_SLIDE_X | XDG_CONSTRAINT_SLIDE_Y,
+      ),
     );
 
     this.popupId = p.allocId();
-    p.send(this.xdgSurfaceId, OP.xdg_surface_get_popup, (b) =>
-      b
-        .newId(this.popupId)
-        .object(parent.getXdgSurfaceId())
-        .object(this.positionerId),
+    p.sendMessage(
+      xdgSurface.requests.getPopup.encode(
+        this.xdgSurfaceId,
+        this.popupId,
+        parent.getXdgSurfaceId(),
+        this.positionerId,
+      ),
     );
     p.setHandler(this.popupId, (opcode, r) => {
       if (opcode === EV.xdg_popup_configure) {
-        r.int();
-        r.int();
-        const w = r.int();
-        const h = r.int();
+        const { width: w, height: h } =
+          xdgPopup.events.configure.decodeReader(r);
         if (w > 0) this.width = w;
         if (h > 0) this.height = h;
       } else if (opcode === EV.xdg_popup_done) {
+        xdgPopup.events.popupDone.decodeReader(r);
         for (const cb of this.closeCbs) cb();
       }
     });
     if (opts.grab !== false && p.getSeatId()) {
-      p.send(this.popupId, OP.xdg_popup_grab, (b) =>
-        b.object(p.getSeatId()).uint(p.getLastPointerSerial()),
+      p.sendMessage(
+        xdgPopup.requests.grab.encode(
+          this.popupId,
+          p.getSeatId(),
+          p.getLastPointerSerial(),
+        ),
       );
     }
-    p.send(this.positionerId, OP.xdg_positioner_destroy, () => {});
+    p.sendMessage(xdgPositioner.requests.destroy.encode(this.positionerId));
     this.positionerId = 0;
   }
 
@@ -1309,8 +1485,8 @@ class WaylandWindow implements PlatformWindow {
   setTitle(title: string): void {
     this.title = title;
     if (this.toplevelId) {
-      this.platform.send(this.toplevelId, OP.xdg_toplevel_set_title, (b) =>
-        b.string(title),
+      this.platform.sendMessage(
+        xdgToplevel.requests.setTitle.encode(this.toplevelId, title),
       );
     }
   }
@@ -1325,6 +1501,26 @@ class WaylandWindow implements PlatformWindow {
     if (!this.alive || !this.configured) return;
     this.width = width;
     this.height = height;
+    const channel = `surface-${this.surfaceId}`;
+    const accelerated = this.platform.renderClientFrame(
+      channel,
+      pixels,
+      width,
+      height,
+    );
+    if (accelerated) {
+      let slot = this.dmabufSlots.get(accelerated.id);
+      if (!slot) {
+        const frameId = accelerated.id;
+        const bufferId = this.platform.createDmabufBuffer(accelerated, () =>
+          this.platform.releaseClientFrame(frameId),
+        );
+        slot = { frameId, bufferId };
+        this.dmabufSlots.set(frameId, slot);
+      }
+      this.commitBuffer(slot.bufferId, width, height);
+      return;
+    }
     const stride = width * 4;
     const size = stride * height;
     let slot = this.slots.find((s) => !s.busy && s.size >= size);
@@ -1335,18 +1531,28 @@ class WaylandWindow implements PlatformWindow {
     }
     flushMmap(slot.map, pixels, size);
     slot.busy = true;
+    this.commitBuffer(slot.bufferId, width, height);
+  }
+
+  private commitBuffer(bufferId: number, width: number, height: number): void {
     const p = this.platform;
     // Window geometry = content box (excludes SSD); matches buffer for our clients.
-    p.send(this.xdgSurfaceId, OP.xdg_surface_set_window_geometry, (b) =>
-      b.int(0).int(0).int(width).int(height),
+    p.sendMessage(
+      xdgSurface.requests.setWindowGeometry.encode(
+        this.xdgSurfaceId,
+        0,
+        0,
+        width,
+        height,
+      ),
     );
-    p.send(this.surfaceId, OP.surface_attach, (b) =>
-      b.object(slot!.bufferId).int(0).int(0),
+    p.sendMessage(
+      wlSurface.requests.attach.encode(this.surfaceId, bufferId, 0, 0),
     );
-    p.send(this.surfaceId, OP.surface_damage, (b) =>
-      b.int(0).int(0).int(width).int(height),
+    p.sendMessage(
+      wlSurface.requests.damage.encode(this.surfaceId, 0, 0, width, height),
     );
-    p.send(this.surfaceId, OP.surface_commit, () => {});
+    p.sendMessage(wlSurface.requests.commit.encode(this.surfaceId));
   }
 
   onConfigure(cb: (w: number, h: number) => void): void {
@@ -1358,8 +1564,8 @@ class WaylandWindow implements PlatformWindow {
     const seatId = this.platform.getSeatId();
     const serial = this.platform.getLastPointerSerial();
     if (!seatId || !serial) return;
-    this.platform.send(this.toplevelId, OP.xdg_toplevel_move, (b) =>
-      b.object(seatId).uint(serial),
+    this.platform.sendMessage(
+      xdgToplevel.requests.move.encode(this.toplevelId, seatId, serial),
     );
   }
 
@@ -1389,21 +1595,31 @@ class WaylandWindow implements PlatformWindow {
     const p = this.platform;
     for (const slot of this.slots) this.freeSlot(slot);
     this.slots = [];
+    for (const slot of this.dmabufSlots.values()) {
+      try {
+        p.sendMessage(wlBuffer.requests.destroy.encode(slot.bufferId));
+      } catch {
+        // ok
+      }
+      p.clearHandler(slot.bufferId);
+    }
+    this.dmabufSlots.clear();
+    p.dropClientChannel(`surface-${this.surfaceId}`);
     if (this.popupId) {
-      p.send(this.popupId, OP.xdg_popup_destroy, () => {});
+      p.sendMessage(xdgPopup.requests.destroy.encode(this.popupId));
       p.clearHandler(this.popupId);
       this.popupId = 0;
     }
     if (this.toplevelId) {
-      p.send(this.toplevelId, OP.xdg_toplevel_destroy, () => {});
+      p.sendMessage(xdgToplevel.requests.destroy.encode(this.toplevelId));
       p.clearHandler(this.toplevelId);
     }
     if (this.xdgSurfaceId) {
-      p.send(this.xdgSurfaceId, OP.xdg_surface_destroy, () => {});
+      p.sendMessage(xdgSurface.requests.destroy.encode(this.xdgSurfaceId));
       p.clearHandler(this.xdgSurfaceId);
     }
     if (this.surfaceId) {
-      p.send(this.surfaceId, OP.surface_destroy, () => {});
+      p.sendMessage(wlSurface.requests.destroy.encode(this.surfaceId));
     }
     p.unregisterWindow(this);
     this.configureCbs = [];
@@ -1417,21 +1633,23 @@ class WaylandWindow implements PlatformWindow {
     const fd = memfdCreate(size);
     const map = mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     const poolId = p.allocId();
-    p.send(p.getShmId(), OP.shm_create_pool, (b) =>
-      b.newId(poolId).fd(fd).int(size),
+    p.sendMessage(
+      wlShm.requests.createPool.encode(p.getShmId(), poolId, fd, size),
     );
     const bufferId = p.allocId();
     const width = this.width;
     const height = this.height;
     const stride = width * 4;
-    p.send(poolId, OP.shm_pool_create_buffer, (b) =>
-      b
-        .newId(bufferId)
-        .int(0)
-        .int(width)
-        .int(height)
-        .int(stride)
-        .uint(WL_SHM_FORMAT_ARGB8888),
+    p.sendMessage(
+      wlShmPool.requests.createBuffer.encode(
+        poolId,
+        bufferId,
+        0,
+        width,
+        height,
+        stride,
+        WL_SHM_FORMAT_ARGB8888,
+      ),
     );
     p.setHandler(bufferId, (opcode) => {
       if (opcode === EV.buffer_release) {
@@ -1470,19 +1688,21 @@ class WaylandWindow implements PlatformWindow {
       if (!this.slots.includes(slot)) this.slots.push(slot);
       return;
     }
-    p.send(slot.bufferId, OP.buffer_destroy, () => {});
+    p.sendMessage(wlBuffer.requests.destroy.encode(slot.bufferId));
     p.clearHandler(slot.bufferId);
     slot.bufferId = p.allocId();
     slot.width = width;
     slot.height = height;
-    p.send(slot.poolId, OP.shm_pool_create_buffer, (b) =>
-      b
-        .newId(slot.bufferId)
-        .int(0)
-        .int(width)
-        .int(height)
-        .int(stride)
-        .uint(WL_SHM_FORMAT_ARGB8888),
+    p.sendMessage(
+      wlShmPool.requests.createBuffer.encode(
+        slot.poolId,
+        slot.bufferId,
+        0,
+        width,
+        height,
+        stride,
+        WL_SHM_FORMAT_ARGB8888,
+      ),
     );
     p.setHandler(slot.bufferId, (opcode) => {
       if (opcode === EV.buffer_release) slot.busy = false;
@@ -1492,13 +1712,13 @@ class WaylandWindow implements PlatformWindow {
   private freeSlot(slot: ShmSlot): void {
     const p = this.platform;
     try {
-      p.send(slot.bufferId, OP.buffer_destroy, () => {});
+      p.sendMessage(wlBuffer.requests.destroy.encode(slot.bufferId));
     } catch {
       // ok
     }
     p.clearHandler(slot.bufferId);
     try {
-      p.send(slot.poolId, OP.shm_pool_destroy, () => {});
+      p.sendMessage(wlShmPool.requests.destroy.encode(slot.poolId));
     } catch {
       // ok
     }
