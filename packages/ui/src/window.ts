@@ -588,7 +588,7 @@ export class Window {
       const frame = this.retainedSoftwareRenderer.render(retained);
       const rasterMs = performance.now() - rasterStartedAt;
       const softwareSubmitStartedAt = performance.now();
-      platformWin.present(frame.pixels, frame.width, frame.height);
+      platformWin.present(frame.pixels, frame.width, frame.height, retained.damage);
       this.recordRenderedFrame(
         "software",
         frameStartedAt,

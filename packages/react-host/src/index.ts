@@ -1029,14 +1029,37 @@ export class RetainedSoftwareRenderer {
 
   render(scene: RetainedSceneFrame): SoftwareFrame {
     const requiredBytes = scene.width * scene.height * 4;
-    const pixels = this.pixels?.byteLength === requiredBytes
-      ? this.pixels
+    const reusable = this.pixels?.byteLength === requiredBytes;
+    const pixels = reusable
+      ? this.pixels!
       : new Uint8Array(requiredBytes);
     const target = new Uint32Array(pixels.buffer);
-    target.fill(scene.clearColor >>> 0);
+    const damage = reusable
+      ? scene.damage ?? [{ x: 0, y: 0, width: scene.width, height: scene.height }]
+      : [{ x: 0, y: 0, width: scene.width, height: scene.height }];
+    for (const rect of damage) {
+      fillRect(
+        target,
+        scene.width,
+        scene.width,
+        scene.height,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        scene.clearColor >>> 0,
+      );
+    }
 
     for (const layer of scene.layers) {
-      compositeRetainedLayer(target, scene.width, scene.height, layer);
+      for (const rect of damage) {
+        const clip = intersectClip(layer.clip, rect);
+        if (clip.width <= 0 || clip.height <= 0) continue;
+        compositeRetainedLayer(target, scene.width, scene.height, {
+          ...layer,
+          clip,
+        });
+      }
     }
 
     this.pixels = pixels;
@@ -1233,6 +1256,91 @@ type RetainedRasterCache = {
   lastSeen: number;
 };
 
+type RetainedLayerSnapshot = {
+  signature: string;
+  bounds: RetainedClip;
+};
+
+function retainedLayerBounds(
+  layer: RetainedLayer,
+  viewport: RenderViewport,
+): RetainedClip {
+  let left = layer.destination.x;
+  let top = layer.destination.y;
+  let right = layer.destination.x + layer.destination.width;
+  let bottom = layer.destination.y + layer.destination.height;
+  if (layer.dropShadow) {
+    const spread = Math.max(0, layer.dropShadow.spread ?? 0);
+    const extent = Math.max(0, layer.dropShadow.blurRadius) + spread;
+    left = Math.min(left, layer.destination.x + layer.dropShadow.offsetX - extent);
+    top = Math.min(top, layer.destination.y + layer.dropShadow.offsetY - extent);
+    right = Math.max(
+      right,
+      layer.destination.x + layer.destination.width + layer.dropShadow.offsetX + extent,
+    );
+    bottom = Math.max(
+      bottom,
+      layer.destination.y + layer.destination.height + layer.dropShadow.offsetY + extent,
+    );
+  }
+  if (layer.clip) {
+    left = Math.max(left, layer.clip.x);
+    top = Math.max(top, layer.clip.y);
+    right = Math.min(right, layer.clip.x + layer.clip.width);
+    bottom = Math.min(bottom, layer.clip.y + layer.clip.height);
+  }
+  const x = Math.max(0, Math.floor(left));
+  const y = Math.max(0, Math.floor(top));
+  const clippedRight = Math.min(viewport.width, Math.ceil(right));
+  const clippedBottom = Math.min(viewport.height, Math.ceil(bottom));
+  return {
+    x,
+    y,
+    width: Math.max(0, clippedRight - x),
+    height: Math.max(0, clippedBottom - y),
+  };
+}
+
+function retainedLayerSignature(layer: RetainedLayer): string {
+  return JSON.stringify({
+    revision: layer.revision,
+    sourceWidth: layer.sourceWidth,
+    sourceHeight: layer.sourceHeight,
+    sourceStride: layer.sourceStride,
+    destination: layer.destination,
+    clip: layer.clip,
+    opacity: layer.opacity,
+    sampling: layer.sampling,
+    cornerRadius: layer.cornerRadius,
+    dropShadow: layer.dropShadow,
+  });
+}
+
+function coalesceDamage(rects: readonly RetainedClip[]): RetainedClip[] {
+  const result: RetainedClip[] = [];
+  for (const rect of rects) {
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    let merged = { ...rect };
+    for (let index = result.length - 1; index >= 0; index--) {
+      const current = result[index]!;
+      const separate =
+        merged.x > current.x + current.width ||
+        merged.x + merged.width < current.x ||
+        merged.y > current.y + current.height ||
+        merged.y + merged.height < current.y;
+      if (separate) continue;
+      const left = Math.min(merged.x, current.x);
+      const top = Math.min(merged.y, current.y);
+      const right = Math.max(merged.x + merged.width, current.x + current.width);
+      const bottom = Math.max(merged.y + merged.height, current.y + current.height);
+      merged = { x: left, y: top, width: right - left, height: bottom - top };
+      result.splice(index, 1);
+    }
+    result.push(merged);
+  }
+  return result;
+}
+
 function intersectClip(a: RetainedClip | undefined, b: RetainedClip): RetainedClip {
   if (!a) return b;
   const x = Math.max(a.x, b.x);
@@ -1264,6 +1372,11 @@ export class RetainedSceneRenderer
   >();
   private nextRevision = 1;
   private frame = 0;
+  private previousLayers = new Map<string, RetainedLayerSnapshot>();
+  private previousOrder: string[] = [];
+  private previousWidth = 0;
+  private previousHeight = 0;
+  private previousClearColor = 0;
 
   private solid(color: number): Uint8Array {
     const key = color >>> 0;
@@ -1504,11 +1617,45 @@ export class RetainedSceneRenderer
         if (this.frame - cached.lastSeen >= 120) this.rasterCache.delete(id);
       }
     }
+    const clearColor = 0x00000000;
+    const order = layers.map((layer) => layer.id);
+    const forceFullDamage =
+      viewport.width !== this.previousWidth ||
+      viewport.height !== this.previousHeight ||
+      clearColor !== this.previousClearColor ||
+      order.length !== this.previousOrder.length ||
+      order.some((id, index) => id !== this.previousOrder[index]);
+    const nextLayers = new Map<string, RetainedLayerSnapshot>();
+    const changedBounds: RetainedClip[] = [];
+    for (const layer of layers) {
+      const snapshot = {
+        signature: retainedLayerSignature(layer),
+        bounds: retainedLayerBounds(layer, viewport),
+      };
+      nextLayers.set(layer.id, snapshot);
+      const previous = this.previousLayers.get(layer.id);
+      if (!previous || previous.signature !== snapshot.signature) {
+        if (previous) changedBounds.push(previous.bounds);
+        changedBounds.push(snapshot.bounds);
+      }
+    }
+    for (const [id, previous] of this.previousLayers) {
+      if (!nextLayers.has(id)) changedBounds.push(previous.bounds);
+    }
+    const damage = forceFullDamage
+      ? [{ x: 0, y: 0, width: viewport.width, height: viewport.height }]
+      : coalesceDamage(changedBounds);
+    this.previousLayers = nextLayers;
+    this.previousOrder = order;
+    this.previousWidth = viewport.width;
+    this.previousHeight = viewport.height;
+    this.previousClearColor = clearColor;
     return {
       width: viewport.width,
       height: viewport.height,
-      clearColor: 0x00000000,
+      clearColor,
       layers,
+      damage,
     };
   }
 }

@@ -550,6 +550,10 @@ type SurfaceState = {
   bufferOffsetX: number;
   bufferOffsetY: number;
   frameCallbacks: number[];
+  /** Buffer-space damage accumulated for the next commit. */
+  pendingDamage: CompositionRect[];
+  /** Buffer-space damage committed but not yet consumed by composition. */
+  damage: CompositionRect[];
   /** Feedback objects requested for the next surface commit. */
   pendingPresentationFeedbacks: number[];
   /** Feedback objects attached to the latest unpresented commit. */
@@ -5172,6 +5176,7 @@ export class CompositorServer {
                 }
               : undefined,
             sampling: "nearest",
+            damage: surface.damage,
           });
           painted++;
         }
@@ -5282,6 +5287,7 @@ export class CompositorServer {
               }
             : undefined,
         sampling: "nearest",
+        damage: surface.damage,
       });
       client.finishSurfaceFrame(surface);
       painted++;
@@ -5954,6 +5960,7 @@ class ClientSession {
     surf.readyPresentationFeedbacks.push(...surf.presentationFeedbacks);
     surf.presentationFeedbacks = [];
     surf.presentationReady = surf.readyPresentationFeedbacks.length > 0;
+    surf.damage = [];
   }
 
   getBuffer(id: number): BufferState | null {
@@ -7558,6 +7565,8 @@ class ClientSession {
         bufferOffsetX: 0,
         bufferOffsetY: 0,
         frameCallbacks: [],
+        pendingDamage: [],
+        damage: [],
         pendingPresentationFeedbacks: [],
         presentationFeedbacks: [],
         readyPresentationFeedbacks: [],
@@ -7785,10 +7794,19 @@ class ClientSession {
         }
       }
     } else if (opcode === OP.surface_damage || opcode === OP.surface_damage_buffer) {
-      r.int();
-      r.int();
-      r.int();
-      r.int();
+      const x = r.int();
+      const y = r.int();
+      const width = r.int();
+      const height = r.int();
+      if (width > 0 && height > 0) {
+        const scale = opcode === OP.surface_damage ? surface.bufferScale : 1;
+        surface.pendingDamage.push({
+          x: x * scale,
+          y: y * scale,
+          width: width * scale,
+          height: height * scale,
+        });
+      }
     } else if (
       opcode === OP.surface_set_opaque_region ||
       opcode === OP.surface_set_input_region
@@ -7803,6 +7821,8 @@ class ClientSession {
       this.objects.set(cbId, { id: cbId, iface: "wl_callback", version: 1 });
       surface.frameCallbacks.push(cbId);
     } else if (opcode === OP.surface_commit) {
+      surface.damage.push(...surface.pendingDamage);
+      surface.pendingDamage = [];
       // A new commit supersedes only a previous commit which has not yet been
       // composited. Feedback already moved to readyPresentationFeedbacks must
       // survive until the output presentation completes.
@@ -7955,6 +7975,8 @@ class ClientSession {
       surface.pendingPresentationFeedbacks = [];
       surface.presentationFeedbacks = [];
       surface.readyPresentationFeedbacks = [];
+      surface.pendingDamage = [];
+      surface.damage = [];
       this.finishSurfaceFrame(surface);
       surface.presentationReady = false;
       this.clearSurfaceOutputs(surface);

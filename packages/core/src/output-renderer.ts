@@ -157,6 +157,7 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
           sourceStride: layer.source.stride,
           revision: layer.source.revision,
           sourceRect: layer.sourceRect,
+          damage: layer.damage,
           destination: layer.destination,
           opacity: layer.opacity,
           transform: layer.transform?.matrix,

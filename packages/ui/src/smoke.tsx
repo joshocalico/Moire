@@ -438,6 +438,13 @@ function declarativeLayoutAndTweenSmoke(): void {
   assert.equal(motion.requiresReconcile, false, "live transforms should bypass React");
   assert.equal(before.layers[0]?.destination.x, 0);
   assert.equal(after.layers[0]?.destination.x, 50);
+  assert.deepEqual(before.damage, [{ x: 0, y: 0, width: 200, height: 40 }]);
+  assert.ok(after.damage && after.damage.length > 0, "moving layer emitted no damage");
+  assert.ok(
+    after.damage.reduce((total, rect) => total + rect.width * rect.height, 0) <
+      200 * 40,
+    "moving a small retained layer damaged the full surface",
+  );
   assert.equal(collectHits(root.container)[0]?.x, 50, "live transforms must move hit regions");
   loop.dispose();
   renderShell(root, null);

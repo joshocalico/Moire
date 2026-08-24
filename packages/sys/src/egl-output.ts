@@ -156,6 +156,8 @@ export type EglDirectPresent = {
 };
 
 /** A renderer-owned dma-buf suitable for a Wayland wl_buffer. */
+export type EglDamageRect = { x: number; y: number; width: number; height: number };
+
 export type EglClientPresent = {
   /** Stable for the lifetime of the underlying GBM BO. */
   id: string;
@@ -165,6 +167,8 @@ export type EglClientPresent = {
   stride: number;
   format: number;
   modifier: bigint;
+  /** Buffer-space damage produced while composing this target. */
+  damage: readonly EglDamageRect[];
 };
 
 export type EglCompositionLayer = {
@@ -175,6 +179,8 @@ export type EglCompositionLayer = {
   sourceStride: number;
   revision?: number;
   sourceRect?: { x: number; y: number; width: number; height: number };
+  /** Source-space damage supplied by the producer of this layer. */
+  damage?: readonly EglDamageRect[];
   destination: { x: number; y: number; width: number; height: number };
   /** Axis-aligned scene-space clip inherited from retained layout groups. */
   clip?: { x: number; y: number; width: number; height: number };
@@ -206,6 +212,8 @@ export type EglCompositionScene = {
   height: number;
   clearColor: number;
   layers: readonly EglCompositionLayer[];
+  /** Producer-computed precise scene-space damage. */
+  damage?: readonly EglDamageRect[];
 };
 
 type CachedTexture = {
@@ -332,6 +340,61 @@ function layerSignature(layer: EglCompositionLayer): string {
     backdropBlur: layer.backdropBlur,
     colorMatrix: layer.colorMatrix,
   });
+}
+
+function layerDamageBounds(
+  layer: EglCompositionLayer,
+  damage: EglDamageRect,
+  sceneWidth: number,
+  sceneHeight: number,
+): DamageRect | null {
+  if (
+    layer.transform ||
+    layer.dropShadow ||
+    layer.backdropBlur ||
+    layer.colorMatrix
+  ) {
+    return layerBounds(layer, sceneWidth, sceneHeight);
+  }
+  const source = layer.sourceRect ?? {
+    x: 0,
+    y: 0,
+    width: layer.sourceWidth,
+    height: layer.sourceHeight,
+  };
+  const left = Math.max(source.x, damage.x);
+  const top = Math.max(source.y, damage.y);
+  const right = Math.min(source.x + source.width, damage.x + damage.width);
+  const bottom = Math.min(source.y + source.height, damage.y + damage.height);
+  if (right <= left || bottom <= top || source.width <= 0 || source.height <= 0) {
+    return null;
+  }
+  const mapped: DamageRect = {
+    x: layer.destination.x +
+      ((left - source.x) / source.width) * layer.destination.width,
+    y: layer.destination.y +
+      ((top - source.y) / source.height) * layer.destination.height,
+    width: ((right - left) / source.width) * layer.destination.width,
+    height: ((bottom - top) / source.height) * layer.destination.height,
+  };
+  if (layer.clip) {
+    const clippedLeft = Math.max(mapped.x, layer.clip.x);
+    const clippedTop = Math.max(mapped.y, layer.clip.y);
+    const clippedRight = Math.min(
+      mapped.x + mapped.width,
+      layer.clip.x + layer.clip.width,
+    );
+    const clippedBottom = Math.min(
+      mapped.y + mapped.height,
+      layer.clip.y + layer.clip.height,
+    );
+    mapped.x = clippedLeft;
+    mapped.y = clippedTop;
+    mapped.width = Math.max(0, clippedRight - clippedLeft);
+    mapped.height = Math.max(0, clippedBottom - clippedTop);
+  }
+  const clipped = clampRect(mapped, sceneWidth, sceneHeight);
+  return clipped.width > 0 && clipped.height > 0 ? clipped : null;
 }
 
 type DirectOutputTarget = EglDirectPresent & {
@@ -1668,8 +1731,24 @@ void main() {
         previous.pixels !== layer.pixels ||
         previous.signature !== signature
       ) {
-        if (previous) damage = rectUnion(damage, previous.bounds);
-        damage = rectUnion(damage, bounds);
+        const canUseSourceDamage =
+          previous != null &&
+          previous.signature === signature &&
+          layer.damage != null;
+        if (canUseSourceDamage) {
+          for (const sourceDamage of layer.damage!) {
+            const mapped = layerDamageBounds(
+              layer,
+              sourceDamage,
+              scene.width,
+              scene.height,
+            );
+            if (mapped) damage = rectUnion(damage, mapped);
+          }
+        } else {
+          if (previous) damage = rectUnion(damage, previous.bounds);
+          damage = rectUnion(damage, bounds);
+        }
       }
     }
     for (const [id, previous] of this.layerSnapshots) {
@@ -1745,7 +1824,7 @@ void main() {
   }
 
   /** Compose retained, revisioned layers into one logical GPU scene. */
-  beginComposition(scene: EglCompositionScene): void {
+  beginComposition(scene: EglCompositionScene): DamageRect | null {
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
     if (scene.width < 1 || scene.height < 1) {
       throw new RangeError("EGL composition scene has invalid dimensions");
@@ -1785,7 +1864,7 @@ void main() {
     }
     if (!damage) {
       this.outputSourceTexture = this.sceneTexture;
-      return;
+      return null;
     }
     this.glViewport(0, 0, scene.width, scene.height);
     this.restoreSceneScissor();
@@ -1914,6 +1993,7 @@ void main() {
         this.layerGeometry.delete(id);
       }
     }
+    return damage;
   }
 
   private validateOutputBounds(output: EglDirectOutput): void {
@@ -2254,6 +2334,7 @@ void main() {
         stride,
         format,
         modifier,
+        damage: [],
         bo,
         image,
         texture,
@@ -2351,6 +2432,7 @@ void main() {
       stride: target.stride,
       format: target.format,
       modifier: target.modifier,
+      damage: [{ x: 0, y: 0, width, height }],
     };
   }
 
@@ -2384,7 +2466,7 @@ void main() {
     }
     if (!target) return null;
 
-    this.beginComposition(scene);
+    const damage = this.beginComposition(scene);
     this.paintOutput(
       {
         id: channel,
@@ -2412,6 +2494,7 @@ void main() {
       stride: target.stride,
       format: target.format,
       modifier: target.modifier,
+      damage: scene.damage ?? (damage ? [damage] : []),
     };
   }
 

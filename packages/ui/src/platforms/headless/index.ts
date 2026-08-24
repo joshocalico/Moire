@@ -11,6 +11,7 @@ import type {
   UiKeyEvent,
   UiPointerEvent,
 } from "../../platform.js";
+import type { RetainedClip } from "@moire/react-host";
 
 export class HeadlessPlatform implements PlatformBackend {
   readonly name = "headless";
@@ -103,7 +104,12 @@ export class HeadlessWindow implements PlatformWindow {
     // The in-memory backend has one transport.
   }
 
-  present(pixels: Uint8Array, width: number, height: number): void {
+  present(
+    pixels: Uint8Array,
+    width: number,
+    height: number,
+    damage?: readonly RetainedClip[],
+  ): void {
     if (!this.alive) return;
     this.width = width;
     this.height = height;
@@ -117,7 +123,9 @@ export class HeadlessWindow implements PlatformWindow {
       transport: "headless",
       submittedAtMs,
       copyMs: 0,
-      damagedPixels: width * height,
+      damagedPixels: damage
+        ? damage.reduce((total, rect) => total + rect.width * rect.height, 0)
+        : width * height,
       totalPixels: width * height,
     });
     queueMicrotask(() => {

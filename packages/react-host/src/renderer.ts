@@ -59,4 +59,6 @@ export type RetainedLayer = {
 export type RetainedSceneFrame = RenderFrame & {
   clearColor: number;
   layers: readonly RetainedLayer[];
+  /** Buffer-space regions changed since the previous frame. */
+  damage?: readonly RetainedClip[];
 };

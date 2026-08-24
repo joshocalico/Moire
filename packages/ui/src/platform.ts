@@ -194,8 +194,13 @@ export interface PlatformWindow {
   setSize(w: number, h: number): void;
   /** Begin an interactive compositor move using the current pointer press. */
   beginMove(): void;
-  /** Present full ARGB8888 frame (row-major, stride = width * 4). */
-  present(pixels: Uint8Array, width: number, height: number): void;
+  /** Present ARGB8888 pixels and optional buffer-space damage. */
+  present(
+    pixels: Uint8Array,
+    width: number,
+    height: number,
+    damage?: readonly RetainedClip[],
+  ): void;
   /** Consume a renderer-neutral retained scene when acceleration is active. */
   presentScene?(scene: RetainedSceneFrame): boolean;
   /** Select this window's backing transport without changing renderer APIs. */
@@ -292,4 +297,4 @@ export async function createPlatformBackend(
   const { HeadlessPlatform } = await import("./platforms/headless/index.js");
   return new HeadlessPlatform();
 }
-import type { RetainedSceneFrame } from "@moire/react-host";
+import type { RetainedClip, RetainedSceneFrame } from "@moire/react-host";

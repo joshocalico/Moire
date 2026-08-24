@@ -67,6 +67,7 @@ import {
   Group,
   Rect,
   Text,
+  type RetainedClip,
   type RetainedSceneFrame,
 } from "@moire/react-host";
 import { themePalette } from "../../theme.js";
@@ -1620,7 +1621,12 @@ class WaylandWindow implements PlatformWindow {
     this.presentationMode = mode;
   }
 
-  present(pixels: Uint8Array, width: number, height: number): void {
+  present(
+    pixels: Uint8Array,
+    width: number,
+    height: number,
+    damage?: readonly RetainedClip[],
+  ): void {
     if (!this.alive || !this.configured) return;
     if (this.framePending) {
       this.retryAfterFrame = true;
@@ -1633,7 +1639,7 @@ class WaylandWindow implements PlatformWindow {
       ? null
       : this.platform.renderClientFrame(channel, pixels, width, height);
     if (accelerated) {
-      this.commitAcceleratedFrame(accelerated, width, height);
+      this.commitAcceleratedFrame(accelerated, width, height, damage);
       this.platform.noteSoftwareDmabufFrame();
       return;
     }
@@ -1649,7 +1655,14 @@ class WaylandWindow implements PlatformWindow {
     flushMmap(slot.map, pixels, size);
     const copyMs = performance.now() - copyStartedAt;
     slot.busy = true;
-    const commit = this.commitBuffer(slot.bufferId, width, height, "shm", copyMs);
+    const commit = this.commitBuffer(
+      slot.bufferId,
+      width,
+      height,
+      "shm",
+      copyMs,
+      damage,
+    );
     slot.commitId = commit.commitId;
     slot.submittedAtMs = commit.submittedAtMs;
     this.platform.noteSoftwareShmFrame();
@@ -1684,6 +1697,7 @@ class WaylandWindow implements PlatformWindow {
     frame: EglClientPresent,
     width: number,
     height: number,
+    damage: readonly RetainedClip[] = frame.damage,
   ): void {
     let slot = this.dmabufSlots.get(frame.id);
     if (!slot) {
@@ -1708,7 +1722,14 @@ class WaylandWindow implements PlatformWindow {
       slot = { frameId, bufferId, commitId: 0, submittedAtMs: 0 };
       this.dmabufSlots.set(frameId, slot);
     }
-    const commit = this.commitBuffer(slot.bufferId, width, height, "dmabuf", 0);
+    const commit = this.commitBuffer(
+      slot.bufferId,
+      width,
+      height,
+      "dmabuf",
+      0,
+      damage,
+    );
     slot.commitId = commit.commitId;
     slot.submittedAtMs = commit.submittedAtMs;
   }
@@ -1719,6 +1740,7 @@ class WaylandWindow implements PlatformWindow {
     height: number,
     transport: "dmabuf" | "shm",
     copyMs: number,
+    damage?: readonly RetainedClip[],
   ): { commitId: number; submittedAtMs: number } {
     const p = this.platform;
     const commitId = this.nextCommitId++;
@@ -1802,9 +1824,31 @@ class WaylandWindow implements PlatformWindow {
     p.sendMessage(
       wlSurface.requests.attach.encode(this.surfaceId, bufferId, 0, 0),
     );
-    p.sendMessage(
-      wlSurface.requests.damage.encode(this.surfaceId, 0, 0, width, height),
-    );
+    const clippedDamage = (damage ?? [{ x: 0, y: 0, width, height }])
+      .map((rect) => {
+        const x = Math.max(0, Math.floor(rect.x));
+        const y = Math.max(0, Math.floor(rect.y));
+        const right = Math.min(width, Math.ceil(rect.x + rect.width));
+        const bottom = Math.min(height, Math.ceil(rect.y + rect.height));
+        return {
+          x,
+          y,
+          width: Math.max(0, right - x),
+          height: Math.max(0, bottom - y),
+        };
+      })
+      .filter((rect) => rect.width > 0 && rect.height > 0);
+    for (const rect of clippedDamage) {
+      p.sendMessage(
+        wlSurface.requests.damageBuffer.encode(
+          this.surfaceId,
+          rect.x,
+          rect.y,
+          rect.width,
+          rect.height,
+        ),
+      );
+    }
     p.sendMessage(wlSurface.requests.commit.encode(this.surfaceId));
     const submittedAtMs = performance.now();
     this.emitFrame({
@@ -1813,7 +1857,10 @@ class WaylandWindow implements PlatformWindow {
       transport,
       submittedAtMs,
       copyMs,
-      damagedPixels: width * height,
+      damagedPixels: clippedDamage.reduce(
+        (total, rect) => total + rect.width * rect.height,
+        0,
+      ),
       totalPixels: width * height,
     });
     return { commitId, submittedAtMs };
