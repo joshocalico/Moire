@@ -6,7 +6,7 @@ SRC=/media/psf/moire
 DST=/home/moire/moire
 RUNTIME=/home/moire/.moire-runtime
 SAMPLE="${1:-}"
-UI_ACCELERATION="${MOIRE_UI_ACCELERATION:-software}"
+UI_ACCELERATION="${MOIRE_UI_ACCELERATION:-auto}"
 
 rsync -a --delete --exclude node_modules "$SRC/packages/ui/" "$DST/packages/ui/"
 rsync -a --delete --exclude node_modules "$SRC/packages/react-host/" "$DST/packages/react-host/"

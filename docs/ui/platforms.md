@@ -15,13 +15,14 @@ resolvePlatformKind();
 
 `PlatformBackend`: `connect`, `createWindow`, `pump`, `disconnect`.
 
-`PlatformWindow`: `present(ARGB pixels)`, configure/close/pointer/key callbacks, `setTitle` / `setSize` / `destroy`.
+`PlatformWindow`: `present(ARGB pixels)`, optional `presentScene(retainedFrame)`,
+configure/close/pointer/key callbacks, `setTitle` / `setSize` / `destroy`.
 
-The pixel argument is the portable hand-off today, not the permanent renderer
-boundary. The Wayland backend can upload that frame into a renderer-owned EGL
-target and attach the exported dma-buf. This gives the client path durable GPU
-buffer/release semantics while the retained scene renderer is migrated away
-from CPU rasterization one primitive family at a time.
+The pixel argument remains the portable fallback. Accelerated windows first
+offer a renderer-neutral retained frame: solid and rounded rectangles plus
+shadows become GPU geometry, images are cached texture layers, and text is
+rasterized only into glyph-sized cached layers. The Wayland backend paints that
+scene into a renderer-owned EGL target and attaches the exported dma-buf.
 
 Optional `DndCapable.startDrag(mimeTypes, getPayload, serial)` — Wayland implements this; widgets talk through `setDndBridge` instead of casting the backend.
 
@@ -47,10 +48,10 @@ Path: `packages/ui/src/platforms/wayland/index.ts`.
 
 Moire guest session sets `XDG_RUNTIME_DIR=$HOME/.moire-runtime` (not `/run/user/$UID`) so the socket survives without logind linger.
 
-`MOIRE_UI_ACCELERATION=software|auto|dmabuf` controls presentation. `software`
-is the default while scene rasterization and compositor import still cross the
-CPU; `auto` probes EGL and quietly falls back; `dmabuf` keeps the fallback but
-reports a failed EGL probe. `software`/`shm` bypasses EGL entirely.
+`MOIRE_UI_ACCELERATION=software|auto|dmabuf` controls presentation. `auto` is
+the default: it probes retained EGL/dmabuf and quietly falls back through a
+full software frame to `wl_shm`. `dmabuf` uses the same fallback but reports a
+failed EGL probe. `software`/`shm` bypasses EGL entirely.
 `MOIRE_RENDER_NODE` can select a non-default render node.
 
 Regenerate the checked-in bindings on a Linux development system with the
@@ -78,6 +79,7 @@ Path: `packages/ui/src/platforms/headless/index.ts`.
 
 Cocoa / Win32 backends are intended to implement the same `PlatformBackend` without changing widgets.
 
-The next EGL tranche paints retained rectangles, images, and glyph-atlas text
-directly into the same client target pool. After that, compositor-side direct
-dma-buf import removes the remaining readback/upload bridge.
+The next EGL tranche turns the cached text layers into a shared glyph atlas,
+adds retained group-opacity surfaces, and moves more border geometry fully
+onto the GPU. After that, compositor-side direct dma-buf import removes the
+remaining import bridge.

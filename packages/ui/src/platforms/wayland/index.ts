@@ -65,6 +65,7 @@ import {
   Group,
   Rect,
   Text,
+  type RetainedSceneFrame,
 } from "@moire/react-host";
 import { themePalette } from "../../theme.js";
 import {
@@ -922,7 +923,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   }
 
   private tryCreateEglPresenter(): void {
-    const mode = (process.env.MOIRE_UI_ACCELERATION ?? "software")
+    const mode = (process.env.MOIRE_UI_ACCELERATION ?? "auto")
       .trim()
       .toLowerCase();
     if (mode === "software" || mode === "shm" || mode === "off") return;
@@ -937,7 +938,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           this.eglPresenter = new EglOutputScaler(fd);
           this.eglFd = fd;
           console.log(
-            `[ui/wayland] dmabuf presentation on ${candidate} (${this.eglPresenter.info.glRenderer})`,
+            `[ui/wayland] retained EGL/dmabuf presentation on ${candidate} (${this.eglPresenter.info.glRenderer})`,
           );
           return;
         } catch (error) {
@@ -975,6 +976,23 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       // A format/driver failure is not expected to heal during this session.
       // Keep the presenter alive so already-exported targets can receive their
       // wl_buffer.release events, but avoid retry/log storms on every tick.
+      this.eglPresentationFailed = true;
+      return null;
+    }
+  }
+
+  renderClientComposition(
+    channel: string,
+    scene: RetainedSceneFrame,
+  ): EglClientPresent | null {
+    if (this.eglPresentationFailed) return null;
+    try {
+      return this.eglPresenter?.renderClientComposition(channel, scene) ?? null;
+    } catch (error) {
+      console.warn(
+        "[ui/wayland] retained EGL scene failed; using software/wl_shm:",
+        error,
+      );
       this.eglPresentationFailed = true;
       return null;
     }
@@ -1509,16 +1527,7 @@ class WaylandWindow implements PlatformWindow {
       height,
     );
     if (accelerated) {
-      let slot = this.dmabufSlots.get(accelerated.id);
-      if (!slot) {
-        const frameId = accelerated.id;
-        const bufferId = this.platform.createDmabufBuffer(accelerated, () =>
-          this.platform.releaseClientFrame(frameId),
-        );
-        slot = { frameId, bufferId };
-        this.dmabufSlots.set(frameId, slot);
-      }
-      this.commitBuffer(slot.bufferId, width, height);
+      this.commitAcceleratedFrame(accelerated, width, height);
       return;
     }
     const stride = width * 4;
@@ -1531,6 +1540,36 @@ class WaylandWindow implements PlatformWindow {
     }
     flushMmap(slot.map, pixels, size);
     slot.busy = true;
+    this.commitBuffer(slot.bufferId, width, height);
+  }
+
+  presentScene(scene: RetainedSceneFrame): boolean {
+    if (!this.alive || !this.configured) return false;
+    const accelerated = this.platform.renderClientComposition(
+      `surface-${this.surfaceId}`,
+      scene,
+    );
+    if (!accelerated) return false;
+    this.width = scene.width;
+    this.height = scene.height;
+    this.commitAcceleratedFrame(accelerated, scene.width, scene.height);
+    return true;
+  }
+
+  private commitAcceleratedFrame(
+    frame: EglClientPresent,
+    width: number,
+    height: number,
+  ): void {
+    let slot = this.dmabufSlots.get(frame.id);
+    if (!slot) {
+      const frameId = frame.id;
+      const bufferId = this.platform.createDmabufBuffer(frame, () =>
+        this.platform.releaseClientFrame(frameId),
+      );
+      slot = { frameId, bufferId };
+      this.dmabufSlots.set(frameId, slot);
+    }
     this.commitBuffer(slot.bufferId, width, height);
   }
 

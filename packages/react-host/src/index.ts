@@ -13,6 +13,9 @@ import {
 } from "./text-renderer.js";
 import type {
   RendererBackend,
+  RetainedClip,
+  RetainedLayer,
+  RetainedSceneFrame,
   RenderViewport,
   SoftwareFrame,
 } from "./renderer.js";
@@ -20,6 +23,9 @@ import type {
 export type {
   RendererBackend,
   RenderFrame,
+  RetainedClip,
+  RetainedLayer,
+  RetainedSceneFrame,
   RenderViewport,
   SoftwareFrame,
 } from "./renderer.js";
@@ -950,6 +956,295 @@ export class SoftwareRenderer implements RendererBackend<SoftwareFrame> {
 
   render(root: SceneNode, viewport: RenderViewport): SoftwareFrame {
     return renderSoftwareFrame(root, viewport.width, viewport.height);
+  }
+}
+
+type RetainedRasterCache = {
+  key: string;
+  pixels: Uint8Array;
+  width: number;
+  height: number;
+  revision: number;
+  lastSeen: number;
+};
+
+function intersectClip(a: RetainedClip | undefined, b: RetainedClip): RetainedClip {
+  if (!a) return b;
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  return {
+    x,
+    y,
+    width: Math.max(0, right - x),
+    height: Math.max(0, bottom - y),
+  };
+}
+
+/**
+ * Convert the React scene into cached texture-backed primitives. This renderer
+ * performs no EGL calls: a platform may consume the frame, or Window can
+ * continue through SoftwareRenderer unchanged.
+ */
+export class RetainedSceneRenderer
+  implements RendererBackend<RetainedSceneFrame>
+{
+  readonly id = "retained-scene";
+  private readonly solidPixels = new Map<number, Uint8Array>();
+  private readonly rasterCache = new Map<string, RetainedRasterCache>();
+  private readonly imageTextures = new WeakMap<
+    Uint8Array,
+    { pixels: Uint8Array; revision: number }
+  >();
+  private nextRevision = 1;
+  private frame = 0;
+
+  private solid(color: number): Uint8Array {
+    const key = color >>> 0;
+    let pixels = this.solidPixels.get(key);
+    if (pixels) return pixels;
+    pixels = new Uint8Array(4);
+    fillRect(new Uint32Array(pixels.buffer), 1, 1, 1, 0, 0, 1, 1, key);
+    this.solidPixels.set(key, pixels);
+    return pixels;
+  }
+
+  private cachedRaster(
+    id: string,
+    key: string,
+    width: number,
+    height: number,
+    paint: (target: Uint32Array, pitch: number) => void,
+  ): RetainedRasterCache {
+    let cached = this.rasterCache.get(id);
+    if (!cached || cached.key !== key) {
+      const pixels = new Uint8Array(width * height * 4);
+      paint(new Uint32Array(pixels.buffer), width);
+      cached = {
+        key,
+        pixels,
+        width,
+        height,
+        revision: this.nextRevision++,
+        lastSeen: this.frame,
+      };
+      this.rasterCache.set(id, cached);
+    }
+    cached.lastSeen = this.frame;
+    return cached;
+  }
+
+  private imageTexture(rgba: Uint8Array): {
+    pixels: Uint8Array;
+    revision: number;
+  } {
+    let cached = this.imageTextures.get(rgba);
+    if (cached) return cached;
+    const pixels = new Uint8Array(rgba.length);
+    for (let offset = 0; offset + 3 < rgba.length; offset += 4) {
+      const alpha = rgba[offset + 3]!;
+      pixels[offset] = Math.round((rgba[offset + 2]! * alpha) / 255);
+      pixels[offset + 1] = Math.round((rgba[offset + 1]! * alpha) / 255);
+      pixels[offset + 2] = Math.round((rgba[offset]! * alpha) / 255);
+      pixels[offset + 3] = alpha;
+    }
+    cached = { pixels, revision: this.nextRevision++ };
+    this.imageTextures.set(rgba, cached);
+    return cached;
+  }
+
+  render(root: SceneNode, viewport: RenderViewport): RetainedSceneFrame {
+    this.frame++;
+    const layers: RetainedLayer[] = [];
+    const visit = (
+      node: SceneNode,
+      parentX: number,
+      parentY: number,
+      inheritedOpacity: number,
+      inheritedClip?: RetainedClip,
+    ): void => {
+      const x = parentX + node.x;
+      const y = parentY + node.y;
+      const opacity = inheritedOpacity * (node.opacity ?? 1);
+      if (opacity <= 0) return;
+      const clip =
+        node.kind === "group" && node.clip
+          ? intersectClip(inheritedClip, {
+              x,
+              y,
+              width: Math.max(0, node.width),
+              height: Math.max(0, node.height),
+            })
+          : inheritedClip;
+      if (clip && (clip.width <= 0 || clip.height <= 0)) return;
+
+      if (node.kind === "rect" && node.width > 0 && node.height > 0) {
+        const destination = { x, y, width: node.width, height: node.height };
+        const fillAlpha = node.fill == null ? 0 : (node.fill >>> 24) & 0xff;
+        const shadow = node.shadow
+          ? {
+              offsetX: node.shadow.offsetX ?? 0,
+              offsetY: node.shadow.offsetY ?? 0,
+              blurRadius: node.shadow.blurRadius,
+              spread: node.shadow.spread,
+              color: node.shadow.color,
+            }
+          : undefined;
+        if (node.fill != null && fillAlpha > 0) {
+          const color = node.fill >>> 0;
+          layers.push({
+            id: `${node.id}:fill`,
+            pixels: this.solid(color),
+            sourceWidth: 1,
+            sourceHeight: 1,
+            sourceStride: 4,
+            revision: color,
+            destination,
+            clip,
+            opacity,
+            sampling: "nearest",
+            cornerRadius: Math.max(0, node.radius ?? 0),
+            dropShadow: shadow,
+          });
+        }
+        const strokeWidth = Math.max(0, node.strokeWidth ?? 1);
+        if (node.stroke != null && strokeWidth > 0) {
+          const width = Math.max(1, Math.ceil(node.width));
+          const height = Math.max(1, Math.ceil(node.height));
+          const stroke = node.stroke >>> 0;
+          const radius = Math.max(0, node.radius ?? 0);
+          const cached = this.cachedRaster(
+            `${node.id}:stroke`,
+            `${width}:${height}:${radius}:${strokeWidth}:${stroke}`,
+            width,
+            height,
+            (target, pitch) =>
+              fillRoundedStroke(
+                target,
+                pitch,
+                width,
+                height,
+                0,
+                0,
+                width,
+                height,
+                radius,
+                strokeWidth,
+                stroke,
+              ),
+          );
+          layers.push({
+            id: `${node.id}:stroke`,
+            pixels: cached.pixels,
+            sourceWidth: cached.width,
+            sourceHeight: cached.height,
+            sourceStride: cached.width * 4,
+            revision: cached.revision,
+            destination,
+            clip,
+            opacity,
+            sampling: "linear",
+            dropShadow: fillAlpha > 0 ? undefined : shadow,
+          });
+        }
+      } else if (node.kind === "text" && node.text) {
+        const style = textStyleOf(node);
+        style.color = node.color ?? 0xffffffff;
+        const pad = 2;
+        const width = Math.max(1, Math.ceil(node.width) + pad * 2);
+        const height = Math.max(1, Math.ceil(node.height) + pad * 2);
+        const key = JSON.stringify({ text: node.text, style, width, height });
+        const cached = this.cachedRaster(
+          `${node.id}:text`,
+          key,
+          width,
+          height,
+          (target, pitch) => {
+            const custom = getTextRenderer();
+            if (custom) {
+              custom.draw(
+                target,
+                pitch,
+                width,
+                height,
+                pad,
+                pad,
+                node.text!,
+                style,
+              );
+            } else {
+              drawBitmapText(
+                target,
+                pitch,
+                width,
+                height,
+                pad,
+                pad,
+                node.text!,
+                style.color ?? 0xffffffff,
+                node.scale ?? 1,
+              );
+            }
+          },
+        );
+        layers.push({
+          id: `${node.id}:text`,
+          pixels: cached.pixels,
+          sourceWidth: cached.width,
+          sourceHeight: cached.height,
+          sourceStride: cached.width * 4,
+          revision: cached.revision,
+          destination: {
+            x: x - pad,
+            y: y - pad,
+            width: cached.width,
+            height: cached.height,
+          },
+          clip,
+          opacity,
+          sampling: "linear",
+        });
+      } else if (
+        node.kind === "image" &&
+        node.imagePixels &&
+        node.imageWidth &&
+        node.imageHeight &&
+        node.width > 0 &&
+        node.height > 0
+      ) {
+        const texture = this.imageTexture(node.imagePixels);
+        layers.push({
+          id: `${node.id}:image`,
+          pixels: texture.pixels,
+          sourceWidth: node.imageWidth,
+          sourceHeight: node.imageHeight,
+          sourceStride: node.imageWidth * 4,
+          revision: texture.revision,
+          destination: { x, y, width: node.width, height: node.height },
+          clip,
+          opacity,
+          sampling: "linear",
+        });
+      }
+
+      for (const child of node.children) {
+        visit(child, x, y, opacity, clip);
+      }
+    };
+    visit(root, 0, 0, 1);
+
+    if (this.frame % 120 === 0) {
+      for (const [id, cached] of this.rasterCache) {
+        if (this.frame - cached.lastSeen >= 120) this.rasterCache.delete(id);
+      }
+    }
+    return {
+      width: viewport.width,
+      height: viewport.height,
+      clearColor: 0x00000000,
+      layers,
+    };
   }
 }
 

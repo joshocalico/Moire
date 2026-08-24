@@ -176,6 +176,8 @@ export type EglCompositionLayer = {
   revision?: number;
   sourceRect?: { x: number; y: number; width: number; height: number };
   destination: { x: number; y: number; width: number; height: number };
+  /** Axis-aligned scene-space clip inherited from retained layout groups. */
+  clip?: { x: number; y: number; width: number; height: number };
   opacity?: number;
   /** Column-major 4×4 transform around the optional local-space origin. */
   transform?: readonly number[];
@@ -291,6 +293,24 @@ function layerBounds(
       height: layer.destination.height + padding * 2,
     });
   }
+  if (layer.clip) {
+    const left = Math.max(bounds.x, layer.clip.x);
+    const top = Math.max(bounds.y, layer.clip.y);
+    const right = Math.min(
+      bounds.x + bounds.width,
+      layer.clip.x + layer.clip.width,
+    );
+    const bottom = Math.min(
+      bounds.y + bounds.height,
+      layer.clip.y + layer.clip.height,
+    );
+    bounds = {
+      x: left,
+      y: top,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top),
+    };
+  }
   return clampRect(bounds, sceneWidth, sceneHeight);
 }
 
@@ -301,6 +321,7 @@ function layerSignature(layer: EglCompositionLayer): string {
     sourceStride: layer.sourceStride,
     sourceRect: layer.sourceRect,
     destination: layer.destination,
+    clip: layer.clip,
     opacity: layer.opacity,
     transform: layer.transform,
     transformOrigin: layer.transformOrigin,
@@ -1697,14 +1718,30 @@ void main() {
     return clipped.width > 0 && clipped.height > 0 ? clipped : null;
   }
 
-  private restoreSceneScissor(): void {
-    const damage = this.activeDamage;
-    if (!damage) {
+  private restoreSceneScissor(
+    clip?: { x: number; y: number; width: number; height: number },
+  ): void {
+    let bounds = this.activeDamage;
+    if (bounds && clip) {
+      const left = Math.max(bounds.x, clip.x);
+      const top = Math.max(bounds.y, clip.y);
+      const right = Math.min(bounds.x + bounds.width, clip.x + clip.width);
+      const bottom = Math.min(bounds.y + bounds.height, clip.y + clip.height);
+      bounds = {
+        x: left,
+        y: top,
+        width: Math.max(0, right - left),
+        height: Math.max(0, bottom - top),
+      };
+    } else if (clip) {
+      bounds = clip;
+    }
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
       this.glDisable(GL_SCISSOR_TEST);
       return;
     }
     this.glEnable(GL_SCISSOR_TEST);
-    this.glScissor(damage.x, damage.y, damage.width, damage.height);
+    this.glScissor(bounds.x, bounds.y, bounds.width, bounds.height);
   }
 
   /** Compose retained, revisioned layers into one logical GPU scene. */
@@ -1774,6 +1811,7 @@ void main() {
       }
       const cachedGeometry = this.geometryForLayer(scene, layer);
       this.paintBackdropBlur(scene, layer, layerIndex);
+      this.restoreSceneScissor(layer.clip);
       const shadow = layer.dropShadow;
       if (shadow) {
         const spread = shadow.spread ?? 0;
@@ -2302,6 +2340,67 @@ void main() {
       target.texture,
       target.framebuffer,
       false,
+    );
+    this.glFlush();
+    target.busy = true;
+    return {
+      id: target.id,
+      fd: target.fd,
+      width: target.width,
+      height: target.height,
+      stride: target.stride,
+      format: target.format,
+      modifier: target.modifier,
+    };
+  }
+
+  /** Paint a renderer-neutral retained client scene directly into a dma-buf. */
+  renderClientComposition(
+    channel: string,
+    scene: EglCompositionScene,
+  ): EglClientPresent | null {
+    if (this.destroyed) throw new Error("EGL output scaler is destroyed");
+    const { width, height } = scene;
+    const key = `${channel}:${width}x${height}`;
+    const previousKey = this.currentClientPool.get(channel);
+    if (previousKey && previousKey !== key) {
+      const previous = this.clientTargets.get(previousKey);
+      if (previous) {
+        previous.retired = true;
+        this.collectClientPool(previous);
+      }
+    }
+    this.currentClientPool.set(channel, key);
+
+    let pool = this.clientTargets.get(key);
+    if (!pool) {
+      pool = { channel, key, retired: false, targets: [] };
+      this.clientTargets.set(key, pool);
+    }
+    let target = pool.targets.find((candidate) => !candidate.busy);
+    if (!target && pool.targets.length < 3) {
+      target = this.createClientTarget(channel, width, height);
+      pool.targets.push(target);
+    }
+    if (!target) return null;
+
+    this.beginComposition(scene);
+    this.paintOutput(
+      {
+        id: channel,
+        x: 0,
+        y: 0,
+        width,
+        height,
+        targetWidth: width,
+        targetHeight: height,
+      },
+      target.texture,
+      target.framebuffer,
+      // Retained composition first paints through an ordinary RGBA scene
+      // texture. Swizzle that intermediate result into the ARGB8888 GBM BO;
+      // the one-pass software upload does not need this extra conversion.
+      true,
     );
     this.glFlush();
     target.busy = true;

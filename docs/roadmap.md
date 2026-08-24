@@ -34,7 +34,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Launcher | Icons from `.desktop`, categories, pinned apps |
 | Performance | Retained desktop/drag layers avoid full-frame software fallback; next reduce idle atmosphere damage and add frame pacing |
 | Flexible compositor rendering | In progress — selectable software/EGL output, composition effects contract, timings, layered GLES + GBM scanout |
-| Accelerated native clients | In progress — pooled EGL/GBM dma-buf presentation with SHM fallback; next direct retained-scene primitives, glyph/image atlases, then compositor zero-copy import |
+| Accelerated native clients | In progress — generated TS Wayland bindings plus pooled retained EGL/GBM dma-buf presentation are default with software/SHM fallback; rectangles, shadows, clipped images, and cached text layers avoid full-window rasterization; next glyph atlas, retained group-opacity surfaces, and compositor zero-copy import |
 | Widget styling v2 | In progress — semantic recipes and foundations now cover radius, borders, density, focus, opacity, motion, and elevation; shared overlay/focus/select/dialog/toast primitives and their live showcase tranche are shipped; next state/theme matrices and remaining chrome migration |
 | App UI audit | Settings display controls now use shared Select/SegmentedControl widgets; migrate Settings (the last app using raw `createElement`) to JSX and continue replacing app-local sizing with intrinsic layout |
 | Text input / IME | Implement `zwp_text_input_v3` with a real input-method broker; do not advertise a no-op global |

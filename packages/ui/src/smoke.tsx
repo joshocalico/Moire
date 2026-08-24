@@ -9,6 +9,7 @@ import {
   Group,
   Rect,
   Text,
+  RetainedSceneRenderer,
   SoftwareRenderer,
   collectHits,
   createShellRoot,
@@ -155,6 +156,36 @@ function rendererSmoke(): void {
     "translucent rect on a clear frame must preserve premultiplied alpha",
   );
   assert.equal(collectHits(root.container).length, 1);
+
+  const retainedRenderer = new RetainedSceneRenderer();
+  const retained = retainedRenderer.render(root.container, {
+    width: 8,
+    height: 8,
+  });
+  assert.equal(retained.width, 8);
+  assert.equal(retained.clearColor, 0x00000000);
+  assert.equal(
+    retained.layers.length,
+    4,
+    "three fills plus the rounded stroke should become retained layers",
+  );
+  const translucent = retained.layers.find(
+    (layer) => layer.destination.x === 7,
+  );
+  assert.deepEqual(
+    [...(translucent?.pixels ?? [])],
+    [0x60, 0x40, 0x20, 0x80],
+    "solid retained colors must use premultiplied BGRA bytes",
+  );
+  const retainedAgain = retainedRenderer.render(root.container, {
+    width: 8,
+    height: 8,
+  });
+  assert.equal(
+    retainedAgain.layers[2]?.pixels,
+    retained.layers[2]?.pixels,
+    "rasterized retained layers should remain texture-cache stable",
+  );
 }
 
 async function clippedTextCompositionSmoke(): Promise<void> {

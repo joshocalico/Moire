@@ -4,6 +4,7 @@ import {
   createShellRoot,
   hitRegionContains,
   renderShell,
+  RetainedSceneRenderer,
   SoftwareRenderer,
   type HitRegion,
   type HitKeyEvent,
@@ -119,6 +120,8 @@ export class Window {
   private readonly onCloseCallbacks = new Set<() => void>();
   /** Current Wayland/headless presentation path consumes software frames. */
   private readonly renderer = new SoftwareRenderer();
+  /** Primitive-layer renderer offered to accelerated platform windows first. */
+  private readonly retainedRenderer = new RetainedSceneRenderer();
   private focusedId: string | null = null;
   private focusedHit: HitRegion | null = null;
   private readonly consumedAutoFocusIds = new Set<string>();
@@ -344,11 +347,16 @@ export class Window {
     // Rendering may synchronously finish a closing popup and destroy this
     // platform window. Do not present through a handle invalidated mid-frame.
     if (this.closed || this.platformWin !== platformWin) return;
-    const frame = this.renderer.render(this.root.container, {
+    const viewport = {
       width: this.width,
       height: this.height,
-    });
+    };
     this.refreshHits();
+    if (platformWin.presentScene) {
+      const retained = this.retainedRenderer.render(this.root.container, viewport);
+      if (platformWin.presentScene(retained)) return;
+    }
+    const frame = this.renderer.render(this.root.container, viewport);
     platformWin.present(frame.pixels, frame.width, frame.height);
   }
 

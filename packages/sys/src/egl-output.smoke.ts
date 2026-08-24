@@ -259,6 +259,46 @@ try {
     "rounded clip discarded the top edge centre",
   );
   scaler.beginComposition({
+    width: 5,
+    height: 5,
+    clearColor: 0xff09111b,
+    layers: [
+      {
+        id: "inherited-scene-clip",
+        pixels: roundedSource,
+        sourceWidth: 5,
+        sourceHeight: 5,
+        sourceStride: 20,
+        revision: 2,
+        destination: { x: 0, y: 0, width: 5, height: 5 },
+        clip: { x: 1, y: 1, width: 3, height: 2 },
+        sampling: "nearest",
+      },
+    ],
+  });
+  const clippedTarget = new Uint8Array(5 * 5 * 4);
+  scaler.renderOutput({
+    id: "inherited-scene-clip",
+    x: 0,
+    y: 0,
+    width: 5,
+    height: 5,
+    targetWidth: 5,
+    targetHeight: 5,
+    targetPitch: 20,
+    target: clippedTarget,
+  });
+  assert.deepEqual(
+    clippedTarget.subarray(0, 4),
+    new Uint8Array([0x1b, 0x11, 0x09, 0xff]),
+    "retained layer clip leaked into the scene corner",
+  );
+  assert.deepEqual(
+    clippedTarget.subarray((1 * 5 + 1) * 4, (1 * 5 + 2) * 4),
+    new Uint8Array([0x10, 0xd0, 0x40, 0xff]),
+    "retained layer clip discarded its interior",
+  );
+  scaler.beginComposition({
     width: 9,
     height: 9,
     clearColor: 0xffffffff,

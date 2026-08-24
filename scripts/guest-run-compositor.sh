@@ -11,7 +11,7 @@ UID_MOIRE=$(id -u moire)
 RUNTIME=/home/moire/.moire-runtime
 RENDERER="${MOIRE_RENDERER:-auto}"
 EGL_PRESENT="${MOIRE_EGL_PRESENT:-auto}"
-UI_ACCELERATION="${MOIRE_UI_ACCELERATION:-software}"
+UI_ACCELERATION="${MOIRE_UI_ACCELERATION:-auto}"
 
 # Free DRM master (gdm comes back after reboot)
 systemctl stop gdm3 2>/dev/null || true

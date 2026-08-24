@@ -152,6 +152,8 @@ export interface PlatformWindow {
   beginMove(): void;
   /** Present full ARGB8888 frame (row-major, stride = width * 4). */
   present(pixels: Uint8Array, width: number, height: number): void;
+  /** Consume a renderer-neutral retained scene when acceleration is active. */
+  presentScene?(scene: RetainedSceneFrame): boolean;
   onConfigure(cb: (w: number, h: number) => void): void;
   onClose(cb: () => void): void;
   onPointer(cb: (ev: UiPointerEvent) => void): void;
@@ -219,3 +221,4 @@ export async function createPlatformBackend(
   const { HeadlessPlatform } = await import("./platforms/headless/index.js");
   return new HeadlessPlatform();
 }
+import type { RetainedSceneFrame } from "@moire/react-host";
