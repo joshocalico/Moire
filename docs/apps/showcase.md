@@ -1,6 +1,6 @@
 # Widget Showcase
 
-`apps/showcase` is the live conformance surface for `@moire/ui`. It is both a
+`apps/developer/showcase` is the live conformance surface for `@moire/ui`. It is both a
 widget catalog and a renderer stress test: the left-hand navigation is a real
 `NavigationSidebar`, each preview is interactive, and the Code tab renders the
 corresponding TSX through `CodeView` and the shared `RichTextView` primitive.

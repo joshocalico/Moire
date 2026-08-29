@@ -5,4 +5,4 @@ grep -E 'shm\] create_pool|deco\]|client\] connected' /tmp/moire-session.log | t
 echo "=== settings ==="
 cat /tmp/moire-settings.log
 echo "=== settings pid ==="
-pgrep -af 'apps/settings|@moire/settings' || true
+pgrep -af 'apps/core/settings|@moire/settings' || true

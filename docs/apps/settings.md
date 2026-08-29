@@ -1,6 +1,6 @@
 # Settings
 
-Package: `apps/settings`.
+Package: `apps/core/settings`.
 
 Writes `~/.config/moire/settings.json` via `@moire/prefs` (not `prefs.json`).
 

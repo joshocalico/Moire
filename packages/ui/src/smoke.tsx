@@ -432,11 +432,20 @@ function declarativeLayoutAndTweenSmoke(): void {
   );
   const retainedRenderer = new RetainedSceneRenderer();
   const before = retainedRenderer.render(root.container, { width: 200, height: 40 });
+  const movingLayer = before.layers[0];
   const motion = tickMotionFrame(0.5);
-  const after = retainedRenderer.render(root.container, { width: 200, height: 40 });
+  const after = retainedRenderer.renderPresentation(
+    root.container,
+    { width: 200, height: 40 },
+  );
+  assert.ok(after, "presentation refresh rejected an unchanged retained graph");
   assert.equal(motion.presentationChanged, true);
   assert.equal(motion.requiresReconcile, false, "live transforms should bypass React");
-  assert.equal(before.layers[0]?.destination.x, 0);
+  assert.equal(
+    after.layers[0],
+    movingLayer,
+    "presentation refresh rebuilt a retained layer",
+  );
   assert.equal(after.layers[0]?.destination.x, 50);
   assert.deepEqual(before.damage, [{ x: 0, y: 0, width: 200, height: 40 }]);
   assert.ok(after.damage && after.damage.length > 0, "moving layer emitted no damage");

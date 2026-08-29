@@ -945,7 +945,7 @@ behind its children, so item menus win over background menus geometrically.
 - `CodeView`: scrollable line-numbered TSX/TypeScript/JavaScript/shell source
   with renderer-native syntax highlighting.
 
-`apps/showcase` pairs a catalog list with Preview and Code tabs so every sample
+`apps/developer/showcase` pairs a catalog list with Preview and Code tabs so every sample
 can be inspected as both live widgets and readable JSX.
 
 Use `dragSource={{ mimeTypes, getPayload, previewIcon }}` on `CollectionItem`.

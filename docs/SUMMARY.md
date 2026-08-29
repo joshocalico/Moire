@@ -38,6 +38,7 @@ Use this file as a sidebar / SUMMARY for Markdown site generators (Docsify, mdBo
 
 * [Files](apps/files.md)
 * [Settings](apps/settings.md)
+* [System management](apps/system-management.md)
 * [Widget Showcase](apps/showcase.md)
 * [Terminal](apps/terminal.md)
 * [Session](apps/session.md)

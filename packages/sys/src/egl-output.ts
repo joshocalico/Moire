@@ -1205,17 +1205,38 @@ void main() {
         );
       }
     }
-    this.glTexImage2D(
-      GL_TEXTURE_2D,
-      0,
-      GL_RGBA,
-      layer.sourceWidth,
-      layer.sourceHeight,
-      0,
-      GL_RGBA,
-      GL_UNSIGNED_BYTE,
-      upload,
-    );
+    if (
+      cached.width !== layer.sourceWidth ||
+      cached.height !== layer.sourceHeight
+    ) {
+      // Allocate storage only when the layer dimensions actually change.
+      // Repeated glTexImage2D on an animated surface can make virtual GPU
+      // drivers retain each replaced backing allocation until much later,
+      // producing unbounded compositor RSS under a 60 Hz workload.
+      this.glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        layer.sourceWidth,
+        layer.sourceHeight,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        upload,
+      );
+    } else {
+      this.glTexSubImage2D(
+        GL_TEXTURE_2D,
+        0,
+        0,
+        0,
+        layer.sourceWidth,
+        layer.sourceHeight,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        upload,
+      );
+    }
     cached.width = layer.sourceWidth;
     cached.height = layer.sourceHeight;
     cached.revision = layer.revision;

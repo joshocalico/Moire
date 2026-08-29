@@ -8,15 +8,16 @@ RUNTIME=/home/moire/.moire-runtime
 SAMPLE="${1:-}"
 UI_ACCELERATION="${MOIRE_UI_ACCELERATION:-auto}"
 
+mkdir -p "$DST/apps/developer/showcase"
 rsync -a --delete --exclude node_modules "$SRC/packages/ui/" "$DST/packages/ui/"
 rsync -a --delete --exclude node_modules "$SRC/packages/react-host/" "$DST/packages/react-host/"
 rsync -a --delete --exclude node_modules "$SRC/packages/sys/" "$DST/packages/sys/"
 rsync -a --delete --exclude node_modules "$SRC/packages/protocol/" "$DST/packages/protocol/"
-rsync -a --delete --exclude node_modules "$SRC/apps/showcase/" "$DST/apps/showcase/"
-chown -R moire:moire "$DST/packages/ui" "$DST/packages/react-host" "$DST/packages/sys" "$DST/packages/protocol" "$DST/apps/showcase"
+rsync -a --delete --exclude node_modules "$SRC/apps/developer/showcase/" "$DST/apps/developer/showcase/"
+chown -R moire:moire "$DST/packages/ui" "$DST/packages/react-host" "$DST/packages/sys" "$DST/packages/protocol" "$DST/apps/developer/showcase"
 
 pkill -u moire -f '@moire/showcase' 2>/dev/null || true
-pkill -u moire -f 'apps/showcase' 2>/dev/null || true
+pkill -u moire -f 'apps/developer/showcase' 2>/dev/null || true
 sleep 0.3
 : >/tmp/moire-showcase.log
 

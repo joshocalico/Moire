@@ -3,7 +3,7 @@
 Day-0 file manager for Moire. Session starts Files and Moire Terminal; Nautilus
 is not part of the Moire session after verification.
 
-Package: `apps/files`.
+Package: `apps/bundled/files`.
 
 ## Features
 
@@ -65,8 +65,8 @@ match).
 
 `moire-session` installs:
 
-- `apps/files/moire-files` as `~/.local/bin/moire-files`
-- `apps/files/moire-files.desktop` under `~/.local/share/applications`
+- `apps/bundled/files/moire-files` as `~/.local/bin/moire-files`
+- `apps/bundled/files/moire-files.desktop` under `~/.local/share/applications`
 - `moire-files.desktop` as the `inode/directory` default via `xdg-mime`
 
 `xdg-open` first determines the target MIME type, queries the default desktop entry, then runs its `Exec` command. For a directory, Moire's entry passes the path/URI to Files, so desktop folders and external callers open at the requested location rather than always starting at `~/Desktop`.

@@ -1,6 +1,6 @@
 # Compositor notes
 
-Core Wayland server lives in `packages/core` (driven by `apps/compositor`). This folder documents protocol behaviors that matter to shell and toolkit authors.
+Core Wayland server lives in `packages/core` (driven by `apps/system/compositor`). This folder documents protocol behaviors that matter to shell and toolkit authors.
 
 ## Topics
 

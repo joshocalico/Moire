@@ -21,7 +21,7 @@ applySettings(loadSettings());
 
 sleep 0.5
 pkill -u moire -f '@moire/settings' 2>/dev/null || true
-pkill -u moire -f 'apps/settings' 2>/dev/null || true
+pkill -u moire -f 'apps/core/settings' 2>/dev/null || true
 sleep 0.4
 : >/tmp/moire-settings.log
 setsid runuser -u moire -- env \

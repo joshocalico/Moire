@@ -31,7 +31,7 @@ react-host (rect, text, image, clip, hits)
         ↓
 @moire/ui (CollectionItem, useDragSource, ContextMenuTrigger, collections, overlays, motion)
         ↓
-   apps/files   ·   shell DesktopIcons / Panel / Launcher   ·   Settings
+   apps/bundled/files   ·   shell DesktopIcons / Panel / Launcher   ·   Settings
 ```
 
 | Layer | Responsibility |
@@ -75,7 +75,7 @@ Headless check: `pnpm --filter @moire/ui smoke`.
 
 ## Files app
 
-Package: `apps/files` (`@moire/files`).
+Package: `apps/bundled/files` (`@moire/files`).
 
 - Places: XDG-aware Home, Desktop, and Downloads plus persisted user favorites.
   Edit mode can pin the current folder, rename custom entries, and remove them;
@@ -90,7 +90,7 @@ Package: `apps/files` (`@moire/files`).
 - DnD: `CollectionItem` composes `useDragSource` (`text/uri-list`); the view is a `DropTarget` that moves/copies into the current directory.
 - Empty-space context menu is distinct from item menus and provides New Folder,
   Select All, Refresh, and view switching.
-- Started by `apps/session/moire-session` and listed in the launcher.
+- Started by `apps/system/session/moire-session` and listed in the launcher.
 
 ## Desktop icons
 
@@ -205,9 +205,9 @@ pnpm --filter @moire/files smoke
 ## Source map
 
 ```
-apps/files/src/main.tsx
-apps/terminal/src/main.tsx
-apps/session/moire-session
+apps/bundled/files/src/main.tsx
+apps/bundled/terminal/src/main.tsx
+apps/system/session/moire-session
 packages/ui/src/widgets/{pressable,button,text-field,breadcrumbs,interaction}.tsx
 packages/ui/src/widgets/{scroll,list,grid,icon,dnd,tabs}.ts
 packages/ui/icons/*.png

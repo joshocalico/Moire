@@ -44,7 +44,7 @@ EXTERNAL authentication over Unix sockets, name ownership, typed method calls,
 exported objects, replies, errors, signals, variants, arrays, dictionaries, and
 introspection. It is deliberately independent of the compositor and renderer.
 
-`apps/portal` is D-Bus activatable as
+`apps/system/portal` is D-Bus activatable as
 `org.freedesktop.impl.portal.desktop.moire` and implements
 `org.freedesktop.impl.portal.AppChooser`. The backend exports cancellable
 request objects, accepts live choice updates, and renders the same

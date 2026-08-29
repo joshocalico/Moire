@@ -8,11 +8,11 @@ third-party Wayland/Xwayland clients remain ordinary peers.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  apps/session          day-0 boot (dbus + compositor + apps) │
+│  apps/system/session   day-0 boot (dbus + services + apps)  │
 └────────────────────────────┬────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────────────┐
-│  apps/compositor + packages/core                             │
+│  apps/system/compositor + packages/core                             │
 │  Wayland socket, surfaces, xdg-shell, seat, DnD, KMS present │
 │  optional ShellBridge (panel, taskbar, SSD, desktop, drops)  │
 └─────────────┬───────────────────────────────┬───────────────┘
@@ -49,12 +49,14 @@ third-party Wayland/Xwayland clients remain ordinary peers.
 | `shell` | DE chrome attached to the compositor process |
 | `app-discovery` | Freedesktop `.desktop`, shared MIME, canonical file activation/Open With policy, and context-action registry |
 | `dbus` | Pure-TypeScript session-bus authentication, wire codec, calls, exported objects, replies, errors, and signals |
-| `apps/portal` | D-Bus-activatable `org.freedesktop.impl.portal.AppChooser` backend using the shared picker/model |
+| `system-management` | Typed client and D-Bus contract for core resource-management applications |
+| `apps/system/portal` | D-Bus-activatable `org.freedesktop.impl.portal.AppChooser` backend using the shared picker/model |
+| `apps/system/management-service` | Session-owned process telemetry, protection policy, termination, and pressure detection |
 
 ## Two React worlds
 
 1. **In-compositor shell** — `createShell()` renders panel/launcher/taskbar/SSD/desktop with `react-host` directly inside the compositor process. The compositor publishes its top-level window model through `ShellBridge.setTasks()`, and task actions return through a narrow callback. No `Application` loop; dirty flags + `needsRepaint()`.
-2. **UI apps** — Files, Settings, Terminal, Showcase, and portal surfaces use
+2. **UI apps** — bundled, core, developer, and portal surfaces use
    `Application` + `Window`, connect as normal Wayland clients, and present
    through the selected portable renderer path.
 
@@ -70,7 +72,7 @@ action. Sandboxed and third-party apps reach the same UI through
 ## Design rules
 
 - Widgets must not import Wayland/koffi. Platforms inject behavior (`setDndBridge`, pointer events).
-- Apps compose toolkit primitives; avoid custom scroll/list raster in `apps/files`.
+- Apps compose toolkit primitives; avoid custom scroll/list raster in `apps/bundled/files`.
 - Theme tokens drive fill/selection/rims; avoid one-off hex in apps.
 - Guest verification uses scripts under `scripts/` and `prlctl capture` — see [reference/scripts.md](../reference/scripts.md).
 

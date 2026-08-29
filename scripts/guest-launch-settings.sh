@@ -3,7 +3,7 @@ set -euo pipefail
 
 TAB="${1:-0}"
 
-FILES_PID="$(pgrep -u moire -f 'apps/files.*tsx src/main.tsx|@moire/files start' | head -n 1)"
+FILES_PID="$(pgrep -u moire -f 'apps/bundled/files.*tsx src/main.tsx|@moire/files start' | head -n 1)"
 if [[ -z "$FILES_PID" ]]; then
   echo "Files session process not found" >&2
   exit 1

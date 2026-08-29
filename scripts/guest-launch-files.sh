@@ -11,7 +11,7 @@ touch ~/Desktop/Notes
 '
 
 pkill -u moire -f '@moire/files' 2>/dev/null || true
-pkill -u moire -f 'apps/files' 2>/dev/null || true
+pkill -u moire -f 'apps/bundled/files' 2>/dev/null || true
 sleep 0.4
 runuser -u moire -- bash -lc ': > /tmp/moire-files.log'
 setsid runuser -u moire -- env \

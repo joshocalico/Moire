@@ -1,0 +1,21 @@
+{
+  "name": "@moire/system-management-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Privileged session service for Moire core management applications",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "smoke": "tsx src/smoke.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@moire/dbus": "workspace:*",
+    "@moire/system-management": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

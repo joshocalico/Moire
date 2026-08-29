@@ -30,7 +30,7 @@ runuser -u moire -- bash -lc "cd '$DST' && pnpm install --frozen-lockfile" \
   >/tmp/moire-pnpm-install.log 2>&1 \
   || true
 install -d -o moire -g moire -m 700 "$RUNTIME"
-chmod +x "$DST/apps/session/moire-session"
+chmod +x "$DST/apps/system/session/moire-session"
 
 if [[ -r /tmp/moire-session.pid ]]; then
   read -r OLD_SESSION_PID < /tmp/moire-session.pid || true
@@ -64,7 +64,7 @@ setsid runuser -u moire -- env \
   MOIRE_EGL_PRESENT="$EGL_PRESENT" \
   MOIRE_UI_ACCELERATION="$UI_ACCELERATION" \
   MOIRE_COMPOSITOR="pnpm --dir $DST --filter @moire/compositor exec tsx src/main.ts" \
-  bash -c "cd $DST && exec ./apps/session/moire-session" \
+  bash -c "cd $DST && exec ./apps/system/session/moire-session" \
   </dev/null >>/tmp/moire-session.log 2>&1 &
 echo "$!" >/tmp/moire-session.pid
 

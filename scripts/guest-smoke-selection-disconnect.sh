@@ -2,7 +2,7 @@
 # A primary-selection owner disappearing must not take down the compositor.
 set -euo pipefail
 
-FILES_PID="$(pgrep -u moire -f 'apps/files.*tsx src/main.tsx|@moire/files start' | head -n 1)"
+FILES_PID="$(pgrep -u moire -f 'apps/bundled/files.*tsx src/main.tsx|@moire/files start' | head -n 1)"
 COMPOSITOR_PID="$(pgrep -u moire -f '@moire/compositor exec tsx src/main.ts' | head -n 1)"
 
 if [[ -z "$FILES_PID" || -z "$COMPOSITOR_PID" ]]; then

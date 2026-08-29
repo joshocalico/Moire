@@ -2,7 +2,7 @@
 set -euo pipefail
 
 FILE_PATH="${1:-/home/moire/Desktop/welcome.txt}"
-FILES_PID="$(pgrep -n -u moire -f 'apps/files' || true)"
+FILES_PID="$(pgrep -n -u moire -f 'apps/bundled/files' || true)"
 if [[ -z "$FILES_PID" ]]; then
   echo "Files is not running" >&2
   exit 1

@@ -2,7 +2,7 @@
 
 Moire owns KMS mode selection in `@moire/sys`; applications never open DRM.
 `@moire/core` publishes the resulting logical desktop to Wayland clients and
-`apps/compositor` exposes the user-facing control boundary over Moire's native
+`apps/system/compositor` exposes the user-facing control boundary over Moire's native
 D-Bus stack.
 
 ## Runtime mode changes

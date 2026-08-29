@@ -572,7 +572,10 @@ export class Window {
     const sceneMs = sceneFinishedAt - frameStartedAt;
     if (platformWin.presentScene) {
       const rasterStartedAt = performance.now();
-      const retained = this.retainedRenderer.render(this.root.container, viewport);
+      const retained = !shouldReconcile
+        ? this.retainedRenderer.renderPresentation(this.root.container, viewport) ??
+          this.retainedRenderer.render(this.root.container, viewport)
+        : this.retainedRenderer.render(this.root.container, viewport);
       this.lastLayerCount = retained.layers.length;
       const submitStartedAt = performance.now();
       if (platformWin.presentScene(retained)) {

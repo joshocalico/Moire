@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SELF")/../../.." && pwd)"
+cd "$ROOT/apps/bundled/files"
+exec ./node_modules/.bin/tsx src/main.tsx "$@"

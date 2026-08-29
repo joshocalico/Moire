@@ -9,14 +9,15 @@ How Moire runs inside the Parallels guest (MoireDev).
 | Files | File manager |
 | Moire Terminal | Native React terminal and PTY session |
 | Portal backend | Moire-native Open With chooser, D-Bus activated on demand |
+| System Management | Session-owned process and memory policy service |
 
 Nautilus is intentionally out of the Moire session once Files is verified.
 
 ## Default applications
 
-During startup, `moire-session` installs the Files, Terminal, and Widget
-Showcase launchers and desktop entries into the user's `~/.local` directories,
-then sets:
+During startup, `moire-session` installs bundled, developer, and core launchers
+and desktop entries into the user's `~/.local` directories, starts the system
+management service, then sets:
 
 ```text
 inode/directory=moire-files.desktop
@@ -35,10 +36,14 @@ This makes `xdg-open <folder>` launch Files with that folder. The association is
 
 `xdg-desktop-portal` owns the public `org.freedesktop.portal.Desktop` API.
 For Moire sessions it routes `org.freedesktop.impl.portal.AppChooser` to the
-D-Bus-activatable `apps/portal` process; unsupported interfaces fall back to
+D-Bus-activatable `apps/system/portal` process; unsupported interfaces fall back to
 the GTK backend. Native Files and shell requests use
 `org.moire.FileActivation1` on that same process so Open With always has one
 chromeless, draggable top-level window and association policy.
+
+The session also owns `org.moire.SystemManagement1`. Process Manager and the
+Memory Pressure recovery surface consume that typed service rather than
+reading process state or sending signals themselves.
 
 ## Scripts
 

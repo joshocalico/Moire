@@ -177,7 +177,7 @@ export type SceneNode = {
   imagePixels?: Uint8Array;
   imageWidth?: number;
   imageHeight?: number;
-  opacity?: number;
+  opacity?: LiveNumber;
   /** Integer pixel scale for bitmap glyphs (1 = default). */
   scale?: number;
   fontSize?: number;
@@ -1261,6 +1261,12 @@ type RetainedLayerSnapshot = {
   bounds: RetainedClip;
 };
 
+type RetainedPresentationBinding = {
+  layer: RetainedLayer;
+  offsetX: number;
+  offsetY: number;
+};
+
 function retainedLayerBounds(
   layer: RetainedLayer,
   viewport: RenderViewport,
@@ -1355,6 +1361,19 @@ function intersectClip(a: RetainedClip | undefined, b: RetainedClip): RetainedCl
   };
 }
 
+function clipsEqual(
+  a: RetainedClip | undefined,
+  b: RetainedClip | undefined,
+): boolean {
+  return a === b ||
+    (a != null &&
+      b != null &&
+      a.x === b.x &&
+      a.y === b.y &&
+      a.width === b.width &&
+      a.height === b.height);
+}
+
 /**
  * Convert the React scene into cached texture-backed primitives. This renderer
  * performs no EGL calls: a platform may consume the frame, or Window can
@@ -1377,6 +1396,11 @@ export class RetainedSceneRenderer
   private previousWidth = 0;
   private previousHeight = 0;
   private previousClearColor = 0;
+  private presentationLayers: RetainedLayer[] | null = null;
+  private readonly presentationBindings = new Map<
+    string,
+    RetainedPresentationBinding[]
+  >();
 
   private solid(color: number): Uint8Array {
     const key = color >>> 0;
@@ -1435,6 +1459,18 @@ export class RetainedSceneRenderer
   render(root: SceneNode, viewport: RenderViewport): RetainedSceneFrame {
     this.frame++;
     const layers: RetainedLayer[] = [];
+    this.presentationBindings.clear();
+    const appendLayer = (
+      node: SceneNode,
+      layer: RetainedLayer,
+      offsetX = 0,
+      offsetY = 0,
+    ): void => {
+      layers.push(layer);
+      const bindings = this.presentationBindings.get(node.id) ?? [];
+      bindings.push({ layer, offsetX, offsetY });
+      this.presentationBindings.set(node.id, bindings);
+    };
     const visit = (
       node: SceneNode,
       parentX: number,
@@ -1471,7 +1507,7 @@ export class RetainedSceneRenderer
           : undefined;
         if (node.fill != null && fillAlpha > 0) {
           const color = node.fill >>> 0;
-          layers.push({
+          appendLayer(node, {
             id: `${node.id}:fill`,
             pixels: this.solid(color),
             sourceWidth: 1,
@@ -1512,7 +1548,7 @@ export class RetainedSceneRenderer
                 stroke,
               ),
           );
-          layers.push({
+          appendLayer(node, {
             id: `${node.id}:stroke`,
             pixels: cached.pixels,
             sourceWidth: cached.width,
@@ -1566,7 +1602,7 @@ export class RetainedSceneRenderer
             }
           },
         );
-        layers.push({
+        appendLayer(node, {
           id: `${node.id}:text`,
           pixels: cached.pixels,
           sourceWidth: cached.width,
@@ -1582,7 +1618,7 @@ export class RetainedSceneRenderer
           clip,
           opacity,
           sampling: "linear",
-        });
+        }, -pad, -pad);
       } else if (
         node.kind === "image" &&
         node.imagePixels &&
@@ -1592,7 +1628,7 @@ export class RetainedSceneRenderer
         node.height > 0
       ) {
         const texture = this.imageTexture(node.imagePixels);
-        layers.push({
+        appendLayer(node, {
           id: `${node.id}:image`,
           pixels: texture.pixels,
           sourceWidth: node.imageWidth,
@@ -1650,12 +1686,115 @@ export class RetainedSceneRenderer
     this.previousWidth = viewport.width;
     this.previousHeight = viewport.height;
     this.previousClearColor = clearColor;
+    this.presentationLayers = layers;
     return {
       width: viewport.width,
       height: viewport.height,
       clearColor,
       layers,
       damage,
+    };
+  }
+
+  /**
+   * Refresh paint-only presentation properties without rebuilding the layer
+   * graph or serialising every static layer signature. Returns null when the
+   * cached graph cannot safely represent the current tree.
+   */
+  renderPresentation(
+    root: SceneNode,
+    viewport: RenderViewport,
+  ): RetainedSceneFrame | null {
+    const layers = this.presentationLayers;
+    if (
+      !layers ||
+      viewport.width !== this.previousWidth ||
+      viewport.height !== this.previousHeight
+    ) return null;
+
+    this.frame++;
+    const changedBounds: RetainedClip[] = [];
+    let valid = true;
+    const visit = (
+      node: SceneNode,
+      parentX: number,
+      parentY: number,
+      inheritedOpacity: number,
+      inheritedClip?: RetainedClip,
+    ): void => {
+      const x = parentX + node.x + resolveLiveNumber(node.translateX);
+      const y = parentY + node.y + resolveLiveNumber(node.translateY);
+      const opacity = inheritedOpacity * resolveLiveNumber(node.opacity, 1);
+      const clip =
+        node.kind === "group" && node.clip
+          ? intersectClip(inheritedClip, {
+              x,
+              y,
+              width: Math.max(0, node.width),
+              height: Math.max(0, node.height),
+            })
+          : inheritedClip;
+      const bindings = this.presentationBindings.get(node.id);
+      if (bindings) {
+        for (const binding of bindings) {
+          const layer = binding.layer;
+          const nextX = x + binding.offsetX;
+          const nextY = y + binding.offsetY;
+          if (
+            layer.destination.x === nextX &&
+            layer.destination.y === nextY &&
+            layer.opacity === opacity &&
+            clipsEqual(layer.clip, clip)
+          ) continue;
+          changedBounds.push(retainedLayerBounds(layer, viewport));
+          layer.destination.x = nextX;
+          layer.destination.y = nextY;
+          layer.opacity = opacity;
+          layer.clip = clip;
+          const bounds = retainedLayerBounds(layer, viewport);
+          changedBounds.push(bounds);
+          this.previousLayers.set(layer.id, {
+            signature: retainedLayerSignature(layer),
+            bounds,
+          });
+        }
+      } else if (
+        (node.kind === "rect" &&
+          node.width > 0 &&
+          node.height > 0 &&
+          ((node.fill != null && ((node.fill >>> 24) & 0xff) > 0) ||
+            (node.stroke != null && (node.strokeWidth ?? 1) > 0))) ||
+        (node.kind === "text" && !!node.text) ||
+        (node.kind === "image" &&
+          !!node.imagePixels &&
+          !!node.imageWidth &&
+          !!node.imageHeight &&
+          node.width > 0 &&
+          node.height > 0)
+      ) {
+        valid = false;
+      }
+      for (const child of node.children) {
+        visit(child, x, y, opacity, clip);
+      }
+    };
+    visit(root, 0, 0, 1);
+    if (!valid) {
+      // Some presentation value can reveal a primitive that was absent from
+      // the cached graph (most commonly opacity starting at zero). Force the
+      // immediate full-render fallback to damage the whole viewport even if
+      // earlier bindings were already refreshed during this traversal.
+      this.previousWidth = 0;
+      this.presentationLayers = null;
+      return null;
+    }
+
+    return {
+      width: viewport.width,
+      height: viewport.height,
+      clearColor: this.previousClearColor,
+      layers,
+      damage: coalesceDamage(changedBounds),
     };
   }
 }

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Process Manager
+Comment=Inspect applications and manage system resources
+Exec=moire-process-manager
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+OnlyShowIn=Moire;
+StartupNotify=true

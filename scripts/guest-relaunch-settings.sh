@@ -7,6 +7,7 @@ TAB="${1:-0}"
 COMPOSITOR_PID="$(pgrep -u moire -f '@moire/compositor exec tsx src/main.ts' | head -n 1)"
 BUS="$(tr '\0' '\n' < "/proc/$COMPOSITOR_PID/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' | head -n 1)"
 
+mkdir -p "$DST/apps/core/settings"
 rsync -a --delete \
   --exclude node_modules --exclude .git --exclude vm \
   --exclude '*.img' --exclude '*.iso' \
@@ -17,11 +18,11 @@ rsync -a --delete \
 rsync -a --delete \
   --exclude node_modules --exclude .git \
   "$SRC/packages/protocol/" "$DST/packages/protocol/"
-rsync -a "$SRC/apps/settings/" "$DST/apps/settings/" --exclude node_modules
-chown -R moire:moire "$DST/packages/ui" "$DST/packages/react-host" "$DST/packages/protocol" "$DST/apps/settings"
+rsync -a "$SRC/apps/core/settings/" "$DST/apps/core/settings/" --exclude node_modules
+chown -R moire:moire "$DST/packages/ui" "$DST/packages/react-host" "$DST/packages/protocol" "$DST/apps/core/settings"
 
 pkill -u moire -f '@moire/settings' 2>/dev/null || true
-pkill -u moire -f 'apps/settings' 2>/dev/null || true
+pkill -u moire -f 'apps/core/settings' 2>/dev/null || true
 sleep 0.5
 : >/tmp/moire-settings.log
 setsid runuser -u moire -- env \

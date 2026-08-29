@@ -61,7 +61,11 @@ import {
   createCompositorOutputRenderer,
   type CompositorOutputRenderer,
 } from "./output-renderer.js";
-import type { CompositionLayer, CompositionScene } from "./composition.js";
+import type {
+  CompositionLayer,
+  CompositionRect,
+  CompositionScene,
+} from "./composition.js";
 import {
   closeDmabufPlanes,
   copyFromDmabuf,
