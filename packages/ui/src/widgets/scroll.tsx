@@ -1,11 +1,7 @@
 /** Clipped vertical viewport with wheel, track, and captured thumb scrolling. */
 import React, { useRef, useState, type ReactNode } from "react";
 import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
-import {
-  resolveStatefulStyle,
-  useWidgetTheme,
-  type ButtonSize,
-} from "../widget-theme.js";
+import { resolveStatefulStyle, useWidgetTheme, type ButtonSize } from "#ui/widget-theme";
 
 export type ScrollAreaProps = {
   x?: number;
@@ -47,23 +43,16 @@ export function ScrollArea(props: ScrollAreaProps): ReactNode {
     recipe.thumb,
     thumbPressed ? "pressed" : thumbHovered ? "hover" : "rest",
   );
-  const scrollbarX =
-    props.width -
-    recipe.metrics.scrollbarMargin -
-    recipe.metrics.scrollbarWidth;
+  const scrollbarX = props.width - recipe.metrics.scrollbarMargin - recipe.metrics.scrollbarWidth;
   const ratio = props.height / Math.max(props.height, props.contentHeight);
   const thumbHeight = showScrollbar
     ? Math.min(
         props.height,
-        Math.max(
-          recipe.metrics.minThumbHeight,
-          Math.floor(props.height * ratio),
-        ),
+        Math.max(recipe.metrics.minThumbHeight, Math.floor(props.height * ratio)),
       )
     : 0;
   const thumbTravel = Math.max(0, props.height - thumbHeight);
-  const thumbY =
-    maxScroll > 0 ? Math.floor((thumbTravel * clampedY) / maxScroll) : 0;
+  const thumbY = maxScroll > 0 ? Math.floor((thumbTravel * clampedY) / maxScroll) : 0;
 
   const setScroll = (next: number) => {
     const clamped = Math.max(0, Math.min(maxScroll, next));
@@ -79,13 +68,7 @@ export function ScrollArea(props: ScrollAreaProps): ReactNode {
   };
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-      clip
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height} clip>
       <Rect
         width={props.width}
         height={props.height}
@@ -95,12 +78,7 @@ export function ScrollArea(props: ScrollAreaProps): ReactNode {
         strokeWidth={recipe.viewport.strokeWidth}
       />
       <Group width={props.width} height={props.height} clip>
-        <Group
-          x={0}
-          y={-clampedY}
-          width={props.width}
-          height={props.contentHeight}
-        >
+        <Group x={0} y={-clampedY} width={props.width} height={props.contentHeight}>
           {props.children}
         </Group>
       </Group>

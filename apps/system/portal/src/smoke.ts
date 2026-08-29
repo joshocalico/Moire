@@ -4,10 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { SessionBus, variant } from "@moire/dbus";
 
-const root = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../../..",
-);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const portal = spawn(
   path.join(root, "node_modules/.bin/tsx"),
   [path.join(root, "apps/system/portal/src/main.tsx")],
@@ -67,8 +64,7 @@ try {
   assert.equal(reply.signature, "ua{sv}");
   assert.equal(reply.body?.[0], 2, "request cancellation did not end the chooser");
 
-  const nativeHandle =
-    "/org/freedesktop/portal/desktop/request/smoke/native_chooser";
+  const nativeHandle = "/org/freedesktop/portal/desktop/request/smoke/native_chooser";
   const nativeChoose = bus.call({
     destination: "org.freedesktop.impl.portal.desktop.moire",
     path: "/org/freedesktop/portal/desktop",

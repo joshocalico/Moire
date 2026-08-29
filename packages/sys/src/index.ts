@@ -1,18 +1,11 @@
 /**
  * Thin TypeScript + koffi bindings to Linux graphics/input libraries.
  */
-export { isLinux, assertLinux } from "./platform.js";
-export { LinuxReadinessDispatcher } from "./readiness.js";
-export { listDrmConnectors, type DrmConnectorInfo } from "./drm.js";
-export {
-  readDisplayIdentity,
-  type DisplayIdentity,
-} from "./display-identity.js";
-export {
-  watchDrmHotplug,
-  type DrmHotplugEvent,
-  type DrmHotplugMonitor,
-} from "./drm-hotplug.js";
+export { isLinux, assertLinux } from "./platform";
+export { LinuxReadinessDispatcher } from "./readiness";
+export { listDrmConnectors, type DrmConnectorInfo } from "./drm";
+export { readDisplayIdentity, type DisplayIdentity } from "./display-identity";
+export { watchDrmHotplug, type DrmHotplugEvent, type DrmHotplugMonitor } from "./drm-hotplug";
 export {
   openKmsOutput,
   openAdditionalKmsOutput,
@@ -33,9 +26,8 @@ export {
   type KmsCursorImage,
   type KmsPresentationFeedback,
   type Rgba,
-} from "./kms.js";
+} from "./kms";
 export {
-  getLibc,
   openPath,
   closeFd,
   mmap,
@@ -45,28 +37,32 @@ export {
   socketpairUnixStream,
   clearCloexec,
   peerCredentials,
+  nativeView,
+  createPipe,
+  ioctlFd,
+  ioctlUint64,
+  createMemfd,
+  truncateFd,
+  writeFd,
+  seekFd,
   type PeerCredentials,
   PROT_READ,
   PROT_WRITE,
   MAP_SHARED,
   O_RDWR,
   O_CLOEXEC,
-} from "./libc.js";
-export {
-  WaylandSocketServer,
-  WaylandClientConn,
-  type WaylandChunk,
-} from "./unix.js";
-export { createXkbKeymapMemfd, type KeymapMemfd } from "./keymap.js";
-export { EvdevKeyboard, type EvdevKeyEvent } from "./evdev.js";
+} from "./libc";
+export { WaylandSocketServer, WaylandClientConn, type WaylandChunk } from "./unix";
+export { createXkbKeymapMemfd, type KeymapMemfd } from "./keymap";
+export { EvdevKeyboard, type EvdevKeyEvent } from "./evdev";
 export {
   EvdevPointer,
   type EvdevPointerMotion,
   type EvdevPointerAbsolute,
   type EvdevPointerButton,
   type EvdevPointerAxis,
-} from "./evdev-pointer.js";
-export { GbmDevice, type GbmMappedPixels } from "./gbm.js";
+} from "./evdev-pointer";
+export { GbmDevice, type GbmMappedPixels } from "./gbm";
 export {
   EglOutputScaler,
   type EglOutputInfo,
@@ -76,4 +72,4 @@ export {
   type EglClientPresent,
   type EglCompositionLayer,
   type EglCompositionScene,
-} from "./egl-output.js";
+} from "./egl-output";

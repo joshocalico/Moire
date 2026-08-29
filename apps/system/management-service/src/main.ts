@@ -1,11 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  execFileSync,
-  spawn,
-  type ChildProcess,
-} from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { SessionBus } from "@moire/dbus";
 import {
   SYSTEM_MANAGEMENT_BUS,
@@ -62,16 +58,17 @@ const protectedAncestors = ancestors(process.pid);
 
 function procStat(pid: number): { ticks: number; rssBytes: number } {
   const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-  const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+  const fields = stat
+    .slice(stat.lastIndexOf(")") + 2)
+    .trim()
+    .split(/\s+/);
   const ticks = Number(fields[11] ?? 0) + Number(fields[12] ?? 0);
   const rssPages = Number(fields[21] ?? 0);
   return { ticks, rssBytes: rssPages * 4096 };
 }
 
 function commandLine(pid: number): string {
-  const value = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8")
-    .replaceAll("\0", " ")
-    .trim();
+  const value = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " ").trim();
   return value || fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim();
 }
 
@@ -88,13 +85,33 @@ type Identity = { name: string; appId: string; protected: boolean };
 function identify(command: string, cwd: string, fallback: string): Identity {
   const source = `${command} ${cwd}`;
   const known: Array<[RegExp, string, string, boolean]> = [
-    [/apps\/system\/compositor|@moire\/compositor/, "Moire Compositor", "org.moire.Compositor", true],
+    [
+      /apps\/system\/compositor|@moire\/compositor/,
+      "Moire Compositor",
+      "org.moire.Compositor",
+      true,
+    ],
     [/apps\/system\/session|moire-session/, "Moire Session", "org.moire.Session", true],
-    [/management-service|@moire\/system-management-service/, "System Management Service", "org.moire.SystemManagement", true],
+    [
+      /management-service|@moire\/system-management-service/,
+      "System Management Service",
+      "org.moire.SystemManagement",
+      true,
+    ],
     [/apps\/system\/portal|@moire\/portal/, "Desktop Portal", "org.moire.Portal", true],
     [/apps\/core\/settings|@moire\/settings/, "Settings", "org.moire.Settings", false],
-    [/apps\/core\/process-manager|@moire\/process-manager/, "Process Manager", "org.moire.ProcessManager", false],
-    [/apps\/core\/memory-pressure|@moire\/memory-pressure/, "Memory Pressure", "org.moire.MemoryPressure", false],
+    [
+      /apps\/core\/process-manager|@moire\/process-manager/,
+      "Process Manager",
+      "org.moire.ProcessManager",
+      false,
+    ],
+    [
+      /apps\/core\/memory-pressure|@moire\/memory-pressure/,
+      "Memory Pressure",
+      "org.moire.MemoryPressure",
+      false,
+    ],
     [/apps\/bundled\/files|@moire\/files/, "Files", "org.moire.Files", false],
     [/apps\/bundled\/terminal|@moire\/terminal-app/, "Terminal", "org.moire.Terminal", false],
     [/apps\/developer\/showcase|@moire\/showcase/, "Widget Showcase", "org.moire.Showcase", false],
@@ -116,7 +133,7 @@ function cpuPercent(pid: number, ticks: number, now: number): number {
   const previous = cpuSamples.get(pid);
   cpuSamples.set(pid, { ticks, at: now });
   if (!previous || now <= previous.at || ticks < previous.ticks) return 0;
-  return ((ticks - previous.ticks) / clockTicks) / ((now - previous.at) / 1_000) * 100;
+  return ((ticks - previous.ticks) / clockTicks / ((now - previous.at) / 1_000)) * 100;
 }
 
 function readProcess(pid: number, now = performance.now()): ManagedProcess | null {
@@ -165,15 +182,10 @@ function watchMemoryPressure(): void {
   let cooldownUntil = 0;
   setInterval(() => {
     const memory = memoryInfo();
-    const pressure = memory.totalMemoryBytes > 0
-      ? 1 - memory.availableMemoryBytes / memory.totalMemoryBytes
-      : 0;
+    const pressure =
+      memory.totalMemoryBytes > 0 ? 1 - memory.availableMemoryBytes / memory.totalMemoryBytes : 0;
     criticalSamples = pressure >= 0.92 ? criticalSamples + 1 : 0;
-    if (
-      criticalSamples < 3 ||
-      dialog ||
-      Date.now() < cooldownUntil
-    ) return;
+    if (criticalSamples < 3 || dialog || Date.now() < cooldownUntil) return;
     criticalSamples = 0;
     try {
       dialog = spawn("moire-memory-pressure", [], {

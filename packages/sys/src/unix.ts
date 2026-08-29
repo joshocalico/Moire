@@ -9,9 +9,9 @@ import fs from "node:fs";
 import net from "node:net";
 import { EventEmitter } from "node:events";
 import koffi from "koffi";
-import { assertLinux } from "./platform.js";
-import { getLibc, peerCredentials } from "./libc.js";
-import { LinuxReadinessDispatcher } from "./readiness.js";
+import { assertLinux } from "./platform";
+import { getLibc, peerCredentials } from "./libc";
+import { LinuxReadinessDispatcher } from "./readiness";
 
 const SOL_SOCKET = 1;
 const SCM_RIGHTS = 1;
@@ -45,8 +45,7 @@ const Cmsghdr = koffi.struct("cmsghdr_wl", {
 });
 
 function socketHandle(sock: net.Socket): { fd?: number; readStop?: () => void } | undefined {
-  return (sock as unknown as { _handle?: { fd?: number; readStop?: () => void } })
-    ._handle;
+  return (sock as unknown as { _handle?: { fd?: number; readStop?: () => void } })._handle;
 }
 
 function socketFd(sock: net.Socket): number {
@@ -98,8 +97,7 @@ export class WaylandSocketServer extends EventEmitter {
 
   start(): void {
     assertLinux("Wayland socket");
-    this.readiness =
-      this.sharedReadiness ?? new LinuxReadinessDispatcher("wayland");
+    this.readiness = this.sharedReadiness ?? new LinuxReadinessDispatcher("wayland");
     this.ownsReadiness = this.sharedReadiness == null;
     try {
       fs.unlinkSync(this.path);
@@ -176,12 +174,16 @@ export class WaylandClientConn extends EventEmitter {
     this.fd = socketFd(sock);
     this.peerPid = peerCredentials(this.fd)?.pid ?? null;
     const libc = getLibc();
-    this.recvmsg = libc.func(
-      "long recvmsg(int sockfd, void *msg, int flags)",
-    ) as (sockfd: number, msg: unknown, flags: number) => number | bigint;
-    this.sendmsg = libc.func(
-      "long sendmsg(int sockfd, void *msg, int flags)",
-    ) as (sockfd: number, msg: unknown, flags: number) => number | bigint;
+    this.recvmsg = libc.func("long recvmsg(int sockfd, void *msg, int flags)") as (
+      sockfd: number,
+      msg: unknown,
+      flags: number,
+    ) => number | bigint;
+    this.sendmsg = libc.func("long sendmsg(int sockfd, void *msg, int flags)") as (
+      sockfd: number,
+      msg: unknown,
+      flags: number,
+    ) => number | bigint;
     claimSocketForRecvmsg(sock);
     this.readiness.add(this.fd, () => this.pump());
     sock.on("close", () => {
@@ -282,9 +284,7 @@ export class WaylandClientConn extends EventEmitter {
     if (n === 0) return { data: Buffer.alloc(0), fds: [] };
 
     // Copy out of the reusable native buffer into a JS Buffer for the demuxer.
-    const view = new Uint8Array(
-      koffi.view(this.recvDataPtr, n) as ArrayBuffer,
-    );
+    const view = new Uint8Array(koffi.view(this.recvDataPtr, n) as ArrayBuffer);
     const data = Buffer.from(view);
 
     const fds: number[] = [];
@@ -300,9 +300,7 @@ export class WaylandClientConn extends EventEmitter {
       };
       if (hdr.cmsg_level === SOL_SOCKET && hdr.cmsg_type === SCM_RIGHTS) {
         const cmsgLen = Number(hdr.cmsg_len);
-        const ctrlView = new Uint8Array(
-          koffi.view(this.recvControl, controllen) as ArrayBuffer,
-        );
+        const ctrlView = new Uint8Array(koffi.view(this.recvControl, controllen) as ArrayBuffer);
         const ctrlBytes = Buffer.from(ctrlView);
         for (let off = 16; off + 4 <= Math.min(cmsgLen, controllen); off += 4) {
           fds.push(ctrlBytes.readInt32LE(off));
@@ -318,9 +316,7 @@ export class WaylandClientConn extends EventEmitter {
     if (this.disposed || this.closeEmitted) return false;
     const dataPtr = this.ensureSendData(data.length);
     if (data.length > 0) {
-      const dest = new Uint8Array(
-        koffi.view(dataPtr, data.length) as ArrayBuffer,
-      );
+      const dest = new Uint8Array(koffi.view(dataPtr, data.length) as ArrayBuffer);
       dest.set(data);
     }
     koffi.encode(this.sendIov, Iovec, {
@@ -343,9 +339,7 @@ export class WaylandClientConn extends EventEmitter {
       for (let i = 0; i < fds.length; i++) {
         bytes.writeInt32LE(fds[i]!, 16 + i * 4);
       }
-      const dest = new Uint8Array(
-        koffi.view(control, bufSize) as ArrayBuffer,
-      );
+      const dest = new Uint8Array(koffi.view(control, bufSize) as ArrayBuffer);
       dest.set(bytes);
       controllen = BigInt(bufSize);
     }

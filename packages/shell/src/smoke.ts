@@ -3,16 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import React from "react";
-import {
-  createShellRoot,
-  rasterize,
-  renderShell,
-  type SceneNode,
-} from "@moire/react-host";
-import { Panel } from "./Panel.js";
-import { Launcher } from "./Launcher.js";
-import { createShell } from "./controller.js";
-import { loadDesktopLayout } from "./DesktopIcons.js";
+import { createShellRoot, rasterize, renderShell, type SceneNode } from "@moire/react-host";
+import { Panel } from "./Panel";
+import { Launcher } from "./Launcher";
+import { createShell } from "./controller";
+import { loadDesktopLayout } from "./DesktopIcons";
 
 const width = 1024;
 const height = 768;
@@ -42,7 +37,7 @@ renderShell(
 const out = rasterize(root.container, width, height);
 let nonzero = 0;
 for (const pixel of new Uint32Array(out.pixels.buffer)) {
-  if ((pixel >>> 24) !== 0) nonzero++;
+  if (pixel >>> 24 !== 0) nonzero++;
 }
 
 assert.equal(root.container.children.length, 1, "panel scene did not mount");
@@ -163,9 +158,7 @@ try {
   );
   const outside = framebuffer[100 * width + 100]!;
   assert.ok(
-    ((outside >>> 16) & 0xff) > 40 &&
-      ((outside >>> 8) & 0xff) > 40 &&
-      (outside & 0xff) > 40,
+    ((outside >>> 16) & 0xff) > 40 && ((outside >>> 8) & 0xff) > 40 && (outside & 0xff) > 40,
     "transparent dismiss layer blacked out the underlying desktop",
   );
   assert.equal(
@@ -260,22 +253,10 @@ try {
   });
   shell.onDesktopPointerMotion?.({ x: 160, y: 40 });
   shell.finishDesktopDrag?.(true, 40, 272);
-  assert.equal(
-    fs.existsSync(path.join(smokeHome, "Desktop", "Alpha.txt")),
-    false,
-  );
-  assert.equal(
-    fs.existsSync(path.join(smokeHome, "Desktop", "Beta.txt")),
-    false,
-  );
-  assert.equal(
-    fs.existsSync(path.join(smokeHome, "Desktop", "New Folder", "Alpha.txt")),
-    true,
-  );
-  assert.equal(
-    fs.existsSync(path.join(smokeHome, "Desktop", "New Folder", "Beta.txt")),
-    true,
-  );
+  assert.equal(fs.existsSync(path.join(smokeHome, "Desktop", "Alpha.txt")), false);
+  assert.equal(fs.existsSync(path.join(smokeHome, "Desktop", "Beta.txt")), false);
+  assert.equal(fs.existsSync(path.join(smokeHome, "Desktop", "New Folder", "Alpha.txt")), true);
+  assert.equal(fs.existsSync(path.join(smokeHome, "Desktop", "New Folder", "Beta.txt")), true);
 
   const ssdWindow = {
     clientId: 9,
@@ -291,11 +272,7 @@ try {
   framebuffer.fill(simulatedWindow);
   shell.beginSsdFrame();
   shell.paintSsdWindow(framebuffer, width, width, height, ssdWindow);
-  assert.equal(
-    framebuffer[100 * width + 100],
-    simulatedWindow,
-    "SSD top corner was not rounded",
-  );
+  assert.equal(framebuffer[100 * width + 100], simulatedWindow, "SSD top corner was not rounded");
   assert.notEqual(
     framebuffer[117 * width + 116],
     simulatedWindow,

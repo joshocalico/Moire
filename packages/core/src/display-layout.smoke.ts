@@ -10,7 +10,7 @@ import {
   outputsIntersectingRect,
   outputMembershipDelta,
   replacementOwner,
-} from "./display-layout.js";
+} from "./display-layout";
 
 const outputs = horizontalLayout([
   { id: "eDP-1", width: 3, height: 2 },
@@ -51,21 +51,14 @@ assert.equal(replacementOwner(outputs, 0)?.id, "DP-1");
 assert.equal(replacementOwner(outputs, 1)?.id, "eDP-1");
 assert.equal(replacementOwner([outputs[0]!], 0), null);
 assert.deepEqual(
-  outputsIntersectingRect(outputs, { x: 2, y: 0, width: 2, height: 2 }).map(
-    (output) => output.id,
-  ),
+  outputsIntersectingRect(outputs, { x: 2, y: 0, width: 2, height: 2 }).map((output) => output.id),
   ["eDP-1", "DP-1"],
 );
 assert.deepEqual(
-  outputsIntersectingRect(outputs, { x: 3, y: 0, width: 1, height: 1 }).map(
-    (output) => output.id,
-  ),
+  outputsIntersectingRect(outputs, { x: 3, y: 0, width: 1, height: 1 }).map((output) => output.id),
   ["DP-1"],
 );
-assert.deepEqual(
-  outputsIntersectingRect(outputs, { x: 7, y: 2, width: 1, height: 1 }),
-  [],
-);
+assert.deepEqual(outputsIntersectingRect(outputs, { x: 7, y: 2, width: 1, height: 1 }), []);
 assert.deepEqual(outputMembershipDelta(new Set([11]), [11, 12]), {
   entered: [12],
   left: [],
@@ -97,12 +90,7 @@ copySceneToOutput(scene, bounds.width, bounds.height, dp, target, pitch);
 for (let y = 0; y < dp.height; y++) {
   for (let x = 0; x < dp.width; x++) {
     const offset = y * pitch + x * 4;
-    assert.deepEqual([...target.subarray(offset, offset + 4)], [
-      dp.x + x,
-      y,
-      0xa5,
-      0xff,
-    ]);
+    assert.deepEqual([...target.subarray(offset, offset + 4)], [dp.x + x, y, 0xa5, 0xff]);
   }
   assert.deepEqual(
     [...target.subarray(y * pitch + dp.width * 4, (y + 1) * pitch)],
@@ -138,12 +126,10 @@ copySceneToOutputScaled(
 for (let py = 0; py < 2; py++) {
   for (let px = 0; px < 4; px++) {
     const offset = (py * 4 + px) * 4;
-    assert.deepEqual([...scaledTarget.subarray(offset, offset + 4)], [
-      3 + Math.floor(px / 2),
-      0,
-      0xa5,
-      0xff,
-    ]);
+    assert.deepEqual(
+      [...scaledTarget.subarray(offset, offset + 4)],
+      [3 + Math.floor(px / 2), 0, 0xa5, 0xff],
+    );
   }
 }
 

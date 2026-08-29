@@ -387,12 +387,7 @@ function blitImageCover(
   }
 }
 
-function wallpaperKey(
-  theme: MoireTheme,
-  w: number,
-  h: number,
-  phaseBucket: number,
-): string {
+function wallpaperKey(theme: MoireTheme, w: number, h: number, phaseBucket: number): string {
   return `${theme.name}|${theme.wallpaper.mode}|${w}x${h}|${phaseBucket}|${JSON.stringify(theme.wallpaper)}`;
 }
 

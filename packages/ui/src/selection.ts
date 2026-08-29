@@ -1,9 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type SelectionState<Key> = {
   selectedKeys: ReadonlySet<Key>;
@@ -88,17 +83,10 @@ export function reconcileSelection<Key>(
   options: Pick<SelectionOptions<Key>, "allowEmpty"> = {},
 ): SelectionState<Key> {
   const available = new Set(keys);
-  let selected = new Set(
-    [...state.selectedKeys].filter((key) => available.has(key)),
-  );
-  let focusKey =
-    state.focusKey !== null && available.has(state.focusKey)
-      ? state.focusKey
-      : null;
+  let selected = new Set([...state.selectedKeys].filter((key) => available.has(key)));
+  let focusKey = state.focusKey !== null && available.has(state.focusKey) ? state.focusKey : null;
   let anchorKey =
-    state.anchorKey !== null && available.has(state.anchorKey)
-      ? state.anchorKey
-      : null;
+    state.anchorKey !== null && available.has(state.anchorKey) ? state.anchorKey : null;
 
   if (selected.size === 0 && options.allowEmpty === false && keys.length > 0) {
     const fallback = focusKey ?? keys[0]!;
@@ -139,12 +127,7 @@ export function createSelectionState<Key>(
   );
 }
 
-function movedIndex(
-  current: number,
-  delta: number,
-  length: number,
-  wrap: boolean,
-): number {
+function movedIndex(current: number, delta: number, length: number, wrap: boolean): number {
   if (length <= 0) return -1;
   const raw = current < 0 ? (delta < 0 ? length - 1 : 0) : current + delta;
   if (wrap) return ((raw % length) + length) % length;
@@ -198,17 +181,18 @@ export function reduceSelection<Key>(
     const focusKey =
       current.focusKey !== null && selected.has(current.focusKey)
         ? current.focusKey
-        : keys[0] ?? null;
+        : (keys[0] ?? null);
     next = { selectedKeys: selected, anchorKey: focusKey, focusKey };
   } else if (action.type === "focus") {
     if (!keys.includes(action.key)) return current;
-    next = action.select === false
-      ? { ...current, focusKey: action.key }
-      : {
-          selectedKeys: new Set([action.key]),
-          anchorKey: action.key,
-          focusKey: action.key,
-        };
+    next =
+      action.select === false
+        ? { ...current, focusKey: action.key }
+        : {
+            selectedKeys: new Set([action.key]),
+            anchorKey: action.key,
+            focusKey: action.key,
+          };
   } else if (action.type === "select") {
     if (!keys.includes(action.key)) return current;
     const gesture = action.gesture ?? {};
@@ -288,9 +272,7 @@ export function useSelectionModel<Key>(
 
   const dispatch = useCallback(
     (action: SelectionAction<Key>) => {
-      setStored((current) =>
-        reduceSelection(current, keys, action, { multiple, allowEmpty }),
-      );
+      setStored((current) => reduceSelection(current, keys, action, { multiple, allowEmpty }));
     },
     [allowEmpty, keys, multiple],
   );
@@ -301,19 +283,14 @@ export function useSelectionModel<Key>(
   const primaryKey =
     state.focusKey !== null && state.selectedKeys.has(state.focusKey)
       ? state.focusKey
-      : selectedKeysInOrder.at(-1) ?? null;
-  const isSelected = useCallback(
-    (key: Key) => state.selectedKeys.has(key),
-    [state.selectedKeys],
-  );
+      : (selectedKeysInOrder.at(-1) ?? null);
+  const isSelected = useCallback((key: Key) => state.selectedKeys.has(key), [state.selectedKeys]);
   const select = useCallback(
-    (key: Key, gesture?: SelectionGesture) =>
-      dispatch({ type: "select", key, gesture }),
+    (key: Key, gesture?: SelectionGesture) => dispatch({ type: "select", key, gesture }),
     [dispatch],
   );
   const focus = useCallback(
-    (key: Key, shouldSelect = true) =>
-      dispatch({ type: "focus", key, select: shouldSelect }),
+    (key: Key, shouldSelect = true) => dispatch({ type: "focus", key, select: shouldSelect }),
     [dispatch],
   );
   const move = useCallback(
@@ -322,13 +299,11 @@ export function useSelectionModel<Key>(
     [dispatch],
   );
   const first = useCallback(
-    (moveOptions?: SelectionMoveOptions) =>
-      dispatch({ type: "first", options: moveOptions }),
+    (moveOptions?: SelectionMoveOptions) => dispatch({ type: "first", options: moveOptions }),
     [dispatch],
   );
   const last = useCallback(
-    (moveOptions?: SelectionMoveOptions) =>
-      dispatch({ type: "last", options: moveOptions }),
+    (moveOptions?: SelectionMoveOptions) => dispatch({ type: "last", options: moveOptions }),
     [dispatch],
   );
   const selectAll = useCallback(() => dispatch({ type: "all" }), [dispatch]);

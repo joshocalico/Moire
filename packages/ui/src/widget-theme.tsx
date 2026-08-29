@@ -1,8 +1,4 @@
-import React, {
-  createContext,
-  useContext,
-  type ReactNode,
-} from "react";
+import React, { createContext, useContext, type ReactNode } from "react";
 import {
   SPACE,
   TYPE_ROLES,
@@ -10,7 +6,7 @@ import {
   themePalette,
   type MoireTheme,
   type ThemePalette,
-} from "./theme.js";
+} from "./theme";
 
 export type WidgetState =
   | "rest"
@@ -319,14 +315,14 @@ function channel(color: number, shift: number): number {
 }
 
 function mixArgb(from: number, to: number, amount: number): number {
-  const mix = (a: number, b: number) =>
-    Math.round(a + (b - a) * Math.max(0, Math.min(1, amount)));
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * Math.max(0, Math.min(1, amount)));
   return (
-    (mix(channel(from, 24), channel(to, 24)) << 24) |
-    (mix(channel(from, 16), channel(to, 16)) << 16) |
-    (mix(channel(from, 8), channel(to, 8)) << 8) |
-    mix(channel(from, 0), channel(to, 0))
-  ) >>> 0;
+    ((mix(channel(from, 24), channel(to, 24)) << 24) |
+      (mix(channel(from, 16), channel(to, 16)) << 16) |
+      (mix(channel(from, 8), channel(to, 8)) << 8) |
+      mix(channel(from, 0), channel(to, 0))) >>>
+    0
+  );
 }
 
 function withAlpha(color: number, alpha: number): number {
@@ -436,8 +432,7 @@ function iconButtonRecipe(
   size: ButtonSize,
   palette: ThemePalette,
 ): IconButtonRecipe {
-  const buttonVariant: ButtonVariant =
-    variant === "standard" ? "secondary" : variant;
+  const buttonVariant: ButtonVariant = variant === "standard" ? "secondary" : variant;
   const source = buttonRecipe(buttonVariant, size, palette);
   return {
     root: source.root,
@@ -446,10 +441,7 @@ function iconButtonRecipe(
   };
 }
 
-function listItemRecipe(
-  size: ButtonSize,
-  palette: ThemePalette,
-): ListItemRecipe {
+function listItemRecipe(size: ButtonSize, palette: ThemePalette): ListItemRecipe {
   const metrics = {
     small: {
       height: 32,
@@ -523,10 +515,7 @@ function listItemRecipe(
   };
 }
 
-function gridItemRecipe(
-  size: ButtonSize,
-  palette: ThemePalette,
-): GridItemRecipe {
+function gridItemRecipe(size: ButtonSize, palette: ThemePalette): GridItemRecipe {
   const metrics = {
     small: {
       fontSize: 11,
@@ -618,10 +607,7 @@ function collectionItemRecipe(palette: ThemePalette): CollectionItemRecipe {
   };
 }
 
-function textFieldRecipe(
-  size: ButtonSize,
-  palette: ThemePalette,
-): TextFieldRecipe {
+function textFieldRecipe(size: ButtonSize, palette: ThemePalette): TextFieldRecipe {
   const metrics = {
     small: { height: 28, paddingX: 8, slotGap: 6, fontSize: 12, iconSize: 14 },
     medium: { height: 32, paddingX: 10, slotGap: 8, fontSize: 13, iconSize: 16 },
@@ -878,10 +864,7 @@ function menuRecipe(size: ButtonSize, palette: ThemePalette): MenuRecipe {
   };
 }
 
-function checkboxRecipe(
-  size: ButtonSize,
-  palette: ThemePalette,
-): CheckboxRecipe {
+function checkboxRecipe(size: ButtonSize, palette: ThemePalette): CheckboxRecipe {
   const metrics = {
     small: { height: 28, controlSize: 16, gap: 7, fontSize: 12, markSize: 12 },
     medium: { height: 32, controlSize: 18, gap: 8, fontSize: 13, markSize: 14 },
@@ -1049,10 +1032,7 @@ function sliderRecipe(size: ButtonSize, palette: ThemePalette): SliderRecipe {
   };
 }
 
-function progressBarRecipe(
-  size: ButtonSize,
-  palette: ThemePalette,
-): ProgressBarRecipe {
+function progressBarRecipe(size: ButtonSize, palette: ThemePalette): ProgressBarRecipe {
   const height = { small: 4, medium: 8, large: 12 }[size];
   return {
     track: {
@@ -1066,10 +1046,7 @@ function progressBarRecipe(
   };
 }
 
-function scrollAreaRecipe(
-  size: ButtonSize,
-  palette: ThemePalette,
-): ScrollAreaRecipe {
+function scrollAreaRecipe(size: ButtonSize, palette: ThemePalette): ScrollAreaRecipe {
   const metrics = {
     small: {
       scrollbarWidth: 5,
@@ -1210,10 +1187,7 @@ function dndRecipe(palette: ThemePalette): DndRecipe {
   };
 }
 
-function pathBarRecipe(
-  size: ButtonSize,
-  palette: ThemePalette,
-): PathBarRecipe {
+function pathBarRecipe(size: ButtonSize, palette: ThemePalette): PathBarRecipe {
   const metrics = {
     small: {
       height: 28,
@@ -1424,13 +1398,9 @@ export type WidgetThemeProviderProps = {
   children?: ReactNode;
 };
 
-export function WidgetThemeProvider(
-  props: WidgetThemeProviderProps,
-): ReactNode {
+export function WidgetThemeProvider(props: WidgetThemeProviderProps): ReactNode {
   return (
-    <WidgetThemeContext.Provider value={props.theme}>
-      {props.children}
-    </WidgetThemeContext.Provider>
+    <WidgetThemeContext.Provider value={props.theme}>{props.children}</WidgetThemeContext.Provider>
   );
 }
 

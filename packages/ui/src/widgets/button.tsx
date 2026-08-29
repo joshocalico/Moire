@@ -1,23 +1,18 @@
 /** Recipe-driven Button with replaceable leading and trailing artwork slots. */
 import React, { useId, useState, type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  type HitKeyEvent,
-  type HitPointerEvent,
-} from "@moire/react-host";
+import { Group, Rect, type HitKeyEvent, type HitPointerEvent } from "@moire/react-host";
 import {
   resolveStatefulStyle,
   useWidgetTheme,
   type ButtonSize,
   type ButtonVariant,
   type WidgetIconStyle,
-} from "../widget-theme.js";
-import { Pressable } from "./pressable.js";
-import { Box, Horizontal, Inset, registerIntrinsicSize } from "./layout.js";
-import { TextBlock } from "./primitives.js";
+} from "#ui/widget-theme";
+import { Pressable } from "./pressable";
+import { Box, Horizontal, Inset, registerIntrinsicSize } from "./layout";
+import { TextBlock } from "./primitives";
 
-export type { ButtonSize, ButtonVariant } from "../widget-theme.js";
+export type { ButtonSize, ButtonVariant } from "#ui/widget-theme";
 
 export type ButtonSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
@@ -63,10 +58,7 @@ export function Button(props: ButtonProps): ReactNode {
   const hoveredRoot = resolveStatefulStyle(recipe.root, "hover");
   const pressedRoot = resolveStatefulStyle(recipe.root, "pressed");
   const disabledRoot = resolveStatefulStyle(recipe.root, "disabled");
-  const label = resolveStatefulStyle(
-    recipe.label,
-    props.disabled ? "disabled" : "rest",
-  );
+  const label = resolveStatefulStyle(recipe.label, props.disabled ? "disabled" : "rest");
   const leadingIcon = resolveStatefulStyle(
     recipe.leadingIcon,
     props.disabled ? "disabled" : "rest",
@@ -83,12 +75,8 @@ export function Button(props: ButtonProps): ReactNode {
   const baseFill = props.fill ?? root.fill;
   const labelColor = props.disabled
     ? label.color
-    : props.color ?? (explicitFill ? 0xffffffff : label.color);
-  const stroke = explicitFill
-    ? undefined
-    : props.disabled
-      ? disabledRoot.stroke
-      : root.stroke;
+    : (props.color ?? (explicitFill ? 0xffffffff : label.color));
+  const stroke = explicitFill ? undefined : props.disabled ? disabledRoot.stroke : root.stroke;
   const strokeWidth = explicitFill
     ? undefined
     : props.disabled
@@ -97,30 +85,24 @@ export function Button(props: ButtonProps): ReactNode {
   const radius = props.disabled ? disabledRoot.radius : root.radius;
   const handleKey = (event: HitKeyEvent) => {
     if (event.repeat || props.disabled) return;
-    if (
-      event.code === 28 ||
-      event.code === 57 ||
-      event.key === "Enter" ||
-      event.key === " "
-    ) {
+    if (event.code === 28 || event.code === 57 || event.key === "Enter" || event.key === " ") {
       const bounds = event.targetBounds;
-      props.onPress?.(bounds ? {
-        x: bounds.x + bounds.width / 2,
-        y: bounds.y + bounds.height / 2,
-        localX: bounds.width / 2,
-        localY: bounds.height / 2,
-        button: "left",
-      } : undefined);
+      props.onPress?.(
+        bounds
+          ? {
+              x: bounds.x + bounds.width / 2,
+              y: bounds.y + bounds.height / 2,
+              localX: bounds.width / 2,
+              localY: bounds.height / 2,
+              button: "left",
+            }
+          : undefined,
+      );
     }
   };
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={height}>
       <Pressable
         x={0}
         y={0}
@@ -182,5 +164,7 @@ export function Button(props: ButtonProps): ReactNode {
 
 registerIntrinsicSize(Button, (props, theme) => ({
   width: props.width,
-  height: props.height ?? theme.recipes.button[props.variant ?? "secondary"][props.size ?? "medium"].metrics.height,
+  height:
+    props.height ??
+    theme.recipes.button[props.variant ?? "secondary"][props.size ?? "medium"].metrics.height,
 }));

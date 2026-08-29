@@ -1,20 +1,8 @@
 import React, { useId, useRef, useState, type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  type HitKeyEvent,
-  type HitPointerEvent,
-} from "@moire/react-host";
-import {
-  resolveStatefulStyle,
-  useWidgetTheme,
-} from "../widget-theme.js";
-import { FocusRing } from "./primitives.js";
-import {
-  DndFeedback,
-  useDragSource,
-  type DragSourceOptions,
-} from "./dnd.js";
+import { Group, Rect, type HitKeyEvent, type HitPointerEvent } from "@moire/react-host";
+import { resolveStatefulStyle, useWidgetTheme } from "#ui/widget-theme";
+import { FocusRing } from "./primitives";
+import { DndFeedback, useDragSource, type DragSourceOptions } from "./dnd";
 
 export type ContextMenuTriggerProps = {
   x?: number;
@@ -32,12 +20,7 @@ export type ContextMenuTriggerProps = {
  */
 export function ContextMenuTrigger(props: ContextMenuTriggerProps): ReactNode {
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       <Rect
         x={0}
         y={0}
@@ -115,18 +98,10 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
   };
 
   const showOutline = props.focused ?? internallyFocused;
-  const outline = resolveStatefulStyle(
-    theme.recipes.collectionItem.outline,
-    "focused",
-  );
+  const outline = resolveStatefulStyle(theme.recipes.collectionItem.outline, "focused");
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       {props.children}
       <Rect
         x={0}
@@ -142,24 +117,14 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
           props.onFocusChange?.(next);
         }}
         onKeyDown={handleKey}
-        onPointerDown={
-          props.disabled || !props.dragSource ? undefined : drag.onPointerDown
-        }
-        onPointerMove={
-          props.disabled || !props.dragSource ? undefined : drag.onPointerMove
-        }
-        onPointerUp={
-          props.disabled || !props.dragSource ? undefined : drag.onPointerUp
-        }
-        onPointerLeave={
-          props.disabled || !props.dragSource ? undefined : drag.onPointerLeave
-        }
+        onPointerDown={props.disabled || !props.dragSource ? undefined : drag.onPointerDown}
+        onPointerMove={props.disabled || !props.dragSource ? undefined : drag.onPointerMove}
+        onPointerUp={props.disabled || !props.dragSource ? undefined : drag.onPointerUp}
+        onPointerLeave={props.disabled || !props.dragSource ? undefined : drag.onPointerLeave}
         onPress={props.disabled ? undefined : activate}
         onContextMenu={props.disabled ? undefined : props.onContextMenu}
         data={props.dropData}
-        onDropHoverChange={
-          props.dropData === undefined ? undefined : setDropHover
-        }
+        onDropHoverChange={props.dropData === undefined ? undefined : setDropHover}
       />
       {showOutline ? (
         <FocusRing
@@ -170,18 +135,10 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
         />
       ) : null}
       {drag.dragging ? (
-        <DndFeedback
-          width={props.width}
-          height={props.height}
-          kind="dragging"
-        />
+        <DndFeedback width={props.width} height={props.height} kind="dragging" />
       ) : null}
       {dropHover ? (
-        <DndFeedback
-          width={props.width}
-          height={props.height}
-          kind="drop-target"
-        />
+        <DndFeedback width={props.width} height={props.height} kind="drop-target" />
       ) : null}
     </Group>
   );

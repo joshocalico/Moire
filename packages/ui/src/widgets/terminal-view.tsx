@@ -1,16 +1,7 @@
 import React, { useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  measureTextBounds,
-  type HitKeyEvent,
-} from "@moire/react-host";
-import {
-  RichTextView,
-  type RichTextLine,
-  type RichTextRun,
-} from "./rich-text.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { Group, Rect, measureTextBounds, type HitKeyEvent } from "@moire/react-host";
+import { RichTextView, type RichTextLine, type RichTextRun } from "./rich-text";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type TerminalCursor = {
   line: number;
@@ -51,10 +42,7 @@ export function measureTerminalGrid(
   const fontSize = options.fontSize ?? 13;
   const padding = options.padding ?? 10;
   const lineHeight = options.lineHeight ?? Math.ceil(fontSize * 1.55);
-  const cellWidth = Math.max(
-    1,
-    measureTextBounds("M", { fontSize, fontFamily: "mono" }).width,
-  );
+  const cellWidth = Math.max(1, measureTextBounds("M", { fontSize, fontFamily: "mono" }).width);
   return {
     columns: Math.max(2, Math.floor((width - padding * 2) / cellWidth)),
     rows: Math.max(1, Math.floor((height - padding * 2) / lineHeight)),
@@ -134,13 +122,7 @@ export function TerminalView(props: TerminalViewProps): ReactNode {
   }, [blinkOn, focused, pal.bg, pal.text, props.cursor, props.lines]);
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-      clip
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height} clip>
       <RichTextView
         width={props.width}
         height={props.height}

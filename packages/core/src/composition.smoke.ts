@@ -3,11 +3,8 @@ import {
   orderedCompositionLayers,
   validateCompositionScene,
   type CompositionScene,
-} from "./composition.js";
-import {
-  resolveEglPresentPreference,
-  resolveOutputRenderPreference,
-} from "./output-renderer.js";
+} from "./composition";
+import { resolveEglPresentPreference, resolveOutputRenderPreference } from "./output-renderer";
 
 const pixel = new Uint8Array([0, 0, 0, 255]);
 const source = { pixels: pixel, width: 1, height: 1, stride: 4 };
@@ -23,12 +20,7 @@ const scene: CompositionScene = {
       destination: { x: 10, y: 10, width: 60, height: 40 },
       cornerRadius: [12, 12, 6, 6],
       transform: {
-        matrix: [
-          1, 0, 0, 0,
-          0, 1, 0, 0,
-          0, 0, 1, 0,
-          4, 2, 0, 1,
-        ],
+        matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 4, 2, 0, 1],
       },
       effects: [
         { kind: "backdrop-blur", radius: 18, saturation: 1.15 },
@@ -71,10 +63,7 @@ assert.equal(resolveEglPresentPreference(undefined), "auto");
 assert.equal(resolveEglPresentPreference("AUTO"), "auto");
 assert.equal(resolveEglPresentPreference("DIRECT"), "direct");
 assert.equal(resolveEglPresentPreference("READBACK"), "readback");
-assert.throws(
-  () => resolveEglPresentPreference("pageflip"),
-  /Invalid MOIRE_EGL_PRESENT/,
-);
+assert.throws(() => resolveEglPresentPreference("pageflip"), /Invalid MOIRE_EGL_PRESENT/);
 assert.throws(
   () => validateCompositionScene({ ...scene, layers: [...scene.layers, scene.layers[0]!] }),
   /duplicated/,

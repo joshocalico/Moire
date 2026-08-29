@@ -4,7 +4,7 @@
  * Widgets / fonts / layout never import Wayland. Window I/O goes through
  * PlatformBackend (wayland | headless; cocoa/win32 later).
  */
-export { Application, type ApplicationOpts } from "./application.js";
+export { Application, type ApplicationOpts } from "./application";
 export {
   Window,
   hitTestDropData,
@@ -15,7 +15,7 @@ export {
   type WindowPerformanceSnapshot,
   type PopupOptions,
   type PopupHandle,
-} from "./window.js";
+} from "./window";
 export {
   createPlatformBackend,
   resolvePlatformKind,
@@ -36,7 +36,7 @@ export {
   type DndCapable,
   keyFromEvdev,
   modifiersFromPressed,
-} from "./platform.js";
+} from "./platform";
 export {
   installUiFonts,
   installUiFontsIfReady,
@@ -47,16 +47,16 @@ export {
   type FontFamily,
   type FontWeight,
   type TextStyle,
-} from "./font/index.js";
-export { layoutFlex, type FlexChildSpec, type FlexContainerOpts } from "./layout/index.js";
-export { themePalette, getTheme, loadTheme, hexToArgb } from "./theme.js";
-export type { MoireTheme, ThemePalette, MoireTokens } from "./theme.js";
+} from "./font/index";
+export { layoutFlex, type FlexChildSpec, type FlexContainerOpts } from "./layout/index";
+export { themePalette, getTheme, loadTheme, hexToArgb } from "./theme";
+export type { MoireTheme, ThemePalette, MoireTokens } from "./theme";
 export {
   createSelectionState,
   reconcileSelection,
   reduceSelection,
   useSelectionModel,
-} from "./selection.js";
+} from "./selection";
 export type {
   SelectionState,
   SelectionGesture,
@@ -64,7 +64,7 @@ export type {
   SelectionOptions,
   SelectionAction,
   SelectionModel,
-} from "./selection.js";
+} from "./selection";
 export type { HitKeyEvent, HitPointerEvent } from "@moire/react-host";
 
 // Motion system
@@ -96,10 +96,10 @@ export {
   type TweenOptions,
   type TweenEasing,
   type TweenProps,
-} from "./motion.js";
+} from "./motion";
 
 // Image loading
-export { loadImage, getCachedImage, clearImageCache, type ImageData } from "./image/load.js";
+export { loadImage, getCachedImage, clearImageCache, type ImageData } from "./image/load";
 
 // Theme design tokens (re-exported for widget consumers)
 export { TYPE_ROLES, SPACE } from "@moire/theme";
@@ -208,7 +208,7 @@ export {
   RadialChart,
   HeatmapChart,
   ChartLegend,
-} from "./widgets/index.js";
+} from "./widgets/index";
 export type {
   BoxProps,
   LayoutMetrics,
@@ -373,4 +373,4 @@ export type {
   RadialChartProps,
   HeatmapCell,
   HeatmapChartProps,
-} from "./widgets/index.js";
+} from "./widgets/index";

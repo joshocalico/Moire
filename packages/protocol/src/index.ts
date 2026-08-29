@@ -24,11 +24,7 @@ export function decodeHeader(buf: Buffer, offset = 0): WaylandHeader {
   return { objectId, opcode, size };
 }
 
-export function encodeHeader(
-  objectId: number,
-  opcode: number,
-  size: number,
-): Buffer {
+export function encodeHeader(objectId: number, opcode: number, size: number): Buffer {
   const buf = Buffer.alloc(WL_HEADER_SIZE);
   buf.writeUInt32LE(objectId, 0);
   buf.writeUInt32LE(((size & 0xffff) << 16) | (opcode & 0xffff), 4);
@@ -106,15 +102,7 @@ export class MessageBuilder {
   }
 }
 
-export type ArgType =
-  | "int"
-  | "uint"
-  | "fixed"
-  | "object"
-  | "new_id"
-  | "string"
-  | "array"
-  | "fd";
+export type ArgType = "int" | "uint" | "fixed" | "object" | "new_id" | "string" | "array" | "fd";
 
 export class MessageReader {
   private offset: number;

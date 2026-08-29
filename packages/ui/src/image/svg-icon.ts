@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { ImageData } from "./load.js";
+import type { ImageData } from "./load";
 
 type Attributes = Record<string, string>;
 
@@ -51,7 +51,11 @@ function paint(attrs: Attributes, root: Attributes): Paint {
 }
 
 function parsePoints(source: string): Array<{ x: number; y: number }> {
-  const values = source.trim().split(/[\s,]+/).map(Number).filter(Number.isFinite);
+  const values = source
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number)
+    .filter(Number.isFinite);
   const points: Array<{ x: number; y: number }> = [];
   for (let index = 0; index + 1 < values.length; index += 2) {
     points.push({ x: values[index]!, y: values[index + 1]! });
@@ -121,13 +125,22 @@ function parseSvg(filePath: string): SvgArtwork {
   return artwork;
 }
 
-function insideRoundedRect(x: number, y: number, shape: Extract<VectorShape, { kind: "rect" }>, inset = 0): boolean {
+function insideRoundedRect(
+  x: number,
+  y: number,
+  shape: Extract<VectorShape, { kind: "rect" }>,
+  inset = 0,
+): boolean {
   const left = shape.x + inset;
   const top = shape.y + inset;
   const right = shape.x + shape.width - inset;
   const bottom = shape.y + shape.height - inset;
-  if (x < left || y < top || x > right || y > bottom || right <= left || bottom <= top) return false;
-  const radius = Math.max(0, Math.min(shape.radius - inset, (right - left) / 2, (bottom - top) / 2));
+  if (x < left || y < top || x > right || y > bottom || right <= left || bottom <= top)
+    return false;
+  const radius = Math.max(
+    0,
+    Math.min(shape.radius - inset, (right - left) / 2, (bottom - top) / 2),
+  );
   if (radius === 0) return true;
   const cx = x < left + radius ? left + radius : x > right - radius ? right - radius : x;
   const cy = y < top + radius ? top + radius : y > bottom - radius ? bottom - radius : y;
@@ -136,11 +149,19 @@ function insideRoundedRect(x: number, y: number, shape: Extract<VectorShape, { k
   return dx * dx + dy * dy <= radius * radius;
 }
 
-function distanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+function distanceToSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
   const dx = bx - ax;
   const dy = by - ay;
   const lengthSq = dx * dx + dy * dy;
-  const t = lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
+  const t =
+    lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
   return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
 }
 
@@ -149,7 +170,7 @@ function insidePolygon(x: number, y: number, points: Array<{ x: number; y: numbe
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
     const a = points[i]!;
     const b = points[j]!;
-    if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+    if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
   }
   return inside;
 }
@@ -204,7 +225,7 @@ export function loadSvgIconSync(filePath: string, size: number, color: number): 
       rgba[offset] = red;
       rgba[offset + 1] = green;
       rgba[offset + 2] = blue;
-      rgba[offset + 3] = Math.round(baseAlpha * covered / totalSamples);
+      rgba[offset + 3] = Math.round((baseAlpha * covered) / totalSamples);
     }
   }
   const result = { rgba, width: pixelSize, height: pixelSize };

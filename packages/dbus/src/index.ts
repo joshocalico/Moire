@@ -6,9 +6,9 @@ import {
   splitSignature,
   type DbusMessage,
   type DbusVariant,
-} from "./codec.js";
+} from "./codec";
 
-export type { DbusMessage, DbusVariant } from "./codec.js";
+export type { DbusMessage, DbusVariant } from "./codec";
 
 export type DbusMethodResult = {
   body?: unknown[];
@@ -22,9 +22,7 @@ export type DbusMethodContext = {
 export type DbusMethod = {
   inSignature: string;
   outSignature: string;
-  handler: (
-    context: DbusMethodContext,
-  ) => DbusMethodResult | Promise<DbusMethodResult>;
+  handler: (context: DbusMethodContext) => DbusMethodResult | Promise<DbusMethodResult>;
 };
 
 export type DbusInterface = {
@@ -46,10 +44,7 @@ function busSocketPath(address: string): string {
         .split(",")
         .map((part) => {
           const equals = part.indexOf("=");
-          return [
-            part.slice(0, equals),
-            decodeURIComponent(part.slice(equals + 1)),
-          ] as const;
+          return [part.slice(0, equals), decodeURIComponent(part.slice(equals + 1))] as const;
         }),
     );
     const path = values.get("path");
@@ -114,10 +109,7 @@ function xmlEscape(value: string): string {
 
 function signatureArgs(signature: string, direction: "in" | "out"): string {
   return splitSignature(signature)
-    .map(
-      (type) =>
-        `<arg type="${xmlEscape(type)}" direction="${direction}"/>`,
-    )
+    .map((type) => `<arg type="${xmlEscape(type)}" direction="${direction}"/>`)
     .join("");
 }
 
@@ -133,9 +125,7 @@ export class SessionBus {
     socket.on("close", () => this.failPending(new Error("D-Bus disconnected")));
   }
 
-  static async connect(
-    address = process.env.DBUS_SESSION_BUS_ADDRESS,
-  ): Promise<SessionBus> {
+  static async connect(address = process.env.DBUS_SESSION_BUS_ADDRESS): Promise<SessionBus> {
     if (!address) throw new Error("DBUS_SESSION_BUS_ADDRESS is not set");
     const socket = net.createConnection({ path: busSocketPath(address) });
     await new Promise<void>((resolve, reject) => {
@@ -205,9 +195,7 @@ export class SessionBus {
     signature?: string;
     body?: unknown[];
   }): void {
-    this.socket.write(
-      encodeMessage({ type: 4, serial: this.nextSerial(), ...input }),
-    );
+    this.socket.write(encodeMessage({ type: 4, serial: this.nextSerial(), ...input }));
   }
 
   close(): void {
@@ -234,9 +222,7 @@ export class SessionBus {
         this.pending.delete(message.replySerial ?? 0);
         if (message.type === 3) {
           pending.reject(
-            new Error(
-              `${message.errorName ?? "D-Bus error"}: ${String(message.body?.[0] ?? "")}`,
-            ),
+            new Error(`${message.errorName ?? "D-Bus error"}: ${String(message.body?.[0] ?? "")}`),
           );
         } else pending.resolve(message);
       } else if (message.type === 1) {
@@ -257,9 +243,7 @@ export class SessionBus {
       this.reply(message, "s", [this.introspectionXml(message.path ?? "/")]);
       return;
     }
-    const descriptor = this.objects
-      .get(message.path ?? "")
-      ?.get(message.interface ?? "");
+    const descriptor = this.objects.get(message.path ?? "")?.get(message.interface ?? "");
     const method = descriptor?.methods[message.member ?? ""];
     if (!method) {
       this.error(

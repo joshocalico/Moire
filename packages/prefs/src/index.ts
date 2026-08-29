@@ -3,8 +3,8 @@
  */
 import fs from "node:fs";
 import { loadTheme, setTheme, type MoireTheme } from "@moire/theme";
-import { activeThemePath, loadSettings, settingsPath } from "./store.js";
-import { bundledThemePath } from "./apply.js";
+import { activeThemePath, loadSettings, settingsPath } from "./store";
+import { bundledThemePath } from "./apply";
 
 export type PrefsWatcher = {
   /** Poll for changes (call from compositor frame / shell timer). */
@@ -34,9 +34,7 @@ export function loadRuntimeTheme(): MoireTheme {
   return theme;
 }
 
-export function createPrefsWatcher(
-  onChange?: (theme: MoireTheme) => void,
-): PrefsWatcher {
+export function createPrefsWatcher(onChange?: (theme: MoireTheme) => void): PrefsWatcher {
   let lastSettingsMtime = 0;
   let lastThemeMtime = 0;
   let lastSig = "";
@@ -83,9 +81,7 @@ export function createPrefsWatcher(
         current = next;
         debounceUntil = now + 200;
         onChange?.(current);
-        console.log(
-          `[prefs] reloaded theme=${current.name} scale=${settings.uiScale}`,
-        );
+        console.log(`[prefs] reloaded theme=${current.name} scale=${settings.uiScale}`);
         return true;
       } catch (err) {
         console.warn("[prefs] reload failed:", err);
@@ -108,7 +104,7 @@ export {
   type MoireSettings,
   type WallpaperSettings,
   type DisplayOutputSettings,
-} from "./store.js";
+} from "./store";
 export {
   applySettings,
   applyVolume,
@@ -118,4 +114,4 @@ export {
   applyGtkAppearance,
   bundledThemePath,
   type ApplyResult,
-} from "./apply.js";
+} from "./apply";

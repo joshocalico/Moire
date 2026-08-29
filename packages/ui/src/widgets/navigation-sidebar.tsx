@@ -1,13 +1,22 @@
 import React, { type ReactNode } from "react";
 import { Group, Rect } from "@moire/react-host";
-import { CollectionItem } from "./interaction.js";
-import { Icon, type IconName } from "./icon.js";
-import { IconButton } from "./icon-button.js";
-import { ListItem } from "./list.js";
-import { Separator, Surface, TextBlock } from "./primitives.js";
-import { ScrollArea } from "./scroll.js";
-import { Align, Box, Horizontal, Inset, Measure, Stack, Vertical, registerIntrinsicSize } from "./layout.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { CollectionItem } from "./interaction";
+import { Icon, type IconName } from "./icon";
+import { IconButton } from "./icon-button";
+import { ListItem } from "./list";
+import { Separator, Surface, TextBlock } from "./primitives";
+import { ScrollArea } from "./scroll";
+import {
+  Align,
+  Box,
+  Horizontal,
+  Inset,
+  Measure,
+  Stack,
+  Vertical,
+  registerIntrinsicSize,
+} from "./layout";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type NavigationSidebarItem = {
   id: string;
@@ -75,26 +84,28 @@ function SidebarRow(props: SidebarRowProps): ReactNode {
           selected={props.selected}
           disabled={props.item.disabled}
           interactive={false}
-          leading={props.item.icon ? (
-            <Group width={26} height={26}>
-              <Rect
-                width={26}
-                height={26}
-                fill={props.selected
-                  ? ((pal.accent & 0x00ffffff) | 0x22000000) >>> 0
-                  : 0x00000000}
-                radius={7}
-              />
-              <Icon
-                x={4}
-                y={4}
-                name={props.item.icon}
-                size={18}
-                symbolic
-                color={props.item.disabled ? pal.muted : props.selected ? pal.accent : pal.text}
-              />
-            </Group>
-          ) : undefined}
+          leading={
+            props.item.icon ? (
+              <Group width={26} height={26}>
+                <Rect
+                  width={26}
+                  height={26}
+                  fill={
+                    props.selected ? ((pal.accent & 0x00ffffff) | 0x22000000) >>> 0 : 0x00000000
+                  }
+                  radius={7}
+                />
+                <Icon
+                  x={4}
+                  y={4}
+                  name={props.item.icon}
+                  size={18}
+                  symbolic
+                  color={props.item.disabled ? pal.muted : props.selected ? pal.accent : pal.text}
+                />
+              </Group>
+            ) : undefined
+          }
         />
       </CollectionItem>
       {props.editing ? (
@@ -124,7 +135,9 @@ function SidebarRow(props: SidebarRowProps): ReactNode {
                 variant="ghost"
                 onPress={() => props.onRemove?.(props.item)}
               />
-            ) : <Box width={24} height={24} />}
+            ) : (
+              <Box width={24} height={24} />
+            )}
           </Horizontal>
         </Align>
       ) : null}
@@ -146,77 +159,70 @@ export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {
   const footerHeight = props.footer ? 44 : 0;
   const contentHeight = props.sections.reduce<number>(
     (height, section) =>
-      height +
-      (section.label ? HEADER_H : 0) +
-      section.items.length * ROW_H +
-      SECTION_GAP,
+      height + (section.label ? HEADER_H : 0) + section.items.length * ROW_H + SECTION_GAP,
     pad,
   );
 
   return (
-    <Surface
-      x={props.x}
-      y={props.y}
-      width={props.width}
-      height={props.height}
-      fill={pal.panel}
-    >
+    <Surface x={props.x} y={props.y} width={props.width} height={props.height} fill={pal.panel}>
       <Vertical width={props.width} height={props.height} gap={0}>
         {props.header ? (
           <Inset height={headerHeight} padding={{ top: 4, horizontal: pad }}>
             {props.header}
           </Inset>
         ) : null}
-        <Measure flexGrow={1} minHeight={1}>{({ width, height }) => (
-          <ScrollArea
-            width={width}
-            height={height}
-            contentHeight={Math.max(height, contentHeight)}
-          >
-            <Vertical
+        <Measure flexGrow={1} minHeight={1}>
+          {({ width, height }) => (
+            <ScrollArea
               width={width}
-              height={Math.max(height, contentHeight)}
-              padding={{ top: pad, right: pad / 2, bottom: SECTION_GAP, left: pad / 2 }}
-              gap={SECTION_GAP}
+              height={height}
+              contentHeight={Math.max(height, contentHeight)}
             >
-              {props.sections.map((section) => (
-                <Vertical
-                  key={section.id}
-                  height={(section.label ? HEADER_H : 0) + section.items.length * ROW_H}
-                  gap={0}
-                >
-                  {section.label ? (
-                    <Inset height={HEADER_H} padding={{ horizontal: pad / 2 }}>
-                      <TextBlock
-                        text={section.label.toUpperCase()}
-                        color={pal.accent}
-                        fontSize={10}
-                        fontWeight="medium"
-                        verticalAlign="center"
-                        overflow="ellipsis"
-                        maxLines={1}
+              <Vertical
+                width={width}
+                height={Math.max(height, contentHeight)}
+                padding={{ top: pad, right: pad / 2, bottom: SECTION_GAP, left: pad / 2 }}
+                gap={SECTION_GAP}
+              >
+                {props.sections.map((section) => (
+                  <Vertical
+                    key={section.id}
+                    height={(section.label ? HEADER_H : 0) + section.items.length * ROW_H}
+                    gap={0}
+                  >
+                    {section.label ? (
+                      <Inset height={HEADER_H} padding={{ horizontal: pad / 2 }}>
+                        <TextBlock
+                          text={section.label.toUpperCase()}
+                          color={pal.accent}
+                          fontSize={10}
+                          fontWeight="medium"
+                          verticalAlign="center"
+                          overflow="ellipsis"
+                          maxLines={1}
+                        />
+                      </Inset>
+                    ) : null}
+                    {section.items.map((item, index) => (
+                      <SidebarRow
+                        key={item.id}
+                        item={item}
+                        index={index}
+                        itemCount={section.items.length}
+                        width={width - pad}
+                        editing={Boolean(props.editing)}
+                        selected={props.selectedId === item.id}
+                        onSelect={props.onSelect}
+                        onRemove={props.onRemove}
+                        onMove={props.onMove}
                       />
-                    </Inset>
-                  ) : null}
-                  {section.items.map((item, index) => (
-                    <SidebarRow
-                      key={item.id}
-                      item={item}
-                      index={index}
-                      itemCount={section.items.length}
-                      width={width - pad}
-                      editing={Boolean(props.editing)}
-                      selected={props.selectedId === item.id}
-                      onSelect={props.onSelect}
-                      onRemove={props.onRemove}
-                      onMove={props.onMove}
-                    />
-                  ))}
-                </Vertical>
-              ))}
-            </Vertical>
-          </ScrollArea>
-        )}</Measure>
+                    ))}
+                  </Vertical>
+                ))}
+              </Vertical>
+            </ScrollArea>
+          )}
+        </Measure>
         {props.footer ? (
           <Inset height={footerHeight} padding={{ horizontal: pad }}>
             <Vertical gap={7}>

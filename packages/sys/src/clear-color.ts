@@ -1,4 +1,4 @@
-import { isLinux, runClearColorLoop } from "./index.js";
+import { isLinux, runClearColorLoop } from "./index";
 
 async function main() {
   if (!isLinux()) {

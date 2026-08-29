@@ -1,11 +1,11 @@
 import React, { type ReactNode } from "react";
 import { Group, Rect } from "@moire/react-host";
-import { Button } from "./button.js";
-import { Icon } from "./icon.js";
-import { IconButton } from "./icon-button.js";
-import { TextBlock } from "./primitives.js";
-import { Horizontal } from "./layout.js";
-import { useWidgetTheme, type ButtonSize } from "../widget-theme.js";
+import { Button } from "./button";
+import { Icon } from "./icon";
+import { IconButton } from "./icon-button";
+import { TextBlock } from "./primitives";
+import { Horizontal } from "./layout";
+import { useWidgetTheme, type ButtonSize } from "#ui/widget-theme";
 
 export type PaginationProps = {
   x?: number;
@@ -44,21 +44,29 @@ export function Pagination(props: PaginationProps): ReactNode {
   const page = count === 0 ? 0 : Math.max(1, Math.min(count, Math.floor(props.page)));
   const siblings = Math.max(0, Math.min(3, Math.floor(props.siblingCount ?? 1)));
   const size = props.size ?? "medium";
-  const metrics = size === "small"
-    ? { height: 28, button: 28, gap: 4, fontSize: 11 }
-    : size === "large"
-      ? { height: 40, button: 40, gap: 7, fontSize: 14 }
-      : { height: 34, button: 34, gap: 5, fontSize: 12 };
+  const metrics =
+    size === "small"
+      ? { height: 28, button: 28, gap: 4, fontSize: 11 }
+      : size === "large"
+        ? { height: 40, button: 40, gap: 7, fontSize: 14 }
+        : { height: 34, button: 34, gap: 5, fontSize: 12 };
   const tokens = pageTokens(page, count, siblings);
   const edgeButtons = props.showFirstLast ? 4 : 2;
-  const intrinsicWidth = (tokens.length + edgeButtons) * metrics.button +
+  const intrinsicWidth =
+    (tokens.length + edgeButtons) * metrics.button +
     Math.max(0, tokens.length + edgeButtons - 1) * metrics.gap;
   const width = Math.max(props.width ?? 0, intrinsicWidth);
   const commit = (next: number) => {
     if (props.disabled || count === 0) return;
     props.onPageChange?.(Math.max(1, Math.min(count, next)));
   };
-  const iconButton = (key: string, icon: "chevron-left" | "chevron-right", target: number, disabled: boolean, edge = false) => {
+  const iconButton = (
+    key: string,
+    icon: "chevron-left" | "chevron-right",
+    target: number,
+    disabled: boolean,
+    edge = false,
+  ) => {
     const left = icon === "chevron-left";
     const node = (
       <IconButton
@@ -67,12 +75,16 @@ export function Pagination(props: PaginationProps): ReactNode {
         height={metrics.height}
         size={size}
         variant="ghost"
-        icon={edge ? (
-          <Group width={14} height={14}>
-            <Rect x={left ? 0 : 12} y={2} width={2} height={10} fill={pal.text} radius={1} />
-            <Icon x={left ? 3 : 0} y={1} name={icon} size={12} symbolic />
-          </Group>
-        ) : <Icon name={icon} size={14} symbolic />}
+        icon={
+          edge ? (
+            <Group width={14} height={14}>
+              <Rect x={left ? 0 : 12} y={2} width={2} height={10} fill={pal.text} radius={1} />
+              <Icon x={left ? 3 : 0} y={1} name={icon} size={12} symbolic />
+            </Group>
+          ) : (
+            <Icon name={icon} size={14} symbolic />
+          )
+        }
         disabled={props.disabled || disabled}
         onPress={() => commit(target)}
       />
@@ -113,10 +125,18 @@ export function Pagination(props: PaginationProps): ReactNode {
     }
   }
   children.push(iconButton("next", "chevron-right", page + 1, page >= count));
-  if (props.showFirstLast) children.push(iconButton("last", "chevron-right", count, page >= count, true));
+  if (props.showFirstLast)
+    children.push(iconButton("last", "chevron-right", count, page >= count, true));
 
   return (
-    <Horizontal x={props.x ?? 0} y={props.y ?? 0} width={width} height={metrics.height} gap={metrics.gap} align="center">
+    <Horizontal
+      x={props.x ?? 0}
+      y={props.y ?? 0}
+      width={width}
+      height={metrics.height}
+      gap={metrics.gap}
+      align="center"
+    >
       {children}
     </Horizontal>
   );

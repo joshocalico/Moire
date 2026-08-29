@@ -1,25 +1,18 @@
 /** Recipe-driven list rows and a scroll-backed generic list collection. */
 import React, { isValidElement, type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  measureTextBounds,
-  type HitPointerEvent,
-} from "@moire/react-host";
+import { Group, Rect, measureTextBounds, type HitPointerEvent } from "@moire/react-host";
 import {
   resolveStatefulStyle,
   useWidgetTheme,
   type ButtonSize,
   type WidgetIconStyle,
-} from "../widget-theme.js";
-import { Pressable } from "./pressable.js";
-import { ScrollArea } from "./scroll.js";
-import { Box, Horizontal, Inset, Vertical, useLayoutMetrics } from "./layout.js";
-import { TextBlock } from "./primitives.js";
+} from "#ui/widget-theme";
+import { Pressable } from "./pressable";
+import { ScrollArea } from "./scroll";
+import { Box, Horizontal, Inset, Vertical, useLayoutMetrics } from "./layout";
+import { TextBlock } from "./primitives";
 
-export type ListItemSlot =
-  | ReactNode
-  | ((style: WidgetIconStyle) => ReactNode);
+export type ListItemSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
 export type ListItemProps = {
   x?: number;
@@ -49,18 +42,9 @@ export function ListItem(props: ListItemProps): ReactNode {
   const interaction = resolveStatefulStyle(recipe.interaction, "rest");
   const hovered = resolveStatefulStyle(recipe.interaction, "hover");
   const pressed = resolveStatefulStyle(recipe.interaction, "pressed");
-  const disabledInteraction = resolveStatefulStyle(
-    recipe.interaction,
-    "disabled",
-  );
-  const title = resolveStatefulStyle(
-    recipe.title,
-    props.disabled ? "disabled" : "rest",
-  );
-  const subtitle = resolveStatefulStyle(
-    recipe.subtitle,
-    props.disabled ? "disabled" : "rest",
-  );
+  const disabledInteraction = resolveStatefulStyle(recipe.interaction, "disabled");
+  const title = resolveStatefulStyle(recipe.title, props.disabled ? "disabled" : "rest");
+  const subtitle = resolveStatefulStyle(recipe.subtitle, props.disabled ? "disabled" : "rest");
   const leadingStyle = resolveStatefulStyle(
     recipe.leadingIcon,
     props.disabled ? "disabled" : "rest",
@@ -77,25 +61,14 @@ export function ListItem(props: ListItemProps): ReactNode {
     ? (props.leading.props as { size?: number; height?: number; width?: number })
     : undefined;
   const leadingSize =
-    elementProps?.size ??
-    elementProps?.height ??
-    elementProps?.width ??
-    leadingStyle.size;
+    elementProps?.size ?? elementProps?.height ?? elementProps?.width ?? leadingStyle.size;
   const textHeight = props.subtitle
     ? titleLineHeight + recipe.metrics.subtitleGap + subtitleLineHeight
     : titleLineHeight;
-  const leading =
-    typeof props.leading === "function"
-      ? props.leading(leadingStyle)
-      : props.leading;
+  const leading = typeof props.leading === "function" ? props.leading(leadingStyle) : props.leading;
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={width}
-      height={height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={height}>
       {props.selected ? (
         <Rect
           x={0}
@@ -193,7 +166,7 @@ export type ListProps<T = unknown> = {
   scrollbar?: boolean;
 };
 
-export function List<T,>(props: ListProps<T>): ReactNode {
+export function List<T>(props: ListProps<T>): ReactNode {
   const itemHeight = props.itemHeight ?? 40;
   const contentHeight = props.items.length * itemHeight;
   return (
@@ -206,13 +179,7 @@ export function List<T,>(props: ListProps<T>): ReactNode {
       scrollbar={props.scrollbar}
     >
       {props.items.map((item, index) => (
-        <Group
-          key={index}
-          x={0}
-          y={index * itemHeight}
-          width={props.width}
-          height={itemHeight}
-        >
+        <Group key={index} x={0} y={index * itemHeight} width={props.width} height={itemHeight}>
           {props.renderItem(item, index, index === props.selectedIndex)}
         </Group>
       ))}

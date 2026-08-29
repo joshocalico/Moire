@@ -33,10 +33,7 @@ function placesFile(): string {
 function xdgUserDirectories(): Map<string, string> {
   const result = new Map<string, string>();
   try {
-    const source = fs.readFileSync(
-      path.join(configHome(), "user-dirs.dirs"),
-      "utf8",
-    );
+    const source = fs.readFileSync(path.join(configHome(), "user-dirs.dirs"), "utf8");
     for (const line of source.split(/\r?\n/)) {
       const match = /^XDG_([A-Z]+)_DIR="(.*)"$/.exec(line.trim());
       if (!match) continue;
@@ -84,18 +81,12 @@ export function loadPlaces(): FilePlace[] {
   const usedPaths = new Set(builtIns.map((place) => place.path));
   const favorites: FilePlace[] = [];
   try {
-    const stored = JSON.parse(
-      fs.readFileSync(placesFile(), "utf8"),
-    ) as Partial<StoredPlaces>;
+    const stored = JSON.parse(fs.readFileSync(placesFile(), "utf8")) as Partial<StoredPlaces>;
     if (stored.version !== 1 || !Array.isArray(stored.favorites)) {
       return builtIns;
     }
     for (const candidate of stored.favorites) {
-      if (
-        !candidate ||
-        typeof candidate.path !== "string" ||
-        typeof candidate.label !== "string"
-      ) {
+      if (!candidate || typeof candidate.path !== "string" || typeof candidate.label !== "string") {
         continue;
       }
       const favoritePath = path.resolve(candidate.path);
@@ -136,10 +127,7 @@ export function savePlaces(places: readonly FilePlace[]): void {
   }
 }
 
-export function addFavorite(
-  places: readonly FilePlace[],
-  favoritePath: string,
-): FilePlace[] {
+export function addFavorite(places: readonly FilePlace[], favoritePath: string): FilePlace[] {
   const resolved = path.resolve(favoritePath);
   if (places.some((place) => place.path === resolved)) return [...places];
   return [
@@ -154,9 +142,7 @@ export function addFavorite(
   ];
 }
 
-export function normalizePlaceLabels(
-  places: readonly FilePlace[],
-): FilePlace[] {
+export function normalizePlaceLabels(places: readonly FilePlace[]): FilePlace[] {
   return places.map((place) => ({
     ...place,
     label: favoriteLabel(place.label, place.path),

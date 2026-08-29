@@ -1,5 +1,5 @@
 import koffi from "koffi";
-import { closeFd, getLibc } from "./libc.js";
+import { closeFd, getLibc } from "./libc";
 
 const ENOENT = 2;
 const EBADF = 9;

@@ -123,7 +123,10 @@ function processTicks(pid: number | null): number | null {
   if (!pid) return null;
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+    const fields = stat
+      .slice(stat.lastIndexOf(")") + 2)
+      .trim()
+      .split(/\s+/);
     return Number(fields[11] ?? 0) + Number(fields[12] ?? 0);
   } catch {
     return null;
@@ -183,9 +186,25 @@ function MetricCard(props: {
     >
       <Inset width={props.width} height={props.height} padding={{ horizontal: 16, vertical: 13 }}>
         <Vertical gap={4} justify="center">
-          <Label text={props.label.toUpperCase()} color={pal.muted} fontSize={9} fontWeight="medium" />
-          <Label text={props.value} color={props.accent ? pal.accent : pal.text} fontSize={22} fontWeight="bold" />
-          <Label text={props.detail} color={pal.muted} fontSize={10} overflow="ellipsis" maxLines={1} />
+          <Label
+            text={props.label.toUpperCase()}
+            color={pal.muted}
+            fontSize={9}
+            fontWeight="medium"
+          />
+          <Label
+            text={props.value}
+            color={props.accent ? pal.accent : pal.text}
+            fontSize={22}
+            fontWeight="bold"
+          />
+          <Label
+            text={props.detail}
+            color={pal.muted}
+            fontSize={10}
+            overflow="ellipsis"
+            maxLines={1}
+          />
         </Vertical>
       </Inset>
     </Surface>
@@ -219,7 +238,15 @@ function StressScene(props: { width: number; height: number; animating: boolean 
     playing: props.animating,
   });
   return (
-    <Surface width={props.width} height={props.height} fill={pal.panel} radius={10} stroke={pal.borderSubtle} strokeWidth={1} clip>
+    <Surface
+      width={props.width}
+      height={props.height}
+      fill={pal.panel}
+      radius={10}
+      stroke={pal.borderSubtle}
+      strokeWidth={1}
+      clip
+    >
       <Grid
         x={12}
         y={12}
@@ -301,12 +328,8 @@ function Overview(props: {
   onModeChange: (mode: UiPresentationMode) => void;
 }): ReactNode {
   const pal = themePalette();
-  const [running, setRunning] = useState(
-    process.env.MOIRE_BENCH_AUTORUN === "1",
-  );
-  const [animating, setAnimating] = useState(
-    process.env.MOIRE_BENCH_ANIMATE !== "0",
-  );
+  const [running, setRunning] = useState(process.env.MOIRE_BENCH_AUTORUN === "1");
+  const [animating, setAnimating] = useState(process.env.MOIRE_BENCH_ANIMATE !== "0");
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const peakRss = useRef(0);
@@ -341,16 +364,15 @@ function Overview(props: {
         submittedFrames,
         compositorFrames,
         presentedFrames,
-        discardedFrames: Math.max(
-          0,
-          endingWindow.discardedFrames - startingWindow.discardedFrames,
-        ),
+        discardedFrames: Math.max(0, endingWindow.discardedFrames - startingWindow.discardedFrames),
         fps: (presentedFrames || compositorFrames) / (elapsed / 1000),
         cpuPercent: ((cpu.user + cpu.system) / 1000 / elapsed) * 100,
         compositorCpuPercent:
           startingCompositorTicks != null && endingCompositorTicks != null
-            ? ((endingCompositorTicks - startingCompositorTicks) / CLOCK_TICKS) /
-              (elapsed / 1_000) * 100
+            ? ((endingCompositorTicks - startingCompositorTicks) /
+                CLOCK_TICKS /
+                (elapsed / 1_000)) *
+              100
             : null,
         averageFrameMs: endingWindow.averageFrameMs,
         peakRssBytes: peakRss.current,
@@ -382,30 +404,91 @@ function Overview(props: {
       <Inset width={props.width} height={contentHeight} padding={{ horizontal: 24, vertical: 20 }}>
         <Vertical gap={14}>
           <Horizontal height={112} gap={12} align="stretch">
-            <Measure flexGrow={1}>{({ width, height }) => (
-              <MetricCard width={width} height={height} label="Presented" value={frameRate(props.metrics.window.presentedFramesPerSecond)} detail={`${props.metrics.window.displayRefreshHz.toFixed(1)} Hz · p95 ${milliseconds(props.metrics.window.presentationFrameMsP95)}`} accent={running} />
-            )}</Measure>
-            <Measure flexGrow={1}>{({ width, height }) => (
-              <MetricCard width={width} height={height} label="Submitted" value={frameRate(props.metrics.window.submittedFramesPerSecond)} detail={`${props.metrics.window.lastTransport ?? "waiting"} · ${props.metrics.window.discardedFrames} discarded`} />
-            )}</Measure>
-            <Measure flexGrow={1}>{({ width, height }) => (
-              <MetricCard width={width} height={height} label="Client CPU" value={`${props.metrics.cpuPercent.toFixed(1)}%`} detail={`compositor ${props.metrics.compositorCpuPercent?.toFixed(1) ?? "—"}% · ${LOGICAL_PROCESSORS} CPUs`} />
-            )}</Measure>
-            <Measure flexGrow={1}>{({ width, height }) => (
-              <MetricCard width={width} height={height} label="Frame work" value={milliseconds(props.metrics.window.averageFrameMs)} detail={`${milliseconds(props.metrics.window.averageRasterMs)} raster`} />
-            )}</Measure>
+            <Measure flexGrow={1}>
+              {({ width, height }) => (
+                <MetricCard
+                  width={width}
+                  height={height}
+                  label="Presented"
+                  value={frameRate(props.metrics.window.presentedFramesPerSecond)}
+                  detail={`${props.metrics.window.displayRefreshHz.toFixed(1)} Hz · p95 ${milliseconds(props.metrics.window.presentationFrameMsP95)}`}
+                  accent={running}
+                />
+              )}
+            </Measure>
+            <Measure flexGrow={1}>
+              {({ width, height }) => (
+                <MetricCard
+                  width={width}
+                  height={height}
+                  label="Submitted"
+                  value={frameRate(props.metrics.window.submittedFramesPerSecond)}
+                  detail={`${props.metrics.window.lastTransport ?? "waiting"} · ${props.metrics.window.discardedFrames} discarded`}
+                />
+              )}
+            </Measure>
+            <Measure flexGrow={1}>
+              {({ width, height }) => (
+                <MetricCard
+                  width={width}
+                  height={height}
+                  label="Client CPU"
+                  value={`${props.metrics.cpuPercent.toFixed(1)}%`}
+                  detail={`compositor ${props.metrics.compositorCpuPercent?.toFixed(1) ?? "—"}% · ${LOGICAL_PROCESSORS} CPUs`}
+                />
+              )}
+            </Measure>
+            <Measure flexGrow={1}>
+              {({ width, height }) => (
+                <MetricCard
+                  width={width}
+                  height={height}
+                  label="Frame work"
+                  value={milliseconds(props.metrics.window.averageFrameMs)}
+                  detail={`${milliseconds(props.metrics.window.averageRasterMs)} raster`}
+                />
+              )}
+            </Measure>
           </Horizontal>
 
-          <Surface height={86} width={contentWidth} fill={pal.surface} radius={10} stroke={pal.borderSubtle} strokeWidth={1}>
+          <Surface
+            height={86}
+            width={contentWidth}
+            fill={pal.surface}
+            radius={10}
+            stroke={pal.borderSubtle}
+            strokeWidth={1}
+          >
             <Inset width={contentWidth} height={86} padding={{ horizontal: 16, vertical: 12 }}>
               <Horizontal gap={14} align="center">
                 <Vertical flexGrow={1} gap={4} justify="center">
                   <Horizontal height={22} gap={8} align="center">
                     <Label text="Current presentation path" fontSize={13} fontWeight="medium" />
-                    <Box width={presentation.length * 7 + 20} height={22}><Badge text={presentation} tone={props.metrics.platform?.accelerated ? "success" : "warning"} /></Box>
+                    <Box width={presentation.length * 7 + 20} height={22}>
+                      <Badge
+                        text={presentation}
+                        tone={props.metrics.platform?.accelerated ? "success" : "warning"}
+                      />
+                    </Box>
                   </Horizontal>
-                  <Label text={props.metrics.platform?.glRenderer ?? props.metrics.platform?.fallbackReason ?? "Waiting for the platform backend"} color={pal.muted} fontSize={10} overflow="ellipsis" maxLines={1} />
-                  <Label text={`Copy ${milliseconds(props.metrics.window.averageCopyMs)} · release ${milliseconds(props.metrics.window.averageBufferReleaseMs)} · damage ${props.metrics.window.averageDamagePercent.toFixed(0)}% · RSS ${bytes(props.metrics.rssBytes)}`} color={pal.muted} fontSize={9} overflow="ellipsis" maxLines={1} />
+                  <Label
+                    text={
+                      props.metrics.platform?.glRenderer ??
+                      props.metrics.platform?.fallbackReason ??
+                      "Waiting for the platform backend"
+                    }
+                    color={pal.muted}
+                    fontSize={10}
+                    overflow="ellipsis"
+                    maxLines={1}
+                  />
+                  <Label
+                    text={`Copy ${milliseconds(props.metrics.window.averageCopyMs)} · release ${milliseconds(props.metrics.window.averageBufferReleaseMs)} · damage ${props.metrics.window.averageDamagePercent.toFixed(0)}% · RSS ${bytes(props.metrics.rssBytes)}`}
+                    color={pal.muted}
+                    fontSize={9}
+                    overflow="ellipsis"
+                    maxLines={1}
+                  />
                 </Vertical>
                 <SegmentedControl
                   width={240}
@@ -442,17 +525,45 @@ function Overview(props: {
           <ProgressBar width={contentWidth} value={progress} />
           <StressScene width={contentWidth} height={260} animating={animating} />
 
-          <Surface width={contentWidth} height={76} fill={pal.surface} radius={10} stroke={pal.borderSubtle} strokeWidth={1}>
+          <Surface
+            width={contentWidth}
+            height={76}
+            fill={pal.surface}
+            radius={10}
+            stroke={pal.borderSubtle}
+            strokeWidth={1}
+          >
             <Inset width={contentWidth} height={76} padding={{ horizontal: 16, vertical: 10 }}>
               {result ? (
                 <Horizontal gap={24} align="center">
-                  <Label flexGrow={1} text={`Result: ${result.fps.toFixed(1)} fps · ${result.cpuPercent.toFixed(1)}% client · ${result.compositorCpuPercent?.toFixed(1) ?? "—"}% compositor · ${milliseconds(result.averageFrameMs)} work · p95 ${milliseconds(result.presentationFrameMsP95)}`} fontSize={12} fontWeight="medium" overflow="ellipsis" maxLines={1} />
-                  <Label text={`${result.presentedFrames} presented · ${result.compositorFrames} compositor · ${result.submittedFrames} submitted · ${result.discardedFrames} discarded`} color={pal.muted} fontSize={10} />
+                  <Label
+                    flexGrow={1}
+                    text={`Result: ${result.fps.toFixed(1)} fps · ${result.cpuPercent.toFixed(1)}% client · ${result.compositorCpuPercent?.toFixed(1) ?? "—"}% compositor · ${milliseconds(result.averageFrameMs)} work · p95 ${milliseconds(result.presentationFrameMsP95)}`}
+                    fontSize={12}
+                    fontWeight="medium"
+                    overflow="ellipsis"
+                    maxLines={1}
+                  />
+                  <Label
+                    text={`${result.presentedFrames} presented · ${result.compositorFrames} compositor · ${result.submittedFrames} submitted · ${result.discardedFrames} discarded`}
+                    color={pal.muted}
+                    fontSize={10}
+                  />
                 </Horizontal>
               ) : (
                 <Vertical gap={4} justify="center">
-                  <Label text="Continuous native-client workload" fontSize={12} fontWeight="medium" />
-                  <Label text="The 96-surface animation stays active for meaningful live FPS. Run the timed test for a repeatable EGL/SHM score, or pause motion to observe retained idle behavior." color={pal.muted} fontSize={10} wrap maxLines={2} />
+                  <Label
+                    text="Continuous native-client workload"
+                    fontSize={12}
+                    fontWeight="medium"
+                  />
+                  <Label
+                    text="The 96-surface animation stays active for meaningful live FPS. Run the timed test for a repeatable EGL/SHM score, or pause motion to observe retained idle behavior."
+                    color={pal.muted}
+                    fontSize={10}
+                    wrap
+                    maxLines={2}
+                  />
                 </Vertical>
               )}
             </Inset>
@@ -479,32 +590,100 @@ function Environment(props: { width: number; height: number; metrics: LiveMetric
             label: "Moire session",
             items: [
               { id: "platform", label: "Platform", value: platform?.platform ?? "Connecting" },
-              { id: "display", label: "Display server", value: `${platform?.displayServer ?? "—"} · ${platform?.display ?? "—"}` },
+              {
+                id: "display",
+                label: "Display server",
+                value: `${platform?.displayServer ?? "—"} · ${platform?.display ?? "—"}`,
+              },
               { id: "transport", label: "Protocol transport", value: platform?.transport ?? "—" },
               { id: "presentation", label: "Presentation", value: platform?.presentation ?? "—" },
-              { id: "window-transport", label: "Window transport", value: props.metrics.window.lastTransport ?? "Waiting" },
-              { id: "acceleration", label: "Requested acceleration", value: platform?.requestedAcceleration ?? "—" },
+              {
+                id: "window-transport",
+                label: "Window transport",
+                value: props.metrics.window.lastTransport ?? "Waiting",
+              },
+              {
+                id: "acceleration",
+                label: "Requested acceleration",
+                value: platform?.requestedAcceleration ?? "—",
+              },
               { id: "render-node", label: "Render node", value: platform?.renderNode ?? "None" },
-              { id: "window", label: "Window buffer", value: `${props.metrics.window.width} × ${props.metrics.window.height}` },
+              {
+                id: "window",
+                label: "Window buffer",
+                value: `${props.metrics.window.width} × ${props.metrics.window.height}`,
+              },
             ],
           },
           {
             id: "graphics",
             label: "Graphics",
             items: [
-              { id: "gl-renderer", label: "GL renderer", value: platform?.glRenderer ?? "Software" },
+              {
+                id: "gl-renderer",
+                label: "GL renderer",
+                value: platform?.glRenderer ?? "Software",
+              },
               { id: "gl-version", label: "GL version", value: platform?.glVersion ?? "—" },
-              { id: "egl", label: "EGL", value: [platform?.eglVendor, platform?.eglVersion].filter(Boolean).join(" · ") || "—" },
-              { id: "frames", label: "Submitted frames", value: `${props.metrics.window.dmabufFrames} dma-buf · ${props.metrics.window.shmFrames} SHM` },
-              { id: "reconciliation", label: "React reconciliations", value: `${props.metrics.window.reconciledFrames} total · presentation motion bypasses React` },
-              { id: "compositor", label: "Compositor callbacks", value: `${props.metrics.window.compositorFrames} · ${frameRate(props.metrics.window.compositorFramesPerSecond)}` },
-              { id: "presented", label: "Presentation feedback", value: `${props.metrics.window.presentedFrames} presented · ${props.metrics.window.discardedFrames} discarded` },
-              { id: "refresh", label: "Display refresh", value: props.metrics.window.displayRefreshHz > 0 ? `${props.metrics.window.displayRefreshHz.toFixed(2)} Hz` : "Unknown" },
-              { id: "work", label: "Scene / raster / submit", value: `${milliseconds(props.metrics.window.averageSceneMs)} · ${milliseconds(props.metrics.window.averageRasterMs)} · ${milliseconds(props.metrics.window.averageSubmitMs)}` },
-              { id: "shm", label: "Copy / buffer release", value: `${milliseconds(props.metrics.window.averageCopyMs)} · ${milliseconds(props.metrics.window.averageBufferReleaseMs)}` },
-              { id: "cadence", label: "Presentation p50 / p95", value: `${milliseconds(props.metrics.window.presentationFrameMsP50)} · ${milliseconds(props.metrics.window.presentationFrameMsP95)}` },
-              { id: "latency", label: "Commit feedback avg / p95", value: `${milliseconds(props.metrics.window.averagePresentationLatencyMs)} · ${milliseconds(props.metrics.window.presentationLatencyMsP95)}` },
-              { id: "damage", label: "Surface damage", value: `${props.metrics.window.averageDamagePercent.toFixed(1)}% of pixels per commit` },
+              {
+                id: "egl",
+                label: "EGL",
+                value:
+                  [platform?.eglVendor, platform?.eglVersion].filter(Boolean).join(" · ") || "—",
+              },
+              {
+                id: "frames",
+                label: "Submitted frames",
+                value: `${props.metrics.window.dmabufFrames} dma-buf · ${props.metrics.window.shmFrames} SHM`,
+              },
+              {
+                id: "reconciliation",
+                label: "React reconciliations",
+                value: `${props.metrics.window.reconciledFrames} total · presentation motion bypasses React`,
+              },
+              {
+                id: "compositor",
+                label: "Compositor callbacks",
+                value: `${props.metrics.window.compositorFrames} · ${frameRate(props.metrics.window.compositorFramesPerSecond)}`,
+              },
+              {
+                id: "presented",
+                label: "Presentation feedback",
+                value: `${props.metrics.window.presentedFrames} presented · ${props.metrics.window.discardedFrames} discarded`,
+              },
+              {
+                id: "refresh",
+                label: "Display refresh",
+                value:
+                  props.metrics.window.displayRefreshHz > 0
+                    ? `${props.metrics.window.displayRefreshHz.toFixed(2)} Hz`
+                    : "Unknown",
+              },
+              {
+                id: "work",
+                label: "Scene / raster / submit",
+                value: `${milliseconds(props.metrics.window.averageSceneMs)} · ${milliseconds(props.metrics.window.averageRasterMs)} · ${milliseconds(props.metrics.window.averageSubmitMs)}`,
+              },
+              {
+                id: "shm",
+                label: "Copy / buffer release",
+                value: `${milliseconds(props.metrics.window.averageCopyMs)} · ${milliseconds(props.metrics.window.averageBufferReleaseMs)}`,
+              },
+              {
+                id: "cadence",
+                label: "Presentation p50 / p95",
+                value: `${milliseconds(props.metrics.window.presentationFrameMsP50)} · ${milliseconds(props.metrics.window.presentationFrameMsP95)}`,
+              },
+              {
+                id: "latency",
+                label: "Commit feedback avg / p95",
+                value: `${milliseconds(props.metrics.window.averagePresentationLatencyMs)} · ${milliseconds(props.metrics.window.presentationLatencyMsP95)}`,
+              },
+              {
+                id: "damage",
+                label: "Surface damage",
+                value: `${props.metrics.window.averageDamagePercent.toFixed(1)}% of pixels per commit`,
+              },
             ],
           },
           {
@@ -514,10 +693,24 @@ function Environment(props: { width: number; height: number; metrics: LiveMetric
               { id: "node", label: "Node", value: `${process.version} · ${process.arch}` },
               { id: "kernel", label: "Kernel", value: `${os.type()} ${os.release()}` },
               { id: "cpu", label: "CPU", value: cpu?.model.trim() ?? "—" },
-              { id: "memory", label: "Memory", value: `${bytes(os.totalmem())} total · ${bytes(props.metrics.freeMemoryBytes)} free` },
+              {
+                id: "memory",
+                label: "Memory",
+                value: `${bytes(os.totalmem())} total · ${bytes(props.metrics.freeMemoryBytes)} free`,
+              },
               { id: "load", label: "Load average", value: props.metrics.loadAverage.toFixed(2) },
-              { id: "pid", label: "Benchmark process", value: `PID ${process.pid} · ${bytes(props.metrics.rssBytes)} resident` },
-              { id: "compositor-pid", label: "Compositor process", value: props.metrics.compositorPid ? `PID ${props.metrics.compositorPid} · ${props.metrics.compositorCpuPercent?.toFixed(1) ?? "—"}% CPU` : "Not found" },
+              {
+                id: "pid",
+                label: "Benchmark process",
+                value: `PID ${process.pid} · ${bytes(props.metrics.rssBytes)} resident`,
+              },
+              {
+                id: "compositor-pid",
+                label: "Compositor process",
+                value: props.metrics.compositorPid
+                  ? `PID ${props.metrics.compositorPid} · ${props.metrics.compositorCpuPercent?.toFixed(1) ?? "—"}% CPU`
+                  : "Not found",
+              },
             ],
           },
         ]}
@@ -526,59 +719,149 @@ function Environment(props: { width: number; height: number; metrics: LiveMetric
   );
 }
 
-function Timeline(props: { width: number; height: number; history: readonly HistorySample[] }): ReactNode {
+function Timeline(props: {
+  width: number;
+  height: number;
+  history: readonly HistorySample[];
+}): ReactNode {
   const pal = themePalette();
   const contentWidth = props.width - 48;
   const cardWidth = Math.floor((contentWidth - 12) / 2);
   const cardHeight = 240;
-  const series = (id: string, label: string, value: (sample: HistorySample) => number) => [{
-    id,
-    label,
-    points: props.history.map((sample) => ({ x: sample.sequence, y: value(sample) })),
-  }];
+  const series = (id: string, label: string, value: (sample: HistorySample) => number) => [
+    {
+      id,
+      label,
+      points: props.history.map((sample) => ({ x: sample.sequence, y: value(sample) })),
+    },
+  ];
   const chartCard = (title: string, detail: string, chart: ReactNode) => (
-    <Surface width={cardWidth} height={cardHeight} fill={pal.panel} radius={10} stroke={pal.borderSubtle} strokeWidth={1} clip>
-      <Label x={14} y={11} width={cardWidth - 28} height={16} text={title} fontSize={12} fontWeight="medium" />
-      <Label x={14} y={29} width={cardWidth - 28} height={13} text={detail} color={pal.muted} fontSize={8} />
-      <Surface x={8} y={48} width={cardWidth - 16} height={cardHeight - 56} fill={0x00000000}>{chart}</Surface>
+    <Surface
+      width={cardWidth}
+      height={cardHeight}
+      fill={pal.panel}
+      radius={10}
+      stroke={pal.borderSubtle}
+      strokeWidth={1}
+      clip
+    >
+      <Label
+        x={14}
+        y={11}
+        width={cardWidth - 28}
+        height={16}
+        text={title}
+        fontSize={12}
+        fontWeight="medium"
+      />
+      <Label
+        x={14}
+        y={29}
+        width={cardWidth - 28}
+        height={13}
+        text={detail}
+        color={pal.muted}
+        fontSize={8}
+      />
+      <Surface x={8} y={48} width={cardWidth - 16} height={cardHeight - 56} fill={0x00000000}>
+        {chart}
+      </Surface>
     </Surface>
   );
-  const multiSeries = (
-    specs: readonly [string, string, (sample: HistorySample) => number][],
-  ) => specs.map(([id, label, value]) => ({
-    id,
-    label,
-    points: props.history.map((sample) => ({ x: sample.sequence, y: value(sample) })),
-  }));
+  const multiSeries = (specs: readonly [string, string, (sample: HistorySample) => number][]) =>
+    specs.map(([id, label, value]) => ({
+      id,
+      label,
+      points: props.history.map((sample) => ({ x: sample.sequence, y: value(sample) })),
+    }));
   return (
     <ScrollArea width={props.width} height={props.height} contentHeight={788}>
       <Inset width={props.width} height={788} padding={{ horizontal: 24, vertical: 20 }}>
         <Vertical gap={12}>
           <Horizontal width={contentWidth} height={cardHeight} gap={12} align="stretch">
-            {chartCard("Process CPU", "Client and compositor · percent of one logical processor", <LineChart width={cardWidth - 16} height={cardHeight - 56} series={multiSeries([
-              ["client", "Client", (sample) => sample.cpuPercent],
-              ["compositor-cpu", "Compositor", (sample) => sample.compositorCpuPercent],
-            ])} yMin={0} formatValue={(value) => `${value.toFixed(0)}%`} />)}
-            {chartCard("Frame delivery", "Presented · compositor callback · submitted", <LineChart width={cardWidth - 16} height={cardHeight - 56} series={multiSeries([
-              ["presented", "Presented", (sample) => sample.presentedFps],
-              ["compositor", "Compositor", (sample) => sample.compositorFps],
-              ["submitted", "Submitted", (sample) => sample.submittedFps],
-            ])} yMin={0} yMax={65} />)}
+            {chartCard(
+              "Process CPU",
+              "Client and compositor · percent of one logical processor",
+              <LineChart
+                width={cardWidth - 16}
+                height={cardHeight - 56}
+                series={multiSeries([
+                  ["client", "Client", (sample) => sample.cpuPercent],
+                  ["compositor-cpu", "Compositor", (sample) => sample.compositorCpuPercent],
+                ])}
+                yMin={0}
+                formatValue={(value) => `${value.toFixed(0)}%`}
+              />,
+            )}
+            {chartCard(
+              "Frame delivery",
+              "Presented · compositor callback · submitted",
+              <LineChart
+                width={cardWidth - 16}
+                height={cardHeight - 56}
+                series={multiSeries([
+                  ["presented", "Presented", (sample) => sample.presentedFps],
+                  ["compositor", "Compositor", (sample) => sample.compositorFps],
+                  ["submitted", "Submitted", (sample) => sample.submittedFps],
+                ])}
+                yMin={0}
+                yMax={65}
+              />,
+            )}
           </Horizontal>
           <Horizontal width={contentWidth} height={cardHeight} gap={12} align="stretch">
-            {chartCard("Frame pipeline", "Scene · raster · platform submit", <LineChart width={cardWidth - 16} height={cardHeight - 56} series={multiSeries([
-              ["scene", "Scene", (sample) => sample.sceneMs],
-              ["raster", "Raster", (sample) => sample.rasterMs],
-              ["submit", "Submit", (sample) => sample.submitMs],
-            ])} yMin={0} formatValue={(value) => `${value.toFixed(1)} ms`} />)}
-            {chartCard("SHM transport", "Pixel copy · commit-to-buffer-release latency", <LineChart width={cardWidth - 16} height={cardHeight - 56} series={multiSeries([
-              ["copy", "Copy", (sample) => sample.copyMs],
-              ["release", "Release", (sample) => sample.releaseMs],
-            ])} yMin={0} formatValue={(value) => `${value.toFixed(1)} ms`} />)}
+            {chartCard(
+              "Frame pipeline",
+              "Scene · raster · platform submit",
+              <LineChart
+                width={cardWidth - 16}
+                height={cardHeight - 56}
+                series={multiSeries([
+                  ["scene", "Scene", (sample) => sample.sceneMs],
+                  ["raster", "Raster", (sample) => sample.rasterMs],
+                  ["submit", "Submit", (sample) => sample.submitMs],
+                ])}
+                yMin={0}
+                formatValue={(value) => `${value.toFixed(1)} ms`}
+              />,
+            )}
+            {chartCard(
+              "SHM transport",
+              "Pixel copy · commit-to-buffer-release latency",
+              <LineChart
+                width={cardWidth - 16}
+                height={cardHeight - 56}
+                series={multiSeries([
+                  ["copy", "Copy", (sample) => sample.copyMs],
+                  ["release", "Release", (sample) => sample.releaseMs],
+                ])}
+                yMin={0}
+                formatValue={(value) => `${value.toFixed(1)} ms`}
+              />,
+            )}
           </Horizontal>
           <Horizontal width={contentWidth} height={cardHeight} gap={12} align="stretch">
-            {chartCard("Resident memory", "Process RSS observed by Node", <AreaChart width={cardWidth - 16} height={cardHeight - 56} series={series("rss", "RSS", (sample) => sample.rssMiB)} formatValue={(value) => `${value.toFixed(0)} MiB`} />)}
-            {chartCard("Total frame work", "All retained-scene, raster and submit work", <LineChart width={cardWidth - 16} height={cardHeight - 56} series={series("frame", "Milliseconds", (sample) => sample.frameMs)} yMin={0} formatValue={(value) => `${value.toFixed(1)} ms`} />)}
+            {chartCard(
+              "Resident memory",
+              "Process RSS observed by Node",
+              <AreaChart
+                width={cardWidth - 16}
+                height={cardHeight - 56}
+                series={series("rss", "RSS", (sample) => sample.rssMiB)}
+                formatValue={(value) => `${value.toFixed(0)} MiB`}
+              />,
+            )}
+            {chartCard(
+              "Total frame work",
+              "All retained-scene, raster and submit work",
+              <LineChart
+                width={cardWidth - 16}
+                height={cardHeight - 56}
+                series={series("frame", "Milliseconds", (sample) => sample.frameMs)}
+                yMin={0}
+                formatValue={(value) => `${value.toFixed(1)} ms`}
+              />,
+            )}
           </Horizontal>
         </Vertical>
       </Inset>
@@ -596,15 +879,17 @@ function Protocols(props: { width: number; height: number; metrics: LiveMetrics 
         labelWidth={250}
         striped
         emptyState={<Label text="No protocol globals reported" />}
-        sections={[{
-          id: "globals",
-          label: `Advertised Wayland globals · ${capabilities.length}`,
-          items: capabilities.map((capability, index) => ({
-            id: `${index}:${capability}`,
-            label: capability,
-            value: "available",
-          })),
-        }]}
+        sections={[
+          {
+            id: "globals",
+            label: `Advertised Wayland globals · ${capabilities.length}`,
+            items: capabilities.map((capability, index) => ({
+              id: `${index}:${capability}`,
+              label: capability,
+              value: "available",
+            })),
+          },
+        ]}
       />
     </Inset>
   );
@@ -646,12 +931,13 @@ function BenchmarkApp(props: WindowSize & { win: Window }): ReactNode {
         ticks = processTicks(compositorPid);
       }
       const compositorElapsed = Math.max(1, now - compositorSample.current.at);
-      const compositorCpuPercent = ticks != null &&
+      const compositorCpuPercent =
+        ticks != null &&
         compositorSample.current.ticks != null &&
         compositorPid === compositorSample.current.pid
-        ? ((ticks - compositorSample.current.ticks) / CLOCK_TICKS) /
-          (compositorElapsed / 1_000) * 100
-        : null;
+          ? ((ticks - compositorSample.current.ticks) / CLOCK_TICKS / (compositorElapsed / 1_000)) *
+            100
+          : null;
       cpuSample.current = { at: now, usage: process.cpuUsage() };
       compositorSample.current = { pid: compositorPid, ticks, at: now };
       const nextMetrics: LiveMetrics = {
@@ -666,21 +952,26 @@ function BenchmarkApp(props: WindowSize & { win: Window }): ReactNode {
         platform: props.win.getPlatformDiagnostics(),
       };
       setMetrics(nextMetrics);
-      setHistory((current) => [...current, {
-        sequence: (current[current.length - 1]?.sequence ?? 0) + 1,
-        cpuPercent: nextMetrics.cpuPercent,
-        compositorCpuPercent: nextMetrics.compositorCpuPercent ?? 0,
-        submittedFps: nextMetrics.window.submittedFramesPerSecond,
-        compositorFps: nextMetrics.window.compositorFramesPerSecond,
-        presentedFps: nextMetrics.window.presentedFramesPerSecond,
-        frameMs: nextMetrics.window.averageFrameMs,
-        sceneMs: nextMetrics.window.averageSceneMs,
-        rasterMs: nextMetrics.window.averageRasterMs,
-        submitMs: nextMetrics.window.averageSubmitMs,
-        copyMs: nextMetrics.window.averageCopyMs,
-        releaseMs: nextMetrics.window.averageBufferReleaseMs,
-        rssMiB: nextMetrics.rssBytes / 1024 / 1024,
-      }].slice(-75));
+      setHistory((current) =>
+        [
+          ...current,
+          {
+            sequence: (current[current.length - 1]?.sequence ?? 0) + 1,
+            cpuPercent: nextMetrics.cpuPercent,
+            compositorCpuPercent: nextMetrics.compositorCpuPercent ?? 0,
+            submittedFps: nextMetrics.window.submittedFramesPerSecond,
+            compositorFps: nextMetrics.window.compositorFramesPerSecond,
+            presentedFps: nextMetrics.window.presentedFramesPerSecond,
+            frameMs: nextMetrics.window.averageFrameMs,
+            sceneMs: nextMetrics.window.averageSceneMs,
+            rasterMs: nextMetrics.window.averageRasterMs,
+            submitMs: nextMetrics.window.averageSubmitMs,
+            copyMs: nextMetrics.window.averageCopyMs,
+            releaseMs: nextMetrics.window.averageBufferReleaseMs,
+            rssMiB: nextMetrics.rssBytes / 1024 / 1024,
+          },
+        ].slice(-75),
+      );
     };
     update();
     const timer = setInterval(update, 400);
@@ -691,13 +982,26 @@ function BenchmarkApp(props: WindowSize & { win: Window }): ReactNode {
   const statusH = 28;
   const bodyH = Math.max(1, props.height - bodyY - statusH);
   const platform = metrics.platform;
-  const mode = metrics.window.lastTransport === "dmabuf" ? "DMA-BUF" :
-    metrics.window.lastTransport === "shm" ? "CPU / SHM" : "WAITING";
+  const mode =
+    metrics.window.lastTransport === "dmabuf"
+      ? "DMA-BUF"
+      : metrics.window.lastTransport === "shm"
+        ? "CPU / SHM"
+        : "WAITING";
   const tabContent = useMemo(() => {
     if (tab === 1) return <Timeline width={props.width} height={bodyH} history={history} />;
     if (tab === 2) return <Environment width={props.width} height={bodyH} metrics={metrics} />;
     if (tab === 3) return <Protocols width={props.width} height={bodyH} metrics={metrics} />;
-    return <Overview width={props.width} height={bodyH} win={props.win} metrics={metrics} mode={presentationMode} onModeChange={setPresentationMode} />;
+    return (
+      <Overview
+        width={props.width}
+        height={bodyH}
+        win={props.win}
+        metrics={metrics}
+        mode={presentationMode}
+        onModeChange={setPresentationMode}
+      />
+    );
   }, [bodyH, history, metrics, presentationMode, props.width, props.win, tab]);
 
   return (
@@ -705,16 +1009,46 @@ function BenchmarkApp(props: WindowSize & { win: Window }): ReactNode {
       <Toolbar width={props.width} height={70}>
         <Vertical flexGrow={1} gap={3} justify="center">
           <Label text="Moire Bench" fontSize={18} fontWeight="bold" />
-          <Label text="Renderer truth, live process telemetry, and a repeatable UI workload" color={pal.muted} fontSize={10} />
+          <Label
+            text="Renderer truth, live process telemetry, and a repeatable UI workload"
+            color={pal.muted}
+            fontSize={10}
+          />
         </Vertical>
-        <Box width={mode.length * 7 + 22} height={22}><Badge text={mode} tone={metrics.window.lastTransport === "dmabuf" ? "success" : "warning"} /></Box>
+        <Box width={mode.length * 7 + 22} height={22}>
+          <Badge
+            text={mode}
+            tone={metrics.window.lastTransport === "dmabuf" ? "success" : "warning"}
+          />
+        </Box>
       </Toolbar>
       <Separator y={69} width={props.width} />
-      <Tabs y={70} width={props.width} height={38} tabs={["Overview", "Timeline", "Environment", "Wayland globals"]} active={tab} onChange={setTab} />
-      <Surface y={bodyY} width={props.width} height={bodyH} fill={pal.bg}>{tabContent}</Surface>
+      <Tabs
+        y={70}
+        width={props.width}
+        height={38}
+        tabs={["Overview", "Timeline", "Environment", "Wayland globals"]}
+        active={tab}
+        onChange={setTab}
+      />
+      <Surface y={bodyY} width={props.width} height={bodyH} fill={pal.bg}>
+        {tabContent}
+      </Surface>
       <StatusBar y={props.height - statusH} width={props.width} height={statusH}>
-        <Label flexGrow={1} text={`${platform?.presentation ?? "connecting"} · ${platform?.transport ?? "initialising"}`} color={pal.muted} fontSize={9} overflow="ellipsis" maxLines={1} />
-        <Label text={`${metrics.window.presentedFrames} presented · ${metrics.window.frames} submitted`} color={pal.muted} fontSize={9} fontFamily="mono" />
+        <Label
+          flexGrow={1}
+          text={`${platform?.presentation ?? "connecting"} · ${platform?.transport ?? "initialising"}`}
+          color={pal.muted}
+          fontSize={9}
+          overflow="ellipsis"
+          maxLines={1}
+        />
+        <Label
+          text={`${metrics.window.presentedFrames} presented · ${metrics.window.frames} submitted`}
+          color={pal.muted}
+          fontSize={9}
+          fontFamily="mono"
+        />
       </StatusBar>
     </Surface>
   );

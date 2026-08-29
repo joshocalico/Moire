@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { MessageBuilder, MessageReader, decodeHeader } from "./index.js";
+import { MessageBuilder, MessageReader, decodeHeader } from "./index";
 import {
   wlDataDevice,
   wlRegistry,
@@ -8,16 +8,10 @@ import {
   wpPresentation,
   wpPresentationFeedback,
   xdgPositioner,
-} from "./generated.js";
+} from "./generated";
 
 function registryBindUsesGenericNewIdLayout(): void {
-  const message = wlRegistry.requests.bind.encode(
-    2,
-    7,
-    "wl_compositor",
-    4,
-    9,
-  );
+  const message = wlRegistry.requests.bind.encode(2, 7, "wl_compositor", 4, 9);
   assert.deepEqual(message.fds, []);
   assert.deepEqual(decodeHeader(message.data), {
     objectId: 2,

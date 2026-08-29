@@ -18,9 +18,7 @@ export function horizontalLayout<T extends Omit<OutputGeometry, "x" | "y">>(
 }
 
 /** Shift a user-arranged layout so its top-left extent is the desktop origin. */
-export function normalizeLayoutOrigin<T extends OutputGeometry>(
-  outputs: readonly T[],
-): T[] {
+export function normalizeLayoutOrigin<T extends OutputGeometry>(outputs: readonly T[]): T[] {
   if (outputs.length === 0) return [];
   const minX = Math.min(...outputs.map((output) => output.x));
   const minY = Math.min(...outputs.map((output) => output.y));
@@ -41,15 +39,17 @@ export function layoutsOverlap(outputs: readonly OutputGeometry[]): boolean {
         left.x + left.width > right.x &&
         left.y < right.y + right.height &&
         left.y + left.height > right.y
-      ) return true;
+      )
+        return true;
     }
   }
   return false;
 }
 
-export function desktopBounds(
-  outputs: readonly OutputGeometry[],
-): { width: number; height: number } {
+export function desktopBounds(outputs: readonly OutputGeometry[]): {
+  width: number;
+  height: number;
+} {
   if (outputs.length === 0) return { width: 1, height: 1 };
   return {
     width: Math.max(1, ...outputs.map((output) => output.x + output.width)),
@@ -87,10 +87,7 @@ export function outputsIntersectingRect<T extends OutputGeometry>(
   );
 }
 
-export function replacementOwner<T>(
-  outputs: readonly T[],
-  removedIndex: number,
-): T | null {
+export function replacementOwner<T>(outputs: readonly T[], removedIndex: number): T | null {
   for (let index = 0; index < outputs.length; index++) {
     if (index !== removedIndex) return outputs[index]!;
   }
@@ -136,10 +133,7 @@ export function copySceneToOutput(
   for (let row = 0; row < output.height; row++) {
     const sourceStart = ((output.y + row) * sourceWidth + output.x) * 4;
     const targetStart = row * targetPitch;
-    target.set(
-      source.subarray(sourceStart, sourceStart + rowBytes),
-      targetStart,
-    );
+    target.set(source.subarray(sourceStart, sourceStart + rowBytes), targetStart);
   }
 }
 
@@ -155,25 +149,25 @@ export function copySceneToOutputScaled(
   targetPitch: number,
 ): void {
   if (
-    output.x < 0 || output.y < 0 ||
+    output.x < 0 ||
+    output.y < 0 ||
     output.x + output.width > sourceWidth ||
     output.y + output.height > sourceHeight
-  ) throw new RangeError(`Output ${output.id} lies outside the logical scene`);
+  )
+    throw new RangeError(`Output ${output.id} lies outside the logical scene`);
   if (
-    targetWidth < 1 || targetHeight < 1 ||
+    targetWidth < 1 ||
+    targetHeight < 1 ||
     targetPitch < targetWidth * 4 ||
     target.length < targetPitch * targetHeight
-  ) throw new RangeError(`Target for ${output.id} is smaller than its geometry`);
+  )
+    throw new RangeError(`Target for ${output.id} is smaller than its geometry`);
   for (let py = 0; py < targetHeight; py++) {
-    const sy = output.y + Math.min(
-      output.height - 1,
-      Math.floor((py * output.height) / targetHeight),
-    );
+    const sy =
+      output.y + Math.min(output.height - 1, Math.floor((py * output.height) / targetHeight));
     for (let px = 0; px < targetWidth; px++) {
-      const sx = output.x + Math.min(
-        output.width - 1,
-        Math.floor((px * output.width) / targetWidth),
-      );
+      const sx =
+        output.x + Math.min(output.width - 1, Math.floor((px * output.width) / targetWidth));
       const sourceOffset = (sy * sourceWidth + sx) * 4;
       const targetOffset = py * targetPitch + px * 4;
       target[targetOffset] = source[sourceOffset]!;

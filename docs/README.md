@@ -6,71 +6,72 @@ This directory is meant to be browsed as a tree or fed to a Markdown site render
 
 ## Guides
 
-| Doc | Description |
-| --- | --- |
-| [Getting started (dev VM)](./dev-vm.md) | Parallels Ubuntu VM, packages, day-0 smoke |
-| [Roadmap](./roadmap.md) | Shipped vs planned |
-| [Files & desktop (overview)](./files-and-desktop.md) | Day-0 Files, icons, DnD summary |
-| [Files, desktop & UI completeness plan](./files-desktop-ui-plan.md) | Product, widget, renderer, JSX, and delivery plan |
-| [Rendering and widget v2](./rendering-and-widget-v2.md) | Active EGL, effects, scanout, and themeable-widget queue |
-| [Freedesktop MIME & actions](./freedesktop-mime-and-actions.md) | Associations, Open With, action plugins |
+| Doc                                                                 | Description                                              |
+| ------------------------------------------------------------------- | -------------------------------------------------------- |
+| [Getting started (dev VM)](./dev-vm.md)                             | Parallels Ubuntu VM, packages, day-0 smoke               |
+| [Roadmap](./roadmap.md)                                             | Shipped vs planned                                       |
+| [Files & desktop (overview)](./files-and-desktop.md)                | Day-0 Files, icons, DnD summary                          |
+| [Files, desktop & UI completeness plan](./files-desktop-ui-plan.md) | Product, widget, renderer, JSX, and delivery plan        |
+| [Rendering and widget v2](./rendering-and-widget-v2.md)             | Active EGL, effects, scanout, and themeable-widget queue |
+| [Freedesktop MIME & actions](./freedesktop-mime-and-actions.md)     | Associations, Open With, action plugins                  |
 
 ## Architecture
 
-| Doc | Description |
-| --- | --- |
-| [Overview](./architecture/overview.md) | Packages, data flow, responsibilities |
-| [Paint order & input](./architecture/paint-and-input.md) | Composite stack, pointer routing |
-| [react-host](./architecture/react-host.md) | Retained scene graph, renderer contract, software backend |
+| Doc                                                      | Description                                               |
+| -------------------------------------------------------- | --------------------------------------------------------- |
+| [Overview](./architecture/overview.md)                   | Packages, data flow, responsibilities                     |
+| [Paint order & input](./architecture/paint-and-input.md) | Composite stack, pointer routing                          |
+| [react-host](./architecture/react-host.md)               | Retained scene graph, renderer contract, software backend |
 
 ## UI toolkit (`@moire/ui`)
 
-| Doc | Description |
-| --- | --- |
-| [UI overview](./ui/README.md) | App model, fonts, scale, theme access |
-| [Application & Window](./ui/application.md) | Lifecycle, event loop, content API |
-| [Widgets](./ui/widgets.md) | Full catalog, props, usage examples |
-| [Motion](./ui/motion.md) | `createMotionValue`, `easeTo`, ticking |
-| [Images & icons](./ui/images-and-icons.md) | PNG load, bundled icons |
-| [Platforms](./ui/platforms.md) | Wayland vs headless backends |
+| Doc                                         | Description                            |
+| ------------------------------------------- | -------------------------------------- |
+| [UI overview](./ui/README.md)               | App model, fonts, scale, theme access  |
+| [Application & Window](./ui/application.md) | Lifecycle, event loop, content API     |
+| [Widgets](./ui/widgets.md)                  | Full catalog, props, usage examples    |
+| [Motion](./ui/motion.md)                    | `createMotionValue`, `easeTo`, ticking |
+| [Images & icons](./ui/images-and-icons.md)  | PNG load, bundled icons                |
+| [Platforms](./ui/platforms.md)              | Wayland vs headless backends           |
 
 ## Theme & prefs
 
-| Doc | Description |
-| --- | --- |
-| [Theme & tokens](./theme/README.md) | Tokens, type roles, spacing |
-| [Wallpaper](./theme/wallpaper.md) | Atmosphere, gradient, image modes |
-| [Preferences](./reference/prefs.md) | `settings.json`, apply pipeline |
+| Doc                                 | Description                       |
+| ----------------------------------- | --------------------------------- |
+| [Theme & tokens](./theme/README.md) | Tokens, type roles, spacing       |
+| [Wallpaper](./theme/wallpaper.md)   | Atmosphere, gradient, image modes |
+| [Preferences](./reference/prefs.md) | `settings.json`, apply pipeline   |
 
 ## Shell & apps
 
-| Doc | Description |
-| --- | --- |
-| [Application classes](../apps/README.md) | Core, system, bundled, and developer authority boundaries |
-| [Shell](./shell/README.md) | Panel, launcher, SSD, ShellBridge |
-| [Desktop icons](./shell/desktop.md) | Layout, hits, reposition and folder drops |
-| [Files](./apps/files.md) | Places, grid/list, default folder handler, DnD |
-| [Settings](./apps/settings.md) | Appearance, live apply |
+| Doc                                              | Description                                                           |
+| ------------------------------------------------ | --------------------------------------------------------------------- |
+| [Application classes](../apps/README.md)         | Core, system, bundled, and developer authority boundaries             |
+| [Shell](./shell/README.md)                       | Panel, launcher, SSD, ShellBridge                                     |
+| [Desktop icons](./shell/desktop.md)              | Layout, hits, reposition and folder drops                             |
+| [Files](./apps/files.md)                         | Places, grid/list, default folder handler, DnD                        |
+| [Settings](./apps/settings.md)                   | Appearance, live apply                                                |
 | [System management](./apps/system-management.md) | Process Manager, memory pressure, and the privileged service boundary |
-| [Widget Showcase](./apps/showcase.md) | Interactive widget catalog, previews, and highlighted TSX |
-| [Terminal](./apps/terminal.md) | Native VT engine, PTY transport, and rich-text terminal surface |
-| [Session](./apps/session.md) | `moire-session` day-0 boot |
+| [Widget Showcase](./apps/showcase.md)            | Interactive widget catalog, previews, and highlighted TSX             |
+| [Terminal](./apps/terminal.md)                   | Native VT engine, PTY transport, and rich-text terminal surface       |
+| [Session](./apps/session.md)                     | `moire-session` day-0 boot                                            |
 
 ## Compositor
 
-| Doc | Description |
-| --- | --- |
-| [Compositor index](./compositor/README.md) | Core package map |
-| [Wayland DnD](./compositor/dnd.md) | `wl_data_device`, desktop drop, preview |
+| Doc                                                                | Description                                    |
+| ------------------------------------------------------------------ | ---------------------------------------------- |
+| [Compositor index](./compositor/README.md)                         | Core package map                               |
+| [Wayland DnD](./compositor/dnd.md)                                 | `wl_data_device`, desktop drop, preview        |
 | [Display modes & protocols](./compositor/display-and-protocols.md) | Runtime KMS modes and desktop protocol tranche |
-| [Parallels DRM present](./parallels-drm-present.md) | Why `presentKms` is required |
+| [Parallels DRM present](./parallels-drm-present.md)                | Why `presentKms` is required                   |
 
 ## Reference
 
-| Doc | Description |
-| --- | --- |
-| [Guest scripts](./reference/scripts.md) | `scripts/guest-*.sh` cheat sheet |
-| [Known issues](./known-issues.md) | Memory, Xwayland, CSD notes |
+| Doc                                                   | Description                                               |
+| ----------------------------------------------------- | --------------------------------------------------------- |
+| [Guest scripts](./reference/scripts.md)               | `scripts/guest-*.sh` cheat sheet                          |
+| [Development conventions](./reference/development.md) | Imports, formatting, linting, and typed native boundaries |
+| [Known issues](./known-issues.md)                     | Memory, Xwayland, CSD notes                               |
 
 ## Repository layout
 

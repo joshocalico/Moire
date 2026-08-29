@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { FileActivationService } from "./open-with.js";
-import type { DesktopEntry } from "./desktop.js";
+import { FileActivationService } from "./open-with";
+import type { DesktopEntry } from "./desktop";
 
 const previous = {
   HOME: process.env.HOME,
@@ -50,10 +50,7 @@ try {
     },
   ];
   const launches: string[] = [];
-  const service = new FileActivationService(
-    ({ command }) => launches.push(command),
-    apps,
-  );
+  const service = new FileActivationService(({ command }) => launches.push(command), apps);
   const filePath = path.join(root, "Notes.txt");
   const initial = service.openWithModel(filePath);
   assert.equal(initial.mimeType, "text/plain");

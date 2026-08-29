@@ -7,6 +7,9 @@
   "scripts": {
     "build": "pnpm -r run build",
     "dev:compositor": "pnpm --filter @moire/compositor dev",
+    "format": "oxfmt apps packages scripts package.json pnpm-workspace.yaml tsconfig.json tsconfig.base.json",
+    "format:check": "oxfmt --check apps packages scripts package.json pnpm-workspace.yaml tsconfig.json tsconfig.base.json",
+    "lint": "oxlint --threads=1 apps packages scripts",
     "typecheck": "pnpm -r run typecheck",
     "probe:drm": "pnpm --filter @moire/sys probe:drm",
     "clear-color": "pnpm --filter @moire/sys clear-color"
@@ -20,6 +23,7 @@
     "yoga-layout": "^3.2.1"
   },
   "devDependencies": {
+    "@moire/tsconfig": "workspace:*",
     "oxfmt": "^0.65.0",
     "oxlint": "^1.80.0"
   }

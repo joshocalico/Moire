@@ -4,9 +4,9 @@
  */
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
-import { assertLinux } from "./platform.js";
-import { getLibc } from "./libc.js";
-import { LinuxReadinessDispatcher } from "./readiness.js";
+import { assertLinux } from "./platform";
+import { getLibc } from "./libc";
+import { LinuxReadinessDispatcher } from "./readiness";
 
 const EV_SYN = 0x00;
 const EV_KEY = 0x01;
@@ -32,9 +32,7 @@ const EVIOCGRAB = (1 << 30) | (4 << 16) | (0x45 << 8) | 0x90;
 function tryGrab(fd: number, path: string): void {
   // Optional exclusive grab — skip if it fails; do not require it for Parallels.
   try {
-    const ioctl = getLibc().func(
-      "int ioctl(int fd, unsigned long request, void *arg)",
-    );
+    const ioctl = getLibc().func("int ioctl(int fd, unsigned long request, void *arg)");
     const rc = ioctl(fd, EVIOCGRAB >>> 0, 1) as number;
     if (rc === 0) console.log(`[evdev] grabbed ${path}`);
   } catch {
@@ -84,9 +82,7 @@ type DeviceState = {
 function listPointerDevices(): string[] {
   const byPath = "/dev/input/by-path";
   try {
-    const links = fs
-      .readdirSync(byPath)
-      .filter((n) => n.includes("event-mouse"));
+    const links = fs.readdirSync(byPath).filter((n) => n.includes("event-mouse"));
     if (links.length > 0) {
       const seen = new Set<string>();
       const out: string[] = [];
@@ -153,7 +149,6 @@ export class EvdevPointer extends EventEmitter {
       console.warn("[evdev] no pointer devices opened — pointer disabled");
       return;
     }
-
   }
 
   stop(): void {
@@ -198,9 +193,7 @@ export class EvdevPointer extends EventEmitter {
       } satisfies EvdevPointerMotion);
       if (!this.loggedFirstRel) {
         this.loggedFirstRel = true;
-        console.log(
-          `[evdev] relative pointer dx=${dev.pendingDx} dy=${dev.pendingDy}`,
-        );
+        console.log(`[evdev] relative pointer dx=${dev.pendingDx} dy=${dev.pendingDy}`);
       }
       dev.pendingDx = 0;
       dev.pendingDy = 0;
@@ -248,11 +241,7 @@ export class EvdevPointer extends EventEmitter {
             else if (code === REL_Y) dev.pendingDy += value;
             else if (code === REL_WHEEL) dev.pendingWheel += value;
           } else if (type === EV_KEY) {
-            if (
-              code === BTN_LEFT ||
-              code === BTN_RIGHT ||
-              code === BTN_MIDDLE
-            ) {
+            if (code === BTN_LEFT || code === BTN_RIGHT || code === BTN_MIDDLE) {
               this.flush(dev);
               this.emit("button", {
                 code,
@@ -273,9 +262,7 @@ export class EvdevPointer extends EventEmitter {
         // stop being polled forever, with no error, no recovery, and
         // whatever gesture was in flight (e.g. a drag) would never see its
         // terminating event. Log it and try to reopen the device path.
-        console.warn(
-          `[evdev] poll error on ${dev.path} (fd=${fd}): ${e.code ?? e.message ?? e}`,
-        );
+        console.warn(`[evdev] poll error on ${dev.path} (fd=${fd}): ${e.code ?? e.message ?? e}`);
         toReopen.push({ fd, dev });
       }
     }
@@ -291,10 +278,7 @@ export class EvdevPointer extends EventEmitter {
       // already gone
     }
     try {
-      const newFd = fs.openSync(
-        dev.path,
-        fs.constants.O_RDONLY | fs.constants.O_NONBLOCK,
-      );
+      const newFd = fs.openSync(dev.path, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
       tryGrab(newFd, dev.path);
       this.devices.set(newFd, {
         ...dev,

@@ -85,8 +85,7 @@ class Writer {
   }
 
   align(bytes: number): void {
-    const padding =
-      (bytes - ((this.baseOffset + this.offset) % bytes)) % bytes;
+    const padding = (bytes - ((this.baseOffset + this.offset) % bytes)) % bytes;
     this.reserve(padding);
     this.buffer.fill(0, this.offset, this.offset + padding);
     this.offset += padding;
@@ -274,11 +273,7 @@ function writeValue(writer: Writer, node: TypeNode, value: unknown): void {
 
 function readString(reader: Reader, signature = false): string {
   const length = signature ? reader.u8() : reader.u32();
-  const value = reader.buffer.toString(
-    "utf8",
-    reader.offset,
-    reader.offset + length,
-  );
+  const value = reader.buffer.toString("utf8", reader.offset, reader.offset + length);
   reader.offset += length + 1;
   return value;
 }
@@ -347,9 +342,7 @@ export function encodeBody(signature: string, values: unknown[]): Buffer {
   const writer = new Writer(0);
   const nodes = parseSignature(signature);
   if (nodes.length !== values.length) {
-    throw new Error(
-      `D-Bus body ${signature} expects ${nodes.length} values, got ${values.length}`,
-    );
+    throw new Error(`D-Bus body ${signature} expects ${nodes.length} values, got ${values.length}`);
   }
   nodes.forEach((node, index) => writeValue(writer, node, values[index]));
   return writer.finish();
@@ -380,10 +373,14 @@ export function encodeMessage(message: DbusMessage): Buffer {
     if (value == null || value === "") continue;
     headerWriter.align(8);
     headerWriter.u8(code);
-    writeValue(headerWriter, { code: "v" }, {
-      signature: fieldSignature,
-      value,
-    });
+    writeValue(
+      headerWriter,
+      { code: "v" },
+      {
+        signature: fieldSignature,
+        value,
+      },
+    );
   }
   const fields = headerWriter.finish();
   const headerEnd = 16 + fields.length;
@@ -440,9 +437,6 @@ export function decodeMessage(buffer: Buffer): DbusMessage {
     destination: fields.get(6) as string | undefined,
     sender: fields.get(7) as string | undefined,
     signature,
-    body: decodeBody(
-      signature,
-      buffer.subarray(bodyStart, bodyStart + bodyLength),
-    ),
+    body: decodeBody(signature, buffer.subarray(bodyStart, bodyStart + bodyLength)),
   };
 }

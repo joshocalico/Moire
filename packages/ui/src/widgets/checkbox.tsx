@@ -1,19 +1,14 @@
 /** Controlled, focusable checkbox with recipe-owned visuals. */
 import React, { useId, useState, type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  measureTextBounds,
-  type HitKeyEvent,
-} from "@moire/react-host";
+import { Group, Rect, measureTextBounds, type HitKeyEvent } from "@moire/react-host";
 import {
   resolveStatefulStyle,
   useWidgetTheme,
   type ButtonSize,
   type WidgetState,
-} from "../widget-theme.js";
-import { Box, Horizontal, registerIntrinsicSize } from "./layout.js";
-import { TextBlock } from "./primitives.js";
+} from "#ui/widget-theme";
+import { Box, Horizontal, registerIntrinsicSize } from "./layout";
+import { TextBlock } from "./primitives";
 
 export type CheckboxProps = {
   x?: number;
@@ -54,31 +49,20 @@ export function Checkbox(props: CheckboxProps): ReactNode {
   const height = props.height ?? recipe.metrics.height;
   const width =
     props.width ??
-    recipe.metrics.controlSize +
-      (labelBounds ? recipe.metrics.gap + labelBounds.width : 0);
+    recipe.metrics.controlSize + (labelBounds ? recipe.metrics.gap + labelBounds.width : 0);
 
   const toggle = () => {
     if (!props.disabled) props.onChange?.(!props.checked);
   };
   const handleKey = (event: HitKeyEvent) => {
     if (event.repeat || props.disabled) return;
-    if (
-      event.code === 28 ||
-      event.code === 57 ||
-      event.key === "Enter" ||
-      event.key === " "
-    ) {
+    if (event.code === 28 || event.code === 57 || event.key === "Enter" || event.key === " ") {
       toggle();
     }
   };
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={width}
-      height={height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={height}>
       <Horizontal width={width} height={height} gap={recipe.metrics.gap} align="center">
         <Box width={recipe.metrics.controlSize} height={recipe.metrics.controlSize}>
           <Rect
@@ -143,10 +127,7 @@ export function Checkbox(props: CheckboxProps): ReactNode {
 
 registerIntrinsicSize(Checkbox, (props, theme) => {
   const recipe = theme.recipes.checkbox[props.size ?? "medium"];
-  const labelStyle = resolveStatefulStyle(
-    recipe.label,
-    props.disabled ? "disabled" : "rest",
-  );
+  const labelStyle = resolveStatefulStyle(recipe.label, props.disabled ? "disabled" : "rest");
   const labelWidth = props.label
     ? measureTextBounds(props.label, {
         fontSize: labelStyle.fontSize,
@@ -154,7 +135,9 @@ registerIntrinsicSize(Checkbox, (props, theme) => {
       }).width
     : 0;
   return {
-    width: props.width ?? recipe.metrics.controlSize + (props.label ? recipe.metrics.gap + labelWidth : 0),
+    width:
+      props.width ??
+      recipe.metrics.controlSize + (props.label ? recipe.metrics.gap + labelWidth : 0),
     height: props.height ?? recipe.metrics.height,
   };
 });

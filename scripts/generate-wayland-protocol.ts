@@ -15,15 +15,7 @@ type XmlNode = {
   children: XmlNode[];
 };
 
-type WireType =
-  | "int"
-  | "uint"
-  | "fixed"
-  | "object"
-  | "new_id"
-  | "string"
-  | "array"
-  | "fd";
+type WireType = "int" | "uint" | "fixed" | "object" | "new_id" | "string" | "array" | "fd";
 
 const TYPE_MAP: Record<WireType, string> = {
   int: "number",
@@ -59,15 +51,67 @@ const DECODE_METHOD: Record<WireType, string> = {
 };
 
 const TS_RESERVED = new Set([
-  "break", "case", "catch", "class", "const", "continue", "debugger",
-  "default", "delete", "do", "else", "enum", "export", "extends",
-  "false", "finally", "for", "function", "if", "import", "in",
-  "instanceof", "new", "null", "return", "super", "switch", "this",
-  "throw", "true", "try", "typeof", "var", "void", "while", "with",
-  "as", "implements", "interface", "let", "package", "private",
-  "protected", "public", "static", "yield", "any", "boolean",
-  "constructor", "declare", "get", "module", "require", "number",
-  "set", "string", "symbol", "type", "from", "of", "targetId",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "import",
+  "in",
+  "instanceof",
+  "new",
+  "null",
+  "return",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  "as",
+  "implements",
+  "interface",
+  "let",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "static",
+  "yield",
+  "any",
+  "boolean",
+  "constructor",
+  "declare",
+  "get",
+  "module",
+  "require",
+  "number",
+  "set",
+  "string",
+  "symbol",
+  "type",
+  "from",
+  "of",
+  "targetId",
 ]);
 
 const DEFAULT_XML = [
@@ -79,24 +123,21 @@ const DEFAULT_XML = [
 ];
 
 function decodeXmlEntities(value: string): string {
-  return value.replace(
-    /&(?:#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g,
-    (entity) => {
-      if (entity.startsWith("&#x")) {
-        return String.fromCodePoint(Number.parseInt(entity.slice(3, -1), 16));
-      }
-      if (entity.startsWith("&#")) {
-        return String.fromCodePoint(Number.parseInt(entity.slice(2, -1), 10));
-      }
-      return {
-        "&amp;": "&",
-        "&lt;": "<",
-        "&gt;": ">",
-        "&quot;": '"',
-        "&apos;": "'",
-      }[entity]!;
-    },
-  );
+  return value.replace(/&(?:#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g, (entity) => {
+    if (entity.startsWith("&#x")) {
+      return String.fromCodePoint(Number.parseInt(entity.slice(3, -1), 16));
+    }
+    if (entity.startsWith("&#")) {
+      return String.fromCodePoint(Number.parseInt(entity.slice(2, -1), 10));
+    }
+    return {
+      "&amp;": "&",
+      "&lt;": "<",
+      "&gt;": ">",
+      "&quot;": '"',
+      "&apos;": "'",
+    }[entity]!;
+  });
 }
 
 /** Parse enough XML for Wayland protocol documents without a package dep. */
@@ -133,9 +174,7 @@ function parseXml(source: string, filename: string): XmlNode {
     const attributes = inner.slice(nameMatch[0].length);
     const attributePattern = /([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
     for (const attribute of attributes.matchAll(attributePattern)) {
-      node.attributes[attribute[1]!] = decodeXmlEntities(
-        attribute[2] ?? attribute[3] ?? "",
-      );
+      node.attributes[attribute[1]!] = decodeXmlEntities(attribute[2] ?? attribute[3] ?? "");
     }
     stack.at(-1)!.children.push(node);
     if (!selfClosing) stack.push(node);
@@ -188,10 +227,7 @@ function ident(name: string): string {
 function argType(arg: XmlNode): string {
   const type = wireType(arg);
   let value = TYPE_MAP[type];
-  if (
-    arg.attributes["allow-null"] === "true" &&
-    (type === "object" || type === "string")
-  ) {
+  if (arg.attributes["allow-null"] === "true" && (type === "object" || type === "string")) {
     value += " | null";
   }
   return value;
@@ -214,12 +250,7 @@ function decodeExpression(arg: XmlNode): string {
   return expression;
 }
 
-function emitMessage(
-  message: XmlNode,
-  opcode: number,
-  request: boolean,
-  indent: string,
-): string[] {
+function emitMessage(message: XmlNode, opcode: number, request: boolean, indent: string): string[] {
   const name = ident(required(message, "name"));
   const since = Number.parseInt(message.attributes.since ?? "1", 10);
   const destructor = message.attributes.type === "destructor";
@@ -260,38 +291,26 @@ function emitMessage(
         lines.push(`${indent}    ${encodeExpression(arg, argName)}`);
       }
     }
-    lines.push(
-      `${indent}    return builder.build(targetId, ${opcode});`,
-      `${indent}  },`,
-    );
+    lines.push(`${indent}    return builder.build(targetId, ${opcode});`, `${indent}  },`);
   } else {
     lines.push(`${indent}  decodeReader(reader: MessageReader) {`);
     if (args.length > 0) {
       lines.push(`${indent}    return {`);
       for (const arg of args) {
-        lines.push(
-          `${indent}      ${ident(required(arg, "name"))}: ${decodeExpression(arg)},`,
-        );
+        lines.push(`${indent}      ${ident(required(arg, "name"))}: ${decodeExpression(arg)},`);
       }
       lines.push(`${indent}    };`);
     } else {
       lines.push(`${indent}    void reader;`, `${indent}    return {};`);
     }
-    lines.push(
-      `${indent}  },`,
-      `${indent}  decode(data: Buffer, fds: number[] = []) {`,
-    );
+    lines.push(`${indent}  },`, `${indent}  decode(data: Buffer, fds: number[] = []) {`);
     if (args.length > 0) {
       lines.push(
         `${indent}    const reader = new MessageReader(data, fds);`,
         `${indent}    return this.decodeReader(reader);`,
       );
     } else {
-      lines.push(
-        `${indent}    void data;`,
-        `${indent}    void fds;`,
-        `${indent}    return {};`,
-      );
+      lines.push(`${indent}    void data;`, `${indent}    void fds;`, `${indent}    return {};`);
     }
     lines.push(`${indent}  },`);
   }
@@ -345,9 +364,7 @@ function parseArguments(argv: string[]): { output: string; xml: string[] } {
   const args = [...argv];
   const outputIndex = args.indexOf("--output");
   if (outputIndex < 0 || !args[outputIndex + 1]) {
-    throw new Error(
-      "usage: generate-wayland-protocol.ts --output FILE [PROTOCOL.xml ...]",
-    );
+    throw new Error("usage: generate-wayland-protocol.ts --output FILE [PROTOCOL.xml ...]");
   }
   const output = args[outputIndex + 1]!;
   args.splice(outputIndex, 2);
@@ -372,9 +389,7 @@ function main(): void {
     }
   }
 
-  const sorted = [...interfaces.entries()].sort(([a], [b]) =>
-    a < b ? -1 : a > b ? 1 : 0,
-  );
+  const sorted = [...interfaces.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const lines = [
     "/**",
     " * Generated Wayland wire bindings. Do not edit by hand.",
@@ -382,7 +397,7 @@ function main(): void {
     " * Regenerate with scripts/generate-wayland-protocol.ts. The runtime is",
     " * Moire's TypeScript codec and Unix socket implementation—not libwayland.",
     " */",
-    'import { MessageBuilder, MessageReader, type EncodedWaylandMessage } from "./index.js";',
+    'import { MessageBuilder, MessageReader, type EncodedWaylandMessage } from "./index";',
     "",
   ];
   for (const [, iface] of sorted) lines.push(...emitInterface(iface));
@@ -392,9 +407,7 @@ function main(): void {
 
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, lines.join("\n"), "utf8");
-  console.log(
-    `generated ${interfaces.size} interfaces from ${xml.length} XML files -> ${output}`,
-  );
+  console.log(`generated ${interfaces.size} interfaces from ${xml.length} XML files -> ${output}`);
 }
 
 main();

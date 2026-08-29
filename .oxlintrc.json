@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["import", "typescript", "unicorn", "oxc"],
+  "ignorePatterns": ["node_modules/**", ".pnpm-store/**", "vm/**", "dist/**"],
+  "rules": {
+    "import/no-relative-parent-imports": "error",
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "koffi",
+            "message": "Use the typed native boundary exported by @moire/sys."
+          }
+        ],
+        "patterns": [
+          {
+            "regex": "^(?:\\.|#).+\\.(?:[cm]?[jt]sx?)$",
+            "message": "Use an extensionless source import specifier."
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["packages/sys/src/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ]
+}

@@ -10,7 +10,7 @@ import type {
   UiPresentationMode,
   UiKeyEvent,
   UiPointerEvent,
-} from "../../platform.js";
+} from "#ui/platform";
 import type { RetainedClip } from "@moire/react-host";
 
 export class HeadlessPlatform implements PlatformBackend {
@@ -39,10 +39,7 @@ export class HeadlessPlatform implements PlatformBackend {
       accelerated: false,
       capabilities: [],
       retainedFrames: 0,
-      softwareFrames: this.windows.reduce(
-        (total, window) => total + window.presentedFrames,
-        0,
-      ),
+      softwareFrames: this.windows.reduce((total, window) => total + window.presentedFrames, 0),
       dmabufFrames: 0,
       shmFrames: 0,
     };

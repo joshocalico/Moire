@@ -44,7 +44,7 @@ export class SystemManagementClient {
       member: "GetSnapshot",
     });
     const [total, available, swapTotal, swapFree, rawProcesses] = reply.body ?? [];
-    const processes = (rawProcesses as WireProcess[] | undefined ?? []).map(
+    const processes = ((rawProcesses as WireProcess[] | undefined) ?? []).map(
       ([pid, name, appId, command, rssKiB, cpuBasisPoints, protectedProcess]) => ({
         pid: Number(pid),
         name: String(name),
@@ -83,11 +83,5 @@ export class SystemManagementClient {
 
 export function memoryPressure(snapshot: SystemSnapshot): number {
   if (snapshot.totalMemoryBytes <= 0) return 0;
-  return Math.max(
-    0,
-    Math.min(
-      1,
-      1 - snapshot.availableMemoryBytes / snapshot.totalMemoryBytes,
-    ),
-  );
+  return Math.max(0, Math.min(1, 1 - snapshot.availableMemoryBytes / snapshot.totalMemoryBytes));
 }

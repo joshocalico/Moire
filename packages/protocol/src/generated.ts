@@ -4,7 +4,7 @@
  * Regenerate with scripts/generate-wayland-protocol.ts. The runtime is
  * Moire's TypeScript codec and Unix socket implementation—not libwayland.
  */
-import { MessageBuilder, MessageReader, type EncodedWaylandMessage } from "./index.js";
+import { MessageBuilder, MessageReader, type EncodedWaylandMessage } from "./index";
 
 export const wlBuffer = {
   name: "wl_buffer",
@@ -35,15 +35,13 @@ export const wlBuffer = {
       },
     },
   },
-  enums: {
-  },
+  enums: {},
 } as const;
 
 export const wlCallback = {
   name: "wl_callback",
   version: 1,
-  requests: {
-  },
+  requests: {},
   events: {
     done: {
       opcode: 0,
@@ -59,8 +57,7 @@ export const wlCallback = {
       },
     },
   },
-  enums: {
-  },
+  enums: {},
 } as const;
 
 export const wlCompositor = {
@@ -88,10 +85,8 @@ export const wlCompositor = {
       },
     },
   },
-  events: {
-  },
-  enums: {
-  },
+  events: {},
+  enums: {},
 } as const;
 
 export const wlDataDevice = {
@@ -102,7 +97,13 @@ export const wlDataDevice = {
       opcode: 0,
       since: 1,
       destructor: false,
-      encode(targetId: number, source: number | null, origin: number, icon: number | null, serial: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        source: number | null,
+        origin: number,
+        icon: number | null,
+        serial: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.object(source ?? 0);
         builder.object(origin);
@@ -155,7 +156,7 @@ export const wlDataDevice = {
           surface: reader.object(),
           x: reader.fixed(),
           y: reader.fixed(),
-          id: (reader.object() || null),
+          id: reader.object() || null,
         };
       },
       decode(data: Buffer, fds: number[] = []) {
@@ -209,7 +210,7 @@ export const wlDataDevice = {
       since: 1,
       decodeReader(reader: MessageReader) {
         return {
-          id: (reader.object() || null),
+          id: reader.object() || null,
         };
       },
       decode(data: Buffer, fds: number[] = []) {
@@ -251,8 +252,7 @@ export const wlDataDeviceManager = {
       },
     },
   },
-  events: {
-  },
+  events: {},
   enums: {
     dndAction: {
       none: 0,
@@ -815,7 +815,13 @@ export const wlPointer = {
       opcode: 0,
       since: 1,
       destructor: false,
-      encode(targetId: number, serial: number, surface: number | null, hotspotX: number, hotspotY: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        serial: number,
+        surface: number | null,
+        hotspotX: number,
+        hotspotY: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.uint(serial);
         builder.object(surface ?? 0);
@@ -1036,7 +1042,13 @@ export const wlRegion = {
       opcode: 1,
       since: 1,
       destructor: false,
-      encode(targetId: number, x: number, y: number, width: number, height: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.int(x);
         builder.int(y);
@@ -1049,7 +1061,13 @@ export const wlRegion = {
       opcode: 2,
       since: 1,
       destructor: false,
-      encode(targetId: number, x: number, y: number, width: number, height: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.int(x);
         builder.int(y);
@@ -1059,10 +1077,8 @@ export const wlRegion = {
       },
     },
   },
-  events: {
-  },
-  enums: {
-  },
+  events: {},
+  enums: {},
 } as const;
 
 export const wlRegistry = {
@@ -1073,7 +1089,13 @@ export const wlRegistry = {
       opcode: 0,
       since: 1,
       destructor: false,
-      encode(targetId: number, name: number, interfaceValue: string, version: number, id: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        name: number,
+        interfaceValue: string,
+        version: number,
+        id: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.uint(name);
         builder.string(interfaceValue);
@@ -1113,8 +1135,7 @@ export const wlRegistry = {
       },
     },
   },
-  enums: {
-  },
+  enums: {},
 } as const;
 
 export const wlSeat = {
@@ -1217,8 +1238,7 @@ export const wlShell = {
       },
     },
   },
-  events: {
-  },
+  events: {},
   enums: {
     error: {
       role: 0,
@@ -1276,7 +1296,13 @@ export const wlShellSurface = {
       opcode: 4,
       since: 1,
       destructor: false,
-      encode(targetId: number, parent: number, x: number, y: number, flags: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        parent: number,
+        x: number,
+        y: number,
+        flags: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.object(parent);
         builder.int(x);
@@ -1289,7 +1315,12 @@ export const wlShellSurface = {
       opcode: 5,
       since: 1,
       destructor: false,
-      encode(targetId: number, method: number, framerate: number, output: number | null): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        method: number,
+        framerate: number,
+        output: number | null,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.uint(method);
         builder.uint(framerate);
@@ -1301,7 +1332,15 @@ export const wlShellSurface = {
       opcode: 6,
       since: 1,
       destructor: false,
-      encode(targetId: number, seat: number, serial: number, parent: number, x: number, y: number, flags: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        seat: number,
+        serial: number,
+        parent: number,
+        x: number,
+        y: number,
+        flags: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.object(seat);
         builder.uint(serial);
@@ -1569,7 +1608,15 @@ export const wlShmPool = {
       opcode: 0,
       since: 1,
       destructor: false,
-      encode(targetId: number, id: number, offset: number, width: number, height: number, stride: number, format: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        id: number,
+        offset: number,
+        width: number,
+        height: number,
+        stride: number,
+        format: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.newId(id);
         builder.int(offset);
@@ -1600,10 +1647,8 @@ export const wlShmPool = {
       },
     },
   },
-  events: {
-  },
-  enums: {
-  },
+  events: {},
+  enums: {},
 } as const;
 
 export const wlSubcompositor = {
@@ -1632,8 +1677,7 @@ export const wlSubcompositor = {
       },
     },
   },
-  events: {
-  },
+  events: {},
   enums: {
     error: {
       badSurface: 0,
@@ -1705,8 +1749,7 @@ export const wlSubsurface = {
       },
     },
   },
-  events: {
-  },
+  events: {},
   enums: {
     error: {
       badSurface: 0,
@@ -1743,7 +1786,13 @@ export const wlSurface = {
       opcode: 2,
       since: 1,
       destructor: false,
-      encode(targetId: number, x: number, y: number, width: number, height: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.int(x);
         builder.int(y);
@@ -1815,7 +1864,13 @@ export const wlSurface = {
       opcode: 9,
       since: 4,
       destructor: false,
-      encode(targetId: number, x: number, y: number, width: number, height: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.int(x);
         builder.int(y);
@@ -2021,8 +2076,7 @@ export const wlTouch = {
       },
     },
   },
-  enums: {
-  },
+  enums: {},
 } as const;
 
 export const wpPresentation = {
@@ -2076,8 +2130,7 @@ export const wpPresentation = {
 export const wpPresentationFeedback = {
   name: "wp_presentation_feedback",
   version: 2,
-  requests: {
-  },
+  requests: {},
   events: {
     syncOutput: {
       opcode: 0,
@@ -2250,7 +2303,13 @@ export const xdgPositioner = {
       opcode: 2,
       since: 1,
       destructor: false,
-      encode(targetId: number, x: number, y: number, width: number, height: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.int(x);
         builder.int(y);
@@ -2331,8 +2390,7 @@ export const xdgPositioner = {
       },
     },
   },
-  events: {
-  },
+  events: {},
   enums: {
     error: {
       invalidInput: 0,
@@ -2398,7 +2456,12 @@ export const xdgSurface = {
       opcode: 2,
       since: 1,
       destructor: false,
-      encode(targetId: number, id: number, parent: number | null, positioner: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        id: number,
+        parent: number | null,
+        positioner: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.newId(id);
         builder.object(parent ?? 0);
@@ -2410,7 +2473,13 @@ export const xdgSurface = {
       opcode: 3,
       since: 1,
       destructor: false,
-      encode(targetId: number, x: number, y: number, width: number, height: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.int(x);
         builder.int(y);
@@ -2504,7 +2573,13 @@ export const xdgToplevel = {
       opcode: 4,
       since: 1,
       destructor: false,
-      encode(targetId: number, seat: number, serial: number, x: number, y: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        seat: number,
+        serial: number,
+        x: number,
+        y: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.object(seat);
         builder.uint(serial);
@@ -2793,7 +2868,15 @@ export const zwpLinuxBufferParamsV1 = {
       opcode: 1,
       since: 1,
       destructor: false,
-      encode(targetId: number, fd: number, planeIdx: number, offset: number, stride: number, modifierHi: number, modifierLo: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        fd: number,
+        planeIdx: number,
+        offset: number,
+        stride: number,
+        modifierHi: number,
+        modifierLo: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.fd(fd);
         builder.uint(planeIdx);
@@ -2808,7 +2891,13 @@ export const zwpLinuxBufferParamsV1 = {
       opcode: 2,
       since: 1,
       destructor: false,
-      encode(targetId: number, width: number, height: number, format: number, flags: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        width: number,
+        height: number,
+        format: number,
+        flags: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.int(width);
         builder.int(height);
@@ -2821,7 +2910,14 @@ export const zwpLinuxBufferParamsV1 = {
       opcode: 3,
       since: 2,
       destructor: false,
-      encode(targetId: number, bufferId: number, width: number, height: number, format: number, flags: number): EncodedWaylandMessage {
+      encode(
+        targetId: number,
+        bufferId: number,
+        width: number,
+        height: number,
+        format: number,
+        flags: number,
+      ): EncodedWaylandMessage {
         const builder = new MessageBuilder();
         builder.newId(bufferId);
         builder.int(width);
@@ -3069,8 +3165,7 @@ export const zwpLinuxDmabufV1 = {
       },
     },
   },
-  enums: {
-  },
+  enums: {},
 } as const;
 
 export const zxdgDecorationManagerV1 = {
@@ -3098,10 +3193,8 @@ export const zxdgDecorationManagerV1 = {
       },
     },
   },
-  events: {
-  },
-  enums: {
-  },
+  events: {},
+  enums: {},
 } as const;
 
 export const zxdgToplevelDecorationV1 = {

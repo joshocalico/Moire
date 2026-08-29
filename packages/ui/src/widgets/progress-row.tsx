@@ -1,10 +1,10 @@
 import React, { type ReactNode } from "react";
 import { measureTextBounds } from "@moire/react-host";
-import { ProgressBar } from "./progress-bar.js";
-import { Spinner } from "./feedback.js";
-import { TextBlock, Surface } from "./primitives.js";
-import { Align, Box, Horizontal, Inset, Measure, Vertical, registerIntrinsicSize } from "./layout.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { ProgressBar } from "./progress-bar";
+import { Spinner } from "./feedback";
+import { TextBlock, Surface } from "./primitives";
+import { Align, Box, Horizontal, Inset, Measure, Vertical, registerIntrinsicSize } from "./layout";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type ProgressRowProps = {
   x?: number;
@@ -25,7 +25,7 @@ export function ProgressRow(props: ProgressRowProps): ReactNode {
   const theme = useWidgetTheme();
   const pal = theme.foundations.palette;
   const height = props.height ?? 78;
-  const actionWidth = props.action ? props.actionWidth ?? 110 : 0;
+  const actionWidth = props.action ? (props.actionWidth ?? 110) : 0;
   const statusBounds = props.status
     ? measureTextBounds(props.status, { fontSize: 10, fontFamily: "mono" })
     : null;
@@ -94,14 +94,16 @@ export function ProgressRow(props: ProgressRowProps): ReactNode {
               </Align>
             ) : (
               <Align height={16} alignY="center">
-                <Measure height={progressHeight}>{({ width }) => (
-                  <ProgressBar
-                    width={width}
-                    height={progressHeight}
-                    value={props.value!}
-                    size="small"
-                  />
-                )}</Measure>
+                <Measure height={progressHeight}>
+                  {({ width }) => (
+                    <ProgressBar
+                      width={width}
+                      height={progressHeight}
+                      value={props.value!}
+                      size="small"
+                    />
+                  )}
+                </Measure>
               </Align>
             )}
           </Vertical>

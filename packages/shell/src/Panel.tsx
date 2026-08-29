@@ -1,14 +1,8 @@
 import React, { type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  Text,
-  measureText,
-  measureTextBounds,
-} from "@moire/react-host";
+import { Group, Rect, Text, measureText, measureTextBounds } from "@moire/react-host";
 import { themePalette } from "@moire/theme";
-import { Button, Icon, Label, Pressable } from "./widgets.js";
-import type { TaskWindowInfo } from "./ssd.js";
+import { Button, Icon, Label, Pressable } from "./widgets";
+import type { TaskWindowInfo } from "./ssd";
 
 export type PanelProps = {
   screenW: number;
@@ -38,10 +32,7 @@ export function Panel(props: PanelProps): ReactNode {
     tasks.length > 0
       ? Math.max(
           30,
-          Math.min(
-            180,
-            Math.floor((taskAreaW - taskGap * (tasks.length - 1)) / tasks.length),
-          ),
+          Math.min(180, Math.floor((taskAreaW - taskGap * (tasks.length - 1)) / tasks.length)),
         )
       : 0;
   const taskH = 32;
@@ -51,27 +42,9 @@ export function Panel(props: PanelProps): ReactNode {
   const panelFill = (pal.panel & 0x00ffffff) | 0xb0000000;
   return (
     <Group x={0} y={y} width={props.screenW} height={panelH}>
-      <Rect
-        x={0}
-        y={0}
-        width={props.screenW}
-        height={panelH}
-        fill={panelFill}
-      />
-      <Rect
-        x={0}
-        y={0}
-        width={props.screenW}
-        height={1}
-        fill={pal.rimLight}
-      />
-      <Rect
-        x={0}
-        y={panelH - 1}
-        width={props.screenW}
-        height={1}
-        fill={pal.rimShade}
-      />
+      <Rect x={0} y={0} width={props.screenW} height={panelH} fill={panelFill} />
+      <Rect x={0} y={0} width={props.screenW} height={1} fill={pal.rimLight} />
+      <Rect x={0} y={panelH - 1} width={props.screenW} height={1} fill={pal.rimShade} />
       <Label
         x={18}
         y={Math.floor((panelH - brandSize) / 2) - 1}
@@ -103,13 +76,7 @@ export function Panel(props: PanelProps): ReactNode {
             y={taskY}
             width={taskW}
             height={taskH}
-            fill={
-              task.focused
-                ? pal.selection
-                : task.minimized
-                  ? 0x00000000
-                  : pal.surface
-            }
+            fill={task.focused ? pal.selection : task.minimized ? 0x00000000 : pal.surface}
             radius={pal.radiusSm}
             stroke={task.focused ? pal.accentLine : pal.borderSubtle}
             strokeWidth={task.focused ? 2 : 1}
@@ -119,11 +86,7 @@ export function Panel(props: PanelProps): ReactNode {
             <Icon
               x={iconX}
               y={Math.floor((taskH - iconSize) / 2)}
-              name={
-                /files?|folder/i.test(`${task.appId} ${task.title}`)
-                  ? "folder"
-                  : "app"
-              }
+              name={/files?|folder/i.test(`${task.appId} ${task.title}`) ? "folder" : "app"}
               path={task.iconPath}
               size={iconSize}
               color={task.minimized ? pal.muted : pal.text}

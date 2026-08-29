@@ -6,10 +6,10 @@ and the measured layout model are OS-agnostic. Window I/O goes through a small
 
 ## Platforms
 
-| Backend   | When |
-|-----------|------|
-| `wayland` | Linux + `WAYLAND_DISPLAY` (Moire session) |
-| `headless`| Tests / CI / no display |
+| Backend    | When                                      |
+| ---------- | ----------------------------------------- |
+| `wayland`  | Linux + `WAYLAND_DISPLAY` (Moire session) |
+| `headless` | Tests / CI / no display                   |
 
 Override with `MOIRE_UI_PLATFORM=wayland|headless`.
 
@@ -37,11 +37,7 @@ Visual policy lives in renderer-neutral recipe data. Applications can replace
 recipes for a complete subtree while retaining widget interaction and layout:
 
 ```tsx
-import {
-  Button,
-  WidgetThemeProvider,
-  createWidgetTheme,
-} from "@moire/ui";
+import { Button, WidgetThemeProvider, createWidgetTheme } from "@moire/ui";
 
 const base = createWidgetTheme();
 const primary = base.recipes.button.primary.medium;

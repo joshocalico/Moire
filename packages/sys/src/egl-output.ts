@@ -7,8 +7,8 @@
  * renderer-owned pair of GBM scanout targets for direct presentation.
  */
 import koffi from "koffi";
-import { closeFd } from "./libc.js";
-import { assertLinux } from "./platform.js";
+import { closeFd } from "./libc";
+import { assertLinux } from "./platform";
 
 const EGL_PLATFORM_GBM_KHR = 0x31d7;
 const EGL_OPENGL_ES_API = 0x30a0;
@@ -59,18 +59,8 @@ const GL_SCISSOR_TEST = 0x0c11;
 const GL_ONE = 1;
 const GL_ONE_MINUS_SRC_ALPHA = 0x0303;
 
-const FULL_QUAD_POSITIONS = new Float32Array([
-  -1, -1,
-  1, -1,
-  -1, 1,
-  1, 1,
-]);
-const UNIT_QUAD_TEX_COORDS = new Float32Array([
-  0, 0,
-  1, 0,
-  0, 1,
-  1, 1,
-]);
+const FULL_QUAD_POSITIONS = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+const UNIT_QUAD_TEX_COORDS = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
 
 const DRM_FORMAT_XRGB8888 = 0x34325258;
 const DRM_FORMAT_ARGB8888 = 0x34325241;
@@ -143,10 +133,7 @@ export type EglScaleOutput = {
   target: Uint8Array;
 };
 
-export type EglDirectOutput = Omit<
-  EglScaleOutput,
-  "targetPitch" | "target"
->;
+export type EglDirectOutput = Omit<EglScaleOutput, "targetPitch" | "target">;
 
 export type EglDirectPresent = {
   framebufferId: number;
@@ -263,12 +250,7 @@ function rectUnion(a: DamageRect | null, b: DamageRect): DamageRect {
 }
 
 function rectsIntersect(a: DamageRect, b: DamageRect): boolean {
-  return (
-    a.x < b.x + b.width &&
-    a.x + a.width > b.x &&
-    a.y < b.y + b.height &&
-    a.y + a.height > b.y
-  );
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
 function clampRect(rect: DamageRect, width: number, height: number): DamageRect {
@@ -304,14 +286,8 @@ function layerBounds(
   if (layer.clip) {
     const left = Math.max(bounds.x, layer.clip.x);
     const top = Math.max(bounds.y, layer.clip.y);
-    const right = Math.min(
-      bounds.x + bounds.width,
-      layer.clip.x + layer.clip.width,
-    );
-    const bottom = Math.min(
-      bounds.y + bounds.height,
-      layer.clip.y + layer.clip.height,
-    );
+    const right = Math.min(bounds.x + bounds.width, layer.clip.x + layer.clip.width);
+    const bottom = Math.min(bounds.y + bounds.height, layer.clip.y + layer.clip.height);
     bounds = {
       x: left,
       y: top,
@@ -348,12 +324,7 @@ function layerDamageBounds(
   sceneWidth: number,
   sceneHeight: number,
 ): DamageRect | null {
-  if (
-    layer.transform ||
-    layer.dropShadow ||
-    layer.backdropBlur ||
-    layer.colorMatrix
-  ) {
+  if (layer.transform || layer.dropShadow || layer.backdropBlur || layer.colorMatrix) {
     return layerBounds(layer, sceneWidth, sceneHeight);
   }
   const source = layer.sourceRect ?? {
@@ -370,24 +341,16 @@ function layerDamageBounds(
     return null;
   }
   const mapped: DamageRect = {
-    x: layer.destination.x +
-      ((left - source.x) / source.width) * layer.destination.width,
-    y: layer.destination.y +
-      ((top - source.y) / source.height) * layer.destination.height,
+    x: layer.destination.x + ((left - source.x) / source.width) * layer.destination.width,
+    y: layer.destination.y + ((top - source.y) / source.height) * layer.destination.height,
     width: ((right - left) / source.width) * layer.destination.width,
     height: ((bottom - top) / source.height) * layer.destination.height,
   };
   if (layer.clip) {
     const clippedLeft = Math.max(mapped.x, layer.clip.x);
     const clippedTop = Math.max(mapped.y, layer.clip.y);
-    const clippedRight = Math.min(
-      mapped.x + mapped.width,
-      layer.clip.x + layer.clip.width,
-    );
-    const clippedBottom = Math.min(
-      mapped.y + mapped.height,
-      layer.clip.y + layer.clip.height,
-    );
+    const clippedRight = Math.min(mapped.x + mapped.width, layer.clip.x + layer.clip.width);
+    const clippedBottom = Math.min(mapped.y + mapped.height, layer.clip.y + layer.clip.height);
     mapped.x = clippedLeft;
     mapped.y = clippedTop;
     mapped.width = Math.max(0, clippedRight - clippedLeft);
@@ -556,12 +519,8 @@ export class EglOutputScaler {
     this.egl = loadFirst(["libEGL.so.1", "libEGL.so"]);
     this.gl = loadFirst(["libGLESv2.so.2", "libGLESv2.so"]);
 
-    const gbmCreateDevice = this.gbm.func(
-      "void *gbm_create_device(int fd)",
-    ) as NativeFunction;
-    this.gbmDestroyDevice = this.gbm.func(
-      "void gbm_device_destroy(void *gbm)",
-    ) as NativeFunction;
+    const gbmCreateDevice = this.gbm.func("void *gbm_create_device(int fd)") as NativeFunction;
+    this.gbmDestroyDevice = this.gbm.func("void gbm_device_destroy(void *gbm)") as NativeFunction;
     this.gbmDevice = gbmCreateDevice(drmFd);
     if (pointerAddress(this.gbmDevice) === 0n) {
       throw new Error("gbm_create_device failed for EGL output");
@@ -573,9 +532,7 @@ export class EglOutputScaler {
     const eglInitialize = this.egl.func(
       "unsigned int eglInitialize(void *display, _Out_ int *major, _Out_ int *minor)",
     ) as NativeFunction;
-    const eglBindApi = this.egl.func(
-      "unsigned int eglBindAPI(unsigned int api)",
-    ) as NativeFunction;
+    const eglBindApi = this.egl.func("unsigned int eglBindAPI(unsigned int api)") as NativeFunction;
     const eglChooseConfig = this.egl.func(
       "unsigned int eglChooseConfig(void *display, const int *attrib_list, _Out_ void **configs, int config_size, _Out_ int *num_config)",
     ) as NativeFunction;
@@ -588,24 +545,16 @@ export class EglOutputScaler {
     this.eglDestroyContext = this.egl.func(
       "unsigned int eglDestroyContext(void *display, void *context)",
     ) as NativeFunction;
-    this.eglTerminate = this.egl.func(
-      "unsigned int eglTerminate(void *display)",
-    ) as NativeFunction;
+    this.eglTerminate = this.egl.func("unsigned int eglTerminate(void *display)") as NativeFunction;
     const eglQueryString = this.egl.func(
       "const char *eglQueryString(void *display, int name)",
     ) as NativeFunction;
-    const eglGetError = this.egl.func(
-      "unsigned int eglGetError(void)",
-    ) as NativeFunction;
+    const eglGetError = this.egl.func("unsigned int eglGetError(void)") as NativeFunction;
     const eglGetProcAddress = this.egl.func(
       "void *eglGetProcAddress(const char *procname)",
     ) as NativeFunction;
 
-    this.display = eglGetPlatformDisplay(
-      EGL_PLATFORM_GBM_KHR,
-      this.gbmDevice,
-      null,
-    );
+    this.display = eglGetPlatformDisplay(EGL_PLATFORM_GBM_KHR, this.gbmDevice, null);
     if (pointerAddress(this.display) === 0n) {
       throw new Error(`eglGetPlatformDisplay failed: 0x${Number(eglGetError()).toString(16)}`);
     }
@@ -641,15 +590,7 @@ export class EglOutputScaler {
     let config: unknown;
     try {
       if (
-        !Number(
-          eglChooseConfig(
-            this.display,
-            configAttrs,
-            configOut,
-            1,
-            configCount,
-          ),
-        ) ||
+        !Number(eglChooseConfig(this.display, configAttrs, configOut, 1, configCount)) ||
         (koffi.decode(configCount, "int") as number) < 1
       ) {
         throw new Error(`eglChooseConfig failed: 0x${Number(eglGetError()).toString(16)}`);
@@ -659,11 +600,7 @@ export class EglOutputScaler {
       koffi.free(configOut);
       koffi.free(configCount);
     }
-    const contextAttrs = new Int32Array([
-      EGL_CONTEXT_CLIENT_VERSION,
-      2,
-      EGL_NONE,
-    ]);
+    const contextAttrs = new Int32Array([EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE]);
     this.context = eglCreateContext(this.display, config, null, contextAttrs);
     if (pointerAddress(this.context) === 0n) {
       throw new Error(`eglCreateContext failed: 0x${Number(eglGetError()).toString(16)}`);
@@ -702,32 +639,20 @@ export class EglOutputScaler {
     ) as NativeFunction;
     this.eglDestroyImage = koffi.decode(
       destroyImagePtr,
-      koffi.proto(
-        "unsigned int MoireEglDestroyImage(void *display, void *image)",
-      ),
+      koffi.proto("unsigned int MoireEglDestroyImage(void *display, void *image)"),
     ) as NativeFunction;
     this.glEglImageTargetTexture = koffi.decode(
       imageTexturePtr,
-      koffi.proto(
-        "void MoireGlEglImageTargetTexture(unsigned int target, void *image)",
-      ),
+      koffi.proto("void MoireGlEglImageTargetTexture(unsigned int target, void *image)"),
     ) as NativeFunction;
 
     this.gbmBoCreate = this.gbm.func(
       "void *gbm_bo_create(void *gbm, uint32_t width, uint32_t height, uint32_t format, uint32_t flags)",
     ) as NativeFunction;
-    this.gbmBoDestroy = this.gbm.func(
-      "void gbm_bo_destroy(void *bo)",
-    ) as NativeFunction;
-    this.gbmBoGetFd = this.gbm.func(
-      "int gbm_bo_get_fd(void *bo)",
-    ) as NativeFunction;
-    this.gbmBoGetStride = this.gbm.func(
-      "uint32_t gbm_bo_get_stride(void *bo)",
-    ) as NativeFunction;
-    this.gbmBoGetFormat = this.gbm.func(
-      "uint32_t gbm_bo_get_format(void *bo)",
-    ) as NativeFunction;
+    this.gbmBoDestroy = this.gbm.func("void gbm_bo_destroy(void *bo)") as NativeFunction;
+    this.gbmBoGetFd = this.gbm.func("int gbm_bo_get_fd(void *bo)") as NativeFunction;
+    this.gbmBoGetStride = this.gbm.func("uint32_t gbm_bo_get_stride(void *bo)") as NativeFunction;
+    this.gbmBoGetFormat = this.gbm.func("uint32_t gbm_bo_get_format(void *bo)") as NativeFunction;
     this.gbmBoGetModifier = this.gbm.func(
       "uint64_t gbm_bo_get_modifier(void *bo)",
     ) as NativeFunction;
@@ -757,9 +682,7 @@ export class EglOutputScaler {
     this.glDeleteProgram = this.gl.func(
       "void glDeleteProgram(unsigned int program)",
     ) as NativeFunction;
-    this.glUseProgram = this.gl.func(
-      "void glUseProgram(unsigned int program)",
-    ) as NativeFunction;
+    this.glUseProgram = this.gl.func("void glUseProgram(unsigned int program)") as NativeFunction;
     this.glActiveTexture = this.gl.func(
       "void glActiveTexture(unsigned int texture)",
     ) as NativeFunction;
@@ -799,27 +722,17 @@ export class EglOutputScaler {
     this.glClearColor = this.gl.func(
       "void glClearColor(float red, float green, float blue, float alpha)",
     ) as NativeFunction;
-    this.glClear = this.gl.func(
-      "void glClear(unsigned int mask)",
-    ) as NativeFunction;
-    this.glUniform1i = this.gl.func(
-      "void glUniform1i(int location, int v0)",
-    ) as NativeFunction;
-    this.glUniform1f = this.gl.func(
-      "void glUniform1f(int location, float v0)",
-    ) as NativeFunction;
+    this.glClear = this.gl.func("void glClear(unsigned int mask)") as NativeFunction;
+    this.glUniform1i = this.gl.func("void glUniform1i(int location, int v0)") as NativeFunction;
+    this.glUniform1f = this.gl.func("void glUniform1f(int location, float v0)") as NativeFunction;
     this.glUniform4f = this.gl.func(
       "void glUniform4f(int location, float v0, float v1, float v2, float v3)",
     ) as NativeFunction;
     this.glUniform2f = this.gl.func(
       "void glUniform2f(int location, float v0, float v1)",
     ) as NativeFunction;
-    this.glEnable = this.gl.func(
-      "void glEnable(unsigned int cap)",
-    ) as NativeFunction;
-    this.glDisable = this.gl.func(
-      "void glDisable(unsigned int cap)",
-    ) as NativeFunction;
+    this.glEnable = this.gl.func("void glEnable(unsigned int cap)") as NativeFunction;
+    this.glDisable = this.gl.func("void glDisable(unsigned int cap)") as NativeFunction;
     this.glBlendFunc = this.gl.func(
       "void glBlendFunc(unsigned int sfactor, unsigned int dfactor)",
     ) as NativeFunction;
@@ -847,54 +760,26 @@ export class EglOutputScaler {
     this.texCoordLocation = Number(glGetAttribLocation(this.program, "a_tex_coord"));
     this.samplerLocation = Number(glGetUniformLocation(this.program, "u_texture"));
     this.opacityLocation = Number(glGetUniformLocation(this.program, "u_opacity"));
-    this.geometryLocation = Number(
-      glGetUniformLocation(this.program, "u_surface_geometry"),
-    );
-    this.hasGeometryLocation = Number(
-      glGetUniformLocation(this.program, "u_has_surface_geometry"),
-    );
+    this.geometryLocation = Number(glGetUniformLocation(this.program, "u_surface_geometry"));
+    this.hasGeometryLocation = Number(glGetUniformLocation(this.program, "u_has_surface_geometry"));
     this.uvRectLocation = Number(glGetUniformLocation(this.program, "u_uv_rect"));
     this.layerSizeLocation = Number(glGetUniformLocation(this.program, "u_layer_size"));
-    this.cornerRadiiLocation = Number(
-      glGetUniformLocation(this.program, "u_corner_radii"),
-    );
+    this.cornerRadiiLocation = Number(glGetUniformLocation(this.program, "u_corner_radii"));
     this.modeLocation = Number(glGetUniformLocation(this.program, "u_mode"));
     this.shadowRectLocation = Number(glGetUniformLocation(this.program, "u_shadow_rect"));
     this.shadowRadiusLocation = Number(glGetUniformLocation(this.program, "u_shadow_radius"));
-    this.shadowSoftnessLocation = Number(
-      glGetUniformLocation(this.program, "u_shadow_softness"),
-    );
+    this.shadowSoftnessLocation = Number(glGetUniformLocation(this.program, "u_shadow_softness"));
     this.shadowColorLocation = Number(glGetUniformLocation(this.program, "u_shadow_color"));
-    this.blurDirectionLocation = Number(
-      glGetUniformLocation(this.program, "u_blur_direction"),
-    );
-    this.saturationLocation = Number(
-      glGetUniformLocation(this.program, "u_saturation"),
-    );
-    this.tintColorLocation = Number(
-      glGetUniformLocation(this.program, "u_tint_color"),
-    );
-    this.hasColorMatrixLocation = Number(
-      glGetUniformLocation(this.program, "u_has_color_matrix"),
-    );
-    this.colorRow0Location = Number(
-      glGetUniformLocation(this.program, "u_color_row_0"),
-    );
-    this.colorRow1Location = Number(
-      glGetUniformLocation(this.program, "u_color_row_1"),
-    );
-    this.colorRow2Location = Number(
-      glGetUniformLocation(this.program, "u_color_row_2"),
-    );
-    this.colorRow3Location = Number(
-      glGetUniformLocation(this.program, "u_color_row_3"),
-    );
-    this.colorOffsetLocation = Number(
-      glGetUniformLocation(this.program, "u_color_offset"),
-    );
-    this.outputSwizzleLocation = Number(
-      glGetUniformLocation(this.program, "u_output_swizzle"),
-    );
+    this.blurDirectionLocation = Number(glGetUniformLocation(this.program, "u_blur_direction"));
+    this.saturationLocation = Number(glGetUniformLocation(this.program, "u_saturation"));
+    this.tintColorLocation = Number(glGetUniformLocation(this.program, "u_tint_color"));
+    this.hasColorMatrixLocation = Number(glGetUniformLocation(this.program, "u_has_color_matrix"));
+    this.colorRow0Location = Number(glGetUniformLocation(this.program, "u_color_row_0"));
+    this.colorRow1Location = Number(glGetUniformLocation(this.program, "u_color_row_1"));
+    this.colorRow2Location = Number(glGetUniformLocation(this.program, "u_color_row_2"));
+    this.colorRow3Location = Number(glGetUniformLocation(this.program, "u_color_row_3"));
+    this.colorOffsetLocation = Number(glGetUniformLocation(this.program, "u_color_offset"));
+    this.outputSwizzleLocation = Number(glGetUniformLocation(this.program, "u_output_swizzle"));
     if (this.positionLocation < 0 || this.texCoordLocation < 0) {
       throw new Error("GLES compositor shader attributes unavailable");
     }
@@ -955,7 +840,9 @@ export class EglOutputScaler {
       if (!(koffi.decode(status, "int") as number)) {
         const log = Buffer.alloc(2048);
         glGetShaderInfoLog(shader, log.length, null, log);
-        throw new Error(`GLES shader compile failed: ${log.toString("utf8").replace(/\0.*$/s, "")}`);
+        throw new Error(
+          `GLES shader compile failed: ${log.toString("utf8").replace(/\0.*$/s, "")}`,
+        );
       }
     } finally {
       koffi.free(status);
@@ -1068,9 +955,7 @@ void main() {
   gl_FragColor = color * u_opacity;
 }`,
     );
-    const glCreateProgram = this.gl.func(
-      "unsigned int glCreateProgram(void)",
-    ) as NativeFunction;
+    const glCreateProgram = this.gl.func("unsigned int glCreateProgram(void)") as NativeFunction;
     const glAttachShader = this.gl.func(
       "void glAttachShader(unsigned int program, unsigned int shader)",
     ) as NativeFunction;
@@ -1097,7 +982,9 @@ void main() {
         if (!(koffi.decode(status, "int") as number)) {
           const log = Buffer.alloc(2048);
           glGetProgramInfoLog(program, log.length, null, log);
-          throw new Error(`GLES program link failed: ${log.toString("utf8").replace(/\0.*$/s, "")}`);
+          throw new Error(
+            `GLES program link failed: ${log.toString("utf8").replace(/\0.*$/s, "")}`,
+          );
         }
       } finally {
         koffi.free(status);
@@ -1197,18 +1084,12 @@ void main() {
       upload = new Uint8Array(tightStride * layer.sourceHeight);
       for (let row = 0; row < layer.sourceHeight; row++) {
         upload.set(
-          layer.pixels.subarray(
-            row * layer.sourceStride,
-            row * layer.sourceStride + tightStride,
-          ),
+          layer.pixels.subarray(row * layer.sourceStride, row * layer.sourceStride + tightStride),
           row * tightStride,
         );
       }
     }
-    if (
-      cached.width !== layer.sourceWidth ||
-      cached.height !== layer.sourceHeight
-    ) {
+    if (cached.width !== layer.sourceWidth || cached.height !== layer.sourceHeight) {
       // Allocate storage only when the layer dimensions actually change.
       // Repeated glTexImage2D on an animated surface can make virtual GPU
       // drivers retain each replaced backing allocation until much later,
@@ -1262,12 +1143,14 @@ void main() {
       if (!rectsIntersect(layerBounds(layer, scene.width, scene.height), sampleBounds)) {
         return [];
       }
-      return [{
-        id: layer.id,
-        pixels: this.pixelIdentity(layer.pixels),
-        revision: layer.revision ?? this.compositionFrame,
-        signature: layerSignature(layer),
-      }];
+      return [
+        {
+          id: layer.id,
+          pixels: this.pixelIdentity(layer.pixels),
+          revision: layer.revision ?? this.compositionFrame,
+          signature: layerSignature(layer),
+        },
+      ];
     });
     return JSON.stringify({
       clearColor: scene.clearColor,
@@ -1370,24 +1253,10 @@ void main() {
     this.writeLayerPoint(layer, x, y, sceneWidth, sceneHeight, target, 0);
     this.writeLayerPoint(layer, x + width, y, sceneWidth, sceneHeight, target, 2);
     this.writeLayerPoint(layer, x, y + height, sceneWidth, sceneHeight, target, 4);
-    this.writeLayerPoint(
-      layer,
-      x + width,
-      y + height,
-      sceneWidth,
-      sceneHeight,
-      target,
-      6,
-    );
+    this.writeLayerPoint(layer, x + width, y + height, sceneWidth, sceneHeight, target, 6);
   }
 
-  private writeTexQuad(
-    target: Float32Array,
-    x0: number,
-    y0: number,
-    x1: number,
-    y1: number,
-  ): void {
+  private writeTexQuad(target: Float32Array, x0: number, y0: number, x1: number, y1: number): void {
     target[0] = x0;
     target[1] = y0;
     target[2] = x1;
@@ -1404,8 +1273,7 @@ void main() {
   ): CachedLayerGeometry {
     // compositionDamage already produced this structural signature for the
     // retained snapshot. Reuse it instead of serialising geometry a second time.
-    const signature =
-      this.layerSnapshots.get(layer.id)?.signature ?? layerSignature(layer);
+    const signature = this.layerSnapshots.get(layer.id)?.signature ?? layerSignature(layer);
     let geometry = this.layerGeometry.get(layer.id);
     if (!geometry) {
       geometry = {
@@ -1453,10 +1321,7 @@ void main() {
     );
     const shadow = layer.dropShadow;
     if (shadow) {
-      const padding = Math.max(
-        1,
-        shadow.blurRadius + Math.max(0, shadow.spread ?? 0),
-      );
+      const padding = Math.max(1, shadow.blurRadius + Math.max(0, shadow.spread ?? 0));
       this.writeLayerQuad(
         layer,
         shadow.offsetX - padding,
@@ -1486,37 +1351,16 @@ void main() {
     if (matrix.length !== 20) {
       throw new RangeError("GLES color matrix must contain 20 values");
     }
-    this.glUniform4f(
-      this.colorRow0Location,
-      matrix[0]!, matrix[1]!, matrix[2]!, matrix[3]!,
-    );
-    this.glUniform4f(
-      this.colorRow1Location,
-      matrix[5]!, matrix[6]!, matrix[7]!, matrix[8]!,
-    );
-    this.glUniform4f(
-      this.colorRow2Location,
-      matrix[10]!, matrix[11]!, matrix[12]!, matrix[13]!,
-    );
-    this.glUniform4f(
-      this.colorRow3Location,
-      matrix[15]!, matrix[16]!, matrix[17]!, matrix[18]!,
-    );
-    this.glUniform4f(
-      this.colorOffsetLocation,
-      matrix[4]!, matrix[9]!, matrix[14]!, matrix[19]!,
-    );
+    this.glUniform4f(this.colorRow0Location, matrix[0]!, matrix[1]!, matrix[2]!, matrix[3]!);
+    this.glUniform4f(this.colorRow1Location, matrix[5]!, matrix[6]!, matrix[7]!, matrix[8]!);
+    this.glUniform4f(this.colorRow2Location, matrix[10]!, matrix[11]!, matrix[12]!, matrix[13]!);
+    this.glUniform4f(this.colorRow3Location, matrix[15]!, matrix[16]!, matrix[17]!, matrix[18]!);
+    this.glUniform4f(this.colorOffsetLocation, matrix[4]!, matrix[9]!, matrix[14]!, matrix[19]!);
   }
 
   private bindColorTarget(framebuffer: number, texture: number): void {
     this.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    this.glFramebufferTexture2D(
-      GL_FRAMEBUFFER,
-      GL_COLOR_ATTACHMENT0,
-      GL_TEXTURE_2D,
-      texture,
-      0,
-    );
+    this.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     const status = Number(this.glCheckFramebufferStatus(GL_FRAMEBUFFER));
     if (status !== GL_FRAMEBUFFER_COMPLETE) {
       throw new Error(`GLES effect framebuffer incomplete: 0x${status.toString(16)}`);
@@ -1536,23 +1380,13 @@ void main() {
     // path until transformed damage/bounds are represented by the graph.
     const padding = Math.ceil(effect.radius);
     const regional = !layer.transform;
-    const sampleX = regional
-      ? Math.max(0, Math.floor(layer.destination.x - padding))
-      : 0;
-    const sampleY = regional
-      ? Math.max(0, Math.floor(layer.destination.y - padding))
-      : 0;
+    const sampleX = regional ? Math.max(0, Math.floor(layer.destination.x - padding)) : 0;
+    const sampleY = regional ? Math.max(0, Math.floor(layer.destination.y - padding)) : 0;
     const sampleRight = regional
-      ? Math.min(
-          scene.width,
-          Math.ceil(layer.destination.x + layer.destination.width + padding),
-        )
+      ? Math.min(scene.width, Math.ceil(layer.destination.x + layer.destination.width + padding))
       : scene.width;
     const sampleBottom = regional
-      ? Math.min(
-          scene.height,
-          Math.ceil(layer.destination.y + layer.destination.height + padding),
-        )
+      ? Math.min(scene.height, Math.ceil(layer.destination.y + layer.destination.height + padding))
       : scene.height;
     const backdropWidth = Math.max(1, sampleRight - sampleX);
     const backdropHeight = Math.max(1, sampleBottom - sampleY);
@@ -1576,10 +1410,7 @@ void main() {
       // the active render target would be undefined feedback in GLES.
       this.glActiveTexture(GL_TEXTURE0);
       this.glBindTexture(GL_TEXTURE_2D, this.backdropTexture);
-      if (
-        backdropWidth !== this.backdropWidth ||
-        backdropHeight !== this.backdropHeight
-      ) {
+      if (backdropWidth !== this.backdropWidth || backdropHeight !== this.backdropHeight) {
         this.glTexImage2D(
           GL_TEXTURE_2D,
           0,
@@ -1652,16 +1483,7 @@ void main() {
       // Preserve the finished blur in a material-owned texture. The shared
       // intermediate pair is reused by every effect in the scene.
       this.glBindTexture(GL_TEXTURE_2D, cached.texture);
-      this.glCopyTexSubImage2D(
-        GL_TEXTURE_2D,
-        0,
-        0,
-        0,
-        0,
-        0,
-        blurWidth,
-        blurHeight,
-      );
+      this.glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, blurWidth, blurHeight);
       cached.dependencyKey = dependencyKey;
     }
 
@@ -1696,27 +1518,15 @@ void main() {
     );
     const x0 = (layer.destination.x - sampleX) / backdropWidth;
     const y0 = (layer.destination.y - sampleY) / backdropHeight;
-    const x1 =
-      (layer.destination.x + layer.destination.width - sampleX) / backdropWidth;
-    const y1 =
-      (layer.destination.y + layer.destination.height - sampleY) / backdropHeight;
+    const x1 = (layer.destination.x + layer.destination.width - sampleX) / backdropWidth;
+    const y1 = (layer.destination.y + layer.destination.height - sampleY) / backdropHeight;
     this.glUniform4f(this.uvRectLocation, x0, y0, x1, y1);
-    this.glUniform2f(
-      this.layerSizeLocation,
-      layer.destination.width,
-      layer.destination.height,
-    );
+    this.glUniform2f(this.layerSizeLocation, layer.destination.width, layer.destination.height);
     const radii =
       typeof layer.cornerRadius === "number"
         ? [layer.cornerRadius, layer.cornerRadius, layer.cornerRadius, layer.cornerRadius]
-        : layer.cornerRadius ?? [0, 0, 0, 0];
-    this.glUniform4f(
-      this.cornerRadiiLocation,
-      radii[0]!,
-      radii[1]!,
-      radii[2]!,
-      radii[3]!,
-    );
+        : (layer.cornerRadius ?? [0, 0, 0, 0]);
+    this.glUniform4f(this.cornerRadiiLocation, radii[0]!, radii[1]!, radii[2]!, radii[3]!);
     this.writeTexQuad(this.effectTexCoords, x0, y0, x1, y1);
     this.drawQuad(this.effectPositions, this.effectTexCoords);
   }
@@ -1753,17 +1563,10 @@ void main() {
         previous.signature !== signature
       ) {
         const canUseSourceDamage =
-          previous != null &&
-          previous.signature === signature &&
-          layer.damage != null;
+          previous != null && previous.signature === signature && layer.damage != null;
         if (canUseSourceDamage) {
           for (const sourceDamage of layer.damage!) {
-            const mapped = layerDamageBounds(
-              layer,
-              sourceDamage,
-              scene.width,
-              scene.height,
-            );
+            const mapped = layerDamageBounds(layer, sourceDamage, scene.width, scene.height);
             if (mapped) damage = rectUnion(damage, mapped);
           }
         } else {
@@ -1818,9 +1621,12 @@ void main() {
     return clipped.width > 0 && clipped.height > 0 ? clipped : null;
   }
 
-  private restoreSceneScissor(
-    clip?: { x: number; y: number; width: number; height: number },
-  ): void {
+  private restoreSceneScissor(clip?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): void {
     let bounds = this.activeDamage;
     if (bounds && clip) {
       const left = Math.max(bounds.x, clip.x);
@@ -1936,10 +1742,7 @@ void main() {
           halfHeight,
         );
         this.glUniform1f(this.shadowRadiusLocation, Math.max(0, radiusValue + spread));
-        this.glUniform1f(
-          this.shadowSoftnessLocation,
-          Math.max(0.5, shadow.blurRadius * 0.5),
-        );
+        this.glUniform1f(this.shadowSoftnessLocation, Math.max(0.5, shadow.blurRadius * 0.5));
         this.glUniform4f(
           this.shadowColorLocation,
           (shadowColor & 0xff) / 255,
@@ -1970,27 +1773,12 @@ void main() {
       const u1 = cachedGeometry.texCoords[2]!;
       const v1 = cachedGeometry.texCoords[5]!;
       this.glUniform4f(this.uvRectLocation, u0, v0, u1, v1);
-      this.glUniform2f(
-        this.layerSizeLocation,
-        layer.destination.width,
-        layer.destination.height,
-      );
+      this.glUniform2f(this.layerSizeLocation, layer.destination.width, layer.destination.height);
       const radii =
         typeof layer.cornerRadius === "number"
-          ? [
-              layer.cornerRadius,
-              layer.cornerRadius,
-              layer.cornerRadius,
-              layer.cornerRadius,
-            ]
-          : layer.cornerRadius ?? [0, 0, 0, 0];
-      this.glUniform4f(
-        this.cornerRadiiLocation,
-        radii[0]!,
-        radii[1]!,
-        radii[2]!,
-        radii[3]!,
-      );
+          ? [layer.cornerRadius, layer.cornerRadius, layer.cornerRadius, layer.cornerRadius]
+          : (layer.cornerRadius ?? [0, 0, 0, 0]);
+      this.glUniform4f(this.cornerRadiiLocation, radii[0]!, radii[1]!, radii[2]!, radii[3]!);
       this.drawQuad(cachedGeometry.positions, cachedGeometry.texCoords);
     }
     this.glDisable(GL_BLEND);
@@ -2036,13 +1824,7 @@ void main() {
   ): void {
     this.validateOutputBounds(output);
     this.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    this.glFramebufferTexture2D(
-      GL_FRAMEBUFFER,
-      GL_COLOR_ATTACHMENT0,
-      GL_TEXTURE_2D,
-      texture,
-      0,
-    );
+    this.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     const status = Number(this.glCheckFramebufferStatus(GL_FRAMEBUFFER));
     if (status !== GL_FRAMEBUFFER_COMPLETE) {
       throw new Error(`GLES framebuffer incomplete: 0x${status.toString(16)}`);
@@ -2115,13 +1897,7 @@ void main() {
         stride,
         EGL_NONE,
       ]);
-      image = this.eglCreateImage(
-        this.display,
-        null,
-        EGL_LINUX_DMA_BUF_EXT,
-        null,
-        imageAttributes,
-      );
+      image = this.eglCreateImage(this.display, null, EGL_LINUX_DMA_BUF_EXT, null, imageAttributes);
       if (pointerAddress(image) === 0n) {
         throw new Error("eglCreateImageKHR dma-buf import failed");
       }
@@ -2142,9 +1918,7 @@ void main() {
       const handleOut = koffi.alloc("uint32_t", 1);
       const framebufferOut = koffi.alloc("uint32_t", 1);
       try {
-        const primeResult = Number(
-          this.drmPrimeFdToHandle(this.drmFd, primeFd, handleOut),
-        );
+        const primeResult = Number(this.drmPrimeFdToHandle(this.drmFd, primeFd, handleOut));
         if (primeResult !== 0) {
           throw new Error(`drmPrimeFDToHandle failed (${primeResult})`);
         }
@@ -2180,9 +1954,7 @@ void main() {
         }
         if (addResult !== 0) {
           const format = Number(this.gbmBoGetFormat(bo));
-          const modifier = BigInt(
-            this.gbmBoGetModifier(bo) as bigint | number,
-          );
+          const modifier = BigInt(this.gbmBoGetModifier(bo) as bigint | number);
           const planes = Number(this.gbmBoGetPlaneCount(bo));
           throw new Error(
             `DRM framebuffer registration failed (${addResult}) handle=${handle} stride=${stride} format=0x${format.toString(16)} modifier=0x${modifier.toString(16)} planes=${planes}`,
@@ -2221,10 +1993,7 @@ void main() {
     }
   }
 
-  private directTargetFor(
-    output: EglDirectOutput,
-    advance: boolean,
-  ): DirectOutputTarget {
+  private directTargetFor(output: EglDirectOutput, advance: boolean): DirectOutputTarget {
     const key = `${output.id}:${output.targetWidth}x${output.targetHeight}`;
     let pool = this.directTargets.get(key);
     if (!pool) {
@@ -2272,11 +2041,7 @@ void main() {
     this.gbmBoDestroy(target.bo);
   }
 
-  private createClientTarget(
-    channel: string,
-    width: number,
-    height: number,
-  ): ClientTarget {
+  private createClientTarget(channel: string, width: number, height: number): ClientTarget {
     if (!this.info.eglExtensions.includes("EGL_EXT_image_dma_buf_import")) {
       throw new Error("EGL_EXT_image_dma_buf_import is unavailable");
     }
@@ -2323,13 +2088,7 @@ void main() {
         stride,
         EGL_NONE,
       ]);
-      image = this.eglCreateImage(
-        this.display,
-        null,
-        EGL_LINUX_DMA_BUF_EXT,
-        null,
-        imageAttributes,
-      );
+      image = this.eglCreateImage(this.display, null, EGL_LINUX_DMA_BUF_EXT, null, imageAttributes);
       if (pointerAddress(image) === 0n) {
         throw new Error("eglCreateImageKHR client dma-buf failed");
       }
@@ -2458,10 +2217,7 @@ void main() {
   }
 
   /** Paint a renderer-neutral retained client scene directly into a dma-buf. */
-  renderClientComposition(
-    channel: string,
-    scene: EglCompositionScene,
-  ): EglClientPresent | null {
+  renderClientComposition(channel: string, scene: EglCompositionScene): EglClientPresent | null {
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
     const { width, height } = scene;
     const key = `${channel}:${width}x${height}`;
@@ -2559,25 +2315,14 @@ void main() {
   }
 
   /** Diagnostic readback for direct-target conformance; not used to present. */
-  readDirectOutput(
-    output: EglDirectOutput,
-    pixels: Uint8Array,
-  ): void {
+  readDirectOutput(output: EglDirectOutput, pixels: Uint8Array): void {
     const target = this.directTargetFor(output, false);
     const required = target.width * target.height * 4;
     if (pixels.byteLength < required) {
       throw new RangeError("Direct output diagnostic buffer is too small");
     }
     this.glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
-    this.glReadPixels(
-      0,
-      0,
-      target.width,
-      target.height,
-      GL_RGBA,
-      GL_UNSIGNED_BYTE,
-      pixels,
-    );
+    this.glReadPixels(0, 0, target.width, target.height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
   }
 
   renderOutput(output: EglScaleOutput): void {
@@ -2590,10 +2335,7 @@ void main() {
     }
 
     this.glBindTexture(GL_TEXTURE_2D, this.targetTexture);
-    if (
-      output.targetWidth !== this.targetWidth ||
-      output.targetHeight !== this.targetHeight
-    ) {
+    if (output.targetWidth !== this.targetWidth || output.targetHeight !== this.targetHeight) {
       this.glTexImage2D(
         GL_TEXTURE_2D,
         0,

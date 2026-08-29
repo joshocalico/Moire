@@ -11,13 +11,13 @@ import React, {
   type ReactNode,
 } from "react";
 import { Group, Rect } from "@moire/react-host";
-import { requestActiveWindowRedraw } from "../window.js";
-import { useTween } from "../motion.js";
-import { useWidgetTheme } from "../widget-theme.js";
-import { Button } from "./button.js";
-import { FocusScope } from "./focus.js";
-import { Horizontal, Inset, Spacer, Vertical } from "./layout.js";
-import { Surface, TextBlock } from "./primitives.js";
+import { requestActiveWindowRedraw } from "#ui/window";
+import { useTween } from "#ui/motion";
+import { useWidgetTheme } from "#ui/widget-theme";
+import { Button } from "./button";
+import { FocusScope } from "./focus";
+import { Horizontal, Inset, Spacer, Vertical } from "./layout";
+import { Surface, TextBlock } from "./primitives";
 
 type OverlayRender = () => ReactNode;
 type OverlayController = {
@@ -36,9 +36,7 @@ export type OverlayHostProps = {
 
 /** Paint registered overlays after ordinary content so they remain topmost. */
 export function OverlayHost(props: OverlayHostProps): ReactNode {
-  const [entries, setEntries] = useState<ReadonlyMap<string, OverlayRender>>(
-    () => new Map(),
-  );
+  const [entries, setEntries] = useState<ReadonlyMap<string, OverlayRender>>(() => new Map());
   const mount = useCallback((id: string, render: OverlayRender) => {
     setEntries((current) => {
       if (current.get(id) === render) return current;
@@ -58,13 +56,10 @@ export function OverlayHost(props: OverlayHostProps): ReactNode {
     requestActiveWindowRedraw();
   }, []);
   const update = useCallback((id: string) => {
-    setEntries((current) => current.has(id) ? new Map(current) : current);
+    setEntries((current) => (current.has(id) ? new Map(current) : current));
     requestActiveWindowRedraw();
   }, []);
-  const controller = useMemo(
-    () => ({ mount, update, unmount }),
-    [mount, unmount, update],
-  );
+  const controller = useMemo(() => ({ mount, update, unmount }), [mount, unmount, update]);
   return (
     <OverlayContext.Provider value={controller}>
       <Group width={props.width} height={props.height}>
@@ -111,9 +106,7 @@ export type ModalBarrierProps = {
 /** Pointer barrier and optional modal scrim. */
 export function ModalBarrier(props: ModalBarrierProps): ReactNode {
   const theme = useWidgetTheme();
-  const alpha = props.visible === false
-    ? 0
-    : Math.round(theme.foundations.opacity.scrim * 255);
+  const alpha = props.visible === false ? 0 : Math.round(theme.foundations.opacity.scrim * 255);
   return (
     <Rect
       width={props.width}
@@ -125,11 +118,7 @@ export function ModalBarrier(props: ModalBarrierProps): ReactNode {
   );
 }
 
-export type PopoverPlacement =
-  | "bottom-start"
-  | "bottom-end"
-  | "top-start"
-  | "top-end";
+export type PopoverPlacement = "bottom-start" | "bottom-end" | "top-start" | "top-end";
 
 export type PopoverProps = {
   open: boolean;
@@ -151,9 +140,7 @@ function popoverPosition(props: PopoverProps): { x: number; y: number; fromY: nu
   const placement = props.placement ?? "bottom-start";
   const below = placement.startsWith("bottom");
   const end = placement.endsWith("end");
-  const desiredX = end
-    ? props.anchor.x + props.anchor.width - props.width
-    : props.anchor.x;
+  const desiredX = end ? props.anchor.x + props.anchor.width - props.width : props.anchor.x;
   const desiredY = below
     ? props.anchor.y + props.anchor.height + gap
     : props.anchor.y - props.height - gap;
@@ -169,9 +156,7 @@ export function Popover(props: PopoverProps): ReactNode {
   const theme = useWidgetTheme();
   const progress = useTween(props.open ? 1 : 0, {
     initialValue: 0,
-    duration: props.open
-      ? theme.foundations.motion.normalMs
-      : theme.foundations.motion.fastMs,
+    duration: props.open ? theme.foundations.motion.normalMs : theme.foundations.motion.fastMs,
     easing: "ease-out",
   });
   if (!props.open && progress <= 0.001) return null;
@@ -237,15 +222,32 @@ export function Sheet(props: SheetProps): ReactNode {
   });
   if (!props.open && progress <= 0.001) return null;
   const edge = props.edge ?? "right";
-  const width = edge === "right" ? (props.width ?? Math.min(440, props.viewportWidth - 32)) : props.viewportWidth;
-  const height = edge === "bottom" ? (props.height ?? Math.min(360, props.viewportHeight - 32)) : props.viewportHeight;
+  const width =
+    edge === "right"
+      ? (props.width ?? Math.min(440, props.viewportWidth - 32))
+      : props.viewportWidth;
+  const height =
+    edge === "bottom"
+      ? (props.height ?? Math.min(360, props.viewportHeight - 32))
+      : props.viewportHeight;
   const x = edge === "right" ? props.viewportWidth - width * progress : 0;
   const y = edge === "bottom" ? props.viewportHeight - height * progress : 0;
   return (
     <OverlayPortal>
       <Group width={props.viewportWidth} height={props.viewportHeight}>
-        <ModalBarrier width={props.viewportWidth} height={props.viewportHeight} onDismiss={props.onDismiss} />
-        <FocusScope x={x} y={y} width={width} height={height} active={props.open} onEscape={props.onDismiss}>
+        <ModalBarrier
+          width={props.viewportWidth}
+          height={props.viewportHeight}
+          onDismiss={props.onDismiss}
+        />
+        <FocusScope
+          x={x}
+          y={y}
+          width={width}
+          height={height}
+          active={props.open}
+          onEscape={props.onDismiss}
+        >
           <Surface
             width={width}
             height={height}
@@ -256,8 +258,20 @@ export function Sheet(props: SheetProps): ReactNode {
             <Inset width={width} height={height} padding={theme.foundations.space.lg}>
               <Vertical gap={theme.foundations.space.md}>
                 <Horizontal height={36} align="center">
-                  <TextBlock flexGrow={1} text={props.title} fontSize={18} fontWeight="medium" verticalAlign="center" />
-                  <Button width={84} size="small" variant="ghost" label="Close" onPress={props.onDismiss} />
+                  <TextBlock
+                    flexGrow={1}
+                    text={props.title}
+                    fontSize={18}
+                    fontWeight="medium"
+                    verticalAlign="center"
+                  />
+                  <Button
+                    width={84}
+                    size="small"
+                    variant="ghost"
+                    label="Close"
+                    onPress={props.onDismiss}
+                  />
                 </Horizontal>
                 <Vertical flexGrow={1}>{props.children}</Vertical>
               </Vertical>
@@ -295,7 +309,11 @@ export function ConfirmationDialog(props: ConfirmationDialogProps): ReactNode {
   return (
     <OverlayPortal>
       <Group width={props.viewportWidth} height={props.viewportHeight}>
-        <ModalBarrier width={props.viewportWidth} height={props.viewportHeight} onDismiss={props.onDismiss} />
+        <ModalBarrier
+          width={props.viewportWidth}
+          height={props.viewportHeight}
+          onDismiss={props.onDismiss}
+        />
         <FocusScope
           x={Math.round((props.viewportWidth - width) / 2)}
           y={Math.round((props.viewportHeight - height) / 2 + (1 - progress) * 10)}
@@ -304,14 +322,38 @@ export function ConfirmationDialog(props: ConfirmationDialogProps): ReactNode {
           active={props.open}
           onEscape={props.onDismiss}
         >
-          <Surface width={width} height={height} elevation="high" radius={theme.foundations.radii.large} opacity={progress}>
+          <Surface
+            width={width}
+            height={height}
+            elevation="high"
+            radius={theme.foundations.radii.large}
+            opacity={progress}
+          >
             <Inset width={width} height={height} padding={theme.foundations.space.lg}>
               <Vertical gap={theme.foundations.space.sm}>
-                <TextBlock height={28} text={props.title} fontSize={17} fontWeight="medium" verticalAlign="center" />
-                <TextBlock flexGrow={1} text={props.message} color={theme.foundations.palette.muted} fontSize={12} wrap lineGap={3} overflow="clip" />
+                <TextBlock
+                  height={28}
+                  text={props.title}
+                  fontSize={17}
+                  fontWeight="medium"
+                  verticalAlign="center"
+                />
+                <TextBlock
+                  flexGrow={1}
+                  text={props.message}
+                  color={theme.foundations.palette.muted}
+                  fontSize={12}
+                  wrap
+                  lineGap={3}
+                  overflow="clip"
+                />
                 <Horizontal height={38} gap={8} align="center">
                   <Spacer />
-                  <Button width={100} label={props.cancelLabel ?? "Cancel"} onPress={props.onDismiss} />
+                  <Button
+                    width={100}
+                    label={props.cancelLabel ?? "Cancel"}
+                    onPress={props.onDismiss}
+                  />
                   <Button
                     width={112}
                     label={props.confirmLabel ?? "Continue"}
@@ -356,17 +398,50 @@ function ToastCard(props: ToastCardProps): ReactNode {
     return () => clearTimeout(timer);
   }, [durationMs, id]);
   return (
-    <Surface width={props.width} height={76} elevation="medium" radius={theme.foundations.radii.medium}>
+    <Surface
+      width={props.width}
+      height={76}
+      elevation="medium"
+      radius={theme.foundations.radii.medium}
+    >
       <Inset width={props.width} height={76} padding={{ vertical: 10, horizontal: 12 }}>
         <Horizontal gap={10} align="center">
           <Vertical flexGrow={1} gap={3} justify="center">
-            <TextBlock height={18} text={props.item.title} fontSize={13} fontWeight="medium" overflow="ellipsis" maxLines={1} />
-            {props.item.message ? <TextBlock height={16} text={props.item.message} fontSize={11} color={theme.foundations.palette.muted} overflow="ellipsis" maxLines={1} /> : null}
+            <TextBlock
+              height={18}
+              text={props.item.title}
+              fontSize={13}
+              fontWeight="medium"
+              overflow="ellipsis"
+              maxLines={1}
+            />
+            {props.item.message ? (
+              <TextBlock
+                height={16}
+                text={props.item.message}
+                fontSize={11}
+                color={theme.foundations.palette.muted}
+                overflow="ellipsis"
+                maxLines={1}
+              />
+            ) : null}
           </Vertical>
           {props.item.actionLabel ? (
-            <Button width={84} size="small" variant="ghost" label={props.item.actionLabel} onPress={props.item.onAction} />
+            <Button
+              width={84}
+              size="small"
+              variant="ghost"
+              label={props.item.actionLabel}
+              onPress={props.item.onAction}
+            />
           ) : null}
-          <Button width={64} size="small" variant="ghost" label="Hide" onPress={() => props.onDismiss(props.item.id)} />
+          <Button
+            width={64}
+            size="small"
+            variant="ghost"
+            label="Hide"
+            onPress={() => props.onDismiss(props.item.id)}
+          />
         </Horizontal>
       </Inset>
     </Surface>
@@ -387,13 +462,7 @@ export function ToastHost(props: ToastHostProps): ReactNode {
   if (props.items.length === 0) return null;
   return (
     <OverlayPortal>
-      <Vertical
-        x={props.viewportWidth - width - 16}
-        y={16}
-        width={width}
-        height={height}
-        gap={10}
-      >
+      <Vertical x={props.viewportWidth - width - 16} y={16} width={width} height={height} gap={10}>
         {props.items.map((item) => (
           <ToastCard key={item.id} item={item} width={width} onDismiss={props.onDismiss} />
         ))}

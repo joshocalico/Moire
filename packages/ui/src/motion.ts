@@ -86,9 +86,12 @@ export function useMotionValue(initial: number): MotionValue {
     registry.add(ref.current);
   }
   const value = ref.current;
-  useEffect(() => () => {
-    registry.delete(value);
-  }, [value]);
+  useEffect(
+    () => () => {
+      registry.delete(value);
+    },
+    [value],
+  );
   return value;
 }
 
@@ -192,9 +195,12 @@ export function useTweenValue(initial: number): TweenValue {
     registry.add(ref.current);
   }
   const value = ref.current;
-  useEffect(() => () => {
-    registry.delete(value);
-  }, [value]);
+  useEffect(
+    () => () => {
+      registry.delete(value);
+    },
+    [value],
+  );
   return value;
 }
 
@@ -299,8 +305,7 @@ class AnimatedValueImpl implements OwnedAnimationValue, TickableMotion {
     if (!this.isActive()) return false;
     this.elapsed = Math.min(this.duration, this.elapsed + Math.max(0, dt));
     const progress = this.duration === 0 ? 1 : this.elapsed / this.duration;
-    this.value = this.from +
-      (this.target - this.from) * applyEasing(progress, this.easing);
+    this.value = this.from + (this.target - this.from) * applyEasing(progress, this.easing);
     if (this.elapsed >= this.duration) {
       this.value = this.target;
       return false;
@@ -313,10 +318,7 @@ class AnimatedValueImpl implements OwnedAnimationValue, TickableMotion {
  * Declaratively animate toward `target` without putting intermediate values
  * through React. Attach the result directly to translateX/Y or opacity.
  */
-export function useAnimatedValue(
-  target: number,
-  options?: AnimatedValueOptions,
-): AnimationValue {
+export function useAnimatedValue(target: number, options?: AnimatedValueOptions): AnimationValue {
   const ref = useRef<AnimatedValueImpl | null>(null);
   if (!ref.current) {
     ref.current = new AnimatedValueImpl(target, options);
@@ -364,8 +366,8 @@ class OscillationValueImpl implements OwnedAnimationValue, TickableMotion {
   private updateValue(): void {
     const center = (this.from + this.to) / 2;
     const amplitude = (this.to - this.from) / 2;
-    this.value = center + amplitude *
-      Math.sin((this.elapsed / this.period) * Math.PI * 2 + this.phase);
+    this.value =
+      center + amplitude * Math.sin((this.elapsed / this.period) * Math.PI * 2 + this.phase);
   }
 
   get(): number {
@@ -480,9 +482,12 @@ export function useLoop(options: LoopOptions): AnimationValue {
   }
   const value = ref.current;
   value.configure(options);
-  useEffect(() => () => {
-    value.dispose();
-  }, [value]);
+  useEffect(
+    () => () => {
+      value.dispose();
+    },
+    [value],
+  );
   return value;
 }
 

@@ -14,17 +14,10 @@ export type DesktopEntry = {
   mimeTypes?: string[];
 };
 
-function parseLocaleKey(
-  map: Map<string, string>,
-  base: string,
-): string | undefined {
+function parseLocaleKey(map: Map<string, string>, base: string): string | undefined {
   const lang = (process.env.LANG ?? "en_US").split(".")[0];
   const short = lang.split("_")[0];
-  return (
-    map.get(`${base}[${lang}]`) ??
-    map.get(`${base}[${short}]`) ??
-    map.get(base)
-  );
+  return map.get(`${base}[${lang}]`) ?? map.get(`${base}[${short}]`) ?? map.get(base);
 }
 
 /**
@@ -93,9 +86,7 @@ export function parseDesktopFile(
     execTemplate: exec,
     icon: keys.get("Icon"),
     terminal: keys.get("Terminal") === "true",
-    categories: (keys.get("Categories") ?? "")
-      .split(";")
-      .filter(Boolean),
+    categories: (keys.get("Categories") ?? "").split(";").filter(Boolean),
     mimeTypes: (keys.get("MimeType") ?? "").split(";").filter(Boolean),
   };
 }

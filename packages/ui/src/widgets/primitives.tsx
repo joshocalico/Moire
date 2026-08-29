@@ -8,12 +8,8 @@ import {
   type HitPressEvent,
   type LiveNumber,
 } from "@moire/react-host";
-import { useWidgetTheme } from "../widget-theme.js";
-import {
-  registerIntrinsicSize,
-  useLayoutMetrics,
-  type FlexItemProps,
-} from "./layout.js";
+import { useWidgetTheme } from "#ui/widget-theme";
+import { registerIntrinsicSize, useLayoutMetrics, type FlexItemProps } from "./layout";
 
 const DEFAULT_FONT = 14;
 
@@ -32,10 +28,7 @@ export type LabelProps = FlexItemProps & {
   overflow?: "visible" | "clip" | "ellipsis";
 };
 
-type TextMeasureStyle = Pick<
-  LabelProps,
-  "scale" | "fontSize" | "fontWeight" | "fontFamily"
->;
+type TextMeasureStyle = Pick<LabelProps, "scale" | "fontSize" | "fontWeight" | "fontFamily">;
 
 function lineWidth(text: string, style: TextMeasureStyle): number {
   return measureTextBounds(text, style).width;
@@ -107,8 +100,8 @@ function intrinsicTextSize(props: LabelProps): { width: number; height: number }
   const lineHeight = measureTextBounds("Mg", style).height;
   return {
     width: Math.max(0, ...lines.map((line) => lineWidth(line, style))),
-    height: Math.max(1, lines.length) * lineHeight +
-      Math.max(0, lines.length - 1) * (props.lineGap ?? 0),
+    height:
+      Math.max(1, lines.length) * lineHeight + Math.max(0, lines.length - 1) * (props.lineGap ?? 0),
   };
 }
 
@@ -131,11 +124,13 @@ export function TextBlock(props: LabelProps): ReactNode {
   let lines = props.wrap
     ? props.text.split("\n").flatMap((line) => wrapParagraph(line, width, style))
     : props.text.split("\n");
-  const naturalHeight = Math.max(1, lines.length) * lineHeight + Math.max(0, lines.length - 1) * lineGap;
+  const naturalHeight =
+    Math.max(1, lines.length) * lineHeight + Math.max(0, lines.length - 1) * lineGap;
   const height = props.height ?? allocated?.height ?? naturalHeight;
-  const heightLimit = props.overflow === "visible"
-    ? Number.POSITIVE_INFINITY
-    : Math.max(1, Math.floor((height + lineGap) / Math.max(1, lineHeight + lineGap)));
+  const heightLimit =
+    props.overflow === "visible"
+      ? Number.POSITIVE_INFINITY
+      : Math.max(1, Math.floor((height + lineGap) / Math.max(1, lineHeight + lineGap)));
   const lineLimit = Math.max(1, Math.min(props.maxLines ?? Number.POSITIVE_INFINITY, heightLimit));
   const truncated = lines.length > lineLimit;
   lines = lines.slice(0, lineLimit);
@@ -145,11 +140,12 @@ export function TextBlock(props: LabelProps): ReactNode {
     );
   }
   const contentHeight = lines.length * lineHeight + Math.max(0, lines.length - 1) * lineGap;
-  const blockY = props.verticalAlign === "center"
-    ? Math.floor((height - contentHeight) / 2)
-    : props.verticalAlign === "end"
-      ? height - contentHeight
-      : 0;
+  const blockY =
+    props.verticalAlign === "center"
+      ? Math.floor((height - contentHeight) / 2)
+      : props.verticalAlign === "end"
+        ? height - contentHeight
+        : 0;
   return (
     <Group
       x={props.x ?? 0}
@@ -160,11 +156,12 @@ export function TextBlock(props: LabelProps): ReactNode {
     >
       {lines.map((line, index) => {
         const measuredWidth = lineWidth(line, style);
-        const textX = props.horizontalAlign === "center"
-          ? Math.floor((width - measuredWidth) / 2)
-          : props.horizontalAlign === "end"
-            ? width - measuredWidth
-            : 0;
+        const textX =
+          props.horizontalAlign === "center"
+            ? Math.floor((width - measuredWidth) / 2)
+            : props.horizontalAlign === "end"
+              ? width - measuredWidth
+              : 0;
         return (
           <Text
             key={`${index}:${line}`}
@@ -213,9 +210,10 @@ export type SurfaceProps = {
 export function Surface(props: SurfaceProps): ReactNode {
   const theme = useWidgetTheme();
   const palette = theme.foundations.palette;
-  const elevation = props.elevation && props.elevation !== "none"
-    ? theme.foundations.elevation[props.elevation]
-    : null;
+  const elevation =
+    props.elevation && props.elevation !== "none"
+      ? theme.foundations.elevation[props.elevation]
+      : null;
   const shadowAlpha = elevation ? Math.round(elevation.opacity * 255) : 0;
   return (
     <Group
@@ -234,11 +232,15 @@ export function Surface(props: SurfaceProps): ReactNode {
         radius={props.radius}
         stroke={props.stroke}
         strokeWidth={props.strokeWidth}
-        shadow={elevation ? {
-          color: (shadowAlpha << 24) >>> 0,
-          blurRadius: elevation.blur,
-          offsetY: elevation.offsetY,
-        } : undefined}
+        shadow={
+          elevation
+            ? {
+                color: (shadowAlpha << 24) >>> 0,
+                blurRadius: elevation.blur,
+                offsetY: elevation.offsetY,
+              }
+            : undefined
+        }
         onPress={props.onPress}
         onContextMenu={props.onContextMenu}
       />
@@ -272,7 +274,9 @@ export function FocusRing(props: FocusRingProps): ReactNode {
       width={Math.max(1, props.width - inset * 2)}
       height={Math.max(1, props.height - inset * 2)}
       fill={0x00000000}
-      radius={props.radius ?? theme.foundations.radii.small + theme.foundations.focusRing.radiusOffset}
+      radius={
+        props.radius ?? theme.foundations.radii.small + theme.foundations.focusRing.radiusOffset
+      }
       stroke={props.color ?? theme.foundations.palette.focusRing}
       strokeWidth={theme.foundations.focusRing.width}
     />

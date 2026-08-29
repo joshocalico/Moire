@@ -1,11 +1,11 @@
 import React, { type ReactNode } from "react";
 import { Group, Rect } from "@moire/react-host";
-import { CollectionItem } from "./interaction.js";
-import { Pressable } from "./pressable.js";
-import { Separator, Surface, TextBlock } from "./primitives.js";
-import { Inset } from "./layout.js";
-import { VirtualList } from "./virtual-list.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { CollectionItem } from "./interaction";
+import { Pressable } from "./pressable";
+import { Separator, Surface, TextBlock } from "./primitives";
+import { Inset } from "./layout";
+import { VirtualList } from "./virtual-list";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type TableSortDirection = "ascending" | "descending";
 export type TableSort = {
@@ -45,21 +45,13 @@ export type TableProps<T = unknown> = {
 
 type ResolvedColumn<T> = TableColumn<T> & { x: number; resolvedWidth: number };
 
-function resolveColumns<T>(
-  columns: readonly TableColumn<T>[],
-  width: number,
-): ResolvedColumn<T>[] {
+function resolveColumns<T>(columns: readonly TableColumn<T>[], width: number): ResolvedColumn<T>[] {
   const fixed = columns.reduce((sum, column) => sum + (column.width ?? 0), 0);
   const flexible = columns.filter((column) => column.width == null);
-  const flexibleWidth = flexible.length > 0
-    ? Math.max(1, (width - fixed) / flexible.length)
-    : 0;
+  const flexibleWidth = flexible.length > 0 ? Math.max(1, (width - fixed) / flexible.length) : 0;
   let x = 0;
   return columns.map((column) => {
-    const resolvedWidth = Math.max(
-      column.minWidth ?? 48,
-      column.width ?? flexibleWidth,
-    );
+    const resolvedWidth = Math.max(column.minWidth ?? 48, column.width ?? flexibleWidth);
     const resolved = { ...column, x, resolvedWidth };
     x += resolvedWidth;
     return resolved;
@@ -75,7 +67,7 @@ function compareValues(a: string | number, b: string | number): number {
 }
 
 /** Sortable virtualized data table with keyed row selection. */
-export function Table<T,>(props: TableProps<T>): ReactNode {
+export function Table<T>(props: TableProps<T>): ReactNode {
   const pal = useWidgetTheme().foundations.palette;
   const headerHeight = props.headerHeight ?? 34;
   const rowHeight = props.rowHeight ?? 38;
@@ -105,9 +97,7 @@ export function Table<T,>(props: TableProps<T>): ReactNode {
       <Surface width={props.width} height={headerHeight} fill={pal.panel}>
         {columns.map((column) => {
           const active = props.sort?.columnId === column.id;
-          const arrow = active
-            ? props.sort?.direction === "ascending" ? "↑" : "↓"
-            : "";
+          const arrow = active ? (props.sort?.direction === "ascending" ? "↑" : "↓") : "";
           return (
             <Group
               key={column.id}
@@ -125,13 +115,15 @@ export function Table<T,>(props: TableProps<T>): ReactNode {
                   props.onSortChange?.({
                     columnId: column.id,
                     direction:
-                      active && props.sort?.direction === "ascending"
-                        ? "descending"
-                        : "ascending",
+                      active && props.sort?.direction === "ascending" ? "descending" : "ascending",
                   });
                 }}
               />
-              <Inset width={column.resolvedWidth} height={headerHeight} padding={{ horizontal: 10 }}>
+              <Inset
+                width={column.resolvedWidth}
+                height={headerHeight}
+                padding={{ horizontal: 10 }}
+              >
                 <TextBlock
                   text={`${column.label}${arrow ? `  ${arrow}` : ""}`}
                   color={active ? pal.accent : pal.muted}
@@ -192,7 +184,11 @@ export function Table<T,>(props: TableProps<T>): ReactNode {
                       clip
                     >
                       {column.renderCell?.(row, index, column.resolvedWidth) ?? (
-                        <Inset width={column.resolvedWidth} height={rowHeight} padding={{ horizontal: 10 }}>
+                        <Inset
+                          width={column.resolvedWidth}
+                          height={rowHeight}
+                          padding={{ horizontal: 10 }}
+                        >
                           <TextBlock
                             text={text}
                             color={pal.text}

@@ -2,14 +2,9 @@
  * Pressable — interactive container with eased hover/press fill motion.
  */
 import React, { useRef, type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  type HitKeyEvent,
-  type HitPointerEvent,
-} from "@moire/react-host";
-import { easeTo, useMotionValue } from "../motion.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { Group, Rect, type HitKeyEvent, type HitPointerEvent } from "@moire/react-host";
+import { easeTo, useMotionValue } from "#ui/motion";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type PressableProps = {
   x?: number;
@@ -69,8 +64,8 @@ export function Pressable(props: PressableProps): ReactNode {
   const lastClick = useRef(0);
 
   const base = props.disabled
-    ? props.disabledFill ?? props.fill ?? 0x00000000
-    : props.fill ?? 0x00000000;
+    ? (props.disabledFill ?? props.fill ?? 0x00000000)
+    : (props.fill ?? 0x00000000);
   let fill = base;
   if (!props.disabled) {
     // Motion values use layout-sized units so the shared 0.5 settle threshold
@@ -96,12 +91,7 @@ export function Pressable(props: PressableProps): ReactNode {
   };
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       <Rect
         x={0}
         y={0}

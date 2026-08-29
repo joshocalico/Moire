@@ -13,16 +13,13 @@ import {
   type ButtonSize,
   type IconButtonVariant,
   type WidgetIconStyle,
-} from "../widget-theme.js";
-import { Pressable } from "./pressable.js";
-import { registerIntrinsicSize } from "./layout.js";
+} from "#ui/widget-theme";
+import { Pressable } from "./pressable";
+import { registerIntrinsicSize } from "./layout";
 
-export type { IconButtonVariant } from "../widget-theme.js";
+export type { IconButtonVariant } from "#ui/widget-theme";
 
-export type IconButtonSlot =
-  | string
-  | ReactNode
-  | ((style: WidgetIconStyle) => ReactNode);
+export type IconButtonSlot = string | ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
 export type IconButtonProps = {
   x?: number;
@@ -46,8 +43,7 @@ export function IconButton(props: IconButtonProps): ReactNode {
   const theme = useWidgetTheme();
   const generatedId = useId();
   const [focused, setFocused] = useState(false);
-  const recipe =
-    theme.recipes.iconButton[props.variant ?? "standard"][props.size ?? "medium"];
+  const recipe = theme.recipes.iconButton[props.variant ?? "standard"][props.size ?? "medium"];
   const root = resolveStatefulStyle(
     recipe.root,
     focused ? "focused" : "rest",
@@ -56,10 +52,7 @@ export function IconButton(props: IconButtonProps): ReactNode {
   const hovered = resolveStatefulStyle(recipe.root, "hover");
   const pressed = resolveStatefulStyle(recipe.root, "pressed");
   const disabled = resolveStatefulStyle(recipe.root, "disabled");
-  const iconStyle = resolveStatefulStyle(
-    recipe.icon,
-    props.disabled ? "disabled" : "rest",
-  );
+  const iconStyle = resolveStatefulStyle(recipe.icon, props.disabled ? "disabled" : "rest");
   const width = props.width ?? recipe.metrics.size;
   const height = props.height ?? recipe.metrics.size;
   const explicitFill = props.fill != null;
@@ -68,20 +61,19 @@ export function IconButton(props: IconButtonProps): ReactNode {
   let artwork: ReactNode;
   const handleKey = (event: HitKeyEvent) => {
     if (event.repeat || props.disabled) return;
-    if (
-      event.code === 28 ||
-      event.code === 57 ||
-      event.key === "Enter" ||
-      event.key === " "
-    ) {
+    if (event.code === 28 || event.code === 57 || event.key === "Enter" || event.key === " ") {
       const bounds = event.targetBounds;
-      props.onPress?.(bounds ? {
-        x: bounds.x + bounds.width / 2,
-        y: bounds.y + bounds.height / 2,
-        localX: bounds.width / 2,
-        localY: bounds.height / 2,
-        button: "left",
-      } : undefined);
+      props.onPress?.(
+        bounds
+          ? {
+              x: bounds.x + bounds.width / 2,
+              y: bounds.y + bounds.height / 2,
+              localX: bounds.width / 2,
+              localY: bounds.height / 2,
+              button: "left",
+            }
+          : undefined,
+      );
     }
   };
 
@@ -127,11 +119,7 @@ export function IconButton(props: IconButtonProps): ReactNode {
         radius={props.disabled ? disabled.radius : root.radius}
         stroke={explicitFill ? undefined : props.disabled ? disabled.stroke : root.stroke}
         strokeWidth={
-          explicitFill
-            ? undefined
-            : props.disabled
-              ? disabled.strokeWidth
-              : root.strokeWidth
+          explicitFill ? undefined : props.disabled ? disabled.strokeWidth : root.strokeWidth
         }
         disabled={props.disabled}
         focusable={!!props.onPress}
@@ -151,7 +139,8 @@ export function IconButton(props: IconButtonProps): ReactNode {
 }
 
 registerIntrinsicSize(IconButton, (props, theme) => {
-  const size = theme.recipes.iconButton[props.variant ?? "standard"][props.size ?? "medium"].metrics.size;
+  const size =
+    theme.recipes.iconButton[props.variant ?? "standard"][props.size ?? "medium"].metrics.size;
   return {
     width: props.width ?? size,
     height: props.height ?? size,

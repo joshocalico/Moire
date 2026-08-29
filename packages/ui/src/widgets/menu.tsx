@@ -1,10 +1,6 @@
 /** Shared menu surface and item primitives for app and compositor popups. */
 import React, { useId, useState, type ReactNode } from "react";
-import {
-  Group,
-  measureTextBounds,
-  type HitKeyEvent,
-} from "@moire/react-host";
+import { Group, measureTextBounds, type HitKeyEvent } from "@moire/react-host";
 import {
   resolveStatefulStyle,
   useWidgetTheme,
@@ -12,19 +8,14 @@ import {
   type WidgetIconStyle,
   type WidgetState,
   type WidgetTextStyle,
-} from "../widget-theme.js";
-import { Pressable } from "./pressable.js";
-import { Align, Box, Horizontal, Inset, Measure, Vertical } from "./layout.js";
-import { Separator, Surface, TextBlock } from "./primitives.js";
+} from "#ui/widget-theme";
+import { Pressable } from "./pressable";
+import { Align, Box, Horizontal, Inset, Measure, Vertical } from "./layout";
+import { Separator, Surface, TextBlock } from "./primitives";
 
-export type MenuItemSlot =
-  | ReactNode
-  | ((style: WidgetIconStyle) => ReactNode);
+export type MenuItemSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
-export type MenuTrailingSlot =
-  | string
-  | ReactNode
-  | ((style: WidgetTextStyle) => ReactNode);
+export type MenuTrailingSlot = string | ReactNode | ((style: WidgetTextStyle) => ReactNode);
 
 export type MenuItemProps = {
   x?: number;
@@ -49,10 +40,7 @@ function renderLeading(slot: MenuItemSlot, style: WidgetIconStyle): ReactNode {
   return typeof slot === "function" ? slot(style) : slot;
 }
 
-function renderTrailing(
-  slot: MenuTrailingSlot,
-  style: WidgetTextStyle,
-): ReactNode {
+function renderTrailing(slot: MenuTrailingSlot, style: WidgetTextStyle): ReactNode {
   return typeof slot === "function" ? slot(style) : slot;
 }
 
@@ -86,36 +74,24 @@ export function MenuItem(props: MenuItemProps): ReactNode {
     : null;
   const blockHeight =
     labelBounds.height +
-    (descriptionBounds
-      ? recipe.metrics.descriptionGap + descriptionBounds.height
-      : 0);
-  const trailingBounds = typeof props.trailing === "string"
-    ? measureTextBounds(props.trailing, {
-        fontSize: trailing.fontSize,
-        fontWeight: trailing.fontWeight,
-      })
-    : null;
+    (descriptionBounds ? recipe.metrics.descriptionGap + descriptionBounds.height : 0);
+  const trailingBounds =
+    typeof props.trailing === "string"
+      ? measureTextBounds(props.trailing, {
+          fontSize: trailing.fontSize,
+          fontWeight: trailing.fontWeight,
+        })
+      : null;
 
   const handleKey = (event: HitKeyEvent) => {
     if (event.repeat || props.disabled) return;
-    if (
-      event.code === 28 ||
-      event.code === 57 ||
-      event.key === "Enter" ||
-      event.key === " "
-    ) {
+    if (event.code === 28 || event.code === 57 || event.key === "Enter" || event.key === " ") {
       props.onPress?.();
     }
   };
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={height}
-      clip
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={height} clip>
       <Pressable
         width={props.width}
         height={height}
@@ -143,7 +119,11 @@ export function MenuItem(props: MenuItemProps): ReactNode {
               {renderLeading(props.leading, leading)}
             </Box>
           ) : null}
-          <Vertical flexGrow={1} height={blockHeight} gap={props.description ? recipe.metrics.descriptionGap : 0}>
+          <Vertical
+            flexGrow={1}
+            height={blockHeight}
+            gap={props.description ? recipe.metrics.descriptionGap : 0}
+          >
             <TextBlock
               height={labelBounds.height}
               text={props.label}
@@ -188,10 +168,7 @@ export function MenuItem(props: MenuItemProps): ReactNode {
   );
 }
 
-export type MenuEntry = Omit<
-  MenuItemProps,
-  "x" | "y" | "width" | "height" | "size"
-> & {
+export type MenuEntry = Omit<MenuItemProps, "x" | "y" | "width" | "height" | "size"> & {
   id?: string;
   separatorBefore?: boolean;
 };
@@ -226,9 +203,15 @@ export function Menu(props: MenuProps): ReactNode {
           padding={{ horizontal: recipe.metrics.paddingX }}
         >
           <Align alignY="center">
-            <Measure height={recipe.separator.height}>{({ width }) => (
-              <Separator width={width} height={recipe.separator.height} color={recipe.separator.fill} />
-            )}</Measure>
+            <Measure height={recipe.separator.height}>
+              {({ width }) => (
+                <Separator
+                  width={width}
+                  height={recipe.separator.height}
+                  color={recipe.separator.fill}
+                />
+              )}
+            </Measure>
           </Align>
         </Inset>,
       );
@@ -239,12 +222,7 @@ export function Menu(props: MenuProps): ReactNode {
         height={recipe.metrics.rowHeight}
         padding={{ horizontal: recipe.metrics.itemInset }}
       >
-        <MenuItem
-          {...item}
-          width={itemWidth}
-          height={recipe.metrics.rowHeight}
-          size={props.size}
-        />
+        <MenuItem {...item} width={itemWidth} height={recipe.metrics.rowHeight} size={props.size} />
       </Inset>,
     );
   });

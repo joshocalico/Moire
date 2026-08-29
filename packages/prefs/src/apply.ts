@@ -12,7 +12,7 @@ import {
   type MoireSettings,
   type WallpaperSettings,
   saveSettings,
-} from "./store.js";
+} from "./store";
 
 function repoThemesRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -28,10 +28,7 @@ export function themeForSettings(settings: MoireSettings): MoireTheme {
   return loadTheme(bundledThemePath(settings.dark));
 }
 
-function settingsWallpaperToSpec(
-  wp: WallpaperSettings,
-  theme: MoireTheme,
-): WallpaperSpec {
+function settingsWallpaperToSpec(wp: WallpaperSettings, theme: MoireTheme): WallpaperSpec {
   if (wp.mode === "atmosphere") return { mode: "atmosphere" };
   if (wp.mode === "gradient") {
     return { mode: "gradient", from: theme.tokens.bg, to: theme.tokens.accentLine };
@@ -94,16 +91,12 @@ gtk-decoration-layout=close,minimize,maximize:
         ],
         { stdio: "ignore" },
       );
-      execFileSync(
-        "gsettings",
-        ["set", "org.gnome.desktop.interface", "gtk-theme", "Moire"],
-        { stdio: "ignore" },
-      );
-      execFileSync(
-        "gsettings",
-        ["set", "org.gnome.desktop.interface", "font-name", font],
-        { stdio: "ignore" },
-      );
+      execFileSync("gsettings", ["set", "org.gnome.desktop.interface", "gtk-theme", "Moire"], {
+        stdio: "ignore",
+      });
+      execFileSync("gsettings", ["set", "org.gnome.desktop.interface", "font-name", font], {
+        stdio: "ignore",
+      });
     } catch {
       // gsettings optional
     }
@@ -113,11 +106,9 @@ gtk-decoration-layout=close,minimize,maximize:
 export function readSystemVolume(): number | null {
   if (commandExists("wpctl")) {
     try {
-      const out = execFileSync(
-        "wpctl",
-        ["get-volume", "@DEFAULT_AUDIO_SINK@"],
-        { encoding: "utf8" },
-      );
+      const out = execFileSync("wpctl", ["get-volume", "@DEFAULT_AUDIO_SINK@"], {
+        encoding: "utf8",
+      });
       // "Volume: 0.70" or "Volume: 0.70 [MUTED]"
       const m = out.match(/Volume:\s*([0-9.]+)/);
       if (m) return Math.min(1, Math.max(0, Number(m[1])));
@@ -127,11 +118,9 @@ export function readSystemVolume(): number | null {
   }
   if (commandExists("pactl")) {
     try {
-      const out = execFileSync(
-        "pactl",
-        ["get-sink-volume", "@DEFAULT_SINK@"],
-        { encoding: "utf8" },
-      );
+      const out = execFileSync("pactl", ["get-sink-volume", "@DEFAULT_SINK@"], {
+        encoding: "utf8",
+      });
       const m = out.match(/(\d+)%/);
       if (m) return Math.min(1, Math.max(0, Number(m[1]) / 100));
     } catch {
@@ -152,11 +141,7 @@ export function applyVolume(volume: number): { ok: boolean; detail: string } {
       return { ok: false, detail: "wpctl: no default audio sink" };
     }
     try {
-      execFileSync(
-        "wpctl",
-        ["set-volume", "@DEFAULT_AUDIO_SINK@", `${pct}%`],
-        { stdio: "ignore" },
-      );
+      execFileSync("wpctl", ["set-volume", "@DEFAULT_AUDIO_SINK@", `${pct}%`], { stdio: "ignore" });
       return { ok: true, detail: `wpctl ${pct}%` };
     } catch (err) {
       return { ok: false, detail: `wpctl failed: ${String(err)}` };
@@ -164,11 +149,7 @@ export function applyVolume(volume: number): { ok: boolean; detail: string } {
   }
   if (commandExists("pactl")) {
     try {
-      execFileSync(
-        "pactl",
-        ["set-sink-volume", "@DEFAULT_SINK@", `${pct}%`],
-        { stdio: "ignore" },
-      );
+      execFileSync("pactl", ["set-sink-volume", "@DEFAULT_SINK@", `${pct}%`], { stdio: "ignore" });
       return { ok: true, detail: `pactl ${pct}%` };
     } catch (err) {
       return { ok: false, detail: `pactl failed: ${String(err)}` };

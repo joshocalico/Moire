@@ -3,4 +3,4 @@ export {
   type FlexChildSpec,
   type FlexContainerOpts,
   type FlexLayoutResult,
-} from "./yoga.js";
+} from "./yoga";

@@ -6,6 +6,16 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "imports": {
+    "#ui/image/*": "./src/image/*.ts",
+    "#ui/layout/*": "./src/layout/*.ts",
+    "#ui/motion": "./src/motion.ts",
+    "#ui/platform": "./src/platform.ts",
+    "#ui/theme": "./src/theme.ts",
+    "#ui/widget-theme": "./src/widget-theme.tsx",
+    "#ui/widgets/*": "./src/widgets/*.tsx",
+    "#ui/window": "./src/window.ts"
+  },
   "bin": {
     "moire-ui-smoke": "./src/smoke.tsx"
   },

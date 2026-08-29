@@ -1,7 +1,7 @@
 import React, { type ReactNode } from "react";
 import { Group, Rect, Text, measureTextBounds } from "@moire/react-host";
-import { ScrollArea } from "./scroll.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { ScrollArea } from "./scroll";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type RichTextRun = {
   text: string;
@@ -42,18 +42,9 @@ export function RichTextView(props: RichTextViewProps): ReactNode {
   const lineHeight = props.lineHeight ?? Math.ceil(fontSize * 1.55);
   const padding = props.padding ?? 10;
   const gutter = props.lineNumbers ? 38 : 0;
-  const contentHeight = Math.max(
-    props.height,
-    padding * 2 + props.lines.length * lineHeight,
-  );
+  const contentHeight = Math.max(props.height, padding * 2 + props.lines.length * lineHeight);
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-      clip
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height} clip>
       <Rect
         width={props.width}
         height={props.height}
@@ -101,13 +92,7 @@ export function RichTextView(props: RichTextViewProps): ReactNode {
                 const x = cursorX;
                 cursorX += bounds.width;
                 return (
-                  <Group
-                    key={runIndex}
-                    x={x}
-                    y={0}
-                    width={bounds.width}
-                    height={lineHeight}
-                  >
+                  <Group key={runIndex} x={x} y={0} width={bounds.width} height={lineHeight}>
                     {run.background != null ? (
                       <Rect
                         x={0}
@@ -117,13 +102,7 @@ export function RichTextView(props: RichTextViewProps): ReactNode {
                         fill={run.background}
                       />
                     ) : null}
-                    <Text
-                      x={0}
-                      y={0}
-                      text={run.text}
-                      color={run.color ?? pal.text}
-                      {...style}
-                    />
+                    <Text x={0} y={0} text={run.text} color={run.color ?? pal.text} {...style} />
                   </Group>
                 );
               })}

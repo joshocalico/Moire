@@ -8,15 +8,10 @@ import React, {
   type ReactNode,
 } from "react";
 import { Group } from "@moire/react-host";
-import {
-  layoutFlex,
-  resolveInsets,
-  type FlexChildSpec,
-  type Insets,
-} from "../layout/yoga.js";
-import { useWidgetTheme, type WidgetTheme } from "../widget-theme.js";
+import { layoutFlex, resolveInsets, type FlexChildSpec, type Insets } from "#ui/layout/yoga";
+import { useWidgetTheme, type WidgetTheme } from "#ui/widget-theme";
 
-export type { Insets } from "../layout/yoga.js";
+export type { Insets } from "#ui/layout/yoga";
 
 export type LayoutMetrics = {
   x: number;
@@ -101,12 +96,7 @@ export function Inset(props: InsetProps): ReactNode {
       <LayoutMetricsContext.Provider
         value={{ x: 0, y: 0, width: contentWidth, height: contentHeight }}
       >
-        <Group
-          x={padding.left}
-          y={padding.top}
-          width={contentWidth}
-          height={contentHeight}
-        >
+        <Group x={padding.left} y={padding.top} width={contentWidth} height={contentHeight}>
           {props.children}
         </Group>
       </LayoutMetricsContext.Provider>
@@ -158,24 +148,23 @@ function collectFlexChildren(
   Children.forEach(children, (child) => {
     if (!isValidElement(child)) return;
     const props = child.props as FlexItemProps;
-    const intrinsic = (typeof child.type === "function" || typeof child.type === "object")
-      ? intrinsicSizeProviders.get(child.type as object)?.(
-          child.props as Record<string, unknown>,
-          theme,
-        )
-      : undefined;
-    const stretchesCrossAxis =
-      (props.alignSelf ?? align) === "stretch";
+    const intrinsic =
+      typeof child.type === "function" || typeof child.type === "object"
+        ? intrinsicSizeProviders.get(child.type as object)?.(
+            child.props as Record<string, unknown>,
+            theme,
+          )
+        : undefined;
+    const stretchesCrossAxis = (props.alignSelf ?? align) === "stretch";
     specs.push({
       // An intrinsic cross-axis size is a measurement hint, not an implicit
       // fixed size. Supplying it to a stretching flow prevents prose and
       // other responsive surfaces from receiving the parent's real width.
-      width: props.width ?? (
-        direction === "column" && stretchesCrossAxis ? undefined : intrinsic?.width
-      ),
-      height: props.height ?? (
-        direction === "row" && stretchesCrossAxis ? undefined : intrinsic?.height
-      ),
+      width:
+        props.width ??
+        (direction === "column" && stretchesCrossAxis ? undefined : intrinsic?.width),
+      height:
+        props.height ?? (direction === "row" && stretchesCrossAxis ? undefined : intrinsic?.height),
       flexGrow: props.flexGrow ?? (child.type === Spacer ? 1 : undefined),
       flexShrink: props.flexShrink,
       minWidth: props.minWidth,
@@ -204,20 +193,13 @@ export type RowProps = FlexItemProps & {
   children?: ReactNode;
 };
 
-function FlexLayout(
-  props: RowProps & { direction: "row" | "column" },
-): ReactNode {
+function FlexLayout(props: RowProps & { direction: "row" | "column" }): ReactNode {
   const theme = useWidgetTheme();
   const allocated = useLayoutMetrics();
   const width = props.width ?? allocated?.width ?? 0;
   const height = props.height ?? allocated?.height;
   const align = props.align ?? (props.direction === "row" ? "center" : "stretch");
-  const { specs, elements } = collectFlexChildren(
-    props.children,
-    theme,
-    props.direction,
-    align,
-  );
+  const { specs, elements } = collectFlexChildren(props.children, theme, props.direction, align);
   const laid = layoutFlex(
     {
       direction: props.direction,
@@ -301,8 +283,10 @@ export function Stack(props: StackProps): ReactNode {
     <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={height}>
       {elements.map((element, index) => {
         const childProps = element.props as FlexItemProps;
-        const childWidth = alignX === "stretch" ? width : Math.min(width, childProps.width ?? width);
-        const childHeight = alignY === "stretch" ? height : Math.min(height, childProps.height ?? height);
+        const childWidth =
+          alignX === "stretch" ? width : Math.min(width, childProps.width ?? width);
+        const childHeight =
+          alignY === "stretch" ? height : Math.min(height, childProps.height ?? height);
         const box = {
           x: alignedOffset(width, childWidth, alignX),
           y: alignedOffset(height, childHeight, alignY),

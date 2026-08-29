@@ -2,8 +2,8 @@
  * Create an XKB keymap memfd for wl_keyboard.keymap (format xkb_v1).
  */
 import koffi from "koffi";
-import { assertLinux } from "./platform.js";
-import { getLibc, closeFd } from "./libc.js";
+import { assertLinux } from "./platform";
+import { getLibc, closeFd } from "./libc";
 
 const MFD_CLOEXEC = 0x0001;
 const XKB_CONTEXT_NO_FLAGS = 0;
@@ -43,9 +43,7 @@ export function createXkbKeymapMemfd(): KeymapMemfd {
   const lib = getXkb();
   const libc = getLibc();
 
-  const xkb_context_new = lib.func(
-    "void *xkb_context_new(int flags)",
-  );
+  const xkb_context_new = lib.func("void *xkb_context_new(int flags)");
   const xkb_context_unref = lib.func("void xkb_context_unref(void *context)");
   const xkb_keymap_new_from_names = lib.func(
     "void *xkb_keymap_new_from_names(void *context, void *names, int flags)",
@@ -56,9 +54,7 @@ export function createXkbKeymapMemfd(): KeymapMemfd {
   const xkb_keymap_unref = lib.func("void xkb_keymap_unref(void *keymap)");
   const strlen = libc.func("size_t strlen(const char *s)");
   const free = libc.func("void free(void *ptr)");
-  const memfd_create = libc.func(
-    "int memfd_create(const char *name, unsigned int flags)",
-  );
+  const memfd_create = libc.func("int memfd_create(const char *name, unsigned int flags)");
   const write = libc.func("long write(int fd, const void *buf, size_t count)");
   const lseek = libc.func("long lseek(int fd, long offset, int whence)");
 
@@ -69,11 +65,7 @@ export function createXkbKeymapMemfd(): KeymapMemfd {
   let strPtr: unknown;
   try {
     // NULL names → system defaults
-    keymapPtr = xkb_keymap_new_from_names(
-      ctx,
-      null,
-      XKB_KEYMAP_COMPILE_NO_FLAGS,
-    );
+    keymapPtr = xkb_keymap_new_from_names(ctx, null, XKB_KEYMAP_COMPILE_NO_FLAGS);
     if (!keymapPtr) throw new Error("xkb_keymap_new_from_names failed");
 
     strPtr = xkb_keymap_get_as_string(keymapPtr, XKB_KEYMAP_FORMAT_TEXT_V1);

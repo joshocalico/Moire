@@ -1,12 +1,12 @@
 import React, { type ReactNode } from "react";
 import { Group, Rect, type HitKeyEvent } from "@moire/react-host";
-import { CollectionItem } from "./interaction.js";
-import { Icon, type IconName } from "./icon.js";
-import { Pressable } from "./pressable.js";
-import { VirtualList } from "./virtual-list.js";
-import { useWidgetTheme } from "../widget-theme.js";
-import { Box, Horizontal, Inset } from "./layout.js";
-import { TextBlock } from "./primitives.js";
+import { CollectionItem } from "./interaction";
+import { Icon, type IconName } from "./icon";
+import { Pressable } from "./pressable";
+import { VirtualList } from "./virtual-list";
+import { useWidgetTheme } from "#ui/widget-theme";
+import { Box, Horizontal, Inset } from "./layout";
+import { TextBlock } from "./primitives";
 
 export type TreeNode<T = unknown> = {
   id: string;
@@ -50,7 +50,7 @@ function flatten<T>(
 }
 
 /** Expandable virtualized hierarchy with keyed selection and keyboard toggles. */
-export function TreeView<T,>(props: TreeViewProps<T>): ReactNode {
+export function TreeView<T>(props: TreeViewProps<T>): ReactNode {
   const pal = useWidgetTheme().foundations.palette;
   const rowHeight = props.rowHeight ?? 34;
   const indent = props.indent ?? 18;
@@ -89,7 +89,12 @@ export function TreeView<T,>(props: TreeViewProps<T>): ReactNode {
         return (
           <Group width={props.width} height={rowHeight}>
             {props.selectedId === node.id ? (
-              <Rect width={props.width} height={rowHeight} fill={pal.selection} radius={pal.radiusSm} />
+              <Rect
+                width={props.width}
+                height={rowHeight}
+                fill={pal.selection}
+                radius={pal.radiusSm}
+              />
             ) : null}
             <CollectionItem
               width={props.width}
@@ -97,7 +102,7 @@ export function TreeView<T,>(props: TreeViewProps<T>): ReactNode {
               focusId={`tree-row:${node.id}`}
               disabled={node.disabled}
               onPress={() => props.onSelect?.(node)}
-              onDoublePress={() => branch ? toggle(node) : props.onActivate?.(node)}
+              onDoublePress={() => (branch ? toggle(node) : props.onActivate?.(node))}
               onKeyDown={handleKey}
             />
             <Inset

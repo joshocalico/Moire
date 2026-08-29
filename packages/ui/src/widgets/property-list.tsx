@@ -1,10 +1,10 @@
 import React, { type ReactNode } from "react";
 import { Group, Rect, type HitKeyEvent } from "@moire/react-host";
-import { Pressable } from "./pressable.js";
-import { ScrollArea } from "./scroll.js";
-import { Align, Horizontal, Inset, Vertical } from "./layout.js";
-import { TextBlock } from "./primitives.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { Pressable } from "./pressable";
+import { ScrollArea } from "./scroll";
+import { Align, Horizontal, Inset, Vertical } from "./layout";
+import { TextBlock } from "./primitives";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type PropertyListItem = {
   id: string;
@@ -69,9 +69,7 @@ function PropertyRow(props: PropertyRowProps): ReactNode {
         <Rect
           width={props.width}
           height={props.height}
-          fill={props.selected
-            ? ((pal.accent & 0x00ffffff) | 0x22000000) >>> 0
-            : pal.panel}
+          fill={props.selected ? ((pal.accent & 0x00ffffff) | 0x22000000) >>> 0 : pal.panel}
         />
       ) : null}
       {props.interactive ? (
@@ -86,11 +84,7 @@ function PropertyRow(props: PropertyRowProps): ReactNode {
           onKeyDown={handleKey}
         />
       ) : null}
-      <Inset
-        width={props.width}
-        height={props.height}
-        padding={{ horizontal: pad }}
-      >
+      <Inset width={props.width} height={props.height} padding={{ horizontal: pad }}>
         <Horizontal gap={pad} align="stretch">
           <Vertical width={props.labelWidth} justify="center" gap={2}>
             <TextBlock
@@ -119,16 +113,22 @@ function PropertyRow(props: PropertyRowProps): ReactNode {
             {isTextValue(props.item.value) ? (
               <TextBlock
                 height={16}
-                text={typeof props.item.value === "boolean"
-                  ? (props.item.value ? "Yes" : "No")
-                  : String(props.item.value)}
+                text={
+                  typeof props.item.value === "boolean"
+                    ? props.item.value
+                      ? "Yes"
+                      : "No"
+                    : String(props.item.value)
+                }
                 color={props.item.disabled ? pal.muted : pal.text}
                 fontSize={12}
                 verticalAlign="center"
                 overflow="ellipsis"
                 maxLines={1}
               />
-            ) : props.item.value}
+            ) : (
+              props.item.value
+            )}
           </Align>
         </Horizontal>
       </Inset>
@@ -146,15 +146,23 @@ function PropertyRow(props: PropertyRowProps): ReactNode {
 /** Sectioned key-value presentation for inspectors, metadata, and settings. */
 export function PropertyList(props: PropertyListProps): ReactNode {
   const pal = useWidgetTheme().foundations.palette;
-  const labelWidth = Math.max(72, Math.min(props.width - 96, props.labelWidth ?? Math.round(props.width * 0.38)));
+  const labelWidth = Math.max(
+    72,
+    Math.min(props.width - 96, props.labelWidth ?? Math.round(props.width * 0.38)),
+  );
   const rowHeight = Math.max(30, props.rowHeight ?? 42);
   const descriptionRowHeight = Math.max(rowHeight, props.descriptionRowHeight ?? 58);
   const hasItems = props.sections.some((section) => section.items.length > 0);
-  const contentHeight = props.sections.reduce((height, section) =>
-    height + (section.label ? SECTION_HEIGHT : 0) + section.items.reduce(
-      (sum, item) => sum + (item.description ? descriptionRowHeight : rowHeight),
-      0,
-    ), 0);
+  const contentHeight = props.sections.reduce(
+    (height, section) =>
+      height +
+      (section.label ? SECTION_HEIGHT : 0) +
+      section.items.reduce(
+        (sum, item) => sum + (item.description ? descriptionRowHeight : rowHeight),
+        0,
+      ),
+    0,
+  );
   const activate = (item: PropertyListItem) => {
     props.onSelect?.(item);
     item.onPress?.();
@@ -172,7 +180,8 @@ export function PropertyList(props: PropertyListProps): ReactNode {
         >
           <Vertical width={props.width} height={Math.max(props.height, contentHeight)} gap={0}>
             {props.sections.map((section, sectionIndex) => {
-              const sectionHeight = (section.label ? SECTION_HEIGHT : 0) +
+              const sectionHeight =
+                (section.label ? SECTION_HEIGHT : 0) +
                 section.items.reduce(
                   (sum, item) => sum + (item.description ? descriptionRowHeight : rowHeight),
                   0,

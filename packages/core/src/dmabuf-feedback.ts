@@ -2,7 +2,7 @@
  * Helpers for zwp_linux_dmabuf_feedback_v1 (format table + DRM device id).
  */
 import fs from "node:fs";
-import { getLibc } from "@moire/sys";
+import { createMemfd, seekFd, writeFd } from "@moire/sys";
 
 const MFD_CLOEXEC = 0x0001;
 const DRM_FORMAT_ARGB8888 = 0x34325241;
@@ -58,18 +58,10 @@ export function createDmabufFormatTableMemfd(): { fd: number; size: number } {
     }
   }
 
-  const libc = getLibc();
-  const memfd_create = libc.func(
-    "int memfd_create(const char *name, unsigned int flags)",
-  );
-  const write = libc.func("long write(int fd, const void *buf, size_t count)");
-  const lseek = libc.func("long lseek(int fd, long offset, int whence)");
-
-  const fd = memfd_create("moire-dmabuf-formats", MFD_CLOEXEC) as number;
-  if (fd < 0) throw new Error("memfd_create format table failed");
-  const n = write(fd, buf, size) as number;
+  const fd = createMemfd("moire-dmabuf-formats", MFD_CLOEXEC);
+  const n = writeFd(fd, buf);
   if (n !== size) throw new Error(`format table write short ${n}/${size}`);
-  lseek(fd, 0, 0); // SEEK_SET
+  seekFd(fd, 0, 0); // SEEK_SET
   return { fd, size };
 }
 

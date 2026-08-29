@@ -12,14 +12,15 @@ export const MOIRE: MoireVersion = {
   version: "0.0.0",
 };
 
-export { spawnDesktopApp, type SpawnOptions } from "./spawn.js";
-export { CompositorServer, type CompositorShell, type SsdWindowInfo, type SsdAction } from "./server.js";
+export { spawnDesktopApp, type SpawnOptions } from "./spawn";
 export {
-  startXwayland,
-  findFreeXDisplay,
-  type XwaylandHandle,
-} from "./xwayland.js";
-export { X11Wm, type XwmWindow, type XwmWindowType } from "./xwm.js";
+  CompositorServer,
+  type CompositorShell,
+  type SsdWindowInfo,
+  type SsdAction,
+} from "./server";
+export { startXwayland, findFreeXDisplay, type XwaylandHandle } from "./xwayland";
+export { X11Wm, type XwmWindow, type XwmWindowType } from "./xwm";
 export {
   validateCompositionScene,
   orderedCompositionLayers,
@@ -32,7 +33,7 @@ export {
   type CompositionLayer,
   type CompositionScene,
   type CompositionCapabilities,
-} from "./composition.js";
+} from "./composition";
 export {
   createCompositorOutputRenderer,
   resolveOutputRenderPreference,
@@ -42,4 +43,4 @@ export {
   type OutputRenderTarget,
   type OutputRenderResult,
   type EglPresentPreference,
-} from "./output-renderer.js";
+} from "./output-renderer";

@@ -18,10 +18,22 @@ export type PixelSurface = {
 
 /** Column-major 4×4 matrix, matching GLES and WebGL conventions. */
 export type CompositionMatrix4 = readonly [
-  number, number, number, number,
-  number, number, number, number,
-  number, number, number, number,
-  number, number, number, number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
 ];
 
 export type CompositionTransform = {
@@ -146,8 +158,7 @@ export function validateCompositionScene(scene: CompositionScene): void {
       layer.source.width < 1 ||
       layer.source.height < 1 ||
       layer.source.stride < layer.source.width * 4 ||
-      layer.source.pixels.byteLength <
-        layer.source.stride * layer.source.height
+      layer.source.pixels.byteLength < layer.source.stride * layer.source.height
     ) {
       throw new RangeError(`Composition layer ${layer.id} has an invalid source`);
     }
@@ -164,9 +175,7 @@ export function validateCompositionScene(scene: CompositionScene): void {
       throw new RangeError(`Composition layer ${layer.id} opacity is outside 0..1`);
     }
     const radii =
-      typeof layer.cornerRadius === "number"
-        ? [layer.cornerRadius]
-        : layer.cornerRadius ?? [];
+      typeof layer.cornerRadius === "number" ? [layer.cornerRadius] : (layer.cornerRadius ?? []);
     if (radii.some((radius) => radius < 0)) {
       throw new RangeError(`Composition layer ${layer.id} has negative corner radius`);
     }
@@ -177,8 +186,7 @@ export function validateCompositionScene(scene: CompositionScene): void {
       if (
         layer.mesh.positions.length < 9 ||
         layer.mesh.positions.length % 3 !== 0 ||
-        layer.mesh.textureCoordinates.length * 3 !==
-          layer.mesh.positions.length * 2
+        layer.mesh.textureCoordinates.length * 3 !== layer.mesh.positions.length * 2
       ) {
         throw new RangeError(`Composition layer ${layer.id} has invalid mesh geometry`);
       }
@@ -208,9 +216,7 @@ export function validateCompositionScene(scene: CompositionScene): void {
 }
 
 /** Stable z ordering without mutating application-owned arrays. */
-export function orderedCompositionLayers(
-  scene: CompositionScene,
-): CompositionLayer[] {
+export function orderedCompositionLayers(scene: CompositionScene): CompositionLayer[] {
   return scene.layers
     .map((layer, index) => ({ layer, index }))
     .sort((a, b) => a.layer.z - b.layer.z || a.index - b.index)

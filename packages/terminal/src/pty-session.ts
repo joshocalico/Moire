@@ -1,11 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import {
-  closeSync,
-  openSync,
-  readFileSync,
-  readlinkSync,
-} from "node:fs";
-import koffi from "koffi";
+import { closeSync, openSync, readFileSync, readlinkSync } from "node:fs";
+import { ioctlFd } from "@moire/sys";
 
 export type PtySessionOptions = {
   columns: number;
@@ -19,20 +14,7 @@ export type PtySessionOptions = {
   onError?: (error: Error) => void;
 };
 
-type Ioctl = (fd: number, request: number, argument: Buffer) => number;
-
 const TIOCSWINSZ = 0x5414;
-let ioctl: Ioctl | undefined;
-
-function getIoctl(): Ioctl {
-  if (!ioctl) {
-    const libc = koffi.load("libc.so.6");
-    ioctl = libc.func(
-      "int ioctl(int fd, unsigned long request, void *argument)",
-    ) as Ioctl;
-  }
-  return ioctl;
-}
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
@@ -40,10 +22,7 @@ function shellQuote(value: string): string {
 
 function childrenOf(pid: number): number[] {
   try {
-    const value = readFileSync(
-      `/proc/${pid}/task/${pid}/children`,
-      "utf8",
-    ).trim();
+    const value = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim();
     if (!value) return [];
     return value
       .split(/\s+/)
@@ -98,23 +77,19 @@ export class PtySession {
     const command =
       this.options.command ??
       `stty rows ${this.rows} cols ${this.columns}; exec ${shellQuote(shell)} -l`;
-    const child = spawn(
-      "script",
-      ["-qfec", command, "/dev/null"],
-      {
-        cwd: this.options.cwd,
-        env: {
-          ...process.env,
-          ...this.options.env,
-          TERM: "xterm-256color",
-          COLORTERM: "truecolor",
-          COLUMNS: String(this.columns),
-          LINES: String(this.rows),
-        },
-        detached: true,
-        stdio: ["pipe", "pipe", "pipe"],
+    const child = spawn("script", ["-qfec", command, "/dev/null"], {
+      cwd: this.options.cwd,
+      env: {
+        ...process.env,
+        ...this.options.env,
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+        COLUMNS: String(this.columns),
+        LINES: String(this.rows),
       },
-    );
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     this.child = child;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -179,13 +154,11 @@ export class PtySession {
       const size = Buffer.alloc(8);
       size.writeUInt16LE(this.rows, 0);
       size.writeUInt16LE(this.columns, 2);
-      getIoctl()(fd, TIOCSWINSZ, size);
+      ioctlFd(fd, TIOCSWINSZ, size);
       const pid = this.child?.pid;
       if (pid) process.kill(-pid, "SIGWINCH");
     } catch (error) {
-      this.options.onError?.(
-        error instanceof Error ? error : new Error(String(error)),
-      );
+      this.options.onError?.(error instanceof Error ? error : new Error(String(error)));
     } finally {
       if (fd !== undefined) closeSync(fd);
     }

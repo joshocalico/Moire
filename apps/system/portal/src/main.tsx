@@ -1,20 +1,8 @@
 import React, { useState, type ReactNode } from "react";
 import { spawn } from "node:child_process";
-import {
-  FileActivationService,
-  type OpenWithModel,
-} from "@moire/app-discovery";
-import {
-  SessionBus,
-  variant,
-  type DbusVariant,
-} from "@moire/dbus";
-import {
-  Application,
-  OpenWithPicker,
-  Window,
-  type WindowSize,
-} from "@moire/ui";
+import { FileActivationService, type OpenWithModel } from "@moire/app-discovery";
+import { SessionBus, variant, type DbusVariant } from "@moire/dbus";
+import { Application, OpenWithPicker, Window, type WindowSize } from "@moire/ui";
 
 const PORTAL_NAME = "org.freedesktop.impl.portal.desktop.moire";
 const PORTAL_PATH = "/org/freedesktop/portal/desktop";
@@ -69,9 +57,7 @@ function Chooser(
       selectedId={selectedId}
       onSelect={setSelectedId}
       onOpen={(choice) => props.finish({ response: 0, choice })}
-      onMakeDefault={(choice) =>
-        props.finish({ response: 0, choice, makeDefault: true })
-      }
+      onMakeDefault={(choice) => props.finish({ response: 0, choice, makeDefault: true })}
       allowMakeDefault={props.allowMakeDefault}
       standalone
       onDrag={props.onDrag}
@@ -242,10 +228,7 @@ async function main(): Promise<void> {
           const [filePath, handle] = body as [string, string];
           if (active) return { body: [2] };
           const initialModel = activation.openWithModel(filePath);
-          const modelForIds = (
-            applicationIds: string[],
-            selectedId: string | null,
-          ) =>
+          const modelForIds = (applicationIds: string[], selectedId: string | null) =>
             activation.applicationChoiceModel({
               fileName: initialModel.fileName,
               mimeType: initialModel.mimeType,
@@ -266,19 +249,12 @@ async function main(): Promise<void> {
             },
           });
           try {
-            const result = await presentChooser(
-              initialModel,
-              modelForIds,
-              (request) => {
-                active = { handle, ...request };
-              },
-            );
+            const result = await presentChooser(initialModel, modelForIds, (request) => {
+              active = { handle, ...request };
+            });
             if (result.response === 0 && result.choice) {
               if (result.makeDefault) {
-                activation.setDefaultApplication(
-                  initialModel.mimeType,
-                  result.choice,
-                );
+                activation.setDefaultApplication(initialModel.mimeType, result.choice);
               }
               activation.openWith(filePath, result.choice);
             }

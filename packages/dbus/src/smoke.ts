@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { SessionBus } from "./index.js";
+import { SessionBus } from "./index";
 
 const bus = await SessionBus.connect();
 const nameResult = await bus.requestName("org.moire.DBusSmoke");

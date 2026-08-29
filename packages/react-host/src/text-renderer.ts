@@ -12,10 +12,7 @@ export type TextDrawStyle = {
 };
 
 export type TextRenderer = {
-  measure(
-    text: string,
-    style?: TextDrawStyle,
-  ): { width: number; height: number };
+  measure(text: string, style?: TextDrawStyle): { width: number; height: number };
   draw(
     fb: Uint32Array,
     pitchPx: number,

@@ -4,12 +4,8 @@
  */
 import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import { Group, Image, Rect } from "@moire/react-host";
-import { getCachedImage, loadImage, type ImageData } from "../image/load.js";
-import {
-  resolveStatefulStyle,
-  useWidgetTheme,
-  type WidgetState,
-} from "../widget-theme.js";
+import { getCachedImage, loadImage, type ImageData } from "#ui/image/load";
+import { resolveStatefulStyle, useWidgetTheme, type WidgetState } from "#ui/widget-theme";
 
 export type ImageFit = "fill" | "contain" | "cover";
 
@@ -40,13 +36,7 @@ function fittedImageRect(
   imageWidth: number,
   imageHeight: number,
 ): { x: number; y: number; width: number; height: number } {
-  if (
-    fit === "fill" ||
-    width <= 0 ||
-    height <= 0 ||
-    imageWidth <= 0 ||
-    imageHeight <= 0
-  ) {
+  if (fit === "fill" || width <= 0 || height <= 0 || imageWidth <= 0 || imageHeight <= 0) {
     return { x: 0, y: 0, width, height };
   }
 
@@ -122,18 +112,10 @@ export function ImageWidget(props: ImageWidgetProps): ReactNode {
   const width = Math.max(0, props.width);
   const height = Math.max(0, props.height);
   const fit = props.fit ?? "fill";
-  const fitted = image
-    ? fittedImageRect(fit, width, height, image.width, image.height)
-    : null;
+  const fitted = image ? fittedImageRect(fit, width, height, image.width, image.height) : null;
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={width}
-      height={height}
-      clip={fit === "cover"}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={height} clip={fit === "cover"}>
       {props.placeholder !== false ? (
         <Rect width={width} height={height} {...placeholderStyle} />
       ) : null}

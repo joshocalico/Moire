@@ -1,6 +1,6 @@
 import React, { type ReactNode } from "react";
-import { RichTextView, type RichTextLine } from "./rich-text.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { RichTextView, type RichTextLine } from "./rich-text";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type CodeLanguage = "tsx" | "typescript" | "javascript" | "shell" | "plain";
 export type CodeViewProps = {
@@ -14,13 +14,37 @@ export type CodeViewProps = {
   fontSize?: number;
 };
 
-type Token = { text: string; kind: "plain" | "keyword" | "string" | "number" | "comment" | "tag" | "punctuation" };
-const KEYWORDS = new Set(["import", "export", "from", "const", "let", "function", "return", "type", "interface", "extends", "new", "if", "else", "true", "false", "null", "undefined", "async", "await"]);
+type Token = {
+  text: string;
+  kind: "plain" | "keyword" | "string" | "number" | "comment" | "tag" | "punctuation";
+};
+const KEYWORDS = new Set([
+  "import",
+  "export",
+  "from",
+  "const",
+  "let",
+  "function",
+  "return",
+  "type",
+  "interface",
+  "extends",
+  "new",
+  "if",
+  "else",
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "async",
+  "await",
+]);
 
 function tokenize(line: string, language: CodeLanguage): Token[] {
   if (language === "plain") return [{ text: line, kind: "plain" }];
   const tokens: Token[] = [];
-  const pattern = /(\/\/.*$|#.*$|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_$][\w$]*\b|<\/?[A-Za-z][\w.-]*|[^\w\s]+|\s+)/g;
+  const pattern =
+    /(\/\/.*$|#.*$|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_$][\w$]*\b|<\/?[A-Za-z][\w.-]*|[^\w\s]+|\s+)/g;
   for (const match of line.matchAll(pattern)) {
     const text = match[0];
     let kind: Token["kind"] = "plain";

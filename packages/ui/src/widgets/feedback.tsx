@@ -1,9 +1,9 @@
 import React, { useEffect, useState, type ReactNode } from "react";
 import { Group, Rect, measureTextBounds } from "@moire/react-host";
-import { Icon, type IconName } from "./icon.js";
-import { Surface, TextBlock } from "./primitives.js";
-import { Align, Box, Center, Horizontal, Inset, Vertical, registerIntrinsicSize } from "./layout.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { Icon, type IconName } from "./icon";
+import { Surface, TextBlock } from "./primitives";
+import { Align, Box, Center, Horizontal, Inset, Vertical, registerIntrinsicSize } from "./layout";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type BadgeTone = "neutral" | "accent" | "success" | "warning" | "danger";
 
@@ -15,7 +15,10 @@ export type BadgeProps = {
   height?: number;
 };
 
-function toneColor(tone: BadgeTone, pal: ReturnType<typeof useWidgetTheme>["foundations"]["palette"]): number {
+function toneColor(
+  tone: BadgeTone,
+  pal: ReturnType<typeof useWidgetTheme>["foundations"]["palette"],
+): number {
   if (tone === "accent") return pal.accentLine;
   if (tone === "success") return 0xff4f9b70;
   if (tone === "warning") return 0xffb48738;
@@ -30,8 +33,24 @@ export function Badge(props: BadgeProps): ReactNode {
   const width = Math.max(height, bounds.width + 14);
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={height}>
-      <Rect width={width} height={height} fill={toneColor(props.tone ?? "neutral", pal)} radius={height / 2} />
-      <TextBlock width={width} height={height} text={props.text} color={0xffffffff} fontSize={10} fontWeight="medium" horizontalAlign="center" verticalAlign="center" overflow="ellipsis" maxLines={1} />
+      <Rect
+        width={width}
+        height={height}
+        fill={toneColor(props.tone ?? "neutral", pal)}
+        radius={height / 2}
+      />
+      <TextBlock
+        width={width}
+        height={height}
+        text={props.text}
+        color={0xffffffff}
+        fontSize={10}
+        fontWeight="medium"
+        horizontalAlign="center"
+        verticalAlign="center"
+        overflow="ellipsis"
+        maxLines={1}
+      />
     </Group>
   );
 }
@@ -54,23 +73,68 @@ export function Banner(props: BannerProps): ReactNode {
   const height = props.height ?? (props.message ? 70 : 56);
   const accent = toneColor(props.tone ?? "accent", pal);
   return (
-    <Surface x={props.x} y={props.y} width={props.width} height={height} fill={pal.surface} radius={theme.foundations.radii.medium} stroke={pal.borderSubtle} strokeWidth={theme.foundations.borders.control} elevation="low">
+    <Surface
+      x={props.x}
+      y={props.y}
+      width={props.width}
+      height={height}
+      fill={pal.surface}
+      radius={theme.foundations.radii.medium}
+      stroke={pal.borderSubtle}
+      strokeWidth={theme.foundations.borders.control}
+      elevation="low"
+    >
       <Rect width={4} height={height} fill={accent} radius={2} />
       <Inset width={props.width} height={height} padding={{ left: 14, right: 12, vertical: 10 }}>
         <Horizontal gap={10} align="center">
-          {props.icon ? <Box width={20} height={20}><Icon name={props.icon} size={20} color={accent} symbolic /></Box> : null}
+          {props.icon ? (
+            <Box width={20} height={20}>
+              <Icon name={props.icon} size={20} color={accent} symbolic />
+            </Box>
+          ) : null}
           <Vertical flexGrow={1} gap={2} justify="center">
-            <TextBlock height={18} text={props.title} color={pal.text} fontSize={13} fontWeight="medium" verticalAlign="center" overflow="ellipsis" maxLines={1} />
-            {props.message ? <TextBlock height={30} text={props.message} color={pal.muted} fontSize={11} wrap lineGap={2} verticalAlign="center" overflow="ellipsis" maxLines={2} /> : null}
+            <TextBlock
+              height={18}
+              text={props.title}
+              color={pal.text}
+              fontSize={13}
+              fontWeight="medium"
+              verticalAlign="center"
+              overflow="ellipsis"
+              maxLines={1}
+            />
+            {props.message ? (
+              <TextBlock
+                height={30}
+                text={props.message}
+                color={pal.muted}
+                fontSize={11}
+                wrap
+                lineGap={2}
+                verticalAlign="center"
+                overflow="ellipsis"
+                maxLines={2}
+              />
+            ) : null}
           </Vertical>
-          {props.action ? <Align width={108} alignX="stretch" alignY="center">{props.action}</Align> : null}
+          {props.action ? (
+            <Align width={108} alignX="stretch" alignY="center">
+              {props.action}
+            </Align>
+          ) : null}
         </Horizontal>
       </Inset>
     </Surface>
   );
 }
 
-export type SpinnerProps = { x?: number; y?: number; size?: number; color?: number; active?: boolean };
+export type SpinnerProps = {
+  x?: number;
+  y?: number;
+  size?: number;
+  color?: number;
+  active?: boolean;
+};
 
 export function Spinner(props: SpinnerProps): ReactNode {
   const pal = useWidgetTheme().foundations.palette;
@@ -87,9 +151,19 @@ export function Spinner(props: SpinnerProps): ReactNode {
     <Group x={props.x ?? 0} y={props.y ?? 0} width={size} height={size}>
       {Array.from({ length: 8 }, (_, index) => {
         const angle = (Math.PI * 2 * index) / 8 - Math.PI / 2;
-        const alpha = 0x30 + (((index - phase + 8) % 8) * 0x18);
+        const alpha = 0x30 + ((index - phase + 8) % 8) * 0x18;
         const color = props.color ?? pal.accent;
-        return <Rect key={index} x={size / 2 + Math.cos(angle) * radius - dot / 2} y={size / 2 + Math.sin(angle) * radius - dot / 2} width={dot} height={dot} fill={((Math.min(0xff, alpha) << 24) | (color & 0x00ffffff)) >>> 0} radius={dot / 2} />;
+        return (
+          <Rect
+            key={index}
+            x={size / 2 + Math.cos(angle) * radius - dot / 2}
+            y={size / 2 + Math.sin(angle) * radius - dot / 2}
+            width={dot}
+            height={dot}
+            fill={((Math.min(0xff, alpha) << 24) | (color & 0x00ffffff)) >>> 0}
+            radius={dot / 2}
+          />
+        );
       })}
     </Group>
   );
@@ -110,15 +184,49 @@ export function EmptyState(props: EmptyStateProps): ReactNode {
   const theme = useWidgetTheme();
   const pal = theme.foundations.palette;
   const contentWidth = Math.max(1, Math.min(360, props.width - 32));
-  const contentHeight = (props.icon ? 56 : 0) + 24 + (props.message ? 44 : 0) + (props.action ? 46 : 0);
+  const contentHeight =
+    (props.icon ? 56 : 0) + 24 + (props.message ? 44 : 0) + (props.action ? 46 : 0);
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       <Center width={props.width} height={props.height}>
         <Vertical width={contentWidth} height={contentHeight} gap={8} align="center">
-          {props.icon ? <Box width={48} height={48}><Icon name={props.icon} size={48} color={pal.muted} symbolic /></Box> : null}
-          <TextBlock width={contentWidth} height={24} text={props.title} color={pal.text} fontSize={15} fontWeight="medium" horizontalAlign="center" verticalAlign="center" overflow="ellipsis" maxLines={1} />
-          {props.message ? <TextBlock width={contentWidth} height={36} text={props.message} color={pal.muted} fontSize={11} horizontalAlign="center" verticalAlign="center" wrap lineGap={3} overflow="ellipsis" maxLines={2} /> : null}
-          {props.action ? <Box width={140} height={36}>{props.action}</Box> : null}
+          {props.icon ? (
+            <Box width={48} height={48}>
+              <Icon name={props.icon} size={48} color={pal.muted} symbolic />
+            </Box>
+          ) : null}
+          <TextBlock
+            width={contentWidth}
+            height={24}
+            text={props.title}
+            color={pal.text}
+            fontSize={15}
+            fontWeight="medium"
+            horizontalAlign="center"
+            verticalAlign="center"
+            overflow="ellipsis"
+            maxLines={1}
+          />
+          {props.message ? (
+            <TextBlock
+              width={contentWidth}
+              height={36}
+              text={props.message}
+              color={pal.muted}
+              fontSize={11}
+              horizontalAlign="center"
+              verticalAlign="center"
+              wrap
+              lineGap={3}
+              overflow="ellipsis"
+              maxLines={2}
+            />
+          ) : null}
+          {props.action ? (
+            <Box width={140} height={36}>
+              {props.action}
+            </Box>
+          ) : null}
         </Vertical>
       </Center>
     </Group>

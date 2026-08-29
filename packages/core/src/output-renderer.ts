@@ -1,11 +1,11 @@
 import { EglOutputScaler, type EglCompositionScene } from "@moire/sys";
-import { copySceneToOutputScaled, type OutputGeometry } from "./display-layout.js";
+import { copySceneToOutputScaled, type OutputGeometry } from "./display-layout";
 import {
   orderedCompositionLayers,
   type CompositionCapabilities,
   type CompositionScene,
   type PixelSurface,
-} from "./composition.js";
+} from "./composition";
 
 export type OutputRenderPreference = "auto" | "software" | "egl";
 
@@ -140,15 +140,9 @@ class EglCompositorOutputRenderer implements CompositorOutputRenderer {
       height: scene.height,
       clearColor: scene.clearColor,
       layers: orderedCompositionLayers(scene).map((layer) => {
-        const dropShadow = layer.effects?.find(
-          (effect) => effect.kind === "drop-shadow",
-        );
-        const backdropBlur = layer.effects?.find(
-          (effect) => effect.kind === "backdrop-blur",
-        );
-        const colorMatrix = layer.effects?.find(
-          (effect) => effect.kind === "color-matrix",
-        );
+        const dropShadow = layer.effects?.find((effect) => effect.kind === "drop-shadow");
+        const backdropBlur = layer.effects?.find((effect) => effect.kind === "backdrop-blur");
+        const colorMatrix = layer.effects?.find((effect) => effect.kind === "color-matrix");
         return {
           id: layer.id,
           pixels: layer.source.pixels,

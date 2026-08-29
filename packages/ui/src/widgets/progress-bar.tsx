@@ -1,8 +1,8 @@
 /** Determinate progress indicator with recipe-owned geometry and paint. */
 import React, { type ReactNode } from "react";
 import { Group, Rect } from "@moire/react-host";
-import { useWidgetTheme, type ButtonSize } from "../widget-theme.js";
-import { registerIntrinsicSize } from "./layout.js";
+import { useWidgetTheme, type ButtonSize } from "#ui/widget-theme";
+import { registerIntrinsicSize } from "./layout";
 
 export type ProgressBarProps = {
   x?: number;
@@ -18,13 +18,7 @@ export function ProgressBar(props: ProgressBarProps): ReactNode {
   const height = props.height ?? recipe.metrics.height;
   const value = Math.max(0, Math.min(1, props.value));
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={height}
-      clip
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={height} clip>
       <Rect
         width={props.width}
         height={height}

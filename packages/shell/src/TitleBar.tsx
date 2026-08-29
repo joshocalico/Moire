@@ -1,13 +1,7 @@
 import React, { type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  Text,
-  measureText,
-  measureTextBounds,
-} from "@moire/react-host";
+import { Group, Rect, Text, measureText, measureTextBounds } from "@moire/react-host";
 import { themePalette } from "@moire/theme";
-import { Pressable } from "./widgets.js";
+import { Pressable } from "./widgets";
 
 export const TITLEBAR_H = 34;
 export const TITLEBAR_BTN = 28;
@@ -52,25 +46,10 @@ function WindowControl(props: WindowControlProps): ReactNode {
         onPress={props.onPress}
       />
       {props.kind === "minimize" ? (
-        <Rect
-          x={9}
-          y={16}
-          width={10}
-          height={1}
-          radius={1}
-          fill={props.color}
-        />
+        <Rect x={9} y={16} width={10} height={1} radius={1} fill={props.color} />
       ) : null}
       {props.kind === "maximize" && props.maximized ? (
-        <Rect
-          x={10}
-          y={8}
-          width={9}
-          height={9}
-          radius={1}
-          stroke={props.color}
-          strokeWidth={1}
-        />
+        <Rect x={10} y={8} width={9} height={9} radius={1} stroke={props.color} strokeWidth={1} />
       ) : null}
       {props.kind === "maximize" ? (
         <Rect
@@ -149,12 +128,7 @@ export function TitleBar(props: TitleBarProps): ReactNode {
         height={1}
         fill={pal.rimLight}
       />
-      <Rect
-        y={titlebarH - 1}
-        width={props.width}
-        height={1}
-        fill={pal.rimShade}
-      />
+      <Rect y={titlebarH - 1} width={props.width} height={1} fill={pal.rimShade} />
 
       {/* A quiet focus jewel gives the title an anchor without an app-icon box. */}
       <Rect
@@ -165,21 +139,9 @@ export function TitleBar(props: TitleBarProps): ReactNode {
         radius={3}
         fill={focused ? pal.accent : pal.border}
       />
-      <Text
-        x={titleX}
-        y={titleY}
-        text={shown}
-        color={fg}
-        fontSize={fontSize}
-        fontWeight="medium"
-      />
+      <Text x={titleX} y={titleY} text={shown} color={fg} fontSize={fontSize} fontWeight="medium" />
 
-      <WindowControl
-        x={minX}
-        kind="minimize"
-        color={controlFg}
-        onPress={props.onMinimize}
-      />
+      <WindowControl x={minX} kind="minimize" color={controlFg} onPress={props.onMinimize} />
       <WindowControl
         x={maxX}
         kind="maximize"

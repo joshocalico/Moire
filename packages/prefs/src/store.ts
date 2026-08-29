@@ -53,8 +53,7 @@ export const DEFAULT_SETTINGS: MoireSettings = {
 };
 
 export function configDir(): string {
-  const base =
-    process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
+  const base = process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
   return path.join(base, "moire");
 }
 
@@ -91,8 +90,7 @@ export function normalizeSettings(s: MoireSettings): MoireSettings {
     notifications: !!s.notifications,
     uiScale: clamp(Number(s.uiScale) || 1, 0.75, 2),
     displayMode:
-      typeof s.displayMode === "string" &&
-      /^\d+x\d+@\d+$/.test(s.displayMode)
+      typeof s.displayMode === "string" && /^\d+x\d+@\d+$/.test(s.displayMode)
         ? s.displayMode
         : null,
     displayOutputs: normalizeDisplayOutputs(s.displayOutputs),
@@ -102,18 +100,14 @@ export function normalizeSettings(s: MoireSettings): MoireSettings {
   };
 }
 
-function normalizeDisplayOutputs(
-  value: unknown,
-): Record<string, DisplayOutputSettings> {
+function normalizeDisplayOutputs(value: unknown): Record<string, DisplayOutputSettings> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const result: Record<string, DisplayOutputSettings> = {};
   for (const [id, raw] of Object.entries(value)) {
     if (!id || !raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const item = raw as Partial<DisplayOutputSettings>;
     const mode =
-      typeof item.mode === "string" && /^\d+x\d+@\d+$/.test(item.mode)
-        ? item.mode
-        : null;
+      typeof item.mode === "string" && /^\d+x\d+@\d+$/.test(item.mode) ? item.mode : null;
     result[id] = {
       x: Math.round(clamp(Number(item.x) || 0, 0, 65_535)),
       y: Math.round(clamp(Number(item.y) || 0, 0, 65_535)),

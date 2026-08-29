@@ -9,7 +9,7 @@ import {
   type FontFamily,
   type FontWeight,
   type TextStyle,
-} from "./engine.js";
+} from "./engine";
 
 let uiScaleFactor = 1;
 
@@ -51,9 +51,7 @@ function toStyle(style?: {
   };
 }
 
-function installRenderer(
-  engine: Awaited<ReturnType<typeof getFontEngine>>,
-): void {
+function installRenderer(engine: Awaited<ReturnType<typeof getFontEngine>>): void {
   setTextRenderer({
     measure(text, style) {
       return engine.measure(text, toStyle(style));
@@ -84,4 +82,4 @@ export {
   type FontFamily,
   type FontWeight,
   type TextStyle,
-} from "./engine.js";
+} from "./engine";

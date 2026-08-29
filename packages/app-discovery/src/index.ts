@@ -1,18 +1,18 @@
-export type { DesktopEntry } from "./desktop.js";
-export { parseDesktopFile } from "./desktop.js";
+export type { DesktopEntry } from "./desktop";
+export { parseDesktopFile } from "./desktop";
 export {
   discoverApplications,
   filterApplications,
   resolveApplicationIcon,
   xdgDataDirs,
-} from "./applications.js";
+} from "./applications";
 
 export {
   MimeAssociationDatabase,
   buildDesktopExec,
   loadMimeAssociationDatabase,
   type MimeAssociationSnapshot,
-} from "./mime.js";
+} from "./mime";
 export {
   ContextActionRegistry,
   type ContextAction,
@@ -20,7 +20,7 @@ export {
   type FileActionContext,
   type FileActionSource,
   type FileActionScope,
-} from "./actions.js";
+} from "./actions";
 export {
   FileActivationService,
   type FileActivation,
@@ -28,8 +28,5 @@ export {
   type ApplicationChoiceModelOptions,
   type OpenWithChoice,
   type OpenWithModel,
-} from "./open-with.js";
-export {
-  FileActivationPortalClient,
-  type FileChooserResponse,
-} from "./portal-client.js";
+} from "./open-with";
+export { FileActivationPortalClient, type FileChooserResponse } from "./portal-client";

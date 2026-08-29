@@ -1,7 +1,7 @@
 /** Declarative focus boundaries and window-level keyboard commands. */
 import React, { useId, type ReactNode } from "react";
 import { Group, type HitKeyEvent } from "@moire/react-host";
-import { useLayoutMetrics, type FlexItemProps } from "./layout.js";
+import { useLayoutMetrics, type FlexItemProps } from "./layout";
 
 export type FocusScopeProps = FlexItemProps & {
   id?: string;
@@ -27,11 +27,15 @@ export function FocusScope(props: FocusScopeProps): ReactNode {
       focusScopeId={id}
       focusScopeTrap={props.trap !== false}
       focusScopeActive={props.active !== false}
-      onGlobalKeyDown={props.onEscape ? (event) => {
-        if (event.repeat || (event.key !== "Escape" && event.code !== 1)) return false;
-        props.onEscape?.();
-        return true;
-      } : undefined}
+      onGlobalKeyDown={
+        props.onEscape
+          ? (event) => {
+              if (event.repeat || (event.key !== "Escape" && event.code !== 1)) return false;
+              props.onEscape?.();
+              return true;
+            }
+          : undefined
+      }
     >
       {props.children}
     </Group>
@@ -61,16 +65,19 @@ export type ShortcutManagerProps = FlexItemProps & {
 
 function matchesShortcut(shortcut: Shortcut, event: HitKeyEvent): boolean {
   if (shortcut.disabled || (!shortcut.allowRepeat && event.repeat)) return false;
-  const keyMatches = shortcut.key == null ||
-    shortcut.key.toLocaleLowerCase() === event.key?.toLocaleLowerCase();
+  const keyMatches =
+    shortcut.key == null || shortcut.key.toLocaleLowerCase() === event.key?.toLocaleLowerCase();
   const codeMatches = shortcut.code == null || shortcut.code === event.code;
   const modifierMatches = shortcut.platformModifier
-    ? (event.ctrlKey || event.metaKey)
-    : event.ctrlKey === (shortcut.ctrl ?? false) &&
-      event.metaKey === (shortcut.meta ?? false);
-  return keyMatches && codeMatches && modifierMatches &&
+    ? event.ctrlKey || event.metaKey
+    : event.ctrlKey === (shortcut.ctrl ?? false) && event.metaKey === (shortcut.meta ?? false);
+  return (
+    keyMatches &&
+    codeMatches &&
+    modifierMatches &&
     event.shiftKey === (shortcut.shift ?? false) &&
-    event.altKey === (shortcut.alt ?? false);
+    event.altKey === (shortcut.alt ?? false)
+  );
 }
 
 /** Dispatch declarative commands before focused-widget keyboard handling. */
@@ -84,12 +91,18 @@ export function ShortcutManager(props: ShortcutManagerProps): ReactNode {
       y={props.y ?? 0}
       width={width}
       height={height}
-      onGlobalKeyDown={props.enabled === false ? undefined : (event) => {
-        const shortcut = props.shortcuts.find((candidate) => matchesShortcut(candidate, event));
-        if (!shortcut) return false;
-        shortcut.onInvoke();
-        return true;
-      }}
+      onGlobalKeyDown={
+        props.enabled === false
+          ? undefined
+          : (event) => {
+              const shortcut = props.shortcuts.find((candidate) =>
+                matchesShortcut(candidate, event),
+              );
+              if (!shortcut) return false;
+              shortcut.onInvoke();
+              return true;
+            }
+      }
     >
       {props.children}
     </Group>

@@ -4,9 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import React, { type ReactNode } from "react";
 import { Group, Image, Rect } from "@moire/react-host";
-import { useWidgetTheme } from "../widget-theme.js";
-import { loadImageSync, type ImageData } from "../image/load.js";
-import { loadSvgIconSync } from "../image/svg-icon.js";
+import { useWidgetTheme } from "#ui/widget-theme";
+import { loadImageSync, type ImageData } from "#ui/image/load";
+import { loadSvgIconSync } from "#ui/image/svg-icon";
 
 export type IconName =
   | "folder"
@@ -62,10 +62,7 @@ const KNOWN: ReadonlySet<string> = new Set([
 ]);
 
 function iconsDir(): string {
-  return path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../icons",
-  );
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../icons");
 }
 
 function resolveIconPath(name: string, explicit?: string): string | null {
@@ -90,7 +87,12 @@ function tryLoad(name: string, explicit?: string): ImageData | null {
   }
 }
 
-function tryLoadSvg(name: string, size: number, color: number, explicit?: string): ImageData | null {
+function tryLoadSvg(
+  name: string,
+  size: number,
+  color: number,
+  explicit?: string,
+): ImageData | null {
   const iconPath = resolveSvgPath(name, explicit);
   if (!iconPath) return null;
   try {
@@ -108,8 +110,22 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
     const bodyY = Math.max(4, Math.round(size * 0.3));
     return (
       <>
-        <Rect x={1} y={bodyY} width={size - 2} height={size - bodyY - 1} fill={color} radius={Math.max(2, pixel * 2)} />
-        <Rect x={2} y={2} width={Math.round(size * 0.46)} height={bodyY + 1} fill={color} radius={Math.max(2, pixel * 2)} />
+        <Rect
+          x={1}
+          y={bodyY}
+          width={size - 2}
+          height={size - bodyY - 1}
+          fill={color}
+          radius={Math.max(2, pixel * 2)}
+        />
+        <Rect
+          x={2}
+          y={2}
+          width={Math.round(size * 0.46)}
+          height={bodyY + 1}
+          fill={color}
+          radius={Math.max(2, pixel * 2)}
+        />
         <Rect x={2} y={bodyY} width={size - 4} height={stroke} fill={dim} />
       </>
     );
@@ -118,7 +134,16 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
     const fold = Math.round(size * 0.3);
     return (
       <>
-        <Rect x={2} y={1} width={size - 4} height={size - 2} fill={0x00000000} radius={Math.max(2, pixel * 2)} stroke={color} strokeWidth={stroke} />
+        <Rect
+          x={2}
+          y={1}
+          width={size - 4}
+          height={size - 2}
+          fill={0x00000000}
+          radius={Math.max(2, pixel * 2)}
+          stroke={color}
+          strokeWidth={stroke}
+        />
         <Rect x={size - fold - 1} y={1} width={stroke} height={fold + 1} fill={color} />
         <Rect x={size - fold - 1} y={fold + 1} width={fold - 1} height={stroke} fill={color} />
         <Rect x={5} y={Math.round(size * 0.6)} width={size - 10} height={stroke} fill={dim} />
@@ -129,41 +154,159 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
     const dot = Math.max(2, Math.round(size * 0.15));
     return (
       <>
-        <Rect x={1} y={2} width={size - 2} height={size - 4} fill={0x00000000} radius={Math.max(2, pixel * 2)} stroke={color} strokeWidth={stroke} />
-        <Rect x={Math.round(size * 0.62)} y={Math.round(size * 0.28)} width={dot} height={dot} fill={color} radius={dot} />
-        <Rect x={3} y={Math.round(size * 0.67)} width={Math.round(size * 0.34)} height={2 * pixel} fill={color} />
-        <Rect x={Math.round(size * 0.28)} y={Math.round(size * 0.56)} width={Math.round(size * 0.28)} height={2 * pixel} fill={color} />
-        <Rect x={Math.round(size * 0.5)} y={Math.round(size * 0.68)} width={Math.round(size * 0.32)} height={2 * pixel} fill={color} />
+        <Rect
+          x={1}
+          y={2}
+          width={size - 2}
+          height={size - 4}
+          fill={0x00000000}
+          radius={Math.max(2, pixel * 2)}
+          stroke={color}
+          strokeWidth={stroke}
+        />
+        <Rect
+          x={Math.round(size * 0.62)}
+          y={Math.round(size * 0.28)}
+          width={dot}
+          height={dot}
+          fill={color}
+          radius={dot}
+        />
+        <Rect
+          x={3}
+          y={Math.round(size * 0.67)}
+          width={Math.round(size * 0.34)}
+          height={2 * pixel}
+          fill={color}
+        />
+        <Rect
+          x={Math.round(size * 0.28)}
+          y={Math.round(size * 0.56)}
+          width={Math.round(size * 0.28)}
+          height={2 * pixel}
+          fill={color}
+        />
+        <Rect
+          x={Math.round(size * 0.5)}
+          y={Math.round(size * 0.68)}
+          width={Math.round(size * 0.32)}
+          height={2 * pixel}
+          fill={color}
+        />
       </>
     );
   }
   if (name === "home") {
     return (
       <>
-        <Rect x={Math.round(size * 0.42)} y={1} width={Math.round(size * 0.16)} height={2 * pixel} fill={color} />
-        <Rect x={Math.round(size * 0.28)} y={3} width={Math.round(size * 0.44)} height={2 * pixel} fill={color} />
-        <Rect x={Math.round(size * 0.14)} y={5} width={Math.round(size * 0.72)} height={2 * pixel} fill={color} />
-        <Rect x={2} y={7} width={size - 4} height={size - 8} fill={0x00000000} radius={Math.max(2, pixel * 2)} stroke={color} strokeWidth={stroke} />
-        <Rect x={Math.round(size * 0.43)} y={Math.round(size * 0.65)} width={Math.max(2, Math.round(size * 0.16))} height={Math.round(size * 0.28)} fill={color} radius={pixel} />
+        <Rect
+          x={Math.round(size * 0.42)}
+          y={1}
+          width={Math.round(size * 0.16)}
+          height={2 * pixel}
+          fill={color}
+        />
+        <Rect
+          x={Math.round(size * 0.28)}
+          y={3}
+          width={Math.round(size * 0.44)}
+          height={2 * pixel}
+          fill={color}
+        />
+        <Rect
+          x={Math.round(size * 0.14)}
+          y={5}
+          width={Math.round(size * 0.72)}
+          height={2 * pixel}
+          fill={color}
+        />
+        <Rect
+          x={2}
+          y={7}
+          width={size - 4}
+          height={size - 8}
+          fill={0x00000000}
+          radius={Math.max(2, pixel * 2)}
+          stroke={color}
+          strokeWidth={stroke}
+        />
+        <Rect
+          x={Math.round(size * 0.43)}
+          y={Math.round(size * 0.65)}
+          width={Math.max(2, Math.round(size * 0.16))}
+          height={Math.round(size * 0.28)}
+          fill={color}
+          radius={pixel}
+        />
       </>
     );
   }
   if (name === "desktop") {
     return (
       <>
-        <Rect x={1} y={2} width={size - 2} height={Math.round(size * 0.62)} fill={0x00000000} radius={Math.max(2, pixel * 2)} stroke={color} strokeWidth={stroke} />
-        <Rect x={Math.round(size * 0.44)} y={Math.round(size * 0.66)} width={Math.max(2, Math.round(size * 0.12))} height={Math.round(size * 0.18)} fill={color} />
-        <Rect x={Math.round(size * 0.27)} y={size - 3} width={Math.round(size * 0.46)} height={stroke} fill={color} radius={pixel} />
+        <Rect
+          x={1}
+          y={2}
+          width={size - 2}
+          height={Math.round(size * 0.62)}
+          fill={0x00000000}
+          radius={Math.max(2, pixel * 2)}
+          stroke={color}
+          strokeWidth={stroke}
+        />
+        <Rect
+          x={Math.round(size * 0.44)}
+          y={Math.round(size * 0.66)}
+          width={Math.max(2, Math.round(size * 0.12))}
+          height={Math.round(size * 0.18)}
+          fill={color}
+        />
+        <Rect
+          x={Math.round(size * 0.27)}
+          y={size - 3}
+          width={Math.round(size * 0.46)}
+          height={stroke}
+          fill={color}
+          radius={pixel}
+        />
       </>
     );
   }
   if (name === "downloads") {
     return (
       <>
-        <Rect x={Math.round(size * 0.45)} y={1} width={Math.max(2, Math.round(size * 0.1))} height={Math.round(size * 0.55)} fill={color} radius={pixel} />
-        <Rect x={Math.round(size * 0.28)} y={Math.round(size * 0.42)} width={Math.round(size * 0.44)} height={2 * pixel} fill={color} />
-        <Rect x={Math.round(size * 0.38)} y={Math.round(size * 0.54)} width={Math.round(size * 0.24)} height={2 * pixel} fill={color} />
-        <Rect x={2} y={size - 5} width={size - 4} height={4} fill={0x00000000} radius={2} stroke={color} strokeWidth={stroke} />
+        <Rect
+          x={Math.round(size * 0.45)}
+          y={1}
+          width={Math.max(2, Math.round(size * 0.1))}
+          height={Math.round(size * 0.55)}
+          fill={color}
+          radius={pixel}
+        />
+        <Rect
+          x={Math.round(size * 0.28)}
+          y={Math.round(size * 0.42)}
+          width={Math.round(size * 0.44)}
+          height={2 * pixel}
+          fill={color}
+        />
+        <Rect
+          x={Math.round(size * 0.38)}
+          y={Math.round(size * 0.54)}
+          width={Math.round(size * 0.24)}
+          height={2 * pixel}
+          fill={color}
+        />
+        <Rect
+          x={2}
+          y={size - 5}
+          width={size - 4}
+          height={4}
+          fill={0x00000000}
+          radius={2}
+          stroke={color}
+          strokeWidth={stroke}
+        />
       </>
     );
   }
@@ -171,11 +314,48 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
     const dot = Math.max(2, Math.round(size * 0.16));
     return (
       <>
-        <Rect x={1} y={1} width={size - 2} height={size - 2} fill={0x00000000} radius={Math.max(3, Math.round(size * 0.25))} stroke={color} strokeWidth={stroke} />
-        <Rect x={Math.round(size * 0.27)} y={Math.round(size * 0.27)} width={dot} height={dot} fill={color} radius={pixel} />
-        <Rect x={Math.round(size * 0.57)} y={Math.round(size * 0.27)} width={dot} height={dot} fill={color} radius={pixel} />
-        <Rect x={Math.round(size * 0.27)} y={Math.round(size * 0.57)} width={dot} height={dot} fill={color} radius={pixel} />
-        <Rect x={Math.round(size * 0.57)} y={Math.round(size * 0.57)} width={dot} height={dot} fill={color} radius={pixel} />
+        <Rect
+          x={1}
+          y={1}
+          width={size - 2}
+          height={size - 2}
+          fill={0x00000000}
+          radius={Math.max(3, Math.round(size * 0.25))}
+          stroke={color}
+          strokeWidth={stroke}
+        />
+        <Rect
+          x={Math.round(size * 0.27)}
+          y={Math.round(size * 0.27)}
+          width={dot}
+          height={dot}
+          fill={color}
+          radius={pixel}
+        />
+        <Rect
+          x={Math.round(size * 0.57)}
+          y={Math.round(size * 0.27)}
+          width={dot}
+          height={dot}
+          fill={color}
+          radius={pixel}
+        />
+        <Rect
+          x={Math.round(size * 0.27)}
+          y={Math.round(size * 0.57)}
+          width={dot}
+          height={dot}
+          fill={color}
+          radius={pixel}
+        />
+        <Rect
+          x={Math.round(size * 0.57)}
+          y={Math.round(size * 0.57)}
+          width={dot}
+          height={dot}
+          fill={color}
+          radius={pixel}
+        />
       </>
     );
   }
@@ -183,9 +363,19 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
     const cell = Math.max(3, Math.floor((size - 5) / 2));
     return (
       <>
-        {[0, 1].flatMap((row) => [0, 1].map((column) => (
-          <Rect key={`${row}:${column}`} x={1 + column * (cell + 3)} y={1 + row * (cell + 3)} width={cell} height={cell} fill={color} radius={Math.max(1, pixel)} />
-        )))}
+        {[0, 1].flatMap((row) =>
+          [0, 1].map((column) => (
+            <Rect
+              key={`${row}:${column}`}
+              x={1 + column * (cell + 3)}
+              y={1 + row * (cell + 3)}
+              width={cell}
+              height={cell}
+              fill={color}
+              radius={Math.max(1, pixel)}
+            />
+          )),
+        )}
       </>
     );
   }
@@ -194,8 +384,22 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
       <>
         {[0, 1, 2].map((row) => (
           <React.Fragment key={row}>
-            <Rect x={1} y={2 + row * Math.round(size * 0.3)} width={2 * pixel} height={2 * pixel} fill={color} radius={pixel} />
-            <Rect x={5} y={2 + row * Math.round(size * 0.3)} width={size - 6} height={2 * pixel} fill={color} radius={pixel} />
+            <Rect
+              x={1}
+              y={2 + row * Math.round(size * 0.3)}
+              width={2 * pixel}
+              height={2 * pixel}
+              fill={color}
+              radius={pixel}
+            />
+            <Rect
+              x={5}
+              y={2 + row * Math.round(size * 0.3)}
+              width={size - 6}
+              height={2 * pixel}
+              fill={color}
+              radius={pixel}
+            />
           </React.Fragment>
         ))}
       </>
@@ -204,9 +408,25 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
   if (name === "trash") {
     return (
       <>
-        <Rect x={Math.round(size * 0.3)} y={1} width={Math.round(size * 0.4)} height={2 * pixel} fill={color} radius={pixel} />
+        <Rect
+          x={Math.round(size * 0.3)}
+          y={1}
+          width={Math.round(size * 0.4)}
+          height={2 * pixel}
+          fill={color}
+          radius={pixel}
+        />
         <Rect x={1} y={4} width={size - 2} height={2 * pixel} fill={color} radius={pixel} />
-        <Rect x={3} y={6} width={size - 6} height={size - 7} fill={0x00000000} radius={2} stroke={color} strokeWidth={stroke} />
+        <Rect
+          x={3}
+          y={6}
+          width={size - 6}
+          height={size - 7}
+          fill={0x00000000}
+          radius={2}
+          stroke={color}
+          strokeWidth={stroke}
+        />
         <Rect x={Math.round(size * 0.42)} y={8} width={stroke} height={size - 11} fill={dim} />
         <Rect x={Math.round(size * 0.62)} y={8} width={stroke} height={size - 11} fill={dim} />
       </>
@@ -215,9 +435,28 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
   if (name === "up") {
     return (
       <>
-        <Rect x={Math.round(size * 0.44)} y={3} width={Math.max(2, Math.round(size * 0.12))} height={size - 5} fill={color} radius={pixel} />
-        <Rect x={Math.round(size * 0.3)} y={3} width={Math.round(size * 0.4)} height={2 * pixel} fill={color} />
-        <Rect x={Math.round(size * 0.4)} y={1} width={Math.round(size * 0.2)} height={2 * pixel} fill={color} />
+        <Rect
+          x={Math.round(size * 0.44)}
+          y={3}
+          width={Math.max(2, Math.round(size * 0.12))}
+          height={size - 5}
+          fill={color}
+          radius={pixel}
+        />
+        <Rect
+          x={Math.round(size * 0.3)}
+          y={3}
+          width={Math.round(size * 0.4)}
+          height={2 * pixel}
+          fill={color}
+        />
+        <Rect
+          x={Math.round(size * 0.4)}
+          y={1}
+          width={Math.round(size * 0.2)}
+          height={2 * pixel}
+          fill={color}
+        />
       </>
     );
   }
@@ -258,13 +497,7 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
           const offset = Math.round(index * step);
           return (
             <React.Fragment key={index}>
-              <Rect
-                x={offset}
-                y={offset}
-                width={pixel}
-                height={pixel}
-                fill={color}
-              />
+              <Rect x={offset} y={offset} width={pixel} height={pixel} fill={color} />
               <Rect
                 x={size - pixel - offset}
                 y={offset}
@@ -290,8 +523,24 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
           const y = apexY + (up ? index * dot : -index * dot);
           return (
             <React.Fragment key={index}>
-              <Rect x={centerX - index * dot} y={y} width={dot} height={dot} fill={color} radius={pixel} />
-              {index > 0 ? <Rect x={centerX + index * dot} y={y} width={dot} height={dot} fill={color} radius={pixel} /> : null}
+              <Rect
+                x={centerX - index * dot}
+                y={y}
+                width={dot}
+                height={dot}
+                fill={color}
+                radius={pixel}
+              />
+              {index > 0 ? (
+                <Rect
+                  x={centerX + index * dot}
+                  y={y}
+                  width={dot}
+                  height={dot}
+                  fill={color}
+                  radius={pixel}
+                />
+              ) : null}
             </React.Fragment>
           );
         })}
@@ -310,8 +559,24 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
           const x = apexX + (left ? index * dot : -index * dot);
           return (
             <React.Fragment key={index}>
-              <Rect x={x} y={centerY - index * dot} width={dot} height={dot} fill={color} radius={pixel} />
-              {index > 0 ? <Rect x={x} y={centerY + index * dot} width={dot} height={dot} fill={color} radius={pixel} /> : null}
+              <Rect
+                x={x}
+                y={centerY - index * dot}
+                width={dot}
+                height={dot}
+                fill={color}
+                radius={pixel}
+              />
+              {index > 0 ? (
+                <Rect
+                  x={x}
+                  y={centerY + index * dot}
+                  width={dot}
+                  height={dot}
+                  fill={color}
+                  radius={pixel}
+                />
+              ) : null}
             </React.Fragment>
           );
         })}
@@ -319,7 +584,16 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
     );
   }
   if (name === "remove") {
-    return <Rect x={2} y={Math.floor((size - pixel) / 2)} width={size - 4} height={pixel} fill={color} radius={pixel} />;
+    return (
+      <Rect
+        x={2}
+        y={Math.floor((size - pixel) / 2)}
+        width={size - 4}
+        height={pixel}
+        fill={color}
+        radius={pixel}
+      />
+    );
   }
   return <Rect x={0} y={0} width={size} height={size} fill={color} />;
 }
@@ -329,9 +603,10 @@ export function Icon(props: IconProps): ReactNode {
   const size = props.size ?? 16;
   const color = props.color ?? palette.text;
   const name = String(props.name);
-  const vector = props.symbolic || props.path?.toLowerCase().endsWith(".svg")
-    ? tryLoadSvg(name, size, color, props.path)
-    : null;
+  const vector =
+    props.symbolic || props.path?.toLowerCase().endsWith(".svg")
+      ? tryLoadSvg(name, size, color, props.path)
+      : null;
   const bitmap = vector ?? (props.symbolic ? null : tryLoad(name, props.path));
 
   if (bitmap) {
@@ -349,12 +624,7 @@ export function Icon(props: IconProps): ReactNode {
   }
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={size}
-      height={size}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={size} height={size}>
       {drawFallback(KNOWN.has(name) ? name : "file", size, color)}
     </Group>
   );

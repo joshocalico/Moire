@@ -1,18 +1,8 @@
-import {
-  resolveApplicationIcon,
-  type DesktopEntry,
-} from "@moire/app-discovery";
+import { resolveApplicationIcon, type DesktopEntry } from "@moire/app-discovery";
 import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import { Group, Rect, Text } from "@moire/react-host";
 import { themePalette } from "@moire/theme";
-import {
-  Icon,
-  Label,
-  ListItem,
-  ScrollArea,
-  Surface,
-  SearchField,
-} from "./widgets.js";
+import { Icon, Label, ListItem, ScrollArea, Surface, SearchField } from "./widgets";
 
 export type LauncherProps = {
   open: boolean;
@@ -41,15 +31,9 @@ export function Launcher(props: LauncherProps): ReactNode {
   const previousQuery = useRef(props.query);
   const pal = themePalette();
   const panelH = pal.panelHeight;
-  const maxBoxH = Math.max(
-    240,
-    Math.min(600, props.screenH - panelH - 24),
-  );
+  const maxBoxH = Math.max(240, Math.min(600, props.screenH - panelH - 24));
   const desiredListH = Math.max(ROW_H * 3, props.apps.length * ROW_H);
-  const boxH = Math.min(
-    maxBoxH,
-    Math.max(300, LIST_TOP + desiredListH + FOOTER_H),
-  );
+  const boxH = Math.min(maxBoxH, Math.max(300, LIST_TOP + desiredListH + FOOTER_H));
   const listH = boxH - LIST_TOP - FOOTER_H;
   const contentH = Math.max(listH, props.apps.length * ROW_H);
   const maxScroll = Math.max(0, contentH - listH);
@@ -85,13 +69,7 @@ export function Launcher(props: LauncherProps): ReactNode {
     }
     const selected = i === props.selected;
     return (
-      <Group
-        key={app.id}
-        x={0}
-        y={rowY}
-        width={listW}
-        height={ROW_H}
-      >
+      <Group key={app.id} x={0} y={rowY} width={listW} height={ROW_H}>
         <ListItem
           x={0}
           y={0}

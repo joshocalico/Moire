@@ -1,25 +1,14 @@
-import {
-  default as React,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  Group,
-  Rect,
-  Text,
-  measureTextBounds,
-} from "@moire/react-host";
-import { themePalette } from "../theme.js";
-import { getWidgetTheme, useWidgetTheme } from "../widget-theme.js";
-import { Button } from "./button.js";
-import { Icon, type IconName } from "./icon.js";
-import { Pressable } from "./pressable.js";
-import { MenuItem } from "./menu.js";
-import { ScrollArea } from "./scroll.js";
-import { SearchField } from "./search-field.js";
-import { easeTo, useMotionValue } from "../motion.js";
+import { default as React, useEffect, useRef, useState, type ReactNode } from "react";
+import { Group, Rect, Text, measureTextBounds } from "@moire/react-host";
+import { themePalette } from "#ui/theme";
+import { getWidgetTheme, useWidgetTheme } from "#ui/widget-theme";
+import { Button } from "./button";
+import { Icon, type IconName } from "./icon";
+import { Pressable } from "./pressable";
+import { MenuItem } from "./menu";
+import { ScrollArea } from "./scroll";
+import { SearchField } from "./search-field";
+import { easeTo, useMotionValue } from "#ui/motion";
 
 function LayerSurface(props: {
   x: number;
@@ -96,21 +85,15 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
   const finalized = useRef(false);
   const width = props.width ?? 244;
   const rowH = recipe.metrics.rowHeight;
-  const titleH = props.title
-    ? recipe.metrics.headerHeight
-    : recipe.metrics.surfacePadding;
+  const titleH = props.title ? recipe.metrics.headerHeight : recipe.metrics.surfacePadding;
   const separators = props.actions.filter((action) => action.separatorBefore).length;
   const height =
     titleH +
     props.actions.length * rowH +
     separators * recipe.metrics.separatorGap +
     recipe.metrics.surfacePadding;
-  const x = props.surface
-    ? 0
-    : Math.max(8, Math.min(props.x, props.viewportWidth - width - 8));
-  const y = props.surface
-    ? 0
-    : Math.max(8, Math.min(props.y, props.viewportHeight - height - 8));
+  const x = props.surface ? 0 : Math.max(8, Math.min(props.x, props.viewportWidth - width - 8));
+  const y = props.surface ? 0 : Math.max(8, Math.min(props.y, props.viewportHeight - height - 8));
   const progress = Math.max(0, Math.min(1, reveal.get() / 100));
   const animatedY = y + Math.round((1 - progress) * 5);
   let rowY = titleH;
@@ -161,13 +144,7 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
         description={action.description}
         leading={
           action.icon
-            ? (style) => (
-                <Icon
-                  name={action.icon!}
-                  size={style.size}
-                  color={style.color}
-                />
-              )
+            ? (style) => <Icon name={action.icon!} size={style.size} color={style.color} />
             : undefined
         }
         indicator
@@ -182,12 +159,7 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
   }
 
   return (
-    <Group
-      x={0}
-      y={0}
-      width={props.viewportWidth}
-      height={props.viewportHeight}
-    >
+    <Group x={0} y={0} width={props.viewportWidth} height={props.viewportHeight}>
       <Rect
         x={0}
         y={0}
@@ -197,14 +169,7 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
         onPress={() => dismiss()}
         onContextMenu={() => dismiss()}
       />
-      <Group
-        x={x}
-        y={animatedY}
-        width={width + 6}
-        height={height + 8}
-        clip
-        opacity={progress}
-      >
+      <Group x={x} y={animatedY} width={width + 6} height={height + 8} clip opacity={progress}>
         <LayerSurface
           x={3}
           y={4}
@@ -221,13 +186,7 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
           fill={recipe.surface.fill}
           radius={recipe.surface.radius}
         >
-          <Rect
-            x={0}
-            y={0}
-            width={width}
-            height={1}
-            fill={pal.rimLight}
-          />
+          <Rect x={0} y={0} width={width} height={1} fill={pal.rimLight} />
           {props.title ? (
             <Text
               x={16}
@@ -283,12 +242,8 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
   const height = props.standalone
     ? props.viewportHeight
     : Math.min(600, Math.max(380, props.viewportHeight - 40));
-  const x = props.standalone
-    ? 0
-    : Math.floor((props.viewportWidth - width) / 2);
-  const y = props.standalone
-    ? 0
-    : Math.max(20, Math.floor((props.viewportHeight - height) / 2));
+  const x = props.standalone ? 0 : Math.floor((props.viewportWidth - width) / 2);
+  const y = props.standalone ? 0 : Math.max(20, Math.floor((props.viewportHeight - height) / 2));
   const rowH = 56;
   const headingH = 28;
   const listTop = 136;
@@ -369,9 +324,7 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
 
   const renderChoice = (choice: OpenWithChoice, rowY: number) => {
     const hasDescription = !!choice.description;
-    const textBlockH = hasDescription
-      ? titleLineH + 2 + descriptionLineH
-      : titleLineH;
+    const textBlockH = hasDescription ? titleLineH + 2 + descriptionLineH : titleLineH;
     const titleY = Math.floor((rowH - textBlockH) / 2);
     return (
       <Pressable
@@ -422,14 +375,7 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
             fill={pal.surface}
             radius={pal.radiusSm}
           >
-            <Text
-              x={10}
-              y={5}
-              text="DEFAULT"
-              color={pal.accent}
-              fontSize={9}
-              fontWeight="medium"
-            />
+            <Text x={10} y={5} text="DEFAULT" color={pal.accent} fontSize={9} fontWeight="medium" />
           </LayerSurface>
         ) : null}
       </Pressable>
@@ -461,12 +407,7 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
   appendSection("OTHER APPLICATIONS", other);
 
   return (
-    <Group
-      x={0}
-      y={0}
-      width={props.viewportWidth}
-      height={props.viewportHeight}
-    >
+    <Group x={0} y={0} width={props.viewportWidth} height={props.viewportHeight}>
       {props.standalone ? (
         <Rect
           x={0}
@@ -528,13 +469,7 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
           fontSize={18}
           fontWeight="medium"
         />
-        <Text
-          x={88}
-          y={51}
-          text={props.mimeType}
-          color={pal.muted}
-          fontSize={12}
-        />
+        <Text x={88} y={51} text={props.mimeType} color={pal.muted} fontSize={12} />
         <SearchField
           x={20}
           y={88}
@@ -573,7 +508,9 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
               <Text
                 x={0}
                 y={0}
-                text={query ? "No applications match this search." : "No applications are available."}
+                text={
+                  query ? "No applications match this search." : "No applications are available."
+                }
                 color={pal.text}
                 fontSize={14}
                 fontWeight="medium"
@@ -581,7 +518,11 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
               <Text
                 x={0}
                 y={28}
-                text={query ? "Try a broader application name." : "Install an application and try again."}
+                text={
+                  query
+                    ? "Try a broader application name."
+                    : "Install an application and try again."
+                }
                 color={pal.muted}
                 fontSize={12}
               />
@@ -598,13 +539,7 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
             </ScrollArea>
           )}
         </LayerSurface>
-        <Rect
-          x={0}
-          y={footerY}
-          width={width}
-          height={1}
-          fill={pal.borderSubtle}
-        />
+        <Rect x={0} y={footerY} width={width} height={1} fill={pal.borderSubtle} />
         <Button
           x={20}
           y={footerY + 20}

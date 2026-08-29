@@ -84,7 +84,7 @@ const US_PRINTABLE: Record<number, [string, string]> = {
   37: ["k", "K"],
   38: ["l", "L"],
   39: [";", ":"],
-  40: ["'", "\""],
+  40: ["'", '"'],
   41: ["`", "~"],
   43: ["\\", "|"],
   44: ["z", "Z"],
@@ -100,9 +100,7 @@ const US_PRINTABLE: Record<number, [string, string]> = {
   57: [" ", " "],
 };
 
-export function modifiersFromPressed(
-  pressed: ReadonlySet<number>,
-): UiKeyModifiers {
+export function modifiersFromPressed(pressed: ReadonlySet<number>): UiKeyModifiers {
   return {
     shift: pressed.has(42) || pressed.has(54),
     ctrl: pressed.has(29) || pressed.has(97),
@@ -291,10 +289,10 @@ export async function createPlatformBackend(
   kind: PlatformKind = resolvePlatformKind(),
 ): Promise<PlatformBackend> {
   if (kind === "wayland") {
-    const { WaylandPlatform } = await import("./platforms/wayland/index.js");
+    const { WaylandPlatform } = await import("./platforms/wayland/index");
     return new WaylandPlatform();
   }
-  const { HeadlessPlatform } = await import("./platforms/headless/index.js");
+  const { HeadlessPlatform } = await import("./platforms/headless/index");
   return new HeadlessPlatform();
 }
 import type { RetainedClip, RetainedSceneFrame } from "@moire/react-host";

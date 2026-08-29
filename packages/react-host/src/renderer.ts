@@ -1,4 +1,4 @@
-import type { SceneNode } from "./index.js";
+import type { SceneNode } from "./index";
 
 /** Viewport passed to a scene renderer, independent of its output target. */
 export type RenderViewport = {

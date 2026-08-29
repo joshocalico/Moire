@@ -1,10 +1,6 @@
-import {
-  createPlatformBackend,
-  resolvePlatformKind,
-  type PlatformBackend,
-} from "./platform.js";
-import { installUiFonts, setUiScaleFactor } from "./font/index.js";
-import { Window } from "./window.js";
+import { createPlatformBackend, resolvePlatformKind, type PlatformBackend } from "./platform";
+import { installUiFonts, setUiScaleFactor } from "./font/index";
+import { Window } from "./window";
 
 export type ApplicationOpts = {
   /** Force platform; default auto (wayland if WAYLAND_DISPLAY, else headless). */

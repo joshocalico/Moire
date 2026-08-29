@@ -106,13 +106,9 @@ import {
   installUiFonts,
   type PlatformPopupOpts,
   type PlatformWindow,
-} from "./index.js";
-import { HeadlessPlatform } from "./platforms/headless/index.js";
-import {
-  DndFeedback,
-  notifyDragEnded,
-  notifyDrop,
-} from "./widgets/dnd.js";
+} from "./index";
+import { HeadlessPlatform } from "./platforms/headless/index";
+import { DndFeedback, notifyDragEnded, notifyDrop } from "./widgets/dnd";
 
 const NO_MODIFIERS = {
   shift: false,
@@ -127,33 +123,52 @@ function chartWidgetSmoke(): void {
     { id: "second", label: "Second", points: [2, 2, 4, 3].map((y, x) => ({ x, y })) },
   ];
   const root = createShellRoot();
-  renderShell(root, (
+  renderShell(
+    root,
     <Group width={640} height={620}>
       <LineChart width={300} height={140} series={series} />
       <AreaChart x={320} width={300} height={140} series={[series[0]!]} />
       <BarChart y={150} width={300} height={140} series={series} />
       <StackedBarChart x={320} y={150} width={300} height={140} series={series} />
       <ScatterChart y={300} width={300} height={140} series={[series[0]!]} />
-      <DonutChart x={320} y={300} width={300} height={140} data={[
-        { id: "a", label: "A", value: 3 },
-        { id: "b", label: "B", value: 2 },
-      ]} />
+      <DonutChart
+        x={320}
+        y={300}
+        width={300}
+        height={140}
+        data={[
+          { id: "a", label: "A", value: 3 },
+          { id: "b", label: "B", value: 2 },
+        ]}
+      />
       <Sparkline y={450} width={190} height={60} values={[1, 4, 2, 5, 3]} fill />
       <RadialChart x={210} y={450} width={100} height={100} value={0.72} />
-      <HeatmapChart x={330} y={450} width={280} height={120} cells={[
-        { row: "A", column: "1", value: 2 },
-        { row: "A", column: "2", value: 8 },
-        { row: "B", column: "1", value: 5 },
-        { row: "B", column: "2", value: 9 },
-      ]} />
-    </Group>
-  ));
+      <HeatmapChart
+        x={330}
+        y={450}
+        width={280}
+        height={120}
+        cells={[
+          { row: "A", column: "1", value: 2 },
+          { row: "A", column: "2", value: 8 },
+          { row: "B", column: "1", value: 5 },
+          { row: "B", column: "2", value: 9 },
+        ]}
+      />
+    </Group>,
+  );
   const images = (node: SceneNode): number =>
     (node.kind === "image" ? 1 : 0) + node.children.reduce((sum, child) => sum + images(child), 0);
   assert.ok(images(root.container) >= 8, "chart family should emit cached image layers");
-  assert.ok(collectHits(root.container).length >= 7, "interactive charts should expose hover regions");
+  assert.ok(
+    collectHits(root.container).length >= 7,
+    "interactive charts should expose hover regions",
+  );
   const frame = new SoftwareRenderer().render(root.container, { width: 640, height: 620 });
-  assert.ok(frame.pixels.some((value) => value !== 0), "chart family should paint visible marks");
+  assert.ok(
+    frame.pixels.some((value) => value !== 0),
+    "chart family should paint visible marks",
+  );
 }
 
 function rendererSmoke(): void {
@@ -161,14 +176,7 @@ function rendererSmoke(): void {
   renderShell(
     root,
     <Group x={0} y={0} width={8} height={8}>
-      <Rect
-        x={1}
-        y={1}
-        width={3}
-        height={3}
-        fill={0xff123456}
-        onPress={() => {}}
-      />
+      <Rect x={1} y={1} width={3} height={3} fill={0xff123456} onPress={() => {}} />
       <Rect
         x={1}
         y={4}
@@ -192,7 +200,7 @@ function rendererSmoke(): void {
   assert.equal(words[1 * 8 + 1], 0xff123456);
   const roundedCorner = words[4 * 8 + 1]!;
   assert.ok(
-    (roundedCorner >>> 24) > 0 && (roundedCorner >>> 24) < 0xff,
+    roundedCorner >>> 24 > 0 && roundedCorner >>> 24 < 0xff,
     "rounded corners should retain fractional antialias coverage",
   );
   assert.equal(words[4 * 8 + 4], 0xff88aacc);
@@ -216,9 +224,7 @@ function rendererSmoke(): void {
     4,
     "three fills plus the rounded stroke should become retained layers",
   );
-  const translucent = retained.layers.find(
-    (layer) => layer.destination.x === 7,
-  );
+  const translucent = retained.layers.find((layer) => layer.destination.x === 7);
   assert.deepEqual(
     [...(translucent?.pixels ?? [])],
     [0x60, 0x40, 0x20, 0x80],
@@ -310,8 +316,12 @@ async function hoverLayoutReconciliationSmoke(): Promise<void> {
             width={120}
             height={30}
             fill={0xff304050}
-            onPointerEnter={() => { enters++; }}
-            onPointerLeave={() => { leaves++; }}
+            onPointerEnter={() => {
+              enters++;
+            }}
+            onPointerLeave={() => {
+              leaves++;
+            }}
           />
         </Box>
       </Column>
@@ -384,14 +394,18 @@ function declarativeLayoutAndTweenSmoke(): void {
     root,
     <Group width={400} height={180}>
       <Horizontal width={400} height={60} gap={10}>
-        <Measure width={100}>{(box) => {
-          fixedWidth = box.width;
-          return <Rect width={box.width} height={box.height} fill={0xff27465c} />;
-        }}</Measure>
-        <Measure flexGrow={1}>{(box) => {
-          growingWidth = box.width;
-          return <Rect width={box.width} height={box.height} fill={0xff3b8f9f} />;
-        }}</Measure>
+        <Measure width={100}>
+          {(box) => {
+            fixedWidth = box.width;
+            return <Rect width={box.width} height={box.height} fill={0xff27465c} />;
+          }}
+        </Measure>
+        <Measure flexGrow={1}>
+          {(box) => {
+            growingWidth = box.width;
+            return <Rect width={box.width} height={box.height} fill={0xff3b8f9f} />;
+          }}
+        </Measure>
       </Horizontal>
       <Stack y={80} width={200} height={80} alignX="center" alignY="center">
         <Box width={40} height={20}>
@@ -409,7 +423,11 @@ function declarativeLayoutAndTweenSmoke(): void {
   );
   const frame = new SoftwareRenderer().render(root.container, { width: 400, height: 180 });
   const words = new Uint32Array(frame.pixels.buffer);
-  assert.equal(words[120 * frame.width + 100], 0xffd59b52, "Stack did not center its measured child");
+  assert.equal(
+    words[120 * frame.width + 100],
+    0xffd59b52,
+    "Stack did not center its measured child",
+  );
 
   const tween = createTweenValue(0);
   tween.animateTo(100, { duration: 1000, easing: "linear" });
@@ -434,24 +452,16 @@ function declarativeLayoutAndTweenSmoke(): void {
   const before = retainedRenderer.render(root.container, { width: 200, height: 40 });
   const movingLayer = before.layers[0];
   const motion = tickMotionFrame(0.5);
-  const after = retainedRenderer.renderPresentation(
-    root.container,
-    { width: 200, height: 40 },
-  );
+  const after = retainedRenderer.renderPresentation(root.container, { width: 200, height: 40 });
   assert.ok(after, "presentation refresh rejected an unchanged retained graph");
   assert.equal(motion.presentationChanged, true);
   assert.equal(motion.requiresReconcile, false, "live transforms should bypass React");
-  assert.equal(
-    after.layers[0],
-    movingLayer,
-    "presentation refresh rebuilt a retained layer",
-  );
+  assert.equal(after.layers[0], movingLayer, "presentation refresh rebuilt a retained layer");
   assert.equal(after.layers[0]?.destination.x, 50);
   assert.deepEqual(before.damage, [{ x: 0, y: 0, width: 200, height: 40 }]);
   assert.ok(after.damage && after.damage.length > 0, "moving layer emitted no damage");
   assert.ok(
-    after.damage.reduce((total, rect) => total + rect.width * rect.height, 0) <
-      200 * 40,
+    after.damage.reduce((total, rect) => total + rect.width * rect.height, 0) < 200 * 40,
     "moving a small retained layer damaged the full surface",
   );
   assert.equal(collectHits(root.container)[0]?.x, 50, "live transforms must move hit regions");
@@ -466,21 +476,21 @@ function boxModelAndTextLayoutSmoke(): void {
   renderShell(
     root,
     <Group width={240} height={160}>
-      <Inset
-        width={200}
-        height={100}
-        padding={{ top: 5, right: 20, bottom: 15, left: 10 }}
-      >
+      <Inset width={200} height={100} padding={{ top: 5, right: 20, bottom: 15, left: 10 }}>
         <Horizontal gap={8}>
-          <Measure width={50}>{(box) => {
-            firstBox = box;
-            return <Rect width={box.width} height={box.height} fill={0xff27465c} />;
-          }}</Measure>
+          <Measure width={50}>
+            {(box) => {
+              firstBox = box;
+              return <Rect width={box.width} height={box.height} fill={0xff27465c} />;
+            }}
+          </Measure>
           <Spacer />
-          <Measure width={20}>{(box) => {
-            trailingBox = box;
-            return <Rect width={box.width} height={box.height} fill={0xff3b8f9f} />;
-          }}</Measure>
+          <Measure width={20}>
+            {(box) => {
+              trailingBox = box;
+              return <Rect width={box.width} height={box.height} fill={0xff3b8f9f} />;
+            }}
+          </Measure>
         </Horizontal>
       </Inset>
       <TextBlock
@@ -500,7 +510,7 @@ function boxModelAndTextLayoutSmoke(): void {
   const findText = (node: SceneNode): SceneNode | null =>
     node.kind === "text" && node.text === "Centered"
       ? node
-      : node.children.map(findText).find(Boolean) ?? null;
+      : (node.children.map(findText).find(Boolean) ?? null);
   const centered = findText(root.container);
   assert.ok(centered && centered.x > 0 && centered.y > 0, "TextBlock did not align inside its box");
 
@@ -546,11 +556,8 @@ function softShadowSmoke(): void {
   const pixels = new Uint32Array(frame.pixels.buffer);
   const softEdge = pixels[45 * frame.width + 18]!;
   const farEdge = pixels[51 * frame.width + 18]!;
-  assert.ok((softEdge >>> 24) > 0, "box shadow did not extend beyond the elevated rect");
-  assert.ok(
-    (farEdge >>> 24) < (softEdge >>> 24),
-    "box shadow did not decay across its blur radius",
-  );
+  assert.ok(softEdge >>> 24 > 0, "box shadow did not extend beyond the elevated rect");
+  assert.ok(farEdge >>> 24 < softEdge >>> 24, "box shadow did not decay across its blur radius");
   renderShell(root, null);
 }
 
@@ -586,19 +593,25 @@ function symbolicSvgIconSmoke(): void {
     </Group>,
   );
   const findImage = (node: SceneNode): SceneNode | null =>
-    node.kind === "image" ? node : node.children.map(findImage).find(Boolean) ?? null;
+    node.kind === "image" ? node : (node.children.map(findImage).find(Boolean) ?? null);
   const image = findImage(root.container);
-  assert.ok(image?.imagePixels, "symbolic Icon did not load its SVG source into an Image primitive");
+  assert.ok(
+    image?.imagePixels,
+    "symbolic Icon did not load its SVG source into an Image primitive",
+  );
   const alpha = Array.from(image.imagePixels).filter((_, index) => index % 4 === 3);
-  assert.ok(alpha.some((value) => value === 255), "SVG icon has no opaque artwork");
-  assert.ok(alpha.some((value) => value > 0 && value < 255), "SVG icon lost antialiased edges");
+  assert.ok(
+    alpha.some((value) => value === 255),
+    "SVG icon has no opaque artwork",
+  );
+  assert.ok(
+    alpha.some((value) => value > 0 && value < 255),
+    "SVG icon lost antialiased edges",
+  );
   renderShell(root, null);
 }
 
-function orderedSelection<Key>(
-  keys: readonly Key[],
-  selected: ReadonlySet<Key>,
-): Key[] {
+function orderedSelection<Key>(keys: readonly Key[], selected: ReadonlySet<Key>): Key[] {
   return keys.filter((key) => selected.has(key));
 }
 
@@ -639,9 +652,14 @@ function selectionModelSmoke(): void {
   assert.deepEqual(orderedSelection(["b", "d"], state.selectedKeys), ["b", "d"]);
   assert.equal(state.focusKey, "b");
 
-  state = reduceSelection(state, ["b", "d"], { type: "clear" }, {
-    allowEmpty: false,
-  });
+  state = reduceSelection(
+    state,
+    ["b", "d"],
+    { type: "clear" },
+    {
+      allowEmpty: false,
+    },
+  );
   assert.deepEqual(orderedSelection(["b", "d"], state.selectedKeys), ["b"]);
 }
 
@@ -717,24 +735,14 @@ function imageWidgetRecipeSmoke(): void {
   const bitmap = {
     width: 2,
     height: 1,
-    rgba: new Uint8Array([
-      0xff, 0x00, 0x00, 0xff,
-      0x00, 0x00, 0xff, 0xff,
-    ]),
+    rgba: new Uint8Array([0xff, 0x00, 0x00, 0xff, 0x00, 0x00, 0xff, 0xff]),
   };
   const root = createShellRoot();
   renderShell(
     root,
     <WidgetThemeProvider theme={customTheme}>
       <Group width={18} height={10}>
-        <ImageWidget
-          x={1}
-          y={1}
-          width={8}
-          height={8}
-          bitmap={bitmap}
-          fit="contain"
-        />
+        <ImageWidget x={1} y={1} width={8} height={8} bitmap={bitmap} fit="contain" />
         <ImageWidget
           x={11}
           y={1}
@@ -761,11 +769,7 @@ function imageWidgetRecipeSmoke(): void {
   assert.equal(words[3 * frame.width + 5], 0xff0000ff);
   assert.equal(words[4 * frame.width + 11], 0xffff0000);
   assert.equal(words[4 * frame.width + 13], 0xff0000ff);
-  assert.equal(
-    words[4 * frame.width + 15],
-    0,
-    "cover should remain clipped to the widget bounds",
-  );
+  assert.equal(words[4 * frame.width + 15], 0, "cover should remain clipped to the widget bounds");
 }
 
 function dndRecipeSmoke(): void {
@@ -842,11 +846,7 @@ async function dndRegistrySmoke(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
   notifyDrop("stale", ["text/plain"], 2, 2);
   notifyDrop("current", ["image/png"], 2, 2);
-  assert.equal(
-    drops,
-    2,
-    "DropTarget should replace its sink when accepted MIME types change",
-  );
+  assert.equal(drops, 2, "DropTarget should replace its sink when accepted MIME types change");
 
   renderShell(root, null);
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -884,11 +884,7 @@ function pathBarRecipeSmoke(): void {
   renderShell(
     root,
     <WidgetThemeProvider theme={customTheme}>
-      <Breadcrumbs
-        width={80}
-        segments={[{ id: "/", label: "Root" }]}
-        onNavigate={() => {}}
-      />
+      <Breadcrumbs width={80} segments={[{ id: "/", label: "Root" }]} onNavigate={() => {}} />
     </WidgetThemeProvider>,
   );
   const frame = new SoftwareRenderer().render(root.container, {
@@ -1340,12 +1336,7 @@ function scrollAreaRecipeSmoke(): void {
   renderShell(
     root,
     <WidgetThemeProvider theme={customTheme}>
-      <ScrollArea
-        width={80}
-        height={60}
-        contentHeight={120}
-        scrollY={30}
-      />
+      <ScrollArea width={80} height={60} contentHeight={120} scrollY={30} />
     </WidgetThemeProvider>,
   );
   const frame = new SoftwareRenderer().render(root.container, {
@@ -1493,24 +1484,10 @@ function collectionRecipeSmoke(): void {
           y={2}
           icon={(style) => {
             iconSlotSize = style.size;
-            return (
-              <Rect
-                width={style.size}
-                height={style.size}
-                radius={3}
-                fill={style.color}
-              />
-            );
+            return <Rect width={style.size} height={style.size} radius={3} fill={style.color} />;
           }}
         />
-        <ListItem
-          x={2}
-          y={42}
-          width={124}
-          title="Recipe row"
-          selected
-          interactive={false}
-        />
+        <ListItem x={2} y={42} width={124} title="Recipe row" selected interactive={false} />
         <GridItem
           x={2}
           y={86}
@@ -1580,22 +1557,10 @@ function showcaseWidgetSmoke(): void {
         ]}
         value="one"
       />
-      <Banner
-        x={270}
-        y={222}
-        width={500}
-        title="Theme updated"
-        message="Recipes are live."
-      />
+      <Banner x={270} y={222} width={500} title="Theme updated" message="Recipes are live." />
       <Badge x={270} y={300} text="Live" tone="accent" />
       <Spinner x={340} y={300} active={false} />
-      <EmptyState
-        x={270}
-        y={340}
-        width={500}
-        height={140}
-        title="No results"
-      />
+      <EmptyState x={270} y={340} width={500} height={140} title="No results" />
       <CodeView
         x={270}
         y={500}
@@ -1608,10 +1573,7 @@ function showcaseWidgetSmoke(): void {
   );
   const hits = collectHits(root.container);
   assert.ok(hits.length >= 6, "showcase widgets lost interactive hit regions");
-  assert.ok(
-    root.container.children.length > 0,
-    "showcase widgets did not produce a scene",
-  );
+  assert.ok(root.container.children.length > 0, "showcase widgets did not produce a scene");
   renderShell(root, null);
 }
 
@@ -1626,18 +1588,13 @@ function advancedCollectionSmoke(): void {
       items={many}
       itemHeight={20}
       overscan={1}
-      renderItem={(item) => (
-        <Label text={item} width={300} height={20} fontSize={11} />
-      )}
+      renderItem={(item) => <Label text={item} width={300} height={20} fontSize={11} />}
     />,
   );
   const countText = (node: SceneNode): number =>
     (node.kind === "text" ? 1 : 0) +
     node.children.reduce((sum, child) => sum + countText(child), 0);
-  assert.ok(
-    countText(virtualRoot.container) <= 8,
-    "VirtualList rendered offscreen rows",
-  );
+  assert.ok(countText(virtualRoot.container) <= 8, "VirtualList rendered offscreen rows");
 
   const root = createShellRoot();
   renderShell(
@@ -1647,8 +1604,20 @@ function advancedCollectionSmoke(): void {
         width={420}
         height={220}
         columns={[
-          { id: "name", label: "Name", sortable: true, getValue: (row: { id: string; name: string; size: number }) => row.name },
-          { id: "size", label: "Size", width: 100, align: "right", sortable: true, getValue: (row: { id: string; name: string; size: number }) => row.size },
+          {
+            id: "name",
+            label: "Name",
+            sortable: true,
+            getValue: (row: { id: string; name: string; size: number }) => row.name,
+          },
+          {
+            id: "size",
+            label: "Size",
+            width: 100,
+            align: "right",
+            sortable: true,
+            getValue: (row: { id: string; name: string; size: number }) => row.size,
+          },
         ]}
         rows={[
           { id: "b", name: "Beta", size: 20 },
@@ -1680,7 +1649,10 @@ function advancedCollectionSmoke(): void {
     ...node.children.flatMap(sceneText),
   ];
   const texts = sceneText(root.container);
-  assert.ok(texts.indexOf("Alpha") < texts.indexOf("Beta"), "Table sort order was not reflected in rows");
+  assert.ok(
+    texts.indexOf("Alpha") < texts.indexOf("Beta"),
+    "Table sort order was not reflected in rows",
+  );
   assert.ok(texts.includes("README.md"), "TreeView did not flatten expanded children");
   assert.ok(collectHits(root.container).length >= 5, "advanced collections lost interaction hits");
   renderShell(virtualRoot, null);
@@ -1754,30 +1726,50 @@ function utilityWidgetSmoke(): void {
         width={640}
         height={180}
         firstSize={160}
-        onFirstSizeChange={(size) => { splitSize = size; }}
-        first={<Surface width={160} height={180}><Label x={12} y={12} text="Inspector" /></Surface>}
-        second={<Panel width={473} height={180}><Label x={12} y={12} text="Canvas" /></Panel>}
+        onFirstSizeChange={(size) => {
+          splitSize = size;
+        }}
+        first={
+          <Surface width={160} height={180}>
+            <Label x={12} y={12} text="Inspector" />
+          </Surface>
+        }
+        second={
+          <Panel width={473} height={180}>
+            <Label x={12} y={12} text="Canvas" />
+          </Panel>
+        }
       />
       <PropertyList
         y={200}
         width={520}
         height={220}
         striped
-        sections={[{
-          id: "file",
-          label: "File",
-          items: [
-            { id: "name", label: "Name", value: "widgets.tsx" },
-            { id: "kind", label: "Kind", value: "TypeScript source", description: "Resolved from MIME metadata" },
-          ],
-        }]}
+        sections={[
+          {
+            id: "file",
+            label: "File",
+            items: [
+              { id: "name", label: "Name", value: "widgets.tsx" },
+              {
+                id: "kind",
+                label: "Kind",
+                value: "TypeScript source",
+                description: "Resolved from MIME metadata",
+              },
+            ],
+          },
+        ]}
       />
       <Pagination y={450} page={4} pageCount={20} onPageChange={() => {}} />
     </Group>,
   );
   const hits = collectHits(root.container);
   const divider = hits.find((hit) => hit.focusId?.startsWith("split-view:"));
-  assert.ok(divider?.onPointerDown && divider.onPointerMove, "SplitView divider lost pointer capture handlers");
+  assert.ok(
+    divider?.onPointerDown && divider.onPointerMove,
+    "SplitView divider lost pointer capture handlers",
+  );
   divider.onPointerDown({ x: 163, y: 40, localX: 3, localY: 40, ...NO_MODIFIERS });
   divider.onPointerMove({ x: 203, y: 40, localX: 43, localY: 40, ...NO_MODIFIERS });
   assert.equal(splitSize, 200, "SplitView did not preserve the pointer-down resize origin");
@@ -1787,7 +1779,10 @@ function utilityWidgetSmoke(): void {
   ];
   const texts = sceneText(root.container);
   assert.ok(texts.includes("TypeScript source"), "PropertyList value was not rendered");
-  assert.ok(texts.includes("4") && texts.includes("…"), "Pagination did not condense a large range");
+  assert.ok(
+    texts.includes("4") && texts.includes("…"),
+    "Pagination did not condense a large range",
+  );
   assert.ok(hits.length >= 8, "utility widgets lost expected interaction surfaces");
   renderShell(root, null);
 }
@@ -1910,18 +1905,32 @@ async function focusScopeAndShortcutSmoke(): Promise<void> {
         width={100}
         label="Outside"
         onPress={() => {}}
-        onFocusChange={(next) => { if (next) focused = "outside"; }}
+        onFocusChange={(next) => {
+          if (next) focused = "outside";
+        }}
       />
-      <FocusScope x={10} y={10} width={240} height={90} onEscape={() => { escapes++; }}>
+      <FocusScope
+        x={10}
+        y={10}
+        width={240}
+        height={90}
+        onEscape={() => {
+          escapes++;
+        }}
+      >
         <ShortcutManager
           width={240}
           height={90}
-          shortcuts={[{
-            id: "command",
-            key: "k",
-            ctrl: true,
-            onInvoke: () => { shortcuts++; },
-          }]}
+          shortcuts={[
+            {
+              id: "command",
+              key: "k",
+              ctrl: true,
+              onInvoke: () => {
+                shortcuts++;
+              },
+            },
+          ]}
         >
           <Button
             x={0}
@@ -1929,7 +1938,9 @@ async function focusScopeAndShortcutSmoke(): Promise<void> {
             width={100}
             label="First"
             onPress={() => {}}
-            onFocusChange={(next) => { if (next) focused = "first"; }}
+            onFocusChange={(next) => {
+              if (next) focused = "first";
+            }}
           />
           <Button
             x={120}
@@ -1937,7 +1948,9 @@ async function focusScopeAndShortcutSmoke(): Promise<void> {
             width={100}
             label="Second"
             onPress={() => {}}
-            onFocusChange={(next) => { if (next) focused = "second"; }}
+            onFocusChange={(next) => {
+              if (next) focused = "second";
+            }}
           />
         </ShortcutManager>
       </FocusScope>
@@ -2006,7 +2019,9 @@ async function overlaySelectSmoke(): Promise<void> {
           { id: "one", label: "One" },
           { id: "two", label: "Two" },
         ]}
-        onChange={(next) => { value = next; }}
+        onChange={(next) => {
+          value = next;
+        }}
       />
     </OverlayHost>
   ));
@@ -2197,7 +2212,9 @@ async function buttonKeyboardInteractionSmoke(): Promise<void> {
         autoFocus
         onPress={(event) => {
           buttonPresses++;
-          buttonOrigin = event ? `${event.x},${event.y}:${event.localX},${event.localY}` : "missing";
+          buttonOrigin = event
+            ? `${event.x},${event.y}:${event.localX},${event.localY}`
+            : "missing";
         }}
       />
       <IconButton
@@ -2224,7 +2241,11 @@ async function buttonKeyboardInteractionSmoke(): Promise<void> {
     timeMs: 1,
   });
   assert.equal(buttonPresses, 1, "Button should activate from Enter");
-  assert.equal(buttonOrigin, "60,27:50,17", "keyboard activation should retain the focused button geometry");
+  assert.equal(
+    buttonOrigin,
+    "60,27:50,17",
+    "keyboard activation should retain the focused button geometry",
+  );
   platformWindow.injectKey({
     type: "down",
     code: 15,
@@ -3009,14 +3030,7 @@ function ScrollSmoke(): ReactNode {
   return (
     <ScrollArea width={300} height={120} contentHeight={400} scrollbar>
       {Array.from({ length: 10 }, (_, i) => (
-        <Label
-          key={i}
-          x={8}
-          y={i * 40}
-          text={`Item ${i + 1}`}
-          width={280}
-          height={40}
-        />
+        <Label key={i} x={8} y={i * 40} text={`Item ${i + 1}`} width={280} height={40} />
       ))}
     </ScrollArea>
   );
@@ -3063,14 +3077,7 @@ function GridSmoke(): ReactNode {
       itemWidth={80}
       itemHeight={80}
       gap={8}
-      renderItem={(label) => (
-        <GridItem
-          width={80}
-          height={80}
-          label={label}
-          onPress={() => {}}
-        />
-      )}
+      renderItem={(label) => <GridItem width={80} height={80} label={label} onPress={() => {}} />}
     />
   );
 }
@@ -3078,18 +3085,8 @@ function GridSmoke(): ReactNode {
 function PressableSmoke(): ReactNode {
   const [count, setCount] = useState(0);
   return (
-    <Pressable
-      width={160}
-      height={40}
-      onPress={() => setCount((value) => value + 1)}
-    >
-      <Label
-        x={8}
-        y={12}
-        text={`Pressed: ${count}`}
-        width={144}
-        height={20}
-      />
+    <Pressable width={160} height={40} onPress={() => setCount((value) => value + 1)}>
+      <Label x={8} y={12} text={`Pressed: ${count}`} width={144} height={20} />
     </Pressable>
   );
 }
@@ -3099,21 +3096,9 @@ function SmokeApp(props: { onQuit: () => void }): ReactNode {
   const [checked, setChecked] = useState(false);
   return (
     <Column x={0} y={0} width={420} height={580} padding={16} gap={12}>
-      <Label
-        text="Moire UI smoke"
-        fontSize={20}
-        fontWeight="bold"
-        height={28}
-        width={388}
-      />
+      <Label text="Moire UI smoke" fontSize={20} fontWeight="bold" height={28} width={388} />
       <Separator width={388} height={1} />
-      <Toggle
-        on={on}
-        label="Dark mode"
-        onChange={setOn}
-        width={200}
-        height={28}
-      />
+      <Toggle on={on} label="Dark mode" onChange={setOn} width={200} height={28} />
       <Checkbox
         checked={checked}
         label="Enable notifications"
@@ -3125,13 +3110,7 @@ function SmokeApp(props: { onQuit: () => void }): ReactNode {
       <ScrollSmoke />
       <ListSmoke />
       <GridSmoke />
-      <Button
-        width={120}
-        height={36}
-        label="Quit"
-        variant="primary"
-        onPress={props.onQuit}
-      />
+      <Button width={120} height={36} label="Quit" variant="primary" onPress={props.onQuit} />
     </Column>
   );
 }

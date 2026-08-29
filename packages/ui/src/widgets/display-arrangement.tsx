@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, type ReactNode } from "react";
 import { Group, Rect, Text, type HitPointerEvent } from "@moire/react-host";
-import { themePalette } from "../theme.js";
+import { themePalette } from "#ui/theme";
 
 export type DisplayArrangementItem = {
   id: string;
@@ -56,7 +56,7 @@ export function DisplayArrangement(props: DisplayArrangementProps): ReactNode {
     if (!active) return;
     const x = Math.round(active.itemX + (event.x - active.pointerX) / geometry.scale);
     const y = Math.round(active.itemY + (event.y - active.pointerY) / geometry.scale);
-    setPreview(items.map((item) => item.id === active.id ? { ...item, x, y } : item));
+    setPreview(items.map((item) => (item.id === active.id ? { ...item, x, y } : item)));
   };
 
   const finish = () => {
@@ -69,7 +69,14 @@ export function DisplayArrangement(props: DisplayArrangementProps): ReactNode {
 
   return (
     <Group width={props.width} height={props.height}>
-      <Rect width={props.width} height={props.height} fill={pal.bg} radius={10} stroke={pal.border} strokeWidth={1} />
+      <Rect
+        width={props.width}
+        height={props.height}
+        fill={pal.bg}
+        radius={10}
+        stroke={pal.border}
+        strokeWidth={1}
+      />
       {items.map((item, index) => {
         const x = geometry.originX + item.x * geometry.scale;
         const y = geometry.originY + item.y * geometry.scale;
@@ -88,7 +95,13 @@ export function DisplayArrangement(props: DisplayArrangementProps): ReactNode {
               onPointerDown={(event) => {
                 if (event.button && event.button !== "left") return;
                 props.onSelect?.(item.id);
-                drag.current = { id: item.id, pointerX: event.x, pointerY: event.y, itemX: item.x, itemY: item.y };
+                drag.current = {
+                  id: item.id,
+                  pointerX: event.x,
+                  pointerY: event.y,
+                  itemX: item.x,
+                  itemY: item.y,
+                };
               }}
               onPointerMove={move}
               onPointerUp={finish}
@@ -102,7 +115,14 @@ export function DisplayArrangement(props: DisplayArrangementProps): ReactNode {
               fontWeight="medium"
             />
             {item.primary ? (
-              <Text x={10} y={height - 20} text="Primary" color={pal.accent} fontSize={10} fontWeight="medium" />
+              <Text
+                x={10}
+                y={height - 20}
+                text="Primary"
+                color={pal.accent}
+                fontSize={10}
+                fontWeight="medium"
+              />
             ) : null}
           </Group>
         );

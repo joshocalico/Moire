@@ -2,12 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  addFavorite,
-  loadPlaces,
-  normalizePlaceLabels,
-  savePlaces,
-} from "./places.js";
+import { addFavorite, loadPlaces, normalizePlaceLabels, savePlaces } from "./places";
 
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "moire-files-places-"));
 const originalConfigHome = process.env.XDG_CONFIG_HOME;

@@ -6,8 +6,8 @@
  */
 import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import { Group, Rect, type HitPointerEvent } from "@moire/react-host";
-import { useWidgetTheme, type WidgetBoxStyle } from "../widget-theme.js";
-import { requestActiveWindowRedraw } from "../window.js";
+import { useWidgetTheme, type WidgetBoxStyle } from "#ui/widget-theme";
+import { requestActiveWindowRedraw } from "#ui/window";
 
 /* ---------- Bridge (plugged in by platform, optional) ---------- */
 
@@ -26,11 +26,7 @@ export type DragPreviewSpec = {
 };
 
 type DndBridge = {
-  startDrag?: (
-    payload: unknown,
-    mimeTypes: string[],
-    opts: DragPreviewSpec,
-  ) => void;
+  startDrag?: (payload: unknown, mimeTypes: string[], opts: DragPreviewSpec) => void;
 };
 
 let dndBridge: DndBridge | null = null;
@@ -66,17 +62,9 @@ export function notifyDropHover(hovering: boolean): void {
  * `x`/`y` are window-local pixel coordinates of the drop, for callers that
  * want to resolve a more specific target (e.g. `hitTestDropData`).
  */
-export function notifyDrop(
-  payload: unknown,
-  mimeTypes: string[],
-  x: number,
-  y: number,
-): void {
+export function notifyDrop(payload: unknown, mimeTypes: string[], x: number, y: number): void {
   for (const s of dropSinks) {
-    if (
-      s.mimeTypes.length === 0 ||
-      mimeTypes.some((m) => s.mimeTypes.includes(m))
-    ) {
+    if (s.mimeTypes.length === 0 || mimeTypes.some((m) => s.mimeTypes.includes(m))) {
       s.onDrop(payload, mimeTypes, x, y);
     }
   }
@@ -127,8 +115,7 @@ export function DndFeedback(props: {
   kind: DndFeedbackKind;
 }): ReactNode {
   const recipe = useWidgetTheme().recipes.dnd;
-  const style: WidgetBoxStyle =
-    props.kind === "dragging" ? recipe.dragging : recipe.dropTarget;
+  const style: WidgetBoxStyle = props.kind === "dragging" ? recipe.dragging : recipe.dropTarget;
   return (
     <Rect
       x={0}
@@ -299,12 +286,7 @@ export function Draggable(props: DraggableProps): ReactNode {
   };
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       {props.children}
       <Rect
         x={0}
@@ -313,9 +295,7 @@ export function Draggable(props: DraggableProps): ReactNode {
         height={props.height}
         fill={0x00000000}
         data={props.dropData}
-        onDropHoverChange={
-          props.dropData !== undefined ? setDropHover : undefined
-        }
+        onDropHoverChange={props.dropData !== undefined ? setDropHover : undefined}
         onPointerDown={drag.onPointerDown}
         onPointerMove={drag.onPointerMove}
         onPointerUp={drag.onPointerUp}
@@ -324,18 +304,10 @@ export function Draggable(props: DraggableProps): ReactNode {
         onContextMenu={props.onContextMenu}
       />
       {drag.dragging ? (
-        <DndFeedback
-          width={props.width}
-          height={props.height}
-          kind="dragging"
-        />
+        <DndFeedback width={props.width} height={props.height} kind="dragging" />
       ) : null}
       {dropHover ? (
-        <DndFeedback
-          width={props.width}
-          height={props.height}
-          kind="drop-target"
-        />
+        <DndFeedback width={props.width} height={props.height} kind="drop-target" />
       ) : null}
     </Group>
   );
@@ -364,12 +336,7 @@ export function DropZone(props: DropZoneProps): ReactNode {
   const [hover, setHover] = useState(false);
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       {props.children}
       <Rect
         x={0}
@@ -380,13 +347,7 @@ export function DropZone(props: DropZoneProps): ReactNode {
         data={props.id}
         onDropHoverChange={setHover}
       />
-      {hover ? (
-        <DndFeedback
-          width={props.width}
-          height={props.height}
-          kind="drop-target"
-        />
-      ) : null}
+      {hover ? <DndFeedback width={props.width} height={props.height} kind="drop-target" /> : null}
     </Group>
   );
 }
@@ -416,8 +377,7 @@ export function DropTarget(props: DropTargetProps): ReactNode {
   useEffect(() => {
     return registerDropSink({
       mimeTypes: [...mimeTypes],
-      onDrop: (payload, mimes, x, y) =>
-        onDropRef.current?.(payload, mimes, x, y),
+      onDrop: (payload, mimes, x, y) => onDropRef.current?.(payload, mimes, x, y),
       onHover: setHovered,
     });
     // A semantic MIME list change replaces the sink; callback identity does not.
@@ -433,19 +393,10 @@ export function DropTarget(props: DropTargetProps): ReactNode {
   const showHover = hovered && (!activeDrag || acceptsLocal());
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       {props.children}
       {showHover ? (
-        <DndFeedback
-          width={props.width}
-          height={props.height}
-          kind="drop-target"
-        />
+        <DndFeedback width={props.width} height={props.height} kind="drop-target" />
       ) : null}
     </Group>
   );

@@ -2,14 +2,14 @@
  * CPU-readable snapshot of a linux-dmabuf wl_buffer.
  * Tries GBM import+map first, then direct mmap of plane 0 (with DMA_BUF sync).
  */
-import koffi from "koffi";
 import {
   closeFd,
   GbmDevice,
-  getLibc,
+  ioctlUint64,
   MAP_SHARED,
   mmap,
   munmap,
+  nativeView,
   PROT_READ,
 } from "@moire/sys";
 
@@ -31,10 +31,7 @@ export type DmabufBuffer = {
 };
 
 function modifierOf(plane: DmabufPlane): bigint {
-  return (
-    (BigInt(plane.modifierHi >>> 0) << 32n) |
-    BigInt(plane.modifierLo >>> 0)
-  );
+  return (BigInt(plane.modifierHi >>> 0) << 32n) | BigInt(plane.modifierLo >>> 0);
 }
 
 function reuseOrAlloc(into: Uint8Array | null | undefined, byteLen: number): Uint8Array {
@@ -51,16 +48,7 @@ const DMA_BUF_IOCTL_SYNC = 0x40086200; // IOC_WRITE | (8<<16) | ('b'<<8) | 0
 
 function dmaBufSync(fd: number, flags: number): void {
   try {
-    const ioctl = getLibc().func(
-      "int ioctl(int fd, unsigned long request, void *arg)",
-    );
-    const buf = koffi.alloc("uint64_t", 1);
-    try {
-      koffi.encode(buf, "uint64_t", BigInt(flags >>> 0));
-      ioctl(fd, DMA_BUF_IOCTL_SYNC >>> 0, buf);
-    } finally {
-      koffi.free(buf);
-    }
+    ioctlUint64(fd, DMA_BUF_IOCTL_SYNC >>> 0, BigInt(flags >>> 0));
   } catch {
     // optional — some drivers reject SYNC
   }
@@ -90,7 +78,7 @@ function tryMmapPlane(
     const map = mmap(mapLen, PROT_READ, MAP_SHARED, plane.fd, 0);
     try {
       dmaBufSync(plane.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
-      const view = new Uint8Array(koffi.view(map, mapLen) as ArrayBuffer);
+      const view = new Uint8Array(nativeView(map, mapLen));
       const slice = view.subarray(plane.offset, plane.offset + byteLen);
       if (!hasNonzero(slice)) return null;
       const pixels = reuseOrAlloc(into, byteLen);
@@ -145,10 +133,7 @@ export function copyFromDmabuf(
   return { pixels, stride: plane.stride };
 }
 
-export function closeDmabufPlanes(
-  planes: DmabufPlane[],
-  gbm?: GbmDevice | null,
-): void {
+export function closeDmabufPlanes(planes: DmabufPlane[], gbm?: GbmDevice | null): void {
   for (const p of planes) {
     gbm?.releaseImport(p.fd);
     try {

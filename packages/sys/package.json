@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "probe:drm": "tsx src/probe-drm.ts",
     "smoke:egl": "tsx src/egl-output.smoke.ts",
+    "smoke:libc": "tsx src/libc.smoke.ts",
     "clear-color": "tsx src/clear-color.ts"
   },
   "dependencies": {

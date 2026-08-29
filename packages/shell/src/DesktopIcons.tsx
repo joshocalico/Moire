@@ -15,16 +15,13 @@ export function desktopDir(): string {
 }
 
 export function desktopLayoutPath(): string {
-  const base =
-    process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
+  const base = process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
   return path.join(base, "moire", "desktop-layout.json");
 }
 
 export function loadDesktopLayout(): DesktopLayout {
   try {
-    return JSON.parse(
-      fs.readFileSync(desktopLayoutPath(), "utf8"),
-    ) as DesktopLayout;
+    return JSON.parse(fs.readFileSync(desktopLayoutPath(), "utf8")) as DesktopLayout;
   } catch {
     return {};
   }
@@ -69,15 +66,8 @@ const GRID_MARGIN_Y = 28;
 const GRID_GAP = 16;
 const COL_WIDTH = 128;
 
-function defaultIconPos(
-  index: number,
-  _screenW: number,
-  availH: number,
-): { x: number; y: number } {
-  const rows = Math.max(
-    1,
-    Math.floor((availH - GRID_MARGIN_Y) / (DESKTOP_ITEM_H + GRID_GAP)),
-  );
+function defaultIconPos(index: number, _screenW: number, availH: number): { x: number; y: number } {
+  const rows = Math.max(1, Math.floor((availH - GRID_MARGIN_Y) / (DESKTOP_ITEM_H + GRID_GAP)));
   const col = Math.floor(index / rows);
   const row = index % rows;
   return {
@@ -99,14 +89,8 @@ export function desktopIconPosition(
   const saved = layout[name];
   const fallback = defaultIconPos(index, screenW, availH);
   return {
-    x: Math.max(
-      0,
-      Math.min(saved?.x ?? fallback.x, screenW - DESKTOP_ITEM_W),
-    ),
-    y: Math.max(
-      0,
-      Math.min(saved?.y ?? fallback.y, availH - DESKTOP_ITEM_H),
-    ),
+    x: Math.max(0, Math.min(saved?.x ?? fallback.x, screenW - DESKTOP_ITEM_W)),
+    y: Math.max(0, Math.min(saved?.y ?? fallback.y, availH - DESKTOP_ITEM_H)),
   };
 }
 
@@ -122,20 +106,8 @@ export function hitTestDesktopIcon(
 ): string | null {
   for (let i = entries.length - 1; i >= 0; i--) {
     const name = entries[i]!;
-    const { x: ix, y: iy } = desktopIconPosition(
-      name,
-      i,
-      layout,
-      screenW,
-      screenH,
-      panelH,
-    );
-    if (
-      x >= ix &&
-      y >= iy &&
-      x < ix + DESKTOP_ITEM_W &&
-      y < iy + DESKTOP_ITEM_H
-    ) {
+    const { x: ix, y: iy } = desktopIconPosition(name, i, layout, screenW, screenH, panelH);
+    if (x >= ix && y >= iy && x < ix + DESKTOP_ITEM_W && y < iy + DESKTOP_ITEM_H) {
       return name;
     }
   }
@@ -176,14 +148,7 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
   const dir = desktopDir();
 
   const icons = entries.map((name, i) => {
-    const { x: ix, y: iy } = desktopIconPosition(
-      name,
-      i,
-      layout,
-      screenW,
-      screenH,
-      panelH,
-    );
+    const { x: ix, y: iy } = desktopIconPosition(name, i, layout, screenW, screenH, panelH);
 
     const filePath = path.join(dir, name);
     const dirEntry = isDirectory(filePath);
@@ -211,13 +176,7 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
           selected={props.selectedNames?.has(name) === true}
           dropHover={dirEntry && props.dropHoverName === name}
           interactive={false}
-          icon={
-            <Icon
-              name={iconName}
-              size={ICON_SIZE}
-              color={dirEntry ? pal.accent : pal.text}
-            />
-          }
+          icon={<Icon name={iconName} size={ICON_SIZE} color={dirEntry ? pal.accent : pal.text} />}
         />
       </CollectionItem>
     );
@@ -228,21 +187,9 @@ export function DesktopIcons(props: DesktopIconsProps): ReactNode {
       {showAreaHighlight ? (
         <>
           <Rect x={0} y={0} width={screenW} height={3} fill={pal.accent} />
-          <Rect
-            x={0}
-            y={availH - 3}
-            width={screenW}
-            height={3}
-            fill={pal.accent}
-          />
+          <Rect x={0} y={availH - 3} width={screenW} height={3} fill={pal.accent} />
           <Rect x={0} y={0} width={3} height={availH} fill={pal.accent} />
-          <Rect
-            x={screenW - 3}
-            y={0}
-            width={3}
-            height={availH}
-            fill={pal.accent}
-          />
+          <Rect x={screenW - 3} y={0} width={3} height={availH} fill={pal.accent} />
         </>
       ) : null}
       {icons}

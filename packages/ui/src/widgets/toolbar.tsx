@@ -1,7 +1,7 @@
 import React, { type ReactNode } from "react";
-import { Surface } from "./primitives.js";
-import { Row, registerIntrinsicSize } from "./layout.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { Surface } from "./primitives";
+import { Row, registerIntrinsicSize } from "./layout";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type ToolbarProps = {
   x?: number;

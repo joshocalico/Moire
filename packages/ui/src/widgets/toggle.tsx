@@ -1,20 +1,15 @@
 /** Controlled switch with focus/keyboard behavior and animated thumb motion. */
 import React, { useEffect, useId, useState, type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  measureTextBounds,
-  type HitKeyEvent,
-} from "@moire/react-host";
+import { Group, Rect, measureTextBounds, type HitKeyEvent } from "@moire/react-host";
 import {
   resolveStatefulStyle,
   useWidgetTheme,
   type ButtonSize,
   type WidgetState,
-} from "../widget-theme.js";
-import { easeTo, useMotionValue } from "../motion.js";
-import { Box, Horizontal, registerIntrinsicSize } from "./layout.js";
-import { TextBlock } from "./primitives.js";
+} from "#ui/widget-theme";
+import { easeTo, useMotionValue } from "#ui/motion";
+import { Box, Horizontal, registerIntrinsicSize } from "./layout";
+import { TextBlock } from "./primitives";
 
 export type ToggleProps = {
   x?: number;
@@ -57,38 +52,24 @@ export function Toggle(props: ToggleProps): ReactNode {
   const height = props.height ?? recipe.metrics.height;
   const width =
     props.width ??
-    recipe.metrics.trackWidth +
-      (labelBounds ? recipe.metrics.gap + labelBounds.width : 0);
+    recipe.metrics.trackWidth + (labelBounds ? recipe.metrics.gap + labelBounds.width : 0);
   const travel =
-    recipe.metrics.trackWidth -
-    recipe.metrics.thumbInset * 2 -
-    recipe.metrics.thumbSize;
+    recipe.metrics.trackWidth - recipe.metrics.thumbInset * 2 - recipe.metrics.thumbSize;
   const thumbX =
-    recipe.metrics.thumbInset +
-    Math.round(travel * Math.max(0, Math.min(1, position.get() / 100)));
+    recipe.metrics.thumbInset + Math.round(travel * Math.max(0, Math.min(1, position.get() / 100)));
 
   const toggle = () => {
     if (!props.disabled) props.onChange?.(!props.on);
   };
   const handleKey = (event: HitKeyEvent) => {
     if (event.repeat || props.disabled) return;
-    if (
-      event.code === 28 ||
-      event.code === 57 ||
-      event.key === "Enter" ||
-      event.key === " "
-    ) {
+    if (event.code === 28 || event.code === 57 || event.key === "Enter" || event.key === " ") {
       toggle();
     }
   };
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={width}
-      height={height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={height}>
       <Horizontal width={width} height={height} gap={recipe.metrics.gap} align="center">
         <Box width={recipe.metrics.trackWidth} height={recipe.metrics.trackHeight}>
           <Rect
@@ -151,10 +132,7 @@ export function Toggle(props: ToggleProps): ReactNode {
 
 registerIntrinsicSize(Toggle, (props, theme) => {
   const recipe = theme.recipes.toggle[props.size ?? "medium"];
-  const labelStyle = resolveStatefulStyle(
-    recipe.label,
-    props.disabled ? "disabled" : "rest",
-  );
+  const labelStyle = resolveStatefulStyle(recipe.label, props.disabled ? "disabled" : "rest");
   const labelWidth = props.label
     ? measureTextBounds(props.label, {
         fontSize: labelStyle.fontSize,
@@ -162,7 +140,9 @@ registerIntrinsicSize(Toggle, (props, theme) => {
       }).width
     : 0;
   return {
-    width: props.width ?? recipe.metrics.trackWidth + (props.label ? recipe.metrics.gap + labelWidth : 0),
+    width:
+      props.width ??
+      recipe.metrics.trackWidth + (props.label ? recipe.metrics.gap + labelWidth : 0),
     height: props.height ?? recipe.metrics.height,
   };
 });

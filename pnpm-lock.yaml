@@ -18,6 +18,9 @@ importers:
         specifier: ^3.2.1
         version: 3.2.1
     devDependencies:
+      '@moire/tsconfig':
+        specifier: workspace:*
+        version: link:packages/tsconfig
       oxfmt:
         specifier: ^0.65.0
         version: 0.65.0
@@ -328,9 +331,6 @@ importers:
       '@moire/theme':
         specifier: workspace:*
         version: link:../theme
-      koffi:
-        specifier: ^2.10.1
-        version: 2.16.2
       x11:
         specifier: ^2.3.0
         version: 2.3.0
@@ -460,9 +460,9 @@ importers:
 
   packages/terminal:
     dependencies:
-      koffi:
-        specifier: ^2.10.1
-        version: 2.16.2
+      '@moire/sys':
+        specifier: workspace:*
+        version: link:../sys
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
@@ -489,6 +489,8 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+
+  packages/tsconfig: {}
 
   packages/ui:
     dependencies:

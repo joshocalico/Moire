@@ -6,23 +6,14 @@
  */
 /* ---------- Re-exports from split modules ---------- */
 
-export { Pressable } from "./pressable.js";
-export type { PressableProps } from "./pressable.js";
+export { Pressable } from "./pressable";
+export type { PressableProps } from "./pressable";
 
-export { Button } from "./button.js";
-export type {
-  ButtonProps,
-  ButtonVariant,
-  ButtonSize,
-  ButtonSlot,
-} from "./button.js";
+export { Button } from "./button";
+export type { ButtonProps, ButtonVariant, ButtonSize, ButtonSlot } from "./button";
 
-export { IconButton } from "./icon-button.js";
-export type {
-  IconButtonProps,
-  IconButtonSlot,
-  IconButtonVariant,
-} from "./icon-button.js";
+export { IconButton } from "./icon-button";
+export type { IconButtonProps, IconButtonSlot, IconButtonVariant } from "./icon-button";
 
 export {
   WidgetThemeProvider,
@@ -30,7 +21,7 @@ export {
   getWidgetTheme,
   resolveStatefulStyle,
   useWidgetTheme,
-} from "../widget-theme.js";
+} from "#ui/widget-theme";
 export type {
   WidgetThemeProviderProps,
   WidgetTheme,
@@ -57,44 +48,33 @@ export type {
   ImageWidgetRecipe,
   DndRecipe,
   PathBarRecipe,
-} from "../widget-theme.js";
+} from "#ui/widget-theme";
 
-export { ScrollArea } from "./scroll.js";
-export type { ScrollAreaProps } from "./scroll.js";
+export { ScrollArea } from "./scroll";
+export type { ScrollAreaProps } from "./scroll";
 
-export { List, ListItem } from "./list.js";
-export type { ListProps, ListItemProps, ListItemSlot } from "./list.js";
+export { List, ListItem } from "./list";
+export type { ListProps, ListItemProps, ListItemSlot } from "./list";
 
-export { VirtualList } from "./virtual-list.js";
-export type { VirtualListProps } from "./virtual-list.js";
+export { VirtualList } from "./virtual-list";
+export type { VirtualListProps } from "./virtual-list";
 
-export { Table } from "./table.js";
-export type {
-  TableProps,
-  TableColumn,
-  TableSort,
-  TableSortDirection,
-} from "./table.js";
+export { Table } from "./table";
+export type { TableProps, TableColumn, TableSort, TableSortDirection } from "./table";
 
-export { TreeView } from "./tree-view.js";
-export type { TreeViewProps, TreeNode } from "./tree-view.js";
+export { TreeView } from "./tree-view";
+export type { TreeViewProps, TreeNode } from "./tree-view";
 
-export { Grid, GridItem } from "./grid.js";
-export type { GridProps, GridItemProps } from "./grid.js";
+export { Grid, GridItem } from "./grid";
+export type { GridProps, GridItemProps } from "./grid";
 
-export { ImageWidget } from "./image-widget.js";
-export type { ImageWidgetProps, ImageFit } from "./image-widget.js";
+export { ImageWidget } from "./image-widget";
+export type { ImageWidgetProps, ImageFit } from "./image-widget";
 
-export { Icon } from "./icon.js";
-export type { IconProps, IconName } from "./icon.js";
+export { Icon } from "./icon";
+export type { IconProps, IconName } from "./icon";
 
-export {
-  Draggable,
-  DropTarget,
-  DropZone,
-  DndFeedback,
-  setDndBridge,
-} from "./dnd.js";
+export { Draggable, DropTarget, DropZone, DndFeedback, setDndBridge } from "./dnd";
 export type {
   DraggableProps,
   DropTargetProps,
@@ -104,68 +84,48 @@ export type {
   DragSourceOptions,
   DragSourceController,
   DndFeedbackKind,
-} from "./dnd.js";
-export { useDragSource } from "./dnd.js";
+} from "./dnd";
+export { useDragSource } from "./dnd";
 
-export { CollectionItem, ContextMenuTrigger } from "./interaction.js";
-export type {
-  CollectionItemProps,
-  ContextMenuTriggerProps,
-} from "./interaction.js";
+export { CollectionItem, ContextMenuTrigger } from "./interaction";
+export type { CollectionItemProps, ContextMenuTriggerProps } from "./interaction";
 
-export { Tabs } from "./tabs.js";
-export type { TabsProps, TabItem, TabSlot } from "./tabs.js";
+export { Tabs } from "./tabs";
+export type { TabsProps, TabItem, TabSlot } from "./tabs";
 
-export { Menu, MenuItem } from "./menu.js";
-export type {
-  MenuProps,
-  MenuEntry,
-  MenuItemProps,
-  MenuItemSlot,
-  MenuTrailingSlot,
-} from "./menu.js";
+export { Menu, MenuItem } from "./menu";
+export type { MenuProps, MenuEntry, MenuItemProps, MenuItemSlot, MenuTrailingSlot } from "./menu";
 
-export { Checkbox } from "./checkbox.js";
-export type { CheckboxProps } from "./checkbox.js";
+export { Checkbox } from "./checkbox";
+export type { CheckboxProps } from "./checkbox";
 
-export { Toggle } from "./toggle.js";
-export type { ToggleProps } from "./toggle.js";
+export { Toggle } from "./toggle";
+export type { ToggleProps } from "./toggle";
 
-export { Slider } from "./slider.js";
-export type { SliderProps } from "./slider.js";
+export { Slider } from "./slider";
+export type { SliderProps } from "./slider";
 
-export { ProgressBar } from "./progress-bar.js";
-export type { ProgressBarProps } from "./progress-bar.js";
+export { ProgressBar } from "./progress-bar";
+export type { ProgressBarProps } from "./progress-bar";
 
-export { TextField } from "./text-field.js";
-export type { TextFieldProps, TextFieldSlot } from "./text-field.js";
+export { TextField } from "./text-field";
+export type { TextFieldProps, TextFieldSlot } from "./text-field";
 
-export { SearchField } from "./search-field.js";
-export type { SearchFieldProps } from "./search-field.js";
+export { SearchField } from "./search-field";
+export type { SearchFieldProps } from "./search-field";
 
-export { Breadcrumbs, PathBar } from "./breadcrumbs.js";
-export type {
-  BreadcrumbSegment,
-  BreadcrumbsProps,
-  PathBarProps,
-} from "./breadcrumbs.js";
+export { Breadcrumbs, PathBar } from "./breadcrumbs";
+export type { BreadcrumbSegment, BreadcrumbsProps, PathBarProps } from "./breadcrumbs";
 
-export {
-  ContextMenu,
-  OpenWithPicker,
-  contextMenuSurfaceSize,
-} from "./context-menu.js";
-export { DisplayArrangement } from "./display-arrangement.js";
-export type {
-  DisplayArrangementItem,
-  DisplayArrangementProps,
-} from "./display-arrangement.js";
+export { ContextMenu, OpenWithPicker, contextMenuSurfaceSize } from "./context-menu";
+export { DisplayArrangement } from "./display-arrangement";
+export type { DisplayArrangementItem, DisplayArrangementProps } from "./display-arrangement";
 export type {
   ContextMenuAction,
   ContextMenuProps,
   OpenWithChoice,
   OpenWithPickerProps,
-} from "./context-menu.js";
+} from "./context-menu";
 
 export {
   Box,
@@ -181,7 +141,7 @@ export {
   Spacer,
   Measure,
   useLayoutMetrics,
-} from "./layout.js";
+} from "./layout";
 export type {
   BoxProps,
   RowProps,
@@ -196,7 +156,7 @@ export type {
   MeasureProps,
   LayoutMetrics,
   FlexItemProps,
-} from "./layout.js";
+} from "./layout";
 
 export {
   Label,
@@ -207,21 +167,17 @@ export {
   Separator,
   Divider,
   usePalette,
-} from "./primitives.js";
+} from "./primitives";
 export type {
   LabelProps,
   SurfaceProps,
   PanelProps,
   FocusRingProps,
   SeparatorProps,
-} from "./primitives.js";
+} from "./primitives";
 
-export { FocusScope, ShortcutManager } from "./focus.js";
-export type {
-  FocusScopeProps,
-  ShortcutManagerProps,
-  Shortcut,
-} from "./focus.js";
+export { FocusScope, ShortcutManager } from "./focus";
+export type { FocusScopeProps, ShortcutManagerProps, Shortcut } from "./focus";
 
 export {
   OverlayHost,
@@ -231,7 +187,7 @@ export {
   Sheet,
   ConfirmationDialog,
   ToastHost,
-} from "./overlay.js";
+} from "./overlay";
 export type {
   OverlayHostProps,
   OverlayPortalProps,
@@ -242,87 +198,65 @@ export type {
   ConfirmationDialogProps,
   ToastHostProps,
   ToastItem,
-} from "./overlay.js";
+} from "./overlay";
 
-export { Select, ComboBox } from "./select.js";
-export type {
-  SelectProps,
-  ComboBoxProps,
-  SelectOption,
-} from "./select.js";
+export { Select, ComboBox } from "./select";
+export type { SelectProps, ComboBoxProps, SelectOption } from "./select";
 
-export { Dialog } from "./dialog.js";
-export type { DialogProps } from "./dialog.js";
+export { Dialog } from "./dialog";
+export type { DialogProps } from "./dialog";
 
-export { Toolbar } from "./toolbar.js";
-export type { ToolbarProps } from "./toolbar.js";
+export { Toolbar } from "./toolbar";
+export type { ToolbarProps } from "./toolbar";
 
-export { Tooltip } from "./tooltip.js";
-export type { TooltipProps, TooltipPlacement } from "./tooltip.js";
+export { Tooltip } from "./tooltip";
+export type { TooltipProps, TooltipPlacement } from "./tooltip";
 
-export { Disclosure } from "./disclosure.js";
-export type { DisclosureProps } from "./disclosure.js";
+export { Disclosure } from "./disclosure";
+export type { DisclosureProps } from "./disclosure";
 
-export { ProgressRow } from "./progress-row.js";
-export type { ProgressRowProps } from "./progress-row.js";
+export { ProgressRow } from "./progress-row";
+export type { ProgressRowProps } from "./progress-row";
 
-export { SplitView } from "./split-view.js";
-export type { SplitViewProps, SplitViewOrientation } from "./split-view.js";
+export { SplitView } from "./split-view";
+export type { SplitViewProps, SplitViewOrientation } from "./split-view";
 
-export { Pagination } from "./pagination.js";
-export type { PaginationProps } from "./pagination.js";
+export { Pagination } from "./pagination";
+export type { PaginationProps } from "./pagination";
 
-export { PropertyList } from "./property-list.js";
-export type {
-  PropertyListProps,
-  PropertyListSection,
-  PropertyListItem,
-} from "./property-list.js";
+export { PropertyList } from "./property-list";
+export type { PropertyListProps, PropertyListSection, PropertyListItem } from "./property-list";
 
-export { NavigationSidebar } from "./navigation-sidebar.js";
+export { NavigationSidebar } from "./navigation-sidebar";
 export type {
   NavigationSidebarProps,
   NavigationSidebarSection,
   NavigationSidebarItem,
-} from "./navigation-sidebar.js";
+} from "./navigation-sidebar";
 
-export { SegmentedControl, RadioGroup } from "./controls.js";
+export { SegmentedControl, RadioGroup } from "./controls";
 export type {
   SegmentedControlProps,
   SegmentedControlOption,
   RadioGroupProps,
   RadioOption,
-} from "./controls.js";
+} from "./controls";
 
-export { Badge, Banner, Spinner, EmptyState } from "./feedback.js";
-export type {
-  BadgeProps,
-  BadgeTone,
-  BannerProps,
-  SpinnerProps,
-  EmptyStateProps,
-} from "./feedback.js";
+export { Badge, Banner, Spinner, EmptyState } from "./feedback";
+export type { BadgeProps, BadgeTone, BannerProps, SpinnerProps, EmptyStateProps } from "./feedback";
 
-export { CodeView } from "./code-view.js";
-export type { CodeViewProps, CodeLanguage } from "./code-view.js";
+export { CodeView } from "./code-view";
+export type { CodeViewProps, CodeLanguage } from "./code-view";
 
-export { RichTextView } from "./rich-text.js";
-export type {
-  RichTextViewProps,
-  RichTextLine,
-  RichTextRun,
-} from "./rich-text.js";
+export { RichTextView } from "./rich-text";
+export type { RichTextViewProps, RichTextLine, RichTextRun } from "./rich-text";
 
-export { TerminalView } from "./terminal-view.js";
-export type {
-  TerminalViewProps,
-  TerminalCursor,
-  TerminalGridMetrics,
-} from "./terminal-view.js";
-export { measureTerminalGrid } from "./terminal-view.js";
+export { TerminalView } from "./terminal-view";
+export type { TerminalViewProps, TerminalCursor, TerminalGridMetrics } from "./terminal-view";
+export { measureTerminalGrid } from "./terminal-view";
 
-export { StatusBar } from "./status-bar.js";
-export type { StatusBarProps } from "./status-bar.js";
+export { StatusBar } from "./status-bar";
+export type { StatusBarProps } from "./status-bar";
 
 export {
   LineChart,
@@ -335,7 +269,7 @@ export {
   RadialChart,
   HeatmapChart,
   ChartLegend,
-} from "./chart.js";
+} from "./chart";
 export type {
   ChartPoint,
   ChartSeries,
@@ -351,4 +285,4 @@ export type {
   RadialChartProps,
   HeatmapCell,
   HeatmapChartProps,
-} from "./chart.js";
+} from "./chart";

@@ -1,14 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { parseDesktopFile, type DesktopEntry } from "./desktop.js";
+import { parseDesktopFile, type DesktopEntry } from "./desktop";
 
 export function xdgDataDirs(): string[] {
-  const home =
-    process.env.XDG_DATA_HOME ??
-    path.join(process.env.HOME ?? "", ".local/share");
-  const dirs = (process.env.XDG_DATA_DIRS ?? "/usr/local/share:/usr/share").split(
-    ":",
-  );
+  const home = process.env.XDG_DATA_HOME ?? path.join(process.env.HOME ?? "", ".local/share");
+  const dirs = (process.env.XDG_DATA_DIRS ?? "/usr/local/share:/usr/share").split(":");
   return [home, ...dirs].filter(Boolean);
 }
 
@@ -20,29 +16,17 @@ export function resolveApplicationIcon(icon?: string): string | undefined {
   if (iconPathCache.has(icon)) return iconPathCache.get(icon);
 
   if (path.isAbsolute(icon)) {
-    const resolved =
-      icon.toLowerCase().endsWith(".png") && fs.existsSync(icon)
-        ? icon
-        : undefined;
+    const resolved = icon.toLowerCase().endsWith(".png") && fs.existsSync(icon) ? icon : undefined;
     iconPathCache.set(icon, resolved);
     return resolved;
   }
 
-  const fileName = icon.toLowerCase().endsWith(".png")
-    ? icon
-    : `${icon}.png`;
+  const fileName = icon.toLowerCase().endsWith(".png") ? icon : `${icon}.png`;
   const sizes = ["64x64", "48x48", "32x32", "128x128", "256x256", "24x24"];
   for (const root of xdgDataDirs()) {
     for (const size of sizes) {
       for (const context of ["apps", "applications"]) {
-        const candidate = path.join(
-          root,
-          "icons",
-          "hicolor",
-          size,
-          context,
-          fileName,
-        );
+        const candidate = path.join(root, "icons", "hicolor", size, context, fileName);
         if (fs.existsSync(candidate)) {
           iconPathCache.set(icon, candidate);
           return candidate;
@@ -93,10 +77,7 @@ export function discoverApplications(desktop = "Moire"): DesktopEntry[] {
   return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function filterApplications(
-  apps: DesktopEntry[],
-  query: string,
-): DesktopEntry[] {
+export function filterApplications(apps: DesktopEntry[], query: string): DesktopEntry[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return apps;
   return apps.filter(

@@ -14,12 +14,10 @@ import {
   type ButtonSize,
   type WidgetIconStyle,
   type WidgetState,
-} from "../widget-theme.js";
-import { registerIntrinsicSize } from "./layout.js";
+} from "#ui/widget-theme";
+import { registerIntrinsicSize } from "./layout";
 
-export type TextFieldSlot =
-  | ReactNode
-  | ((style: WidgetIconStyle) => ReactNode);
+export type TextFieldSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
 export type TextFieldProps = {
   x?: number;
@@ -47,12 +45,7 @@ export type TextFieldProps = {
   readOnly?: boolean;
 };
 
-function cursorFromX(
-  value: string,
-  localX: number,
-  textX: number,
-  fontSize: number,
-): number {
+function cursorFromX(value: string, localX: number, textX: number, fontSize: number): number {
   const target = Math.max(0, localX - textX);
   let best = 0;
   let bestDistance = Number.POSITIVE_INFINITY;
@@ -84,10 +77,7 @@ export function TextField(props: TextFieldProps): ReactNode {
   if (props.invalid) states.push("invalid");
   if (props.disabled) states.push("disabled");
   const root = resolveStatefulStyle(recipe.root, ...states);
-  const textStyle = resolveStatefulStyle(
-    recipe.text,
-    props.disabled ? "disabled" : "rest",
-  );
+  const textStyle = resolveStatefulStyle(recipe.text, props.disabled ? "disabled" : "rest");
   const placeholderStyle = resolveStatefulStyle(
     recipe.placeholder,
     props.disabled ? "disabled" : "rest",
@@ -95,42 +85,25 @@ export function TextField(props: TextFieldProps): ReactNode {
   const iconStates: WidgetState[] = [];
   if (focused) iconStates.push("focused");
   if (props.disabled) iconStates.push("disabled");
-  const leadingStyle = resolveStatefulStyle(
-    recipe.leadingIcon,
-    ...iconStates,
-  );
-  const trailingStyle = resolveStatefulStyle(
-    recipe.trailingIcon,
-    ...iconStates,
-  );
+  const leadingStyle = resolveStatefulStyle(recipe.leadingIcon, ...iconStates);
+  const trailingStyle = resolveStatefulStyle(recipe.trailingIcon, ...iconStates);
   const lineHeight = measureTextBounds("Mg", {
     fontSize: textStyle.fontSize,
     fontWeight: textStyle.fontWeight,
   }).height;
-  const leadingWidth = props.leading
-    ? leadingStyle.size + recipe.metrics.slotGap
-    : 0;
-  const trailingWidth = props.trailing
-    ? trailingStyle.size + recipe.metrics.slotGap
-    : 0;
+  const leadingWidth = props.leading ? leadingStyle.size + recipe.metrics.slotGap : 0;
+  const trailingWidth = props.trailing ? trailingStyle.size + recipe.metrics.slotGap : 0;
   const textX = recipe.metrics.paddingX + leadingWidth;
 
   useEffect(() => {
     setCursor((current) => Math.min(current, props.value.length));
   }, [props.value]);
 
-  const available = Math.max(
-    1,
-    props.width - textX - trailingWidth - recipe.metrics.paddingX,
-  );
+  const available = Math.max(1, props.width - textX - trailingWidth - recipe.metrics.paddingX);
   let visibleStart = 0;
   while (
     visibleStart < cursor &&
-    measureText(
-      props.value.slice(visibleStart, cursor),
-      textStyle.fontSize / 14,
-    ) >
-      available - 2
+    measureText(props.value.slice(visibleStart, cursor), textStyle.fontSize / 14) > available - 2
   ) {
     visibleStart++;
   }
@@ -141,16 +114,10 @@ export function TextField(props: TextFieldProps): ReactNode {
   ) {
     visibleValue = visibleValue.slice(0, -1);
   }
-  const shown =
-    props.value.length > 0 ? visibleValue : (props.placeholder ?? "");
-  const shownStyle =
-    props.value.length > 0 ? textStyle : placeholderStyle;
+  const shown = props.value.length > 0 ? visibleValue : (props.placeholder ?? "");
+  const shownStyle = props.value.length > 0 ? textStyle : placeholderStyle;
   const caretX =
-    textX +
-    measureText(
-      props.value.slice(visibleStart, cursor),
-      textStyle.fontSize / 14,
-    );
+    textX + measureText(props.value.slice(visibleStart, cursor), textStyle.fontSize / 14);
 
   const replaceValue = (next: string, nextCursor: number) => {
     props.onChange?.(next);
@@ -166,10 +133,7 @@ export function TextField(props: TextFieldProps): ReactNode {
         return;
       case 14:
         if (editing && cursor > 0) {
-          replaceValue(
-            props.value.slice(0, cursor - 1) + props.value.slice(cursor),
-            cursor - 1,
-          );
+          replaceValue(props.value.slice(0, cursor - 1) + props.value.slice(cursor), cursor - 1);
         }
         return;
       case 28:
@@ -189,21 +153,12 @@ export function TextField(props: TextFieldProps): ReactNode {
         return;
       case 111:
         if (editing && cursor < props.value.length) {
-          replaceValue(
-            props.value.slice(0, cursor) + props.value.slice(cursor + 1),
-            cursor,
-          );
+          replaceValue(props.value.slice(0, cursor) + props.value.slice(cursor + 1), cursor);
         }
         return;
     }
 
-    if (
-      editing &&
-      event.text &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.metaKey
-    ) {
+    if (editing && event.text && !event.ctrlKey && !event.altKey && !event.metaKey) {
       replaceValue(
         props.value.slice(0, cursor) + event.text + props.value.slice(cursor),
         cursor + event.text.length,
@@ -213,21 +168,13 @@ export function TextField(props: TextFieldProps): ReactNode {
 
   const handlePress = (event: HitPointerEvent) => {
     if (!props.disabled) {
-      setCursor(
-        cursorFromX(props.value, event.localX, textX, textStyle.fontSize),
-      );
+      setCursor(cursorFromX(props.value, event.localX, textX, textStyle.fontSize));
     }
     props.onPress?.(event);
   };
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={height}
-      clip
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={height} clip>
       <Rect
         x={0}
         y={0}
@@ -268,10 +215,7 @@ export function TextField(props: TextFieldProps): ReactNode {
       />
       {focused && !props.disabled ? (
         <Rect
-          x={Math.min(
-            props.width - recipe.metrics.paddingX - trailingWidth,
-            caretX,
-          )}
+          x={Math.min(props.width - recipe.metrics.paddingX - trailingWidth, caretX)}
           y={Math.floor((height - lineHeight) / 2) - 1}
           width={recipe.caret.width}
           height={lineHeight + 2}

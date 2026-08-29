@@ -1,9 +1,6 @@
 import koffi from "koffi";
-import { assertLinux } from "./platform.js";
-import {
-  readDisplayIdentity,
-  type DisplayIdentity,
-} from "./display-identity.js";
+import { assertLinux } from "./platform";
+import { readDisplayIdentity, type DisplayIdentity } from "./display-identity";
 import {
   closeFd,
   flushMmap,
@@ -15,8 +12,8 @@ import {
   openPath,
   PROT_READ,
   PROT_WRITE,
-} from "./libc.js";
-import { LinuxReadinessDispatcher } from "./readiness.js";
+} from "./libc";
+import { LinuxReadinessDispatcher } from "./readiness";
 
 const DRM_MODE_CONNECTED = 1;
 const DRM_MODE_TYPE_PREFERRED = 1 << 3;
@@ -346,9 +343,7 @@ export function openKmsOutput(
     "void *drmModeGetConnector(int fd, uint32_t connectorId)",
   );
   const drmModeFreeConnector = libdrm.func("void drmModeFreeConnector(void *ptr)");
-  const drmModeGetEncoder = libdrm.func(
-    "void *drmModeGetEncoder(int fd, uint32_t encoder_id)",
-  );
+  const drmModeGetEncoder = libdrm.func("void *drmModeGetEncoder(int fd, uint32_t encoder_id)");
   const drmModeFreeEncoder = libdrm.func("void drmModeFreeEncoder(void *ptr)");
   const drmModeAddFB = libdrm.func(
     "int drmModeAddFB(int fd, uint32_t width, uint32_t height, uint8_t depth, uint8_t bpp, uint32_t pitch, uint32_t bo_handle, _Out_ uint32_t *buf_id)",
@@ -388,10 +383,7 @@ export function openKmsOutput(
       res.connectors,
       koffi.array("uint32_t", res.count_connectors),
     ) as number[];
-    const crtcIds = koffi.decode(
-      res.crtcs,
-      koffi.array("uint32_t", res.count_crtcs),
-    ) as number[];
+    const crtcIds = koffi.decode(res.crtcs, koffi.array("uint32_t", res.count_crtcs)) as number[];
 
     for (const connectorId of connectorIds) {
       const connPtr = drmModeGetConnector(fd, connectorId);
@@ -502,13 +494,7 @@ export function openKmsOutput(
           offset: bigint | number;
         };
         const size = Number(created.size);
-        const map = mmap(
-          size,
-          PROT_READ | PROT_WRITE,
-          MAP_SHARED,
-          fd,
-          Number(mapped.offset),
-        );
+        const map = mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, Number(mapped.offset));
 
         const fbIdOut = koffi.alloc("uint32_t", 1);
         const add = drmModeAddFB(
@@ -524,7 +510,7 @@ export function openKmsOutput(
         if (add !== 0) {
           throw new Error(`drmModeAddFB failed: ${add}`);
         }
-        const fbId = (koffi.decode(fbIdOut, "uint32_t") as number);
+        const fbId = koffi.decode(fbIdOut, "uint32_t") as number;
 
         // Copy first mode into a durable allocation for SetCrtc
         const modePtr = koffi.alloc(DrmModeModeInfo, 1);
@@ -533,16 +519,7 @@ export function openKmsOutput(
         const connectors = koffi.alloc("uint32_t", 1);
         koffi.encode(connectors, "uint32_t", connectorId);
 
-        const set = drmModeSetCrtc(
-          fd,
-          crtcId,
-          fbId,
-          0,
-          0,
-          connectors,
-          1,
-          modePtr,
-        ) as number;
+        const set = drmModeSetCrtc(fd, crtcId, fbId, 0, 0, connectors, 1, modePtr) as number;
         if (set !== 0) {
           throw new Error(
             `drmModeSetCrtc failed (${set}). Run on a free VT / as DRM master (see docs/dev-vm.md).`,
@@ -554,10 +531,7 @@ export function openKmsOutput(
           ownsFd: true,
           cardPath,
           connectorId,
-          connectorName: connectorName(
-            conn.connector_type,
-            conn.connector_type_id,
-          ),
+          connectorName: connectorName(conn.connector_type, conn.connector_type_id),
           identity: readDisplayIdentity(
             cardPath,
             connectorName(conn.connector_type, conn.connector_type_id),
@@ -646,15 +620,11 @@ export function refreshKmsOutputModes(out: KmsOutput): KmsOutputRefresh {
       .map((mode) => `${mode.id}:${mode.preferred ? 1 : 0}`)
       .join(",");
     const metadataChanged =
-      out.connectorName !==
-        connectorName(conn.connector_type, conn.connector_type_id) ||
+      out.connectorName !== connectorName(conn.connector_type, conn.connector_type_id) ||
       out.physicalWidthMm !== conn.mmWidth ||
       out.physicalHeightMm !== conn.mmHeight;
 
-    out.connectorName = connectorName(
-      conn.connector_type,
-      conn.connector_type_id,
-    );
+    out.connectorName = connectorName(conn.connector_type, conn.connector_type_id);
     out.identity = readDisplayIdentity(out.cardPath, out.connectorName);
     out.physicalWidthMm = conn.mmWidth;
     out.physicalHeightMm = conn.mmHeight;
@@ -666,9 +636,7 @@ export function refreshKmsOutputModes(out: KmsOutput): KmsOutputRefresh {
       modesChanged: previousDescription !== nextDescription || metadataChanged,
       currentModeAvailable: out.modeData.has(out.currentModeId),
       preferredModeId:
-        nextModeData.find((mode) => mode.preferred)?.id ??
-        nextModeData[0]?.id ??
-        null,
+        nextModeData.find((mode) => mode.preferred)?.id ?? nextModeData[0]?.id ?? null,
     };
   } finally {
     out.freeConnector(connPtr);
@@ -780,10 +748,7 @@ export function switchKmsConnector(
     };
 
     out.connectorId = nextConnectorId;
-    out.connectorName = connectorName(
-      conn.connector_type,
-      conn.connector_type_id,
-    );
+    out.connectorName = connectorName(conn.connector_type, conn.connector_type_id);
     out.identity = readDisplayIdentity(out.cardPath, out.connectorName);
     out.physicalWidthMm = conn.mmWidth;
     out.physicalHeightMm = conn.mmHeight;
@@ -855,10 +820,7 @@ function destroyFramebuffer(out: KmsOutput, fb: KmsFramebuffer): void {
   }
 }
 
-function createFramebuffer(
-  out: KmsOutput,
-  mode: KmsModeData,
-): KmsFramebuffer {
+function createFramebuffer(out: KmsOutput, mode: KmsModeData): KmsFramebuffer {
   const createBuf = koffi.alloc(DrmModeCreateDumb, 1);
   koffi.encode(createBuf, DrmModeCreateDumb, {
     height: mode.height,
@@ -900,13 +862,7 @@ function createFramebuffer(
   koffi.free(mapBuf);
 
   const size = Number(created.size);
-  const map = mmap(
-    size,
-    PROT_READ | PROT_WRITE,
-    MAP_SHARED,
-    out.fd,
-    Number(mapped.offset),
-  );
+  const map = mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, out.fd, Number(mapped.offset));
   const fbIdOut = koffi.alloc("uint32_t", 1);
   const add = out.addFb(
     out.fd,
@@ -985,10 +941,7 @@ export function openAdditionalKmsOutput(
     const encoderIds = conn.encoder_id
       ? [conn.encoder_id]
       : conn.count_encoders > 0
-        ? (koffi.decode(
-            conn.encoders,
-            koffi.array("uint32_t", conn.count_encoders),
-          ) as number[])
+        ? (koffi.decode(conn.encoders, koffi.array("uint32_t", conn.count_encoders)) as number[])
         : [];
     const resourcesPtr = primary.getResources(primary.fd);
     if (!resourcesPtr) throw new Error("drmModeGetResources failed");
@@ -1016,10 +969,7 @@ export function openAdditionalKmsOutput(
           }
           for (let index = 0; index < crtcIds.length; index++) {
             const candidate = crtcIds[index]!;
-            if (
-              encoder.possible_crtcs & (1 << index) &&
-              !usedCrtcIds.has(candidate)
-            ) {
+            if (encoder.possible_crtcs & (1 << index) && !usedCrtcIds.has(candidate)) {
               crtcId = candidate;
               break;
             }
@@ -1057,10 +1007,7 @@ export function openAdditionalKmsOutput(
       ...primary,
       ownsFd: false,
       connectorId,
-      connectorName: connectorName(
-        conn.connector_type,
-        conn.connector_type_id,
-      ),
+      connectorName: connectorName(conn.connector_type, conn.connector_type_id),
       identity: readDisplayIdentity(
         primary.cardPath,
         connectorName(conn.connector_type, conn.connector_type_id),
@@ -1132,13 +1079,7 @@ export function setKmsMode(out: KmsOutput, modeId: string): boolean {
     koffi.free(mapBuf);
 
     const size = Number(created.size);
-    const map = mmap(
-      size,
-      PROT_READ | PROT_WRITE,
-      MAP_SHARED,
-      out.fd,
-      Number(mapped.offset),
-    );
+    const map = mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, out.fd, Number(mapped.offset));
     const fbIdOut = koffi.alloc("uint32_t", 1);
     const add = out.addFb(
       out.fd,
@@ -1243,8 +1184,7 @@ function handlePageFlipEvents(presenter: KmsPageFlipDevicePresenter): void {
       throw new Error(`drmHandleEvent failed (${handled}) on fd=${presenter.fd}`);
     }
   } catch (error) {
-    const failure =
-      error instanceof Error ? error : new Error(`drmHandleEvent failed: ${error}`);
+    const failure = error instanceof Error ? error : new Error(`drmHandleEvent failed: ${error}`);
     rejectPendingPageFlips(presenter, failure);
   }
 }
@@ -1271,21 +1211,13 @@ function pageFlipPresenter(
     pageFlip: libdrm.func(
       "int drmModePageFlip(int fd, uint32_t crtc_id, uint32_t fb_id, uint32_t flags, void *user_data)",
     ),
-    handleEvent: libdrm.func(
-      "int drmHandleEvent(int fd, void *evctx)",
-    ),
+    handleEvent: libdrm.func("int drmHandleEvent(int fd, void *evctx)"),
     outputs: new Set<KmsOutput>([out]),
     pending: new Map<number, PendingPageFlip>(),
     support: new WeakMap<KmsOutput, boolean>(),
   } as unknown as KmsPageFlipDevicePresenter;
   presenter.callback = koffi.register(
-    (
-      _fd: number,
-      sequence: number,
-      seconds: number,
-      microseconds: number,
-      crtcId: number,
-    ) => {
+    (_fd: number, sequence: number, seconds: number, microseconds: number, crtcId: number) => {
       const pending = presenter.pending.get(crtcId);
       if (!pending) return;
       presenter.pending.delete(crtcId);
@@ -1336,13 +1268,7 @@ async function tryPageFlip(
     throw new Error(`DRM page flip already pending on ${out.connectorName}`);
   }
   const queued = Number(
-    presenter.pageFlip(
-      out.fd,
-      out.crtcId,
-      framebufferId,
-      DRM_MODE_PAGE_FLIP_EVENT,
-      null,
-    ),
+    presenter.pageFlip(out.fd, out.crtcId, framebufferId, DRM_MODE_PAGE_FLIP_EVENT, null),
   );
   if (queued !== 0) {
     console.warn(
@@ -1426,9 +1352,7 @@ function setKmsFramebuffer(out: KmsOutput, framebufferId: number): void {
     out.modePtr,
   );
   if (set !== 0) {
-    throw new Error(
-      `drmModeSetCrtc framebuffer ${framebufferId} present failed (${set})`,
-    );
+    throw new Error(`drmModeSetCrtc framebuffer ${framebufferId} present failed (${set})`);
   }
 }
 
@@ -1477,13 +1401,7 @@ function createKmsCursorBuffer(out: KmsOutput): KmsCursorBuffer {
     handle: created.handle,
     pitch: created.pitch,
     size,
-    map: mmap(
-      size,
-      PROT_READ | PROT_WRITE,
-      MAP_SHARED,
-      out.fd,
-      Number(mapped.offset),
-    ),
+    map: mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, out.fd, Number(mapped.offset)),
   };
 }
 
@@ -1514,9 +1432,7 @@ function kmsCursorState(out: KmsOutput): KmsCursorState {
     setCursor2: libdrm.func(
       "int drmModeSetCursor2(int fd, uint32_t crtc_id, uint32_t bo_handle, uint32_t width, uint32_t height, int32_t hot_x, int32_t hot_y)",
     ),
-    moveCursor: libdrm.func(
-      "int drmModeMoveCursor(int fd, uint32_t crtc_id, int x, int y)",
-    ),
+    moveCursor: libdrm.func("int drmModeMoveCursor(int fd, uint32_t crtc_id, int x, int y)"),
   };
   kmsCursorStates.set(out, state);
   return state;
@@ -1541,12 +1457,7 @@ function rejectKmsCursor(out: KmsOutput, state: KmsCursorState, result: number):
 }
 
 /** Upload and position an ARGB8888 cursor using the output's legacy cursor plane. */
-export function setKmsCursor(
-  out: KmsOutput,
-  image: KmsCursorImage,
-  x: number,
-  y: number,
-): boolean {
+export function setKmsCursor(out: KmsOutput, image: KmsCursorImage, x: number, y: number): boolean {
   if (
     image.width < 1 ||
     image.height < 1 ||

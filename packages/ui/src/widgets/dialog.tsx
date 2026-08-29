@@ -1,10 +1,10 @@
 /** Recipe-driven application dialog surface. */
 import React, { type ReactNode } from "react";
-import { useWidgetTheme, type ButtonSize } from "../widget-theme.js";
-import { Icon } from "./icon.js";
-import { IconButton } from "./icon-button.js";
-import { Box, Horizontal, Inset, Vertical, registerIntrinsicSize } from "./layout.js";
-import { Surface, TextBlock } from "./primitives.js";
+import { useWidgetTheme, type ButtonSize } from "#ui/widget-theme";
+import { Icon } from "./icon";
+import { IconButton } from "./icon-button";
+import { Box, Horizontal, Inset, Vertical, registerIntrinsicSize } from "./layout";
+import { Surface, TextBlock } from "./primitives";
 
 export type DialogProps = {
   x?: number;
@@ -63,10 +63,19 @@ export function Dialog(props: DialogProps): ReactNode {
                   height={recipe.metrics.closeSize}
                   size={props.size}
                   variant="ghost"
-                  icon={<Icon name="close" size={recipe.closeIcon.size} color={recipe.closeIcon.color} symbolic />}
+                  icon={
+                    <Icon
+                      name="close"
+                      size={recipe.closeIcon.size}
+                      color={recipe.closeIcon.color}
+                      symbolic
+                    />
+                  }
                   onPress={props.onClose}
                 />
-              ) : <Box width={0} height={recipe.metrics.closeSize} />}
+              ) : (
+                <Box width={0} height={recipe.metrics.closeSize} />
+              )}
             </Horizontal>
           </Inset>
         </Surface>

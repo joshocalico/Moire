@@ -1,20 +1,11 @@
 /** Recipe-driven grid cells and a scroll-backed generic grid collection. */
 import React, { type ReactNode } from "react";
-import {
-  Group,
-  Rect,
-  measureTextBounds,
-  type HitPointerEvent,
-} from "@moire/react-host";
-import {
-  resolveStatefulStyle,
-  useWidgetTheme,
-  type ButtonSize,
-} from "../widget-theme.js";
-import { Pressable } from "./pressable.js";
-import { ScrollArea } from "./scroll.js";
-import { Align, Box, Inset, Stack, Vertical } from "./layout.js";
-import { TextBlock } from "./primitives.js";
+import { Group, Rect, measureTextBounds, type HitPointerEvent } from "@moire/react-host";
+import { resolveStatefulStyle, useWidgetTheme, type ButtonSize } from "#ui/widget-theme";
+import { Pressable } from "./pressable";
+import { ScrollArea } from "./scroll";
+import { Align, Box, Inset, Stack, Vertical } from "./layout";
+import { TextBlock } from "./primitives";
 
 export type GridItemProps = {
   x?: number;
@@ -46,14 +37,8 @@ export function GridItem(props: GridItemProps): ReactNode {
   const interaction = resolveStatefulStyle(recipe.interaction, "rest");
   const hovered = resolveStatefulStyle(recipe.interaction, "hover");
   const pressed = resolveStatefulStyle(recipe.interaction, "pressed");
-  const disabledInteraction = resolveStatefulStyle(
-    recipe.interaction,
-    "disabled",
-  );
-  const labelStyle = resolveStatefulStyle(
-    recipe.label,
-    props.disabled ? "disabled" : "rest",
-  );
+  const disabledInteraction = resolveStatefulStyle(recipe.interaction, "disabled");
+  const labelStyle = resolveStatefulStyle(recipe.label, props.disabled ? "disabled" : "rest");
   const textHeight = measureTextBounds("Mg", {
     fontSize: labelStyle.fontSize,
     fontWeight: labelStyle.fontWeight,
@@ -63,24 +48,12 @@ export function GridItem(props: GridItemProps): ReactNode {
     props.iconSize ??
     Math.max(
       recipe.metrics.iconMin,
-      Math.min(
-        recipe.metrics.iconMax,
-        props.height - labelHeight - recipe.metrics.iconGap,
-      ),
+      Math.min(recipe.metrics.iconMax, props.height - labelHeight - recipe.metrics.iconGap),
     );
-  const highlight = props.dropHover
-    ? recipe.dropTarget
-    : props.selected
-      ? recipe.selection
-      : null;
+  const highlight = props.dropHover ? recipe.dropTarget : props.selected ? recipe.selection : null;
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={props.height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       {highlight ? (
         <Rect
           x={0}
@@ -114,7 +87,9 @@ export function GridItem(props: GridItemProps): ReactNode {
         <Vertical gap={2} align="stretch">
           <Align flexGrow={1} minHeight={1} alignX="center" alignY="center">
             {props.icon ? (
-              <Box width={iconSize} height={iconSize}>{props.icon}</Box>
+              <Box width={iconSize} height={iconSize}>
+                {props.icon}
+              </Box>
             ) : null}
           </Align>
           <Inset height={labelHeight} padding={{ horizontal: recipe.metrics.labelPadding }}>
@@ -159,17 +134,13 @@ export type GridProps<T = unknown> = {
   scrollbar?: boolean;
 };
 
-export function Grid<T,>(props: GridProps<T>): ReactNode {
+export function Grid<T>(props: GridProps<T>): ReactNode {
   const gap = props.gap ?? 8;
   const padding = props.padding ?? 0;
   const innerWidth = Math.max(1, props.width - padding * 2);
-  const columns = Math.max(
-    1,
-    Math.floor((innerWidth + gap) / (props.itemWidth + gap)),
-  );
+  const columns = Math.max(1, Math.floor((innerWidth + gap) / (props.itemWidth + gap)));
   const rows = Math.ceil(props.items.length / columns);
-  const contentHeight =
-    padding * 2 + (rows > 0 ? rows * (props.itemHeight + gap) - gap : 0);
+  const contentHeight = padding * 2 + (rows > 0 ? rows * (props.itemHeight + gap) - gap : 0);
 
   return (
     <ScrollArea

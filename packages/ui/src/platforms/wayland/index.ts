@@ -46,8 +46,9 @@ import {
   WaylandClientConn,
   assertLinux,
   closeFd,
+  createMemfd,
+  createPipe,
   flushMmap,
-  getLibc,
   mmap,
   munmap,
   openPath,
@@ -56,6 +57,7 @@ import {
   O_RDWR,
   PROT_READ,
   PROT_WRITE,
+  truncateFd,
   type EglClientPresent,
   type WaylandChunk,
 } from "@moire/sys";
@@ -70,7 +72,7 @@ import {
   type RetainedClip,
   type RetainedSceneFrame,
 } from "@moire/react-host";
-import { themePalette } from "../../theme.js";
+import { themePalette } from "#ui/theme";
 import {
   keyFromEvdev,
   modifiersFromPressed,
@@ -85,7 +87,7 @@ import {
   type UiPresentationMode,
   type UiPointerEvent,
   type PointerButton,
-} from "../../platform.js";
+} from "#ui/platform";
 import {
   setDndBridge,
   notifyDrop,
@@ -93,14 +95,11 @@ import {
   preferredDropMimes,
   notifyDragEnded,
   type DragPreviewSpec,
-} from "../../widgets/dnd.js";
-import {
-  updateActiveWindowDropHover,
-  clearActiveWindowDropHover,
-} from "../../window.js";
-import { Icon } from "../../widgets/icon.js";
-import { GridItem } from "../../widgets/grid.js";
-import { ListItem } from "../../widgets/list.js";
+} from "#ui/widgets/dnd";
+import { updateActiveWindowDropHover, clearActiveWindowDropHover } from "#ui/window";
+import { Icon } from "#ui/widgets/icon";
+import { GridItem } from "#ui/widgets/grid";
+import { ListItem } from "#ui/widgets/list";
 
 const WL_DISPLAY_ID = 1;
 const WL_SHM_FORMAT_ARGB8888 = wlShm.enums.format.argb8888;
@@ -108,15 +107,11 @@ const BTN_LEFT = 0x110;
 const BTN_RIGHT = 0x111;
 const BTN_MIDDLE = 0x112;
 const KEY_PRESSED = wlKeyboard.enums.keyState.pressed;
-const XDG_DECORATION_MODE_CLIENT =
-  zxdgToplevelDecorationV1.enums.mode.clientSide;
-const XDG_DECORATION_MODE_SERVER =
-  zxdgToplevelDecorationV1.enums.mode.serverSide;
+const XDG_DECORATION_MODE_CLIENT = zxdgToplevelDecorationV1.enums.mode.clientSide;
+const XDG_DECORATION_MODE_SERVER = zxdgToplevelDecorationV1.enums.mode.serverSide;
 const XDG_ANCHOR_TOP_LEFT = xdgPositioner.enums.anchor.topLeft;
-const XDG_CONSTRAINT_SLIDE_X =
-  xdgPositioner.enums.constraintAdjustment.slideX;
-const XDG_CONSTRAINT_SLIDE_Y =
-  xdgPositioner.enums.constraintAdjustment.slideY;
+const XDG_CONSTRAINT_SLIDE_X = xdgPositioner.enums.constraintAdjustment.slideX;
+const XDG_CONSTRAINT_SLIDE_Y = xdgPositioner.enums.constraintAdjustment.slideY;
 
 const EV = {
   display_error: wlDisplay.events.error.opcode,
@@ -157,12 +152,9 @@ const EV = {
   data_offer_source_actions: wlDataOffer.events.sourceActions.opcode,
   data_offer_action: wlDataOffer.events.action.opcode,
   presentation_clock_id: wpPresentation.events.clockId.opcode,
-  presentation_feedback_sync_output:
-    wpPresentationFeedback.events.syncOutput.opcode,
-  presentation_feedback_presented:
-    wpPresentationFeedback.events.presented.opcode,
-  presentation_feedback_discarded:
-    wpPresentationFeedback.events.discarded.opcode,
+  presentation_feedback_sync_output: wpPresentationFeedback.events.syncOutput.opcode,
+  presentation_feedback_presented: wpPresentationFeedback.events.presented.opcode,
+  presentation_feedback_discarded: wpPresentationFeedback.events.discarded.opcode,
 } as const;
 
 /** DnD action bitmask constants. */
@@ -193,23 +185,18 @@ type DmabufSlot = {
 
 function waylandSocketPath(): string {
   const runtime =
-    process.env.XDG_RUNTIME_DIR ??
-    path.join(os.tmpdir(), `moire-${process.getuid?.() ?? 0}`);
+    process.env.XDG_RUNTIME_DIR ?? path.join(os.tmpdir(), `moire-${process.getuid?.() ?? 0}`);
   const display = process.env.WAYLAND_DISPLAY ?? "wayland-0";
   return path.join(runtime, display);
 }
 
 function memfdCreate(size: number): number {
-  const libc = getLibc();
-  const memfd_create = libc.func(
-    "int memfd_create(const char *name, unsigned int flags)",
-  );
-  const ftruncate = libc.func("int ftruncate(int fd, long length)");
-  const fd = memfd_create("moire-ui-shm", 1) as number;
-  if (fd < 0) throw new Error("memfd_create failed");
-  if ((ftruncate(fd, size) as number) !== 0) {
+  const fd = createMemfd("moire-ui-shm", 1);
+  try {
+    truncateFd(fd, size);
+  } catch (error) {
     closeFd(fd);
-    throw new Error("ftruncate failed");
+    throw error;
   }
   return fd;
 }
@@ -228,10 +215,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private buf = Buffer.alloc(0);
   private pendingFds: number[] = [];
   private globals = new Map<string, GlobalInfo>();
-  private handlers = new Map<
-    number,
-    (opcode: number, r: MessageReader) => void
-  >();
+  private handlers = new Map<number, (opcode: number, r: MessageReader) => void>();
   private syncWaiters = new Map<number, () => void>();
   private registryId = 0;
   private compositorId = 0;
@@ -303,9 +287,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     this.handlers.set(WL_DISPLAY_ID, (opcode, r) => {
       if (opcode === EV.display_error) {
         const event = wlDisplay.events.error.decodeReader(r);
-        console.error(
-          `[ui/wayland] display.error code=${event.code} ${event.message}`,
-        );
+        console.error(`[ui/wayland] display.error code=${event.code} ${event.message}`);
       } else if (opcode === EV.display_delete_id) {
         wlDisplay.events.deleteId.decodeReader(r);
       }
@@ -320,9 +302,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       const version = event.version;
       this.globals.set(iface, { name, iface, version });
     });
-    this.sendMessage(
-      wlDisplay.requests.getRegistry.encode(WL_DISPLAY_ID, this.registryId),
-    );
+    this.sendMessage(wlDisplay.requests.getRegistry.encode(WL_DISPLAY_ID, this.registryId));
     await this.roundtrip();
 
     this.compositorId = this.bindGlobal("wl_compositor", 4);
@@ -364,21 +344,13 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         const { capabilities: caps } = wlSeat.events.capabilities.decodeReader(r);
         if ((caps & 1) !== 0 && !this.pointerId) {
           this.pointerId = this.allocId();
-          this.sendMessage(
-            wlSeat.requests.getPointer.encode(this.seatId, this.pointerId),
-          );
-          this.handlers.set(this.pointerId, (op, rr) =>
-            this.handlePointer(op, rr),
-          );
+          this.sendMessage(wlSeat.requests.getPointer.encode(this.seatId, this.pointerId));
+          this.handlers.set(this.pointerId, (op, rr) => this.handlePointer(op, rr));
         }
         if ((caps & 2) !== 0 && !this.keyboardId) {
           this.keyboardId = this.allocId();
-          this.sendMessage(
-            wlSeat.requests.getKeyboard.encode(this.seatId, this.keyboardId),
-          );
-          this.handlers.set(this.keyboardId, (op, rr) =>
-            this.handleKeyboard(op, rr),
-          );
+          this.sendMessage(wlSeat.requests.getKeyboard.encode(this.seatId, this.keyboardId));
+          this.handlers.set(this.keyboardId, (op, rr) => this.handleKeyboard(op, rr));
         }
       });
     }
@@ -395,9 +367,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           this.seatId,
         ),
       );
-      this.handlers.set(this.dataDeviceId, (op, rr) =>
-        this.handleDataDevice(op, rr),
-      );
+      this.handlers.set(this.dataDeviceId, (op, rr) => this.handleDataDevice(op, rr));
     }
 
     await this.roundtrip();
@@ -442,9 +412,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     if (!this.conn || !this.dataDeviceManagerId || !this.dataDeviceId) return;
     if (this.activeDrag) {
       try {
-        this.sendMessage(
-          wlDataSource.requests.destroy.encode(this.activeDrag.sourceId),
-        );
+        this.sendMessage(wlDataSource.requests.destroy.encode(this.activeDrag.sourceId));
       } catch {
         /* ok */
       }
@@ -458,27 +426,20 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
     const sourceId = this.allocId();
     this.sendMessage(
-      wlDataDeviceManager.requests.createDataSource.encode(
-        this.dataDeviceManagerId,
-        sourceId,
-      ),
+      wlDataDeviceManager.requests.createDataSource.encode(this.dataDeviceManagerId, sourceId),
     );
     for (const mime of mimeTypes) {
       this.sendMessage(wlDataSource.requests.offer.encode(sourceId, mime));
     }
     const actions = WL_DND_ACTION_COPY | WL_DND_ACTION_MOVE;
-    this.sendMessage(
-      wlDataSource.requests.setActions.encode(sourceId, actions),
-    );
+    this.sendMessage(wlDataSource.requests.setActions.encode(sourceId, actions));
 
     const chipLabel = (label && label.trim()) || "Item";
     const iconSurfaceId = this.createDragIconSurface(chipLabel, preview);
 
     this.activeDrag = { sourceId, iconSurfaceId, getPayload };
 
-    this.handlers.set(sourceId, (op, rr) =>
-      this.handleDataSource(op, rr, sourceId),
-    );
+    this.handlers.set(sourceId, (op, rr) => this.handleDataSource(op, rr, sourceId));
 
     // start_drag(source, origin, icon, serial)
     this.sendMessage(
@@ -591,18 +552,14 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     const size = stride * chipH;
 
     const surfaceId = this.allocId();
-    this.sendMessage(
-      wlCompositor.requests.createSurface.encode(this.compositorId, surfaceId),
-    );
+    this.sendMessage(wlCompositor.requests.createSurface.encode(this.compositorId, surfaceId));
 
     const fd = memfdCreate(size);
     const map = mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     flushMmap(map, pixels, size);
 
     const poolId = this.allocId();
-    this.sendMessage(
-      wlShm.requests.createPool.encode(this.shmId, poolId, fd, size),
-    );
+    this.sendMessage(wlShm.requests.createPool.encode(this.shmId, poolId, fd, size));
     const bufferId = this.allocId();
     this.sendMessage(
       wlShmPool.requests.createBuffer.encode(
@@ -615,17 +572,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         WL_SHM_FORMAT_ARGB8888,
       ),
     );
-    this.sendMessage(
-      wlSurface.requests.attach.encode(
-        surfaceId,
-        bufferId,
-        -hotspotX,
-        -hotspotY,
-      ),
-    );
-    this.sendMessage(
-      wlSurface.requests.damage.encode(surfaceId, 0, 0, chipW, chipH),
-    );
+    this.sendMessage(wlSurface.requests.attach.encode(surfaceId, bufferId, -hotspotX, -hotspotY));
+    this.sendMessage(wlSurface.requests.damage.encode(surfaceId, 0, 0, chipW, chipH));
     this.sendMessage(wlSurface.requests.commit.encode(surfaceId));
 
     // Keep map alive for the duration of the drag (compositor may read async).
@@ -648,14 +596,16 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     } catch {
       /* ok */
     }
-    const bag = (this as unknown as {
-      _dragIconMaps?: {
-        surfaceId: number;
-        map: ReturnType<typeof mmap>;
-        fd: number;
-        size: number;
-      }[];
-    })._dragIconMaps;
+    const bag = (
+      this as unknown as {
+        _dragIconMaps?: {
+          surfaceId: number;
+          map: ReturnType<typeof mmap>;
+          fd: number;
+          size: number;
+        }[];
+      }
+    )._dragIconMaps;
     if (!bag) return;
     const idx = bag.findIndex((x) => x.surfaceId === surfaceId);
     if (idx < 0) return;
@@ -672,11 +622,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     }
   }
 
-  private handleDataSource(
-    opcode: number,
-    r: MessageReader,
-    sourceId: number,
-  ): void {
+  private handleDataSource(opcode: number, r: MessageReader, sourceId: number): void {
     if (opcode === EV.data_source_send) {
       const event = wlDataSource.events.send.decodeReader(r);
       const mime = event.mimeType ?? "";
@@ -686,13 +632,21 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         console.warn(
           `[ui/dnd] data_source_send for source=${sourceId} but activeDrag.sourceId=${drag?.sourceId ?? "(none)"} — dropping fd`,
         );
-        try { closeFd(fd); } catch { /* ok */ }
+        try {
+          closeFd(fd);
+        } catch {
+          /* ok */
+        }
         return;
       }
       const data = drag.getPayload(mime);
       if (data == null) {
         console.warn(`[ui/dnd] data_source_send mime=${mime} getPayload returned null`);
-        try { closeFd(fd); } catch { /* ok */ }
+        try {
+          closeFd(fd);
+        } catch {
+          /* ok */
+        }
         return;
       }
       // Write payload to the fd provided by the compositor, then close.
@@ -705,11 +659,12 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       } catch (err) {
         console.warn("[ui/dnd] data_source_send write failed:", err);
       }
-      try { closeFd(fd); } catch { /* ok */ }
-    } else if (
-      opcode === EV.data_source_cancelled ||
-      opcode === EV.data_source_dnd_finished
-    ) {
+      try {
+        closeFd(fd);
+      } catch {
+        /* ok */
+      }
+    } else if (opcode === EV.data_source_cancelled || opcode === EV.data_source_dnd_finished) {
       if (this.activeDrag?.sourceId === sourceId) {
         console.log(
           `[ui/dnd] source ${opcode === EV.data_source_cancelled ? "cancelled" : "finished"} source=${sourceId}`,
@@ -733,9 +688,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     if (opcode === EV.data_device_data_offer) {
       const { id: offerId } = wlDataDevice.events.dataOffer.decodeReader(r);
       this.incomingOffer = { offerId, mimes: [], serial: 0, x: 0, y: 0 };
-      this.handlers.set(offerId, (op, rr) =>
-        this.handleIncomingOffer(op, rr, offerId),
-      );
+      this.handlers.set(offerId, (op, rr) => this.handleIncomingOffer(op, rr, offerId));
     } else if (opcode === EV.data_device_enter) {
       const event = wlDataDevice.events.enter.decodeReader(r);
       const { serial, x, y } = event;
@@ -753,16 +706,10 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           preferredDropMimes().find((m) => offer.mimes.includes(m)) ??
           offer.mimes[0] ??
           "text/uri-list";
-        this.sendMessage(
-          wlDataOffer.requests.accept.encode(offer.offerId, serial, preferred),
-        );
+        this.sendMessage(wlDataOffer.requests.accept.encode(offer.offerId, serial, preferred));
         const actions = WL_DND_ACTION_COPY | WL_DND_ACTION_MOVE;
         this.sendMessage(
-          wlDataOffer.requests.setActions.encode(
-            offer.offerId,
-            actions,
-            WL_DND_ACTION_MOVE,
-          ),
+          wlDataOffer.requests.setActions.encode(offer.offerId, actions, WL_DND_ACTION_MOVE),
         );
         updateActiveWindowDropHover(x, y);
       }
@@ -773,9 +720,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       clearActiveWindowDropHover();
       if (this.incomingOffer) {
         try {
-          this.sendMessage(
-            wlDataOffer.requests.destroy.encode(this.incomingOffer.offerId),
-          );
+          this.sendMessage(wlDataOffer.requests.destroy.encode(this.incomingOffer.offerId));
         } catch {
           /* ok */
         }
@@ -845,20 +790,13 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     }
   }
 
-  private handleIncomingOffer(
-    opcode: number,
-    r: MessageReader,
-    offerId: number,
-  ): void {
+  private handleIncomingOffer(opcode: number, r: MessageReader, offerId: number): void {
     if (opcode === EV.data_offer_offer) {
       const { mimeType: mime = "" } = wlDataOffer.events.offer.decodeReader(r);
       if (this.incomingOffer?.offerId === offerId && mime) {
         this.incomingOffer.mimes.push(mime);
       }
-    } else if (
-      opcode === EV.data_offer_source_actions ||
-      opcode === EV.data_offer_action
-    ) {
+    } else if (opcode === EV.data_offer_source_actions || opcode === EV.data_offer_action) {
       if (opcode === EV.data_offer_source_actions) {
         wlDataOffer.events.sourceActions.decodeReader(r);
       } else {
@@ -870,22 +808,9 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private receiveOfferData(offerId: number, mime: string): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       try {
-        const libc = getLibc();
-        const pipe2 = libc.func("int pipe2(int *pipefd, int flags)") as (
-          pipefd: Buffer,
-          flags: number,
-        ) => number;
         const O_CLOEXEC = 0o2000000;
-        const pfds = Buffer.alloc(8);
-        if (pipe2(pfds, O_CLOEXEC) !== 0) {
-          reject(new Error("pipe2 failed"));
-          return;
-        }
-        const readFd = pfds.readInt32LE(0);
-        const writeFd = pfds.readInt32LE(4);
-        this.sendMessage(
-          wlDataOffer.requests.receive.encode(offerId, mime, writeFd),
-        );
+        const [readFd, writeFd] = createPipe(O_CLOEXEC);
+        this.sendMessage(wlDataOffer.requests.receive.encode(offerId, mime, writeFd));
         try {
           closeFd(writeFd);
         } catch {
@@ -999,9 +924,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   }
 
   private tryCreateEglPresenter(): void {
-    const mode = (process.env.MOIRE_UI_ACCELERATION ?? "auto")
-      .trim()
-      .toLowerCase();
+    const mode = (process.env.MOIRE_UI_ACCELERATION ?? "auto").trim().toLowerCase();
     if (mode === "software" || mode === "shm" || mode === "off") {
       this.fallbackReason = `acceleration disabled by MOIRE_UI_ACCELERATION=${mode}`;
       return;
@@ -1047,12 +970,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   ): EglClientPresent | null {
     if (this.eglPresentationFailed) return null;
     try {
-      return this.eglPresenter?.renderClientFrame(
-        channel,
-        pixels,
-        width,
-        height,
-      ) ?? null;
+      return this.eglPresenter?.renderClientFrame(channel, pixels, width, height) ?? null;
     } catch (error) {
       console.warn("[ui/wayland] EGL client frame failed; using wl_shm:", error);
       // A format/driver failure is not expected to heal during this session.
@@ -1064,18 +982,12 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     }
   }
 
-  renderClientComposition(
-    channel: string,
-    scene: RetainedSceneFrame,
-  ): EglClientPresent | null {
+  renderClientComposition(channel: string, scene: RetainedSceneFrame): EglClientPresent | null {
     if (this.eglPresentationFailed) return null;
     try {
       return this.eglPresenter?.renderClientComposition(channel, scene) ?? null;
     } catch (error) {
-      console.warn(
-        "[ui/wayland] retained EGL scene failed; using software/wl_shm:",
-        error,
-      );
+      console.warn("[ui/wayland] retained EGL scene failed; using software/wl_shm:", error);
       this.eglPresentationFailed = true;
       this.fallbackReason = error instanceof Error ? error.message : String(error);
       return null;
@@ -1086,15 +998,10 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     return Boolean(this.eglPresenter && !this.eglPresentationFailed);
   }
 
-  createDmabufBuffer(
-    frame: EglClientPresent,
-    onRelease: () => void,
-  ): number {
+  createDmabufBuffer(frame: EglClientPresent, onRelease: () => void): number {
     if (!this.dmabufId) throw new Error("linux-dmabuf is not bound");
     const paramsId = this.allocId();
-    this.sendMessage(
-      zwpLinuxDmabufV1.requests.createParams.encode(this.dmabufId, paramsId),
-    );
+    this.sendMessage(zwpLinuxDmabufV1.requests.createParams.encode(this.dmabufId, paramsId));
     this.handlers.set(paramsId, () => {});
     const modifierHi = Number((frame.modifier >> 32n) & 0xffffffffn);
     const modifierLo = Number(frame.modifier & 0xffffffffn);
@@ -1182,10 +1089,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     this.conn.send(message.data, [...fds, ...message.fds]);
   }
 
-  setHandler(
-    id: number,
-    handler: (opcode: number, r: MessageReader) => void,
-  ): void {
+  setHandler(id: number, handler: (opcode: number, r: MessageReader) => void): void {
     this.handlers.set(id, handler);
   }
 
@@ -1214,15 +1118,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     if (!g) throw new Error(`Wayland global missing: ${iface}`);
     const id = this.allocId();
     const ver = Math.min(version, g.version);
-    this.sendMessage(
-      wlRegistry.requests.bind.encode(
-        this.registryId,
-        g.name,
-        iface,
-        ver,
-        id,
-      ),
-    );
+    this.sendMessage(wlRegistry.requests.bind.encode(this.registryId, g.name, iface, ver, id));
     return id;
   }
 
@@ -1395,29 +1291,18 @@ class WaylandWindow implements PlatformWindow {
   create(): void {
     const p = this.platform;
     this.surfaceId = p.allocId();
-    p.sendMessage(
-      wlCompositor.requests.createSurface.encode(
-        p.getCompositorId(),
-        this.surfaceId,
-      ),
-    );
+    p.sendMessage(wlCompositor.requests.createSurface.encode(p.getCompositorId(), this.surfaceId));
     p.registerSurface(this.surfaceId, this);
 
     this.xdgSurfaceId = p.allocId();
     p.sendMessage(
-      xdgWmBase.requests.getXdgSurface.encode(
-        p.getWmBaseId(),
-        this.xdgSurfaceId,
-        this.surfaceId,
-      ),
+      xdgWmBase.requests.getXdgSurface.encode(p.getWmBaseId(), this.xdgSurfaceId, this.surfaceId),
     );
     p.setHandler(this.xdgSurfaceId, (opcode, r) => {
       if (opcode === EV.xdg_surface_configure) {
         const { serial } = xdgSurface.events.configure.decodeReader(r);
         this.configured = true;
-        p.sendMessage(
-          xdgSurface.requests.ackConfigure.encode(this.xdgSurfaceId, serial),
-        );
+        p.sendMessage(xdgSurface.requests.ackConfigure.encode(this.xdgSurfaceId, serial));
         for (const cb of this.configureCbs) cb(this.width, this.height);
       }
     });
@@ -1429,16 +1314,10 @@ class WaylandWindow implements PlatformWindow {
     }
 
     this.toplevelId = p.allocId();
-    p.sendMessage(
-      xdgSurface.requests.getToplevel.encode(
-        this.xdgSurfaceId,
-        this.toplevelId,
-      ),
-    );
+    p.sendMessage(xdgSurface.requests.getToplevel.encode(this.xdgSurfaceId, this.toplevelId));
     p.setHandler(this.toplevelId, (opcode, r) => {
       if (opcode === EV.xdg_toplevel_configure) {
-        const { width: w, height: h } =
-          xdgToplevel.events.configure.decodeReader(r);
+        const { width: w, height: h } = xdgToplevel.events.configure.decodeReader(r);
         if (!this.resizable) {
           // Moire initially configures new toplevels to 800×600; min==max then
           // reconfigures to our preferred size. Ignore mismatched interim hints.
@@ -1465,32 +1344,18 @@ class WaylandWindow implements PlatformWindow {
       }
     });
 
-    p.sendMessage(
-      xdgToplevel.requests.setTitle.encode(this.toplevelId, this.title),
-    );
-    p.sendMessage(
-      xdgToplevel.requests.setAppId.encode(this.toplevelId, this.appId),
-    );
+    p.sendMessage(xdgToplevel.requests.setTitle.encode(this.toplevelId, this.title));
+    p.sendMessage(xdgToplevel.requests.setAppId.encode(this.toplevelId, this.appId));
     // Ask for our preferred size. Fixed windows use min==max so Moire
     // reconfigures away from its default 800×600 slot hint.
     p.sendMessage(
-      xdgToplevel.requests.setMinSize.encode(
-        this.toplevelId,
-        this.preferredW,
-        this.preferredH,
-      ),
+      xdgToplevel.requests.setMinSize.encode(this.toplevelId, this.preferredW, this.preferredH),
     );
     if (this.resizable) {
-      p.sendMessage(
-        xdgToplevel.requests.setMaxSize.encode(this.toplevelId, 0, 0),
-      );
+      p.sendMessage(xdgToplevel.requests.setMaxSize.encode(this.toplevelId, 0, 0));
     } else {
       p.sendMessage(
-        xdgToplevel.requests.setMaxSize.encode(
-          this.toplevelId,
-          this.preferredW,
-          this.preferredH,
-        ),
+        xdgToplevel.requests.setMaxSize.encode(this.toplevelId, this.preferredW, this.preferredH),
       );
     }
     const decoMgr = p.getDecoManagerId();
@@ -1506,9 +1371,7 @@ class WaylandWindow implements PlatformWindow {
       p.sendMessage(
         zxdgToplevelDecorationV1.requests.setMode.encode(
           decoId,
-          this.decorated
-            ? XDG_DECORATION_MODE_SERVER
-            : XDG_DECORATION_MODE_CLIENT,
+          this.decorated ? XDG_DECORATION_MODE_SERVER : XDG_DECORATION_MODE_CLIENT,
         ),
       );
       p.setHandler(decoId, () => {
@@ -1524,18 +1387,9 @@ class WaylandWindow implements PlatformWindow {
     if (!opts || !(parent instanceof WaylandWindow)) return;
     const p = this.platform;
     this.positionerId = p.allocId();
+    p.sendMessage(xdgWmBase.requests.createPositioner.encode(p.getWmBaseId(), this.positionerId));
     p.sendMessage(
-      xdgWmBase.requests.createPositioner.encode(
-        p.getWmBaseId(),
-        this.positionerId,
-      ),
-    );
-    p.sendMessage(
-      xdgPositioner.requests.setSize.encode(
-        this.positionerId,
-        this.width,
-        this.height,
-      ),
+      xdgPositioner.requests.setSize.encode(this.positionerId, this.width, this.height),
     );
     p.sendMessage(
       xdgPositioner.requests.setAnchorRect.encode(
@@ -1546,18 +1400,8 @@ class WaylandWindow implements PlatformWindow {
         1,
       ),
     );
-    p.sendMessage(
-      xdgPositioner.requests.setAnchor.encode(
-        this.positionerId,
-        XDG_ANCHOR_TOP_LEFT,
-      ),
-    );
-    p.sendMessage(
-      xdgPositioner.requests.setGravity.encode(
-        this.positionerId,
-        XDG_ANCHOR_TOP_LEFT,
-      ),
-    );
+    p.sendMessage(xdgPositioner.requests.setAnchor.encode(this.positionerId, XDG_ANCHOR_TOP_LEFT));
+    p.sendMessage(xdgPositioner.requests.setGravity.encode(this.positionerId, XDG_ANCHOR_TOP_LEFT));
     p.sendMessage(
       xdgPositioner.requests.setConstraintAdjustment.encode(
         this.positionerId,
@@ -1576,8 +1420,7 @@ class WaylandWindow implements PlatformWindow {
     );
     p.setHandler(this.popupId, (opcode, r) => {
       if (opcode === EV.xdg_popup_configure) {
-        const { width: w, height: h } =
-          xdgPopup.events.configure.decodeReader(r);
+        const { width: w, height: h } = xdgPopup.events.configure.decodeReader(r);
         if (w > 0) this.width = w;
         if (h > 0) this.height = h;
       } else if (opcode === EV.xdg_popup_done) {
@@ -1587,11 +1430,7 @@ class WaylandWindow implements PlatformWindow {
     });
     if (opts.grab !== false && p.getSeatId()) {
       p.sendMessage(
-        xdgPopup.requests.grab.encode(
-          this.popupId,
-          p.getSeatId(),
-          p.getLastPointerSerial(),
-        ),
+        xdgPopup.requests.grab.encode(this.popupId, p.getSeatId(), p.getLastPointerSerial()),
       );
     }
     p.sendMessage(xdgPositioner.requests.destroy.encode(this.positionerId));
@@ -1605,9 +1444,7 @@ class WaylandWindow implements PlatformWindow {
   setTitle(title: string): void {
     this.title = title;
     if (this.toplevelId) {
-      this.platform.sendMessage(
-        xdgToplevel.requests.setTitle.encode(this.toplevelId, title),
-      );
+      this.platform.sendMessage(xdgToplevel.requests.setTitle.encode(this.toplevelId, title));
     }
   }
 
@@ -1635,9 +1472,10 @@ class WaylandWindow implements PlatformWindow {
     this.width = width;
     this.height = height;
     const channel = `surface-${this.surfaceId}`;
-    const accelerated = this.presentationMode === "shm"
-      ? null
-      : this.platform.renderClientFrame(channel, pixels, width, height);
+    const accelerated =
+      this.presentationMode === "shm"
+        ? null
+        : this.platform.renderClientFrame(channel, pixels, width, height);
     if (accelerated) {
       this.commitAcceleratedFrame(accelerated, width, height, damage);
       this.platform.noteSoftwareDmabufFrame();
@@ -1655,14 +1493,7 @@ class WaylandWindow implements PlatformWindow {
     flushMmap(slot.map, pixels, size);
     const copyMs = performance.now() - copyStartedAt;
     slot.busy = true;
-    const commit = this.commitBuffer(
-      slot.bufferId,
-      width,
-      height,
-      "shm",
-      copyMs,
-      damage,
-    );
+    const commit = this.commitBuffer(slot.bufferId, width, height, "shm", copyMs, damage);
     slot.commitId = commit.commitId;
     slot.submittedAtMs = commit.submittedAtMs;
     this.platform.noteSoftwareShmFrame();
@@ -1675,10 +1506,7 @@ class WaylandWindow implements PlatformWindow {
       this.retryAfterFrame = true;
       return true;
     }
-    const accelerated = this.platform.renderClientComposition(
-      `surface-${this.surfaceId}`,
-      scene,
-    );
+    const accelerated = this.platform.renderClientComposition(`surface-${this.surfaceId}`, scene);
     if (!accelerated) {
       if (this.platform.clientAccelerationAvailable()) {
         this.retainedBackpressured = true;
@@ -1722,14 +1550,7 @@ class WaylandWindow implements PlatformWindow {
       slot = { frameId, bufferId, commitId: 0, submittedAtMs: 0 };
       this.dmabufSlots.set(frameId, slot);
     }
-    const commit = this.commitBuffer(
-      slot.bufferId,
-      width,
-      height,
-      "dmabuf",
-      0,
-      damage,
-    );
+    const commit = this.commitBuffer(slot.bufferId, width, height, "dmabuf", 0, damage);
     slot.commitId = commit.commitId;
     slot.submittedAtMs = commit.submittedAtMs;
   }
@@ -1766,9 +1587,7 @@ class WaylandWindow implements PlatformWindow {
         retrySuggested,
       });
     });
-    p.sendMessage(
-      wlSurface.requests.frame.encode(this.surfaceId, frameCallbackId),
-    );
+    p.sendMessage(wlSurface.requests.frame.encode(this.surfaceId, frameCallbackId));
     const presentationId = p.getPresentationId();
     if (presentationId) {
       const feedbackId = p.allocId();
@@ -1781,10 +1600,8 @@ class WaylandWindow implements PlatformWindow {
         const receivedAtMs = performance.now();
         if (opcode === EV.presentation_feedback_presented) {
           const event = wpPresentationFeedback.events.presented.decodeReader(r);
-          const seconds =
-            (BigInt(event.tvSecHi) << 32n) | BigInt(event.tvSecLo);
-          const sequence =
-            (BigInt(event.seqHi) << 32n) | BigInt(event.seqLo);
+          const seconds = (BigInt(event.tvSecHi) << 32n) | BigInt(event.tvSecLo);
+          const sequence = (BigInt(event.seqHi) << 32n) | BigInt(event.seqLo);
           this.emitFrame({
             type: "presented",
             commitId,
@@ -1804,26 +1621,14 @@ class WaylandWindow implements PlatformWindow {
         p.clearHandler(feedbackId);
       });
       p.sendMessage(
-        wpPresentation.requests.feedback.encode(
-          presentationId,
-          this.surfaceId,
-          feedbackId,
-        ),
+        wpPresentation.requests.feedback.encode(presentationId, this.surfaceId, feedbackId),
       );
     }
     // Window geometry = content box (excludes SSD); matches buffer for our clients.
     p.sendMessage(
-      xdgSurface.requests.setWindowGeometry.encode(
-        this.xdgSurfaceId,
-        0,
-        0,
-        width,
-        height,
-      ),
+      xdgSurface.requests.setWindowGeometry.encode(this.xdgSurfaceId, 0, 0, width, height),
     );
-    p.sendMessage(
-      wlSurface.requests.attach.encode(this.surfaceId, bufferId, 0, 0),
-    );
+    p.sendMessage(wlSurface.requests.attach.encode(this.surfaceId, bufferId, 0, 0));
     const clippedDamage = (damage ?? [{ x: 0, y: 0, width, height }])
       .map((rect) => {
         const x = Math.max(0, Math.floor(rect.x));
@@ -1857,10 +1662,7 @@ class WaylandWindow implements PlatformWindow {
       transport,
       submittedAtMs,
       copyMs,
-      damagedPixels: clippedDamage.reduce(
-        (total, rect) => total + rect.width * rect.height,
-        0,
-      ),
+      damagedPixels: clippedDamage.reduce((total, rect) => total + rect.width * rect.height, 0),
       totalPixels: width * height,
     });
     return { commitId, submittedAtMs };
@@ -1875,9 +1677,7 @@ class WaylandWindow implements PlatformWindow {
     const seatId = this.platform.getSeatId();
     const serial = this.platform.getLastPointerSerial();
     if (!seatId || !serial) return;
-    this.platform.sendMessage(
-      xdgToplevel.requests.move.encode(this.toplevelId, seatId, serial),
-    );
+    this.platform.sendMessage(xdgToplevel.requests.move.encode(this.toplevelId, seatId, serial));
   }
 
   onClose(cb: () => void): void {
@@ -1959,9 +1759,7 @@ class WaylandWindow implements PlatformWindow {
     const fd = memfdCreate(size);
     const map = mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     const poolId = p.allocId();
-    p.sendMessage(
-      wlShm.requests.createPool.encode(p.getShmId(), poolId, fd, size),
-    );
+    p.sendMessage(wlShm.requests.createPool.encode(p.getShmId(), poolId, fd, size));
     const bufferId = p.allocId();
     const width = this.width;
     const height = this.height;
@@ -2011,12 +1809,7 @@ class WaylandWindow implements PlatformWindow {
     return slot;
   }
 
-  private recreateBuffer(
-    slot: ShmSlot,
-    width: number,
-    height: number,
-    stride: number,
-  ): void {
+  private recreateBuffer(slot: ShmSlot, width: number, height: number, stride: number): void {
     const p = this.platform;
     const need = stride * height;
     if (need > slot.size) {

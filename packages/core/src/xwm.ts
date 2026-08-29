@@ -63,20 +63,11 @@ type XClient = {
     name: string,
     cb: (err: Error | null, atom: number) => void,
   ) => void;
-  ChangeWindowAttributes: (
-    wid: number,
-    attrs: Record<string, unknown>,
-  ) => void;
-  GetWindowAttributes: (
-    wid: number,
-    cb: (err: Error | null, attrs: unknown) => void,
-  ) => void;
+  ChangeWindowAttributes: (wid: number, attrs: Record<string, unknown>) => void;
+  GetWindowAttributes: (wid: number, cb: (err: Error | null, attrs: unknown) => void) => void;
   GetGeometry: (
     wid: number,
-    cb: (
-      err: Error | null,
-      geom: { x: number; y: number; width: number; height: number },
-    ) => void,
+    cb: (err: Error | null, geom: { x: number; y: number; width: number; height: number }) => void,
   ) => void;
   MapWindow: (wid: number) => void;
   ConfigureWindow: (wid: number, conf: Record<string, number>) => void;
@@ -162,10 +153,7 @@ export class X11Wm extends EventEmitter {
    * Connect as the Xwayland WM over the `-wm` socketpair fd.
    * `displayNum` is only used for the X11 handshake cookie lookup.
    */
-  static async startFromWmFd(
-    wmFd: number,
-    displayNum: number,
-  ): Promise<X11Wm> {
+  static async startFromWmFd(wmFd: number, displayNum: number): Promise<X11Wm> {
     const wm = new X11Wm();
     await wm.connectFd(wmFd, displayNum);
     return wm;
@@ -188,17 +176,15 @@ export class X11Wm extends EventEmitter {
       const restore = () => {
         if (!restored) {
           restored = true;
-          (net as unknown as { createConnection: typeof origCreate }).createConnection =
-            origCreate;
+          (net as unknown as { createConnection: typeof origCreate }).createConnection = origCreate;
         }
       };
 
       // Hijack createConnection so createClient uses our already-open fd.
-      (net as unknown as { createConnection: typeof origCreate }).createConnection =
-        (() => {
-          process.nextTick(() => sock.emit("connect"));
-          return sock;
-        }) as typeof origCreate;
+      (net as unknown as { createConnection: typeof origCreate }).createConnection = (() => {
+        process.nextTick(() => sock.emit("connect"));
+        return sock;
+      }) as typeof origCreate;
 
       try {
         x11.createClient(
@@ -212,9 +198,7 @@ export class X11Wm extends EventEmitter {
             const d = displayObj as XDisplay;
             this.X = d.client;
             this.root = d.screen[0]!.root;
-            this.bootstrap()
-              .then(resolve)
-              .catch(reject);
+            this.bootstrap().then(resolve).catch(reject);
           },
         );
       } catch (err) {
@@ -234,9 +218,7 @@ export class X11Wm extends EventEmitter {
         const d = displayObj as XDisplay;
         this.X = d.client;
         this.root = d.screen[0]!.root;
-        this.bootstrap()
-          .then(resolve)
-          .catch(reject);
+        this.bootstrap().then(resolve).catch(reject);
       });
     });
   }
@@ -310,11 +292,14 @@ export class X11Wm extends EventEmitter {
       const client = X as XClient & {
         require?: (
           name: string,
-          cb: (err: Error | null, ext: {
-            Redirect: { Manual: number };
-            RedirectSubwindows: (wid: number, mode: number) => void;
-            QueryVersion: (a: number, b: number, cb: () => void) => void;
-          }) => void,
+          cb: (
+            err: Error | null,
+            ext: {
+              Redirect: { Manual: number };
+              RedirectSubwindows: (wid: number, mode: number) => void;
+              QueryVersion: (a: number, b: number, cb: () => void) => void;
+            },
+          ) => void,
         ) => void;
       };
       if (typeof client.require !== "function") {
@@ -362,22 +347,8 @@ export class X11Wm extends EventEmitter {
       const checkBuf = Buffer.alloc(4);
       checkBuf.writeUInt32LE(this.ewmhCheckWid >>> 0, 0);
       const checkAtom = this.atoms._NET_SUPPORTING_WM_CHECK!;
-      X.ChangeProperty(
-        PROP_MODE_REPLACE,
-        this.root,
-        checkAtom,
-        XA_WINDOW,
-        32,
-        checkBuf,
-      );
-      X.ChangeProperty(
-        PROP_MODE_REPLACE,
-        this.ewmhCheckWid,
-        checkAtom,
-        XA_WINDOW,
-        32,
-        checkBuf,
-      );
+      X.ChangeProperty(PROP_MODE_REPLACE, this.root, checkAtom, XA_WINDOW, 32, checkBuf);
+      X.ChangeProperty(PROP_MODE_REPLACE, this.ewmhCheckWid, checkAtom, XA_WINDOW, 32, checkBuf);
       const name = Buffer.from("Moire", "utf8");
       X.ChangeProperty(
         PROP_MODE_REPLACE,
@@ -407,21 +378,12 @@ export class X11Wm extends EventEmitter {
         "_NET_WM_WINDOW_TYPE_NOTIFICATION",
         "WM_DELETE_WINDOW",
       ];
-      const atoms = supportedNames
-        .map((n) => this.atoms[n])
-        .filter((a): a is number => a != null);
+      const atoms = supportedNames.map((n) => this.atoms[n]).filter((a): a is number => a != null);
       const list = Buffer.alloc(atoms.length * 4);
       for (let i = 0; i < atoms.length; i++) {
         list.writeUInt32LE(atoms[i]! >>> 0, i * 4);
       }
-      X.ChangeProperty(
-        PROP_MODE_REPLACE,
-        this.root,
-        this.atoms._NET_SUPPORTED!,
-        XA_ATOM,
-        32,
-        list,
-      );
+      X.ChangeProperty(PROP_MODE_REPLACE, this.root, this.atoms._NET_SUPPORTED!, XA_ATOM, 32, list);
       console.log(`[xwm] EWMH published (_NET_SUPPORTED=${atoms.length})`);
     } catch (err) {
       console.warn("[xwm] EWMH publish failed:", err);
@@ -435,9 +397,7 @@ export class X11Wm extends EventEmitter {
   }
 
   /** Oldest mapped window that has a serial and passes `isFree`. */
-  takeUnpairedSerialWindow(
-    isFree: (wid: number) => boolean = () => true,
-  ): XwmWindow | null {
+  takeUnpairedSerialWindow(isFree: (wid: number) => boolean = () => true): XwmWindow | null {
     for (const win of this.windows.values()) {
       if (win.serial != null && win.mapped && isFree(win.wid)) return win;
     }
@@ -555,14 +515,7 @@ export class X11Wm extends EventEmitter {
     try {
       const buf = Buffer.alloc(4);
       buf.writeUInt32LE((wid ?? 0) >>> 0, 0);
-      X.ChangeProperty(
-        PROP_MODE_REPLACE,
-        this.root,
-        atom,
-        XA_WINDOW,
-        32,
-        buf,
-      );
+      X.ChangeProperty(PROP_MODE_REPLACE, this.root, atom, XA_WINDOW, 32, buf);
     } catch (err) {
       console.warn("[xwm] setActiveWindow failed:", err);
     }
@@ -624,9 +577,7 @@ export class X11Wm extends EventEmitter {
     try {
       X.ChangeWindowAttributes(wid, {
         eventMask:
-          eventMask.StructureNotify |
-          eventMask.PropertyChange |
-          eventMask.SubstructureNotify,
+          eventMask.StructureNotify | eventMask.PropertyChange | eventMask.SubstructureNotify,
       });
     } catch (err) {
       console.warn("[xwm] select events on", wid, err);
@@ -712,10 +663,7 @@ export class X11Wm extends EventEmitter {
   }
 
   private onProperty(wid: number, atom: number): void {
-    if (
-      atom === this.atoms.WM_NAME ||
-      atom === this.atoms._NET_WM_NAME
-    ) {
+    if (atom === this.atoms.WM_NAME || atom === this.atoms._NET_WM_NAME) {
       this.readTitle(wid);
     } else if (atom === this.atoms.WM_TRANSIENT_FOR) {
       void this.readTransientFor(wid);
@@ -822,9 +770,7 @@ export class X11Wm extends EventEmitter {
     const type = ev.message_type as number | undefined;
     const wid = ev.wid as number;
     if (type == null || wid == null) return;
-    console.log(
-      `[xwm] ClientMessage wid=${wid} type=${type} data=${JSON.stringify(ev.data)}`,
-    );
+    console.log(`[xwm] ClientMessage wid=${wid} type=${type} data=${JSON.stringify(ev.data)}`);
     if (type === this.atoms.WL_SURFACE_SERIAL) {
       const data = ev.data as number[] | undefined;
       const lo = (data?.[0] ?? 0) >>> 0;

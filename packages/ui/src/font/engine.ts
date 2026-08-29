@@ -66,7 +66,9 @@ export class FontEngine {
       for (const [family, weight] of specs) {
         const file = faceFile(family, weight);
         const buf = fs.readFileSync(file);
-        const font = opentype.parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+        const font = opentype.parse(
+          buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+        );
         this.faces.set(`${family}:${weight}`, font);
       }
       this.ready = true;
@@ -227,16 +229,8 @@ export class FontEngine {
           const t = i / 10;
           const u = 1 - t;
           cur.push({
-            x:
-              u * u * u * cx +
-              3 * u * u * t * x1 +
-              3 * u * t * t * x2 +
-              t * t * t * x,
-            y:
-              u * u * u * cy +
-              3 * u * u * t * y1 +
-              3 * u * t * t * y2 +
-              t * t * t * y,
+            x: u * u * u * cx + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x,
+            y: u * u * u * cy + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y,
           });
         }
         cx = x;
@@ -341,14 +335,12 @@ export class FontEngine {
           // clip layer; forcing those pixels opaque turns white AA coverage
           // into a gray fringe when the layer is later composited over a fill.
           const outA = srcA + Math.round((dstA * inv) / 255);
-          const outR = Math.round((cr * srcA) / 255) +
-            Math.round((((dst >>> 16) & 0xff) * inv) / 255);
-          const outG = Math.round((cg * srcA) / 255) +
-            Math.round((((dst >>> 8) & 0xff) * inv) / 255);
-          const outB = Math.round((cb * srcA) / 255) +
-            Math.round(((dst & 0xff) * inv) / 255);
-          fb[row + px] =
-            ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
+          const outR =
+            Math.round((cr * srcA) / 255) + Math.round((((dst >>> 16) & 0xff) * inv) / 255);
+          const outG =
+            Math.round((cg * srcA) / 255) + Math.round((((dst >>> 8) & 0xff) * inv) / 255);
+          const outB = Math.round((cb * srcA) / 255) + Math.round(((dst & 0xff) * inv) / 255);
+          fb[row + px] = ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
         }
       }
       penX += g.advance;

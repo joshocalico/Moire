@@ -92,10 +92,7 @@ function mapJustify(j: FlexContainerOpts["justify"]): Justify {
   }
 }
 
-function applyEdges(
-  value: Insets | undefined,
-  apply: (edge: Edge, amount: number) => void,
-): void {
+function applyEdges(value: Insets | undefined, apply: (edge: Edge, amount: number) => void): void {
   if (value == null) return;
   const edges = resolveInsets(value);
   apply(Edge.Top, edges.top);
@@ -124,9 +121,7 @@ export function layoutFlex(
 ): { container: FlexLayoutResult; children: FlexLayoutResult[] } {
   const root = Yoga.Node.create();
   root.setBoxSizing(BoxSizing.BorderBox);
-  root.setFlexDirection(
-    opts.direction === "row" ? FlexDirection.Row : FlexDirection.Column,
-  );
+  root.setFlexDirection(opts.direction === "row" ? FlexDirection.Row : FlexDirection.Column);
   root.setWidth(opts.width);
   if (opts.height != null) root.setHeight(opts.height);
   if (opts.gap != null) root.setGap(Gutter.All, opts.gap);

@@ -30,8 +30,7 @@ async function main() {
   const cardPath = connected[0]!.cardPath;
 
   const runtimeDir =
-    process.env.XDG_RUNTIME_DIR ??
-    path.join(os.tmpdir(), `moire-${process.getuid?.() ?? 0}`);
+    process.env.XDG_RUNTIME_DIR ?? path.join(os.tmpdir(), `moire-${process.getuid?.() ?? 0}`);
   const display = process.env.WAYLAND_DISPLAY ?? "wayland-1";
 
   const server = new CompositorServer(runtimeDir, display);
@@ -43,17 +42,16 @@ async function main() {
   const clientEnv = (): NodeJS.ProcessEnv => ({
     WAYLAND_DISPLAY: display,
     XDG_RUNTIME_DIR: runtimeDir,
-    ...(xwayland
-      ? { DISPLAY: xwayland.display, MOIRE_XWAYLAND: "1" }
-      : {}),
+    ...(xwayland ? { DISPLAY: xwayland.display, MOIRE_XWAYLAND: "1" } : {}),
   });
 
   server.setShell(
-    createShell((opts) =>
-      spawnDesktopApp({
-        exec: opts.exec,
-        env: clientEnv(),
-      }),
+    createShell(
+      (opts) =>
+        spawnDesktopApp({
+          exec: opts.exec,
+          env: clientEnv(),
+        }),
       (task) => server.toggleTask(task.clientId, task.surfaceId),
     ),
   );
@@ -85,8 +83,7 @@ async function main() {
             body: [
               server.listDisplayModes().map((mode) => mode.id),
               server.currentDisplayMode(),
-              server.listDisplayModes().find((mode) => mode.preferred)?.id ??
-                "",
+              server.listDisplayModes().find((mode) => mode.preferred)?.id ?? "",
             ],
           }),
         },
@@ -103,20 +100,22 @@ async function main() {
           outSignature: "a(ssssssiiiiib)",
           handler: () => ({
             body: [
-              server.getDisplayOutputs().map(({ kms, x, y, scale120, primary }) => [
-                kms.identity.id,
-                kms.connectorName,
-                kms.identity.make,
-                kms.identity.model,
-                kms.identity.serial,
-                kms.currentModeId,
-                x,
-                y,
-                Math.max(1, Math.round((kms.width * 120) / scale120)),
-                Math.max(1, Math.round((kms.height * 120) / scale120)),
-                scale120,
-                primary,
-              ]),
+              server
+                .getDisplayOutputs()
+                .map(({ kms, x, y, scale120, primary }) => [
+                  kms.identity.id,
+                  kms.connectorName,
+                  kms.identity.make,
+                  kms.identity.model,
+                  kms.identity.serial,
+                  kms.currentModeId,
+                  x,
+                  y,
+                  Math.max(1, Math.round((kms.width * 120) / scale120)),
+                  Math.max(1, Math.round((kms.height * 120) / scale120)),
+                  scale120,
+                  primary,
+                ]),
             ],
           }),
         },
@@ -143,10 +142,12 @@ async function main() {
           handler: () => {
             if (!server.confirmDisplayLayout()) return { body: [false] };
             const displayOutputs = Object.fromEntries(
-              server.getDisplayOutputs().map(({ kms, x, y, scale120, primary }) => [
-                kms.identity.id,
-                { x, y, scale120, primary, mode: kms.currentModeId },
-              ]),
+              server
+                .getDisplayOutputs()
+                .map(({ kms, x, y, scale120, primary }) => [
+                  kms.identity.id,
+                  { x, y, scale120, primary, mode: kms.currentModeId },
+                ]),
             );
             saveSettings({ ...loadSettings(), displayOutputs });
             return { body: [true] };
@@ -161,9 +162,7 @@ async function main() {
           inSignature: "s",
           outSignature: "b",
           handler: ({ body }) => {
-            const result = server.beginDisplayModeChange(
-              String(body[0] ?? ""),
-            );
+            const result = server.beginDisplayModeChange(String(body[0] ?? ""));
             return { body: [result.changed] };
           },
         },
@@ -174,9 +173,7 @@ async function main() {
             const confirmedMode = server.confirmDisplayMode();
             if (confirmedMode) {
               const current = loadSettings();
-              const output = server
-                .getDisplayOutputs()
-                .find(({ kms }) => kms === server.getKms());
+              const output = server.getDisplayOutputs().find(({ kms }) => kms === server.getKms());
               const displayOutputs = output
                 ? {
                     ...current.displayOutputs,

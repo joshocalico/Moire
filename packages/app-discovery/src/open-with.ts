@@ -1,14 +1,11 @@
 import path from "node:path";
-import {
-  discoverApplications,
-  resolveApplicationIcon,
-} from "./applications.js";
-import type { DesktopEntry } from "./desktop.js";
+import { discoverApplications, resolveApplicationIcon } from "./applications";
+import type { DesktopEntry } from "./desktop";
 import {
   buildDesktopExec,
   loadMimeAssociationDatabase,
   type MimeAssociationDatabase,
-} from "./mime.js";
+} from "./mime";
 
 export type OpenWithChoice = {
   id: string;
@@ -56,16 +53,12 @@ export class FileActivationService {
 
   constructor(
     private readonly launch: FileActivationLauncher,
-    applications = discoverApplications(
-      process.env.XDG_CURRENT_DESKTOP ?? "Moire",
-    ),
+    applications = discoverApplications(process.env.XDG_CURRENT_DESKTOP ?? "Moire"),
     mimeDatabase = loadMimeAssociationDatabase(applications),
   ) {
     // Normalize desktop-file ids once at the service boundary. Malformed caches
     // must not create duplicate React keys or ambiguous launch targets.
-    this.applications = [
-      ...new Map(applications.map((app) => [app.id, app] as const)).values(),
-    ];
+    this.applications = [...new Map(applications.map((app) => [app.id, app] as const)).values()];
     this.mimeDatabase = mimeDatabase;
   }
 
@@ -79,9 +72,7 @@ export class FileActivationService {
     const recommendedIds = new Set(recommended.map((app) => app.id));
     const ordered = [
       ...new Map(
-        [...recommended, ...this.applications].map(
-          (app) => [app.id, app] as const,
-        ),
+        [...recommended, ...this.applications].map((app) => [app.id, app] as const),
       ).values(),
     ];
     const defaultId = this.mimeDatabase.defaultApplicationForMime(mimeType)?.id;
@@ -104,17 +95,11 @@ export class FileActivationService {
   }
 
   /** Build the same visual model from application ids supplied over D-Bus. */
-  applicationChoiceModel(
-    options: ApplicationChoiceModelOptions,
-  ): OpenWithModel {
+  applicationChoiceModel(options: ApplicationChoiceModelOptions): OpenWithModel {
     const recommendedIds = new Set(
-      this.mimeDatabase
-        .applicationsForMime(options.mimeType)
-        .map((app) => app.id),
+      this.mimeDatabase.applicationsForMime(options.mimeType).map((app) => app.id),
     );
-    const defaultId = this.mimeDatabase.defaultApplicationForMime(
-      options.mimeType,
-    )?.id;
+    const defaultId = this.mimeDatabase.defaultApplicationForMime(options.mimeType)?.id;
     const applicationsById = new Map<string, DesktopEntry>();
     for (const app of this.applications) {
       applicationsById.set(app.id, app);
@@ -122,9 +107,7 @@ export class FileActivationService {
     }
     const ids = options.applicationIds.length
       ? options.applicationIds
-      : this.mimeDatabase
-          .applicationsForMime(options.mimeType)
-          .map((app) => app.id);
+      : this.mimeDatabase.applicationsForMime(options.mimeType).map((app) => app.id);
     const seen = new Set<string>();
     const choices = ids.flatMap((id): OpenWithChoice[] => {
       if (seen.has(id)) return [];
@@ -147,8 +130,7 @@ export class FileActivationService {
           name: app.name,
           description: app.comment ?? app.genericName ?? app.exec,
           iconPath: resolveApplicationIcon(app.icon),
-          recommended:
-            recommendedIds.has(app.id) || recommendedIds.has(id),
+          recommended: recommendedIds.has(app.id) || recommendedIds.has(id),
           isDefault: app.id === defaultId,
         },
       ];
@@ -156,9 +138,7 @@ export class FileActivationService {
     const selectedId =
       options.selectedId && choices.some(({ id }) => id === options.selectedId)
         ? options.selectedId
-        : (choices.find(({ isDefault }) => isDefault)?.id ??
-          choices[0]?.id ??
-          null);
+        : (choices.find(({ isDefault }) => isDefault)?.id ?? choices[0]?.id ?? null);
     return {
       filePath: "",
       fileName: options.fileName,
@@ -171,16 +151,10 @@ export class FileActivationService {
   openDefault(filePath: string): FileActivation | null {
     const mimeType = this.mimeDatabase.mimeTypeForPath(filePath);
     const application = this.mimeDatabase.defaultApplicationForMime(mimeType);
-    return application
-      ? this.activate(filePath, mimeType, application)
-      : null;
+    return application ? this.activate(filePath, mimeType, application) : null;
   }
 
-  openWith(
-    filePath: string,
-    desktopId: string,
-    makeDefault = false,
-  ): FileActivation | null {
+  openWith(filePath: string, desktopId: string, makeDefault = false): FileActivation | null {
     const mimeType = this.mimeDatabase.mimeTypeForPath(filePath);
     const application = this.applicationForId(desktopId);
     if (!application) return null;
@@ -200,17 +174,11 @@ export class FileActivationService {
   private applicationForId(applicationId: string): DesktopEntry | undefined {
     const normalized = applicationId.replace(/\.desktop$/, "");
     return this.applications.find(
-      (app) =>
-        app.id === applicationId ||
-        app.id.replace(/\.desktop$/, "") === normalized,
+      (app) => app.id === applicationId || app.id.replace(/\.desktop$/, "") === normalized,
     );
   }
 
-  private activate(
-    filePath: string,
-    mimeType: string,
-    application: DesktopEntry,
-  ): FileActivation {
+  private activate(filePath: string, mimeType: string, application: DesktopEntry): FileActivation {
     const activation = {
       filePath,
       mimeType,

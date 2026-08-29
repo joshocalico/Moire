@@ -2,11 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import {
-  clearCloexec,
-  closeFd,
-  socketpairUnixStream,
-} from "@moire/sys";
+import { clearCloexec, closeFd, socketpairUnixStream } from "@moire/sys";
 
 export type XwaylandHandle = {
   /** e.g. ":2" */
@@ -20,10 +16,7 @@ export type XwaylandHandle = {
 };
 
 function displayInUse(n: number): boolean {
-  return (
-    fs.existsSync(`/tmp/.X${n}-lock`) ||
-    fs.existsSync(path.join("/tmp/.X11-unix", `X${n}`))
-  );
+  return fs.existsSync(`/tmp/.X${n}-lock`) || fs.existsSync(path.join("/tmp/.X11-unix", `X${n}`));
 }
 
 /** Pick a free X11 display number (skip :0 — often system/gdm). */
@@ -80,8 +73,7 @@ export async function startXwayland(opts: {
 }): Promise<XwaylandHandle> {
   const bin = process.env.MOIRE_XWAYLAND_BIN ?? "Xwayland";
   // Rootless unless explicitly asked for the nested-screen rootful mode.
-  const rootless =
-    opts.rootless ?? process.env.MOIRE_XWAYLAND !== "rootful";
+  const rootless = opts.rootless ?? process.env.MOIRE_XWAYLAND !== "rootful";
   const n = findFreeXDisplay();
   const display = `:${n}`;
 
@@ -162,9 +154,7 @@ export async function startXwayland(opts: {
     throw err;
   }
 
-  console.log(
-    `[xwayland] ready DISPLAY=${display} mode=${rootless ? "rootless" : "rootful"}`,
-  );
+  console.log(`[xwayland] ready DISPLAY=${display} mode=${rootless ? "rootless" : "rootful"}`);
 
   // Session scripts / terminals read this so X11 clients get a DISPLAY.
   try {

@@ -2,8 +2,8 @@
  * Minimal libgbm bindings for importing client dmabuf FDs and CPU-mapping them.
  */
 import koffi from "koffi";
-import { assertLinux } from "./platform.js";
-import { closeFd, O_CLOEXEC, O_RDWR, openPath } from "./libc.js";
+import { assertLinux } from "./platform";
+import { closeFd, O_CLOEXEC, O_RDWR, openPath } from "./libc";
 
 const GBM_BO_IMPORT_FD = 0x5503;
 const GBM_BO_IMPORT_FD_MODIFIER = 0x5508;
@@ -165,8 +165,7 @@ export class GbmDevice {
       0,
     ];
 
-    const mod =
-      args.modifier === 0xffffffffffffffffn ? 0n : args.modifier;
+    const mod = args.modifier === 0xffffffffffffffffn ? 0n : args.modifier;
 
     for (const usage of usageFlags) {
       for (const kind of ["FD", "FD_MODIFIER"] as const) {
@@ -257,8 +256,7 @@ export class GbmDevice {
       const mapAddr = BigInt(koffi.address(mapPtr));
       if (mapAddr === 0n || mapAddr === 0xffffffffffffffffn) return null;
       mapData = koffi.decode(mapDataOut, "void *");
-      const stride =
-        (koffi.decode(strideOut, "uint32_t") as number) || args.stride;
+      const stride = (koffi.decode(strideOut, "uint32_t") as number) || args.stride;
       const byteLen = stride * args.height;
       const view = new Uint8Array(koffi.view(mapPtr, byteLen) as ArrayBuffer);
       let nonzero = byteLen === 0;
@@ -269,9 +267,7 @@ export class GbmDevice {
         }
       }
       if (!nonzero) return null;
-      const pixels = into?.byteLength === byteLen
-        ? into
-        : new Uint8Array(byteLen);
+      const pixels = into?.byteLength === byteLen ? into : new Uint8Array(byteLen);
       pixels.set(view);
       return { pixels, stride };
     } finally {

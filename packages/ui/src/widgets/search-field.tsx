@@ -1,14 +1,11 @@
 /** Search input assembled from the shared editable-control primitives. */
 import React, { type ReactNode } from "react";
-import { Icon } from "./icon.js";
-import { IconButton } from "./icon-button.js";
-import { TextField, type TextFieldProps } from "./text-field.js";
-import { registerIntrinsicSize } from "./layout.js";
+import { Icon } from "./icon";
+import { IconButton } from "./icon-button";
+import { TextField, type TextFieldProps } from "./text-field";
+import { registerIntrinsicSize } from "./layout";
 
-export type SearchFieldProps = Omit<
-  TextFieldProps,
-  "leading" | "trailing"
-> & {
+export type SearchFieldProps = Omit<TextFieldProps, "leading" | "trailing"> & {
   onClear?: () => void;
 };
 
@@ -19,9 +16,7 @@ export function SearchField(props: SearchFieldProps): ReactNode {
   return (
     <TextField
       {...fieldProps}
-      leading={(style) => (
-        <Icon name="search" size={style.size} color={style.color} />
-      )}
+      leading={(style) => <Icon name="search" size={style.size} color={style.color} />}
       trailing={
         canClear
           ? (style) => (

@@ -27,10 +27,8 @@ type ParserState = "text" | "escape" | "csi" | "osc" | "oscEscape" | "charset";
 export const TERMINAL_DEFAULT_FOREGROUND = 0xffd7e1e8;
 export const TERMINAL_DEFAULT_BACKGROUND = 0xff101419;
 const ANSI = [
-  0xff1b2027, 0xffd35f5f, 0xff70b77e, 0xffd1ae55,
-  0xff639ad6, 0xffaa7ac1, 0xff58b9c6, 0xffd7e1e8,
-  0xff66727d, 0xffff7b72, 0xff8fd694, 0xffffd166,
-  0xff82b7ef, 0xffcf8fe3, 0xff73d2de, 0xffffffff,
+  0xff1b2027, 0xffd35f5f, 0xff70b77e, 0xffd1ae55, 0xff639ad6, 0xffaa7ac1, 0xff58b9c6, 0xffd7e1e8,
+  0xff66727d, 0xffff7b72, 0xff8fd694, 0xffffd166, 0xff82b7ef, 0xffcf8fe3, 0xff73d2de, 0xffffffff,
 ] as const;
 
 function blankCell(): TerminalCell {
@@ -65,12 +63,7 @@ function indexedColor(index: number): number {
   const green = Math.floor((cube % 36) / 6);
   const blue = cube % 6;
   const channel = (part: number) => (part === 0 ? 0 : 55 + part * 40);
-  return (
-    0xff000000 |
-    (channel(red) << 16) |
-    (channel(green) << 8) |
-    channel(blue)
-  ) >>> 0;
+  return (0xff000000 | (channel(red) << 16) | (channel(green) << 8) | channel(blue)) >>> 0;
 }
 
 /** Renderer-independent VT-style screen and scrollback model. */
@@ -93,16 +86,16 @@ export class TerminalBuffer {
   private parserState: ParserState = "text";
   private parserBuffer = "";
   private responses: string[] = [];
-  private alternate:
-    | { screen: TerminalCell[][]; row: number; column: number }
-    | undefined;
+  private alternate: { screen: TerminalCell[][]; row: number; column: number } | undefined;
 
-  constructor(columns = 80, rows = 24, private readonly scrollbackLimit = 5000) {
+  constructor(
+    columns = 80,
+    rows = 24,
+    private readonly scrollbackLimit = 5000,
+  ) {
     this.columnsValue = Math.max(2, Math.floor(columns));
     this.rowsValue = Math.max(1, Math.floor(rows));
-    this.screen = Array.from({ length: this.rowsValue }, () =>
-      blankLine(this.columnsValue),
-    );
+    this.screen = Array.from({ length: this.rowsValue }, () => blankLine(this.columnsValue));
   }
 
   get columns(): number {
@@ -133,9 +126,7 @@ export class TerminalBuffer {
       this.cursorRow = Math.max(0, this.cursorRow - remove);
     } else if (nextRows > this.rowsValue) {
       this.screen.push(
-        ...Array.from({ length: nextRows - this.rowsValue }, () =>
-          blankLine(this.columnsValue),
-        ),
+        ...Array.from({ length: nextRows - this.rowsValue }, () => blankLine(this.columnsValue)),
       );
     }
     this.rowsValue = nextRows;
@@ -256,12 +247,8 @@ export class TerminalBuffer {
       this.cursorColumn = 0;
       this.lineFeed();
     }
-    const foreground = this.pen.inverse
-      ? this.pen.background
-      : this.pen.foreground;
-    const background = this.pen.inverse
-      ? this.pen.foreground
-      : this.pen.background;
+    const foreground = this.pen.inverse ? this.pen.background : this.pen.foreground;
+    const background = this.pen.inverse ? this.pen.foreground : this.pen.background;
     const line = this.screen[this.cursorRow];
     if (line) {
       line[this.cursorColumn] = {
@@ -293,9 +280,8 @@ export class TerminalBuffer {
   private handleCsi(raw: string, final: string): void {
     const privateMode = raw.startsWith("?");
     const body = privateMode ? raw.slice(1) : raw;
-    const parameters = body.length === 0
-      ? [0]
-      : body.split(";").map((value) => Number.parseInt(value || "0", 10));
+    const parameters =
+      body.length === 0 ? [0] : body.split(";").map((value) => Number.parseInt(value || "0", 10));
     const value = (index: number, fallback = 1) => {
       const current = parameters[index] ?? 0;
       return current === 0 ? fallback : current;
@@ -309,8 +295,10 @@ export class TerminalBuffer {
       return;
     }
     if (final === "A") this.cursorRow = Math.max(0, this.cursorRow - value(0));
-    else if (final === "B") this.cursorRow = Math.min(this.rowsValue - 1, this.cursorRow + value(0));
-    else if (final === "C") this.cursorColumn = Math.min(this.columnsValue - 1, this.cursorColumn + value(0));
+    else if (final === "B")
+      this.cursorRow = Math.min(this.rowsValue - 1, this.cursorRow + value(0));
+    else if (final === "C")
+      this.cursorColumn = Math.min(this.columnsValue - 1, this.cursorColumn + value(0));
     else if (final === "D") this.cursorColumn = Math.max(0, this.cursorColumn - value(0));
     else if (final === "E") {
       this.cursorRow = Math.min(this.rowsValue - 1, this.cursorRow + value(0));
@@ -418,11 +406,15 @@ export class TerminalBuffer {
       else if (code === 22) this.pen.bold = false;
       else if (code === 7) this.pen.inverse = true;
       else if (code === 27) this.pen.inverse = false;
-      else if (code >= 30 && code <= 37) this.pen.foreground = ANSI[code - 30] ?? TERMINAL_DEFAULT_FOREGROUND;
-      else if (code >= 90 && code <= 97) this.pen.foreground = ANSI[code - 90 + 8] ?? TERMINAL_DEFAULT_FOREGROUND;
+      else if (code >= 30 && code <= 37)
+        this.pen.foreground = ANSI[code - 30] ?? TERMINAL_DEFAULT_FOREGROUND;
+      else if (code >= 90 && code <= 97)
+        this.pen.foreground = ANSI[code - 90 + 8] ?? TERMINAL_DEFAULT_FOREGROUND;
       else if (code === 39) this.pen.foreground = TERMINAL_DEFAULT_FOREGROUND;
-      else if (code >= 40 && code <= 47) this.pen.background = ANSI[code - 40] ?? TERMINAL_DEFAULT_BACKGROUND;
-      else if (code >= 100 && code <= 107) this.pen.background = ANSI[code - 100 + 8] ?? TERMINAL_DEFAULT_BACKGROUND;
+      else if (code >= 40 && code <= 47)
+        this.pen.background = ANSI[code - 40] ?? TERMINAL_DEFAULT_BACKGROUND;
+      else if (code >= 100 && code <= 107)
+        this.pen.background = ANSI[code - 100 + 8] ?? TERMINAL_DEFAULT_BACKGROUND;
       else if (code === 49) this.pen.background = TERMINAL_DEFAULT_BACKGROUND;
       else if ((code === 38 || code === 48) && parameters[index + 1] === 5) {
         const color = indexedColor(parameters[index + 2] ?? 0);

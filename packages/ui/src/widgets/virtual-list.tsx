@@ -1,6 +1,6 @@
 import React, { useState, type ReactNode } from "react";
 import { Group } from "@moire/react-host";
-import { ScrollArea } from "./scroll.js";
+import { ScrollArea } from "./scroll";
 
 export type VirtualListProps<T = unknown> = {
   x?: number;
@@ -18,7 +18,7 @@ export type VirtualListProps<T = unknown> = {
 };
 
 /** Fixed-row virtualization composed over the shared ScrollArea viewport. */
-export function VirtualList<T,>(props: VirtualListProps<T>): ReactNode {
+export function VirtualList<T>(props: VirtualListProps<T>): ReactNode {
   const [internalScrollY, setInternalScrollY] = useState(0);
   const scrollY = props.scrollY ?? internalScrollY;
   const itemHeight = Math.max(1, props.itemHeight);

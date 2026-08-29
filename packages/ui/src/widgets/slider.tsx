@@ -6,8 +6,8 @@ import {
   useWidgetTheme,
   type ButtonSize,
   type WidgetState,
-} from "../widget-theme.js";
-import { registerIntrinsicSize } from "./layout.js";
+} from "#ui/widget-theme";
+import { registerIntrinsicSize } from "./layout";
 
 export type SliderProps = {
   x?: number;
@@ -60,9 +60,19 @@ export function Slider(props: SliderProps): ReactNode {
   const handleKey = (event: HitKeyEvent) => {
     if (event.repeat || props.disabled) return;
     const increment = step * (event.shiftKey ? 10 : 1);
-    if (event.code === 105 || event.code === 108 || event.key === "ArrowLeft" || event.key === "ArrowDown") {
+    if (
+      event.code === 105 ||
+      event.code === 108 ||
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowDown"
+    ) {
       commit(value - increment);
-    } else if (event.code === 106 || event.code === 103 || event.key === "ArrowRight" || event.key === "ArrowUp") {
+    } else if (
+      event.code === 106 ||
+      event.code === 103 ||
+      event.key === "ArrowRight" ||
+      event.key === "ArrowUp"
+    ) {
       commit(value + increment);
     } else if (event.code === 102 || event.key === "Home") {
       commit(0);
@@ -72,12 +82,7 @@ export function Slider(props: SliderProps): ReactNode {
   };
 
   return (
-    <Group
-      x={props.x ?? 0}
-      y={props.y ?? 0}
-      width={props.width}
-      height={height}
-    >
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={height}>
       <Rect
         x={trackX}
         y={trackY}
@@ -125,11 +130,7 @@ export function Slider(props: SliderProps): ReactNode {
                 setFromX(event.localX);
               }
         }
-        onPointerMove={
-          props.disabled || !pressed
-            ? undefined
-            : (event) => setFromX(event.localX)
-        }
+        onPointerMove={props.disabled || !pressed ? undefined : (event) => setFromX(event.localX)}
         onPointerUp={
           props.disabled
             ? undefined

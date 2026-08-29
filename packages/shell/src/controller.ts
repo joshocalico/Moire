@@ -37,10 +37,10 @@ import { createElement, useEffect, useMemo } from "react";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Panel } from "./Panel.js";
-import { Launcher } from "./Launcher.js";
-import { TitleBar } from "./TitleBar.js";
-import { Label } from "./widgets.js";
+import { Panel } from "./Panel";
+import { Launcher } from "./Launcher";
+import { TitleBar } from "./TitleBar";
+import { Label } from "./widgets";
 import {
   DesktopIcons,
   listDesktopEntries,
@@ -53,13 +53,8 @@ import {
   DESKTOP_ITEM_H,
   ICON_SIZE,
   type DesktopLayout,
-} from "./DesktopIcons.js";
-import type {
-  SsdAction,
-  SsdWindowInfo,
-  TaskWindowAction,
-  TaskWindowInfo,
-} from "./ssd.js";
+} from "./DesktopIcons";
+import type { SsdAction, SsdWindowInfo, TaskWindowAction, TaskWindowInfo } from "./ssd";
 import { Group, Rect, measureText } from "@moire/react-host";
 
 export type ShellSpawn = (opts: { exec: string }) => { unref?: () => void };
@@ -81,12 +76,7 @@ export type ShellRasterSurface = {
 
 export type ShellBridge = {
   setPrimaryOutput(output: { x: number; y: number; width: number; height: number }): void;
-  paint(
-    fb: Uint32Array,
-    pitchPx: number,
-    width: number,
-    height: number,
-  ): void;
+  paint(fb: Uint32Array, pitchPx: number, width: number, height: number): void;
   /** Revisioned shell surfaces for retained compositor backends. */
   chromeRaster(width: number, height: number): ShellRasterSurface | null;
   desktopRaster(width: number, height: number): ShellRasterSurface | null;
@@ -153,12 +143,7 @@ export type ShellBridge = {
    * Call after wallpaper and before windows so icons appear under windows.
    * No-ops when showDesktopIcons is false.
    */
-  paintDesktop(
-    fb: Uint32Array,
-    pitchPx: number,
-    width: number,
-    height: number,
-  ): void;
+  paintDesktop(fb: Uint32Array, pitchPx: number, width: number, height: number): void;
   /**
    * Parse file:// URIs and place them on the desktop. If (x, y) lands on a
    * folder icon, moves into that folder instead of ~/Desktop's root.
@@ -177,11 +162,7 @@ export type ShellBridge = {
     label: string,
   ): void;
   /** Revisioned drag preview used by retained compositor backends. */
-  dragRaster(
-    cursorX: number,
-    cursorY: number,
-    label: string,
-  ): ShellRasterSurface | null;
+  dragRaster(cursorX: number, cursorY: number, label: string): ShellRasterSurface | null;
   /** Label for an in-progress desktop icon drag, if any. */
   desktopDragLabel?(): string | null;
   /**
@@ -378,9 +359,7 @@ export function createShell(
   const mergeApps = (): DesktopEntry[] => [
     ...builtinApps,
     ...discoverApplications(process.env.XDG_CURRENT_DESKTOP ?? "Moire").filter(
-      (app) =>
-        app.id !== "moire-settings.desktop" &&
-        app.id !== "moire-files.desktop",
+      (app) => app.id !== "moire-settings.desktop" && app.id !== "moire-files.desktop",
     ),
   ];
   let apps = mergeApps();
@@ -388,9 +367,7 @@ export function createShell(
     new FileActivationService((activation) => {
       const child = spawn({ exec: activation.command });
       child.unref?.();
-      console.log(
-        `[shell] file activation: ${activation.filePath} → ${activation.command}`,
-      );
+      console.log(`[shell] file activation: ${activation.filePath} → ${activation.command}`);
     }, applications);
   let activation = createActivationService(apps);
   const activationPortal = new FileActivationPortalClient();
@@ -446,8 +423,7 @@ export function createShell(
   const desktopRoot: ShellRoot = createShellRoot();
   let desktopEntries: string[] = listDesktopEntries();
   let desktopLayout: DesktopLayout = loadDesktopLayout();
-  let desktopSelection: SelectionState<string> =
-    createSelectionState(desktopEntries);
+  let desktopSelection: SelectionState<string> = createSelectionState(desktopEntries);
   let desktopKeyboardActive = false;
   let desktopMenu:
     | { kind: "item"; name: string; x: number; y: number }
@@ -465,8 +441,7 @@ export function createShell(
   let desktopH = 0;
   let desktopDirty = true;
   let desktopHover: HitRegion | null = null;
-  let desktopDown: { x: number; y: number; hit: HitRegion; name?: string } | null =
-    null;
+  let desktopDown: { x: number; y: number; hit: HitRegion; name?: string } | null = null;
   let desktopDrag: {
     name: string;
     names: string[];
@@ -510,9 +485,7 @@ export function createShell(
   let dragChipRevision = 0;
   const DESKTOP_DRAG_THRESHOLD = 8;
 
-  const updateDesktopSelection = (
-    action: SelectionAction<string>,
-  ): void => {
+  const updateDesktopSelection = (action: SelectionAction<string>): void => {
     const next = reduceSelection(desktopSelection, desktopEntries, action);
     if (next === desktopSelection) return;
     desktopSelection = next;
@@ -559,26 +532,16 @@ export function createShell(
       const dx = candidate.x - from.x;
       const dy = candidate.y - from.y;
       const primary =
-        direction === "left"
-          ? -dx
-          : direction === "right"
-            ? dx
-            : direction === "up"
-              ? -dy
-              : dy;
+        direction === "left" ? -dx : direction === "right" ? dx : direction === "up" ? -dy : dy;
       if (primary <= 0) continue;
-      const cross = direction === "left" || direction === "right"
-        ? Math.abs(dy)
-        : Math.abs(dx);
+      const cross = direction === "left" || direction === "right" ? Math.abs(dy) : Math.abs(dx);
       const score = primary + cross * 2;
       if (!best || score < best.score) best = { name, score };
     }
     return best?.name ?? fromName;
   };
 
-  const moveDesktopSelection = (
-    direction: "left" | "right" | "up" | "down",
-  ): void => {
+  const moveDesktopSelection = (direction: "left" | "right" | "up" | "down"): void => {
     const from = desktopSelection.focusKey ?? desktopEntries[0] ?? null;
     if (!from) return;
     const target = desktopNeighbor(from, direction);
@@ -605,8 +568,7 @@ export function createShell(
           app.icon !== current.icon ||
           app.terminal !== current.terminal ||
           app.categories.join("\0") !== current.categories.join("\0") ||
-          (app.mimeTypes ?? []).join("\0") !==
-            (current.mimeTypes ?? []).join("\0")
+          (app.mimeTypes ?? []).join("\0") !== (current.mimeTypes ?? []).join("\0")
         );
       });
     apps = nextApps;
@@ -675,15 +637,10 @@ export function createShell(
       const openActions = [
         {
           id: "open",
-          label:
-            context.paths.length === 1
-              ? "Open"
-              : `Open ${context.paths.length} Items`,
+          label: context.paths.length === 1 ? "Open" : `Open ${context.paths.length} Items`,
           icon: context.directories.every(Boolean) ? "folder" : "file",
           run: () => {
-            context.paths.forEach((filePath) =>
-              openDesktopEntry(path.basename(filePath)),
-            );
+            context.paths.forEach((filePath) => openDesktopEntry(path.basename(filePath)));
           },
         },
       ];
@@ -725,9 +682,7 @@ export function createShell(
   });
 
   const desktopContextActions = (name: string): ContextMenuAction[] => {
-    const targetNames = desktopSelection.selectedKeys.has(name)
-      ? selectedDesktopNames()
-      : [name];
+    const targetNames = desktopSelection.selectedKeys.has(name) ? selectedDesktopNames() : [name];
     const paths = targetNames.map((target) => path.join(desktopDir(), target));
     const context: FileActionContext = {
       source: "desktop",
@@ -747,9 +702,7 @@ export function createShell(
       id: action.id,
       label: action.label,
       description: action.description,
-      icon: (["app", "file", "folder"] as IconName[]).includes(
-        action.icon as IconName,
-      )
+      icon: (["app", "file", "folder"] as IconName[]).includes(action.icon as IconName)
         ? (action.icon as IconName)
         : undefined,
       danger: action.danger,
@@ -852,9 +805,7 @@ export function createShell(
         id: action.id,
         label: action.label,
         description: action.description,
-        icon: (["app", "desktop", "folder", "grid"] as IconName[]).includes(
-          action.icon as IconName,
-        )
+        icon: (["app", "desktop", "folder", "grid"] as IconName[]).includes(action.icon as IconName)
           ? (action.icon as IconName)
           : undefined,
         danger: action.danger,
@@ -871,9 +822,7 @@ export function createShell(
   }, 1000).unref?.();
 
   const launch = (app: DesktopEntry) => {
-    const exec = app.terminal
-      ? `moire-terminal --command ${shellQuote(app.exec)}`
-      : app.exec;
+    const exec = app.terminal ? `moire-terminal --command ${shellQuote(app.exec)}` : app.exec;
     try {
       const child = spawn({ exec });
       child.unref?.();
@@ -984,26 +933,18 @@ export function createShell(
   /** Cache non-transparent runs once per raster instead of scanning every
    * transparent screen pixel on every composite. The runs also map directly
    * to retained-scene damage regions for the EGL path. */
-  const buildAlphaRuns = (
-    srcBytes: Uint8Array,
-    width: number,
-    height: number,
-  ): AlphaRuns => {
-    const src = new Uint32Array(
-      srcBytes.buffer,
-      srcBytes.byteOffset,
-      srcBytes.byteLength >>> 2,
-    );
+  const buildAlphaRuns = (srcBytes: Uint8Array, width: number, height: number): AlphaRuns => {
+    const src = new Uint32Array(srcBytes.buffer, srcBytes.byteOffset, srcBytes.byteLength >>> 2);
     const rows: AlphaRuns = new Array(height).fill(null);
     for (let y = 0; y < height; y++) {
       const pairs: number[] = [];
       const row = y * width;
       let x = 0;
       while (x < width) {
-        while (x < width && (src[row + x]! >>> 24) === 0) x++;
+        while (x < width && src[row + x]! >>> 24 === 0) x++;
         if (x >= width) break;
         const start = x;
-        while (x < width && (src[row + x]! >>> 24) !== 0) x++;
+        while (x < width && src[row + x]! >>> 24 !== 0) x++;
         pairs.push(start, x);
       }
       if (pairs.length > 0) rows[y] = Int32Array.from(pairs);
@@ -1019,11 +960,7 @@ export function createShell(
     srcBytes: Uint8Array,
     runs?: AlphaRuns | null,
   ) => {
-    const src = new Uint32Array(
-      srcBytes.buffer,
-      srcBytes.byteOffset,
-      srcBytes.byteLength >>> 2,
-    );
+    const src = new Uint32Array(srcBytes.buffer, srcBytes.byteOffset, srcBytes.byteLength >>> 2);
     for (let y = 0; y < height; y++) {
       const si = y * width;
       const di = y * pitchPx;
@@ -1042,11 +979,9 @@ export function createShell(
           }
           const dst = fb[di + x]!;
           const inv = 255 - a;
-          const r =
-            (((pixel >>> 16) & 0xff) + ((((dst >>> 16) & 0xff) * inv) / 255)) | 0;
-          const g =
-            (((pixel >>> 8) & 0xff) + ((((dst >>> 8) & 0xff) * inv) / 255)) | 0;
-          const b = ((pixel & 0xff) + (((dst & 0xff) * inv) / 255)) | 0;
+          const r = (((pixel >>> 16) & 0xff) + (((dst >>> 16) & 0xff) * inv) / 255) | 0;
+          const g = (((pixel >>> 8) & 0xff) + (((dst >>> 8) & 0xff) * inv) / 255) | 0;
+          const b = ((pixel & 0xff) + ((dst & 0xff) * inv) / 255) | 0;
           fb[di + x] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
         }
       }
@@ -1064,11 +999,7 @@ export function createShell(
     srcW: number,
     srcH: number,
   ) => {
-    const src = new Uint32Array(
-      srcBytes.buffer,
-      srcBytes.byteOffset,
-      srcBytes.byteLength >>> 2,
-    );
+    const src = new Uint32Array(srcBytes.buffer, srcBytes.byteOffset, srcBytes.byteLength >>> 2);
     for (let row = 0; row < srcH; row++) {
       const py = dy + row;
       if (py < 0 || py >= fbH) continue;
@@ -1086,11 +1017,9 @@ export function createShell(
         }
         const dst = fb[di + px]!;
         const inv = 255 - a;
-        const r =
-          (((pixel >>> 16) & 0xff) + ((((dst >>> 16) & 0xff) * inv) / 255)) | 0;
-        const g =
-          (((pixel >>> 8) & 0xff) + ((((dst >>> 8) & 0xff) * inv) / 255)) | 0;
-        const b = ((pixel & 0xff) + (((dst & 0xff) * inv) / 255)) | 0;
+        const r = (((pixel >>> 16) & 0xff) + (((dst >>> 16) & 0xff) * inv) / 255) | 0;
+        const g = (((pixel >>> 8) & 0xff) + (((dst >>> 8) & 0xff) * inv) / 255) | 0;
+        const b = ((pixel & 0xff) + ((dst & 0xff) * inv) / 255) | 0;
         fb[di + px] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
       }
     }
@@ -1233,11 +1162,7 @@ export function createShell(
           },
         }),
       );
-      const painted = rasterize(
-        strip.root.container,
-        Math.max(1, window.contentW),
-        titlebarH,
-      );
+      const painted = rasterize(strip.root.container, Math.max(1, window.contentW), titlebarH);
       strip.pixels = painted.pixels;
       strip.w = window.contentW;
       strip.h = titlebarH;
@@ -1294,11 +1219,7 @@ export function createShell(
     );
   };
 
-  const desktopFolderAt = (
-    x: number,
-    y: number,
-    sourceNames: readonly string[],
-  ): string | null => {
+  const desktopFolderAt = (x: number, y: number, sourceNames: readonly string[]): string | null => {
     const pal = themePalette();
     const targetName = hitTestDesktopIcon(
       x,
@@ -1311,9 +1232,7 @@ export function createShell(
     );
     if (!targetName || sourceNames.includes(targetName)) return null;
     try {
-      return fs.statSync(path.join(desktopDir(), targetName)).isDirectory()
-        ? targetName
-        : null;
+      return fs.statSync(path.join(desktopDir(), targetName)).isDirectory() ? targetName : null;
     } catch {
       return null;
     }
@@ -1376,19 +1295,14 @@ export function createShell(
         desktopDropHoverName = null;
         desktopDragActive = false;
         refreshDesktop();
-        console.log(
-          `[shell] desktop local drop: ${drag.names.join(", ")} → ${targetName}`,
-        );
+        console.log(`[shell] desktop local drop: ${drag.names.join(", ")} → ${targetName}`);
         return;
       } catch (err) {
         for (const move of moved.reverse()) {
           try {
             fs.renameSync(move.dest, move.src);
           } catch (rollbackError) {
-            console.error(
-              "[shell] desktop group-drop rollback failed:",
-              rollbackError,
-            );
+            console.error("[shell] desktop group-drop rollback failed:", rollbackError);
           }
         }
         console.error(
@@ -1458,19 +1372,14 @@ export function createShell(
     let dirEntry = false;
     if (isDesktopDrag) {
       try {
-        dirEntry = fs
-          .statSync(path.join(desktopDir(), desktopPreview.name))
-          .isDirectory();
+        dirEntry = fs.statSync(path.join(desktopDir(), desktopPreview.name)).isDirectory();
       } catch {
         // The file may have moved while the return animation is completing.
       }
     }
     const padX = 12;
     const padY = 8;
-    const plainW = Math.max(
-      72,
-      Math.round(measureText(text, 13 / 14) + padX * 2 + 28),
-    );
+    const plainW = Math.max(72, Math.round(measureText(text, 13 / 14) + padX * 2 + 28));
     const w = isDesktopDrag ? DESKTOP_ITEM_W : plainW;
     const h = isDesktopDrag ? DESKTOP_ITEM_H : 36;
     const cacheKey = `${text}|${isDesktopDrag}|${dirEntry}`;
@@ -1568,7 +1477,8 @@ export function createShell(
         primaryOutput.y === next.y &&
         primaryOutput.width === next.width &&
         primaryOutput.height === next.height
-      ) return;
+      )
+        return;
       primaryOutput = { ...next };
       dirty = true;
     },
@@ -1645,12 +1555,7 @@ export function createShell(
       ssdPending.current = null;
       for (let i = ssdHits.length - 1; i >= 0; i--) {
         const h = ssdHits[i]!;
-        if (
-          x >= h.x &&
-          y >= h.y &&
-          x < h.x + h.width &&
-          y < h.y + h.height
-) {
+        if (x >= h.x && y >= h.y && x < h.x + h.width && y < h.y + h.height) {
           h.onPress?.({
             x,
             y,
@@ -1791,9 +1696,10 @@ export function createShell(
             y: ev.y,
             localX: ev.x - hit.x,
             localY: ev.y - hit.y,
-            button: ev.button === PANEL_BTN_RIGHT || ev.button === 273
-              ? ("right" as const)
-              : ("left" as const),
+            button:
+              ev.button === PANEL_BTN_RIGHT || ev.button === 273
+                ? ("right" as const)
+                : ("left" as const),
           };
           hit.onPointerUp?.(args);
           if (
@@ -1815,29 +1721,20 @@ export function createShell(
       }
       for (let i = hits.length - 1; i >= 0; i--) {
         const h = hits[i]!;
-        if (
-          !h.onPointerDown &&
-          !h.onPress &&
-          !h.onContextMenu &&
-          !h.focusable
-        ) {
+        if (!h.onPointerDown && !h.onPress && !h.onContextMenu && !h.focusable) {
           continue;
         }
-        if (
-          ev.x >= h.x &&
-          ev.y >= h.y &&
-          ev.x < h.x + h.width &&
-          ev.y < h.y + h.height
-        ) {
+        if (ev.x >= h.x && ev.y >= h.y && ev.x < h.x + h.width && ev.y < h.y + h.height) {
           overlayDownHit = h;
           h.onPointerDown?.({
             x: ev.x,
             y: ev.y,
             localX: ev.x - h.x,
             localY: ev.y - h.y,
-            button: ev.button === PANEL_BTN_RIGHT || ev.button === 273
-              ? ("right" as const)
-              : ("left" as const),
+            button:
+              ev.button === PANEL_BTN_RIGHT || ev.button === 273
+                ? ("right" as const)
+                : ("left" as const),
           });
           overlayPointerGrab = true;
           dirty = true;
@@ -2069,10 +1966,7 @@ export function createShell(
           return true;
         }
 
-        const hit =
-          findHit((h) => !!(h.onPointerUp || h.onPress)) ??
-          desktopDown?.hit ??
-          null;
+        const hit = findHit((h) => !!(h.onPointerUp || h.onPress)) ?? desktopDown?.hit ?? null;
         if (hit?.onPointerUp) hit.onPointerUp(args(hit));
         if (desktopDown) {
           const dx = ev.x - desktopDown.x;
@@ -2101,9 +1995,7 @@ export function createShell(
         if (dx * dx + dy * dy >= DESKTOP_DRAG_THRESHOLD * DESKTOP_DRAG_THRESHOLD) {
           const name = desktopDown.name;
           if (!desktopSelection.selectedKeys.has(name)) selectDesktopName(name);
-          const names = desktopSelection.selectedKeys.has(name)
-            ? selectedDesktopNames()
-            : [name];
+          const names = desktopSelection.selectedKeys.has(name) ? selectedDesktopNames() : [name];
           const origins: DesktopLayout = {};
           names.forEach((selectedName) => {
             const index = desktopEntries.indexOf(selectedName);
@@ -2145,15 +2037,8 @@ export function createShell(
         // untouched) while a translucent ghost tracks the cursor via
         // paintDragPreview; the real position only commits on drop, in
         // finalizeDesktopDrop. No desktop-layer rebuild needed here.
-        const nextDropHover = desktopFolderAt(
-          ev.x,
-          ev.y,
-          desktopDrag.names,
-        );
-        if (
-          nextDropHover !== desktopDropHoverName ||
-          !desktopDragActive
-        ) {
+        const nextDropHover = desktopFolderAt(ev.x, ev.y, desktopDrag.names);
+        if (nextDropHover !== desktopDropHoverName || !desktopDragActive) {
           desktopDropHoverName = nextDropHover;
           desktopDragActive = true;
           desktopDirty = true;
@@ -2246,33 +2131,16 @@ export function createShell(
     },
 
     paintDesktop(fb, pitchPx, width, height) {
-      if (
-        desktopDirty ||
-        !desktopOverlay ||
-        desktopW !== width ||
-        desktopH !== height
-      ) {
+      if (desktopDirty || !desktopOverlay || desktopW !== width || desktopH !== height) {
         rebuildDesktop(width, height);
       }
       if (!showDesktopIcons) return;
       if (!desktopOverlay) return;
-      blendOverlay(
-        fb,
-        pitchPx,
-        width,
-        height,
-        desktopOverlay,
-        desktopOverlayRuns,
-      );
+      blendOverlay(fb, pitchPx, width, height, desktopOverlay, desktopOverlayRuns);
     },
 
     desktopRaster(width, height) {
-      if (
-        desktopDirty ||
-        !desktopOverlay ||
-        desktopW !== width ||
-        desktopH !== height
-      ) {
+      if (desktopDirty || !desktopOverlay || desktopW !== width || desktopH !== height) {
         rebuildDesktop(width, height);
       }
       if (!showDesktopIcons || !desktopOverlay) return null;
@@ -2366,9 +2234,7 @@ export function createShell(
       let dirEntry = false;
       if (isDesktopDrag) {
         try {
-          dirEntry = fs
-            .statSync(path.join(desktopDir(), desktopPreview.name))
-            .isDirectory();
+          dirEntry = fs.statSync(path.join(desktopDir(), desktopPreview.name)).isDirectory();
         } catch {
           // ignore
         }
@@ -2457,10 +2323,7 @@ export function createShell(
         dy = (cursorY | 0) - desktopDrag.grabY;
       } else if (desktopDragReturn) {
         const anim = desktopDragReturn;
-        const progress = Math.min(
-          1,
-          Math.max(0, (Date.now() - anim.startedMs) / anim.durationMs),
-        );
+        const progress = Math.min(1, Math.max(0, (Date.now() - anim.startedMs) / anim.durationMs));
         if (progress >= 1) {
           desktopDragReturn = null;
           desktopDirty = true;
@@ -2477,8 +2340,7 @@ export function createShell(
       return buildDragRaster(cursorX, cursorY, label);
     },
 
-    desktopDragLabel: () =>
-      desktopDrag?.label ?? desktopDragReturn?.label ?? null,
+    desktopDragLabel: () => desktopDrag?.label ?? desktopDragReturn?.label ?? null,
 
     desktopDragUri: () => {
       if (!desktopDrag) return null;

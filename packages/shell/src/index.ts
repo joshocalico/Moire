@@ -1,7 +1,7 @@
-export { TitleBar, TITLEBAR_H } from "./TitleBar.js";
-export { Launcher } from "./Launcher.js";
-export { Panel, PANEL_H } from "./Panel.js";
-export { createShell, type ShellBridge, type ShellSpawn } from "./controller.js";
+export { TitleBar, TITLEBAR_H } from "./TitleBar";
+export { Launcher } from "./Launcher";
+export { Panel, PANEL_H } from "./Panel";
+export { createShell, type ShellBridge, type ShellSpawn } from "./controller";
 export {
   DesktopIcons,
   listDesktopEntries,
@@ -11,7 +11,7 @@ export {
   desktopLayoutPath,
   type DesktopIconsProps,
   type DesktopLayout,
-} from "./DesktopIcons.js";
+} from "./DesktopIcons";
 export {
   SSD_TITLEBAR_H,
   SSD_PANEL_H,
@@ -19,11 +19,5 @@ export {
   type SsdAction,
   type TaskWindowInfo,
   type TaskWindowAction,
-} from "./ssd.js";
-export {
-  Label,
-  Button,
-  Surface,
-  Divider,
-  usePalette,
-} from "./widgets.js";
+} from "./ssd";
+export { Label, Button, Surface, Divider, usePalette } from "./widgets";

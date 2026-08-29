@@ -6,11 +6,8 @@ import {
   DiscreteEventPriority,
   LegacyRoot,
 } from "react-reconciler/constants.js";
-import { drawText as drawBitmapText, FONT_H, measureText as measureBitmapText } from "./font.js";
-import {
-  getTextRenderer,
-  type TextDrawStyle,
-} from "./text-renderer.js";
+import { drawText as drawBitmapText, FONT_H, measureText as measureBitmapText } from "./font";
+import { getTextRenderer, type TextDrawStyle } from "./text-renderer";
 import type {
   RendererBackend,
   RetainedClip,
@@ -18,7 +15,7 @@ import type {
   RetainedSceneFrame,
   RenderViewport,
   SoftwareFrame,
-} from "./renderer.js";
+} from "./renderer";
 
 export type {
   RendererBackend,
@@ -28,7 +25,7 @@ export type {
   RetainedSceneFrame,
   RenderViewport,
   SoftwareFrame,
-} from "./renderer.js";
+} from "./renderer";
 
 // Present at runtime in React 19; @types/react-reconciler may lag.
 const NoEventPriority = 0;
@@ -249,10 +246,7 @@ export type HitRegion = {
 let nextId = 1;
 let currentUpdatePriority: number = NoEventPriority;
 
-function makeNode(
-  kind: SceneKind,
-  props: Record<string, unknown>,
-): SceneNode {
+function makeNode(kind: SceneKind, props: Record<string, unknown>): SceneNode {
   return {
     kind,
     id: `n${nextId++}`,
@@ -265,8 +259,7 @@ function makeNode(
     fill: props.fill as number | undefined,
     radius: props.radius != null ? Number(props.radius) : undefined,
     stroke: props.stroke as number | undefined,
-    strokeWidth:
-      props.strokeWidth != null ? Number(props.strokeWidth) : undefined,
+    strokeWidth: props.strokeWidth != null ? Number(props.strokeWidth) : undefined,
     shadow: props.shadow as BoxShadow | undefined,
     color: props.color as number | undefined,
     text: props.text as string | undefined,
@@ -291,9 +284,7 @@ function makeNode(
     captureTab: props.captureTab as boolean | undefined,
     autoFocus: props.autoFocus as boolean | undefined,
     focusId: props.focusId as string | undefined,
-    onFocusChange: props.onFocusChange as
-      | ((focused: boolean) => void)
-      | undefined,
+    onFocusChange: props.onFocusChange as ((focused: boolean) => void) | undefined,
     onKeyDown: props.onKeyDown as HitKeyHandler | undefined,
     onKeyUp: props.onKeyUp as HitKeyHandler | undefined,
     onGlobalKeyDown: props.onGlobalKeyDown as HitGlobalKeyHandler | undefined,
@@ -339,8 +330,7 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   }
   if ("stroke" in props) node.stroke = props.stroke as number | undefined;
   if ("strokeWidth" in props) {
-    node.strokeWidth =
-      props.strokeWidth != null ? Number(props.strokeWidth) : undefined;
+    node.strokeWidth = props.strokeWidth != null ? Number(props.strokeWidth) : undefined;
   }
   if ("shadow" in props) node.shadow = props.shadow as BoxShadow | undefined;
   if ("color" in props) node.color = props.color as number | undefined;
@@ -395,9 +385,7 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   if ("autoFocus" in props) node.autoFocus = props.autoFocus as boolean | undefined;
   if ("focusId" in props) node.focusId = props.focusId as string | undefined;
   if ("onFocusChange" in props) {
-    node.onFocusChange = props.onFocusChange as
-      | ((focused: boolean) => void)
-      | undefined;
+    node.onFocusChange = props.onFocusChange as ((focused: boolean) => void) | undefined;
   }
   if ("onKeyDown" in props) {
     node.onKeyDown = props.onKeyDown as HitKeyHandler | undefined;
@@ -419,9 +407,7 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   }
   if ("data" in props) node.data = props.data;
   if ("onDropHoverChange" in props) {
-    node.onDropHoverChange = props.onDropHoverChange as
-      | ((hovering: boolean) => void)
-      | undefined;
+    node.onDropHoverChange = props.onDropHoverChange as ((hovering: boolean) => void) | undefined;
   }
   if (node.kind === "text" && node.text) {
     const m = measureNodeText(node.text, textStyleOf(node));
@@ -537,11 +523,7 @@ const hostConfig = {
     if (i < 0) parent.children.push(child);
     else parent.children.splice(i, 0, child);
   },
-  insertInContainerBefore(
-    container: SceneNode,
-    child: SceneNode,
-    before: SceneNode,
-  ): void {
+  insertInContainerBefore(container: SceneNode, child: SceneNode, before: SceneNode): void {
     insertBefore(container, child, before);
   },
   removeChild(parent: SceneNode, child: SceneNode): void {
@@ -740,20 +722,8 @@ export function collectHits(
 }
 
 /** Geometry-aware hit test shared by input dispatchers and renderer backends. */
-export function hitRegionContains(
-  hit: HitRegion,
-  x: number,
-  y: number,
-): boolean {
-  return insideRoundedRect(
-    x,
-    y,
-    hit.x,
-    hit.y,
-    hit.width,
-    hit.height,
-    hit.radius ?? 0,
-  );
+export function hitRegionContains(hit: HitRegion, x: number, y: number): boolean {
+  return insideRoundedRect(x, y, hit.x, hit.y, hit.width, hit.height, hit.radius ?? 0);
 }
 
 function renderSoftwareFrame(
@@ -763,9 +733,8 @@ function renderSoftwareFrame(
   reusablePixels?: Uint8Array,
 ): SoftwareFrame {
   const requiredBytes = fbW * fbH * 4;
-  const pixels = reusablePixels?.byteLength === requiredBytes
-    ? reusablePixels
-    : new Uint8Array(requiredBytes);
+  const pixels =
+    reusablePixels?.byteLength === requiredBytes ? reusablePixels : new Uint8Array(requiredBytes);
   pixels.fill(0);
   const fb = new Uint32Array(pixels.buffer);
   const pitchPx = fbW;
@@ -776,9 +745,9 @@ function renderSoftwareFrame(
       node.kind === "rect" || node.kind === "image"
         ? { x0: 0, y0: 0, x1: node.width, y1: node.height }
         : node.kind === "text"
-          // Glyph bearings and antialias coverage can extend just outside the
-          // measured advance box. Preserve that fringe in opacity layers.
-          ? { x0: -2, y0: -2, x1: node.width + 2, y1: node.height + 2 }
+          ? // Glyph bearings and antialias coverage can extend just outside the
+            // measured advance box. Preserve that fringe in opacity layers.
+            { x0: -2, y0: -2, x1: node.width + 2, y1: node.height + 2 }
           : null;
     if (node.kind === "rect" && node.shadow) {
       const spread = Math.max(0, node.shadow.spread ?? 0);
@@ -818,9 +787,7 @@ function renderSoftwareFrame(
         x1: Math.min(node.width, bounds.x1),
         y1: Math.min(node.height, bounds.y1),
       };
-      return clipped.x1 > clipped.x0 && clipped.y1 > clipped.y0
-        ? clipped
-        : null;
+      return clipped.x1 > clipped.x0 && clipped.y1 > clipped.y0 ? clipped : null;
     }
     return bounds;
   };
@@ -837,7 +804,7 @@ function renderSoftwareFrame(
     if (node.kind === "rect") {
       const radius = Math.max(0, node.radius ?? 0);
       const strokeWidth = Math.max(0, node.strokeWidth ?? 1);
-      if (node.shadow && (node.shadow.color >>> 24) > 0) {
+      if (node.shadow && node.shadow.color >>> 24 > 0) {
         fillRoundedBoxShadow(
           target,
           targetPitch,
@@ -866,17 +833,7 @@ function renderSoftwareFrame(
             node.fill,
           );
         } else {
-          fillRect(
-            target,
-            targetPitch,
-            targetW,
-            targetH,
-            x,
-            y,
-            node.width,
-            node.height,
-            node.fill,
-          );
+          fillRect(target, targetPitch, targetW, targetH, x, y, node.width, node.height, node.fill);
         }
       }
       if (node.stroke != null && strokeWidth > 0) {
@@ -913,12 +870,7 @@ function renderSoftwareFrame(
           node.scale ?? 1,
         );
       }
-    } else if (
-      node.kind === "image" &&
-      node.imagePixels &&
-      node.imageWidth &&
-      node.imageHeight
-    ) {
+    } else if (node.kind === "image" && node.imagePixels && node.imageWidth && node.imageHeight) {
       blitImage(
         target,
         targetPitch,
@@ -1007,12 +959,7 @@ export class SoftwareRenderer implements RendererBackend<SoftwareFrame> {
   private pixels: Uint8Array | undefined;
 
   render(root: SceneNode, viewport: RenderViewport): SoftwareFrame {
-    const frame = renderSoftwareFrame(
-      root,
-      viewport.width,
-      viewport.height,
-      this.pixels,
-    );
+    const frame = renderSoftwareFrame(root, viewport.width, viewport.height, this.pixels);
     this.pixels = frame.pixels;
     return frame;
   }
@@ -1030,12 +977,10 @@ export class RetainedSoftwareRenderer {
   render(scene: RetainedSceneFrame): SoftwareFrame {
     const requiredBytes = scene.width * scene.height * 4;
     const reusable = this.pixels?.byteLength === requiredBytes;
-    const pixels = reusable
-      ? this.pixels!
-      : new Uint8Array(requiredBytes);
+    const pixels = reusable ? this.pixels! : new Uint8Array(requiredBytes);
     const target = new Uint32Array(pixels.buffer);
     const damage = reusable
-      ? scene.damage ?? [{ x: 0, y: 0, width: scene.width, height: scene.height }]
+      ? (scene.damage ?? [{ x: 0, y: 0, width: scene.width, height: scene.height }])
       : [{ x: 0, y: 0, width: scene.width, height: scene.height }];
     for (const rect of damage) {
       fillRect(
@@ -1079,16 +1024,13 @@ function compositeRetainedLayer(
     destination.height <= 0 ||
     layer.sourceWidth <= 0 ||
     layer.sourceHeight <= 0
-  ) return;
+  )
+    return;
 
   const clipX0 = layer.clip ? Math.floor(layer.clip.x) : 0;
   const clipY0 = layer.clip ? Math.floor(layer.clip.y) : 0;
-  const clipX1 = layer.clip
-    ? Math.ceil(layer.clip.x + layer.clip.width)
-    : targetWidth;
-  const clipY1 = layer.clip
-    ? Math.ceil(layer.clip.y + layer.clip.height)
-    : targetHeight;
+  const clipX1 = layer.clip ? Math.ceil(layer.clip.x + layer.clip.width) : targetWidth;
+  const clipY1 = layer.clip ? Math.ceil(layer.clip.y + layer.clip.height) : targetHeight;
   const bounds = {
     x0: Math.max(0, clipX0),
     y0: Math.max(0, clipY0),
@@ -1097,7 +1039,7 @@ function compositeRetainedLayer(
   };
   if (bounds.x1 <= bounds.x0 || bounds.y1 <= bounds.y0) return;
 
-  if (layer.dropShadow && (layer.dropShadow.color >>> 24) > 0) {
+  if (layer.dropShadow && layer.dropShadow.color >>> 24 > 0) {
     fillRoundedBoxShadow(
       target,
       targetWidth,
@@ -1133,7 +1075,7 @@ function compositeRetainedLayer(
     layer.sourceWidth === 1 &&
     layer.sourceHeight === 1 &&
     opacity === 1 &&
-    (source[0]! >>> 24) === 0xff &&
+    source[0]! >>> 24 === 0xff &&
     x0 === Math.floor(destination.x) &&
     y0 === Math.floor(destination.y) &&
     x1 === Math.ceil(destination.x + destination.width) &&
@@ -1184,7 +1126,7 @@ function compositeRetainedLayer(
       const targetRow = y * targetWidth;
       for (let x = x0; x < x1; x++) {
         const pixel = source[sourceRow + x - originX]!;
-        if ((pixel >>> 24) === 0) continue;
+        if (pixel >>> 24 === 0) continue;
         blendPremultiplied(
           target,
           targetRow + x,
@@ -1204,33 +1146,28 @@ function compositeRetainedLayer(
       layer.sourceHeight - 1,
       Math.max(
         0,
-        Math.floor(
-          ((y + 0.5 - destination.y) * layer.sourceHeight) /
-            destination.height,
-        ),
+        Math.floor(((y + 0.5 - destination.y) * layer.sourceHeight) / destination.height),
       ),
     );
     for (let x = x0; x < x1; x++) {
-      const coverage = radius > 0
-        ? roundedRectCoverage(
-            x + 0.5,
-            y + 0.5,
-            destination.x,
-            destination.y,
-            destination.width,
-            destination.height,
-            radius,
-          )
-        : 1;
+      const coverage =
+        radius > 0
+          ? roundedRectCoverage(
+              x + 0.5,
+              y + 0.5,
+              destination.x,
+              destination.y,
+              destination.width,
+              destination.height,
+              radius,
+            )
+          : 1;
       if (coverage <= 0) continue;
       const sourceX = Math.min(
         layer.sourceWidth - 1,
         Math.max(
           0,
-          Math.floor(
-            ((x + 0.5 - destination.x) * layer.sourceWidth) /
-              destination.width,
-          ),
+          Math.floor(((x + 0.5 - destination.x) * layer.sourceWidth) / destination.width),
         ),
       );
       const pixel = source[sourceY * sourcePitch + sourceX]!;
@@ -1267,10 +1204,7 @@ type RetainedPresentationBinding = {
   offsetY: number;
 };
 
-function retainedLayerBounds(
-  layer: RetainedLayer,
-  viewport: RenderViewport,
-): RetainedClip {
+function retainedLayerBounds(layer: RetainedLayer, viewport: RenderViewport): RetainedClip {
   let left = layer.destination.x;
   let top = layer.destination.y;
   let right = layer.destination.x + layer.destination.width;
@@ -1361,17 +1295,16 @@ function intersectClip(a: RetainedClip | undefined, b: RetainedClip): RetainedCl
   };
 }
 
-function clipsEqual(
-  a: RetainedClip | undefined,
-  b: RetainedClip | undefined,
-): boolean {
-  return a === b ||
+function clipsEqual(a: RetainedClip | undefined, b: RetainedClip | undefined): boolean {
+  return (
+    a === b ||
     (a != null &&
       b != null &&
       a.x === b.x &&
       a.y === b.y &&
       a.width === b.width &&
-      a.height === b.height);
+      a.height === b.height)
+  );
 }
 
 /**
@@ -1379,9 +1312,7 @@ function clipsEqual(
  * performs no EGL calls: a platform may consume the frame, or Window can
  * continue through SoftwareRenderer unchanged.
  */
-export class RetainedSceneRenderer
-  implements RendererBackend<RetainedSceneFrame>
-{
+export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame> {
   readonly id = "retained-scene";
   private readonly solidPixels = new Map<number, Uint8Array>();
   private readonly rasterCache = new Map<string, RetainedRasterCache>();
@@ -1397,10 +1328,7 @@ export class RetainedSceneRenderer
   private previousHeight = 0;
   private previousClearColor = 0;
   private presentationLayers: RetainedLayer[] | null = null;
-  private readonly presentationBindings = new Map<
-    string,
-    RetainedPresentationBinding[]
-  >();
+  private readonly presentationBindings = new Map<string, RetainedPresentationBinding[]>();
 
   private solid(color: number): Uint8Array {
     const key = color >>> 0;
@@ -1460,12 +1388,7 @@ export class RetainedSceneRenderer
     this.frame++;
     const layers: RetainedLayer[] = [];
     this.presentationBindings.clear();
-    const appendLayer = (
-      node: SceneNode,
-      layer: RetainedLayer,
-      offsetX = 0,
-      offsetY = 0,
-    ): void => {
+    const appendLayer = (node: SceneNode, layer: RetainedLayer, offsetX = 0, offsetY = 0): void => {
       layers.push(layer);
       const bindings = this.presentationBindings.get(node.id) ?? [];
       bindings.push({ layer, offsetX, offsetY });
@@ -1569,56 +1492,46 @@ export class RetainedSceneRenderer
         const width = Math.max(1, Math.ceil(node.width) + pad * 2);
         const height = Math.max(1, Math.ceil(node.height) + pad * 2);
         const key = JSON.stringify({ text: node.text, style, width, height });
-        const cached = this.cachedRaster(
-          `${node.id}:text`,
-          key,
-          width,
-          height,
-          (target, pitch) => {
-            const custom = getTextRenderer();
-            if (custom) {
-              custom.draw(
-                target,
-                pitch,
-                width,
-                height,
-                pad,
-                pad,
-                node.text!,
-                style,
-              );
-            } else {
-              drawBitmapText(
-                target,
-                pitch,
-                width,
-                height,
-                pad,
-                pad,
-                node.text!,
-                style.color ?? 0xffffffff,
-                node.scale ?? 1,
-              );
-            }
+        const cached = this.cachedRaster(`${node.id}:text`, key, width, height, (target, pitch) => {
+          const custom = getTextRenderer();
+          if (custom) {
+            custom.draw(target, pitch, width, height, pad, pad, node.text!, style);
+          } else {
+            drawBitmapText(
+              target,
+              pitch,
+              width,
+              height,
+              pad,
+              pad,
+              node.text!,
+              style.color ?? 0xffffffff,
+              node.scale ?? 1,
+            );
+          }
+        });
+        appendLayer(
+          node,
+          {
+            id: `${node.id}:text`,
+            pixels: cached.pixels,
+            sourceWidth: cached.width,
+            sourceHeight: cached.height,
+            sourceStride: cached.width * 4,
+            revision: cached.revision,
+            destination: {
+              x: x - pad,
+              y: y - pad,
+              width: cached.width,
+              height: cached.height,
+            },
+            clip,
+            opacity,
+            sampling: "linear",
           },
+          -pad,
+          -pad,
         );
-        appendLayer(node, {
-          id: `${node.id}:text`,
-          pixels: cached.pixels,
-          sourceWidth: cached.width,
-          sourceHeight: cached.height,
-          sourceStride: cached.width * 4,
-          revision: cached.revision,
-          destination: {
-            x: x - pad,
-            y: y - pad,
-            width: cached.width,
-            height: cached.height,
-          },
-          clip,
-          opacity,
-          sampling: "linear",
-        }, -pad, -pad);
       } else if (
         node.kind === "image" &&
         node.imagePixels &&
@@ -1701,16 +1614,10 @@ export class RetainedSceneRenderer
    * graph or serialising every static layer signature. Returns null when the
    * cached graph cannot safely represent the current tree.
    */
-  renderPresentation(
-    root: SceneNode,
-    viewport: RenderViewport,
-  ): RetainedSceneFrame | null {
+  renderPresentation(root: SceneNode, viewport: RenderViewport): RetainedSceneFrame | null {
     const layers = this.presentationLayers;
-    if (
-      !layers ||
-      viewport.width !== this.previousWidth ||
-      viewport.height !== this.previousHeight
-    ) return null;
+    if (!layers || viewport.width !== this.previousWidth || viewport.height !== this.previousHeight)
+      return null;
 
     this.frame++;
     const changedBounds: RetainedClip[] = [];
@@ -1745,7 +1652,8 @@ export class RetainedSceneRenderer
             layer.destination.y === nextY &&
             layer.opacity === opacity &&
             clipsEqual(layer.clip, clip)
-          ) continue;
+          )
+            continue;
           changedBounds.push(retainedLayerBounds(layer, viewport));
           layer.destination.x = nextX;
           layer.destination.y = nextY;
@@ -1920,8 +1828,7 @@ function blendRgba(
   const outR = sr + Math.round((dr * inv) / 255);
   const outG = sg + Math.round((dg * inv) / 255);
   const outB = sb + Math.round((db * inv) / 255);
-  fb[index] =
-    ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
+  fb[index] = ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
 }
 
 function blendPremultiplied(
@@ -1952,8 +1859,7 @@ function blendPremultiplied(
   const outR = sr + Math.round((dr * inv) / 255);
   const outG = sg + Math.round((dg * inv) / 255);
   const outB = sb + Math.round((db * inv) / 255);
-  fb[index] =
-    ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
+  fb[index] = ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
 }
 
 function fillRect(
@@ -2026,23 +1932,10 @@ function blendFillColor(fb: Uint32Array, index: number, color: number): void {
     fb[index] = c;
     return;
   }
-  blendRgba(
-    fb,
-    index,
-    (c >>> 16) & 0xff,
-    (c >>> 8) & 0xff,
-    c & 0xff,
-    a,
-    1,
-  );
+  blendRgba(fb, index, (c >>> 16) & 0xff, (c >>> 8) & 0xff, c & 0xff, a, 1);
 }
 
-function blendCoverageColor(
-  fb: Uint32Array,
-  index: number,
-  color: number,
-  coverage: number,
-): void {
+function blendCoverageColor(fb: Uint32Array, index: number, color: number, coverage: number): void {
   const clamped = Math.max(0, Math.min(1, coverage));
   if (clamped <= 0) return;
   if (clamped >= 1) {
@@ -2050,15 +1943,7 @@ function blendCoverageColor(
     return;
   }
   const c = color >>> 0;
-  blendRgba(
-    fb,
-    index,
-    (c >>> 16) & 0xff,
-    (c >>> 8) & 0xff,
-    c & 0xff,
-    (c >>> 24) & 0xff,
-    clamped,
-  );
+  blendRgba(fb, index, (c >>> 16) & 0xff, (c >>> 8) & 0xff, c & 0xff, (c >>> 24) & 0xff, clamped);
 }
 
 /** One-pixel analytic coverage for the curved part of a rounded rectangle. */
@@ -2075,10 +1960,7 @@ function roundedRectCoverage(
   const r = clampedRadius(w, h, radius);
   if (r <= 0) return 1;
   // Most pixels lie in the horizontal or vertical body and need no sqrt.
-  if (
-    (px >= x + r && px < x + w - r) ||
-    (py >= y + r && py < y + h - r)
-  ) {
+  if ((px >= x + r && px < x + w - r) || (py >= y + r && py < y + h - r)) {
     return 1;
   }
   const cx = px < x + r ? x + r : x + w - r;
@@ -2101,8 +1983,7 @@ function roundedRectSignedDistance(
   const halfH = height / 2;
   const qx = Math.abs(px - (x + halfW)) - Math.max(0, halfW - r);
   const qy = Math.abs(py - (y + halfH)) - Math.max(0, halfH - r);
-  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) +
-    Math.min(Math.max(qx, qy), 0) - r;
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
 }
 
 /**
@@ -2154,9 +2035,7 @@ function fillRoundedBoxShadow(
         shadowHeight,
         shadowRadius,
       );
-      const coverage = distance <= 0
-        ? 1
-        : Math.exp(-(distance * distance) / denominator);
+      const coverage = distance <= 0 ? 1 : Math.exp(-(distance * distance) / denominator);
       if (coverage < 0.002) continue;
       blendCoverageColor(fb, py * pitchPx + px, shadow.color, coverage);
     }
@@ -2181,15 +2060,7 @@ function fillRoundedRect(
   const y1 = Math.min(fbH, (y | 0) + (h | 0));
   for (let py = y0; py < y1; py++) {
     for (let px = x0; px < x1; px++) {
-      const coverage = roundedRectCoverage(
-        px + 0.5,
-        py + 0.5,
-        x,
-        y,
-        w,
-        h,
-        radius,
-      );
+      const coverage = roundedRectCoverage(px + 0.5, py + 0.5, x, y, w, h, radius);
       blendCoverageColor(fb, py * pitchPx + px, color, coverage);
     }
   }
@@ -2225,21 +2096,8 @@ function fillRoundedStroke(
       const inner =
         innerW > 0 &&
         innerH > 0 &&
-        roundedRectCoverage(
-          sx,
-          sy,
-          innerX,
-          innerY,
-          innerW,
-          innerH,
-          innerRadius,
-        );
-      blendCoverageColor(
-        fb,
-        py * pitchPx + px,
-        color,
-        outer * (1 - Number(inner)),
-      );
+        roundedRectCoverage(sx, sy, innerX, innerY, innerW, innerH, innerRadius);
+      blendCoverageColor(fb, py * pitchPx + px, color, outer * (1 - Number(inner)));
     }
   }
 }
@@ -2284,10 +2142,10 @@ export function drawText(
   drawBitmapText(fb, pitchPx, fbW, fbH, x, y, text, color, scale);
 }
 
-export { FONT_H, FONT_W } from "./font.js";
+export { FONT_H, FONT_W } from "./font";
 export {
   setTextRenderer,
   getTextRenderer,
   type TextRenderer,
   type TextDrawStyle,
-} from "./text-renderer.js";
+} from "./text-renderer";

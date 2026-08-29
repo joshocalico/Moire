@@ -41,12 +41,12 @@ import {
   type EvdevPointerButton,
   type EvdevPointerAxis,
   closeFd,
+  createPipe,
   flushMmap,
   GbmDevice,
-  getLibc,
   LinuxReadinessDispatcher,
 } from "@moire/sys";
-import { mmapShm, munmapShm, copyFromPool } from "./shm-map.js";
+import { mmapShm, munmapShm, copyFromPool } from "./shm-map";
 import {
   desktopBounds,
   horizontalLayout,
@@ -56,29 +56,22 @@ import {
   outputsIntersectingRect,
   outputMembershipDelta,
   replacementOwner,
-} from "./display-layout.js";
-import {
-  createCompositorOutputRenderer,
-  type CompositorOutputRenderer,
-} from "./output-renderer.js";
-import type {
-  CompositionLayer,
-  CompositionRect,
-  CompositionScene,
-} from "./composition.js";
+} from "./display-layout";
+import { createCompositorOutputRenderer, type CompositorOutputRenderer } from "./output-renderer";
+import type { CompositionLayer, CompositionRect, CompositionScene } from "./composition";
 import {
   closeDmabufPlanes,
   copyFromDmabuf,
   type DmabufBuffer,
   type DmabufPlane,
-} from "./dmabuf-map.js";
+} from "./dmabuf-map";
 import {
   createDmabufFormatTableMemfd,
   DMABUF_FEEDBACK_FORMAT_COUNT,
   resolveDrmFeedbackDevice,
   type DrmFeedbackDevice,
-} from "./dmabuf-feedback.js";
-import { X11Wm, type XwmWindow } from "./xwm.js";
+} from "./dmabuf-feedback";
+import { X11Wm, type XwmWindow } from "./xwm";
 import {
   paintWallpaper,
   hexToArgb,
@@ -420,11 +413,7 @@ function xdgAnchorPoint(
 }
 
 /** Offset from popup top-left to the gravity point. */
-function xdgGravityOffset(
-  w: number,
-  h: number,
-  gravity: number,
-): { dx: number; dy: number } {
+function xdgGravityOffset(w: number, h: number, gravity: number): { dx: number; dy: number } {
   switch (gravity) {
     case XDG_ANCHOR_TOP:
       return { dx: w / 2, dy: 0 };
@@ -457,13 +446,7 @@ function placePopupRelative(
 ): { x: number; y: number; w: number; h: number } {
   const pw = Math.max(1, pos.width);
   const ph = Math.max(1, pos.height);
-  const anchor = xdgAnchorPoint(
-    pos.anchorX,
-    pos.anchorY,
-    pos.anchorW,
-    pos.anchorH,
-    pos.anchor,
-  );
+  const anchor = xdgAnchorPoint(pos.anchorX, pos.anchorY, pos.anchorW, pos.anchorH, pos.anchor);
   const grav = xdgGravityOffset(pw, ph, pos.gravity);
   let relX = anchor.x - grav.dx + pos.offsetX;
   let relY = anchor.y - grav.dy + pos.offsetY;
@@ -522,11 +505,7 @@ const DRM_FORMAT_MOD_INVALID_LO = 0xffffffff;
 
 /** XRGB leaves A=0; blit skips a===0 — force opaque for CPU paint. */
 function forceOpaqueAlpha(pixels: Uint8Array): void {
-  const words = new Uint32Array(
-    pixels.buffer,
-    pixels.byteOffset,
-    pixels.byteLength >>> 2,
-  );
+  const words = new Uint32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength >>> 2);
   for (let i = 0; i < words.length; i++) {
     words[i] = (words[i]! | 0xff000000) >>> 0;
   }
@@ -737,12 +716,7 @@ type ShellRasterSurface = {
 
 export type CompositorShell = {
   setPrimaryOutput?(output: { x: number; y: number; width: number; height: number }): void;
-  paint(
-    fb: Uint32Array,
-    pitchPx: number,
-    width: number,
-    height: number,
-  ): void;
+  paint(fb: Uint32Array, pitchPx: number, width: number, height: number): void;
   chromeRaster?(width: number, height: number): ShellRasterSurface | null;
   desktopRaster?(width: number, height: number): ShellRasterSurface | null;
   beginSsdFrame?(): void;
@@ -796,12 +770,7 @@ export type CompositorShell = {
    */
   acceptDesktopDrop?(uris: string[], x: number, y: number): boolean;
   /** Paint desktop icons / drop highlight after wallpaper, before windows. */
-  paintDesktop?(
-    fb: Uint32Array,
-    pitchPx: number,
-    width: number,
-    height: number,
-  ): void;
+  paintDesktop?(fb: Uint32Array, pitchPx: number, width: number, height: number): void;
   /** Return true when (x,y) is a valid desktop drop zone (defaults true). */
   hitDesktop?(x: number, y: number): boolean;
   /** Paint a shell-owned drag preview when no client icon surface is available. */
@@ -815,11 +784,7 @@ export type CompositorShell = {
     label: string,
   ): void;
   /** Revisioned shell drag preview for retained compositor backends. */
-  dragRaster?(
-    cursorX: number,
-    cursorY: number,
-    label: string,
-  ): ShellRasterSurface | null;
+  dragRaster?(cursorX: number, cursorY: number, label: string): ShellRasterSurface | null;
   desktopDragLabel?(): string | null;
   /**
    * URI payload + label for the desktop icon currently mid local-reposition
@@ -902,7 +867,7 @@ class ShellDragSource implements DragSourceLike {
     return [...this.payloads.keys()];
   }
   dataSourceActions(): number {
-    return 1 /* copy */ | 2 /* move */;
+    return 1 /* copy */ | 2; /* move */
   }
   sendDataSourceCancelled(): void {
     // No remote client to notify.
@@ -1030,8 +995,7 @@ export class CompositorServer {
   /** One native readiness worker shared by transport, input, and DRM events. */
   private readiness: LinuxReadinessDispatcher | null = null;
   private focused: ClientSession | null = null;
-  private pointerFocus: { session: ClientSession; surfaceId: number } | null =
-    null;
+  private pointerFocus: { session: ClientSession; surfaceId: number } | null = null;
   /** Last forwarded button press, used to recover the exact drag start point. */
   private lastPointerPress: {
     session: ClientSession;
@@ -1049,8 +1013,7 @@ export class CompositorServer {
     hotspotY: number;
   } | null = null;
   /** Semantic cursor requested through wp_cursor_shape_device_v1. */
-  private clientCursorShape: { session: ClientSession; shape: number } | null =
-    null;
+  private clientCursorShape: { session: ClientSession; shape: number } | null = null;
   /** Active DRM cursor plane; null keeps cursor rendering in the scene. */
   private hardwareCursor: { connectorId: number; imageKey: string } | null = null;
   private fallbackCursorPixels = new Map<string, Uint8Array>();
@@ -1076,8 +1039,7 @@ export class CompositorServer {
   private nextTaskOrder = 1;
   /** Bottom → top mapped xdg_popups (painted/hit above toplevels). */
   private popupStack: { session: ClientSession; surfaceId: number }[] = [];
-  private focusedToplevel: { session: ClientSession; surfaceId: number } | null =
-    null;
+  private focusedToplevel: { session: ClientSession; surfaceId: number } | null = null;
   private altHeld = false;
   private shiftHeld = false;
   /** CPU staging buffer — paint here, then flushMmap + presentKms. */
@@ -1119,15 +1081,9 @@ export class CompositorServer {
   /** Rootless XWM (optional). */
   private xwm: X11Wm | null = null;
   /** Wayland surfaces waiting for X11 serial match. */
-  private xwayPendingBySerial = new Map<
-    bigint,
-    { session: ClientSession; surfaceId: number }
-  >();
+  private xwayPendingBySerial = new Map<bigint, { session: ClientSession; surfaceId: number }>();
   /** X11 wid → paired Wayland surface. */
-  private xwayByWid = new Map<
-    number,
-    { session: ClientSession; surfaceId: number }
-  >();
+  private xwayByWid = new Map<number, { session: ClientSession; surfaceId: number }>();
   /** Last SSD window list from composite — used for reliable hit-testing. */
   private ssdWindows: SsdWindowInfo[] = [];
   /** Desktop theme (tokens + wallpaper). */
@@ -1174,8 +1130,7 @@ export class CompositorServer {
   async start(cardPath?: string): Promise<void> {
     fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
     const displaySettings = loadSettings();
-    const requestedMode =
-      process.env.MOIRE_MODE ?? displaySettings.displayMode ?? undefined;
+    const requestedMode = process.env.MOIRE_MODE ?? displaySettings.displayMode ?? undefined;
     this.kms = openKmsOutput(cardPath, requestedMode);
     this.readiness = new LinuxReadinessDispatcher("compositor");
     this.outputs = [{ kms: this.kms, x: 0, y: 0, scale120: 120, primary: true }];
@@ -1197,10 +1152,7 @@ export class CompositorServer {
         usedCrtcs.add(output.crtcId);
         this.outputs.push({ kms: output, x: 0, y: 0, scale120: 120, primary: false });
       } catch (error) {
-        console.warn(
-          `[output] could not activate connector ${connector.connectorId}:`,
-          error,
-        );
+        console.warn(`[output] could not activate connector ${connector.connectorId}:`, error);
       }
     }
     for (const output of this.outputs) {
@@ -1232,18 +1184,14 @@ export class CompositorServer {
         b: bootBg & 0xff,
       });
     }
-    console.log(
-      `[theme] ${this.theme.name} wallpaper=${this.theme.wallpaper.mode}`,
-    );
+    console.log(`[theme] ${this.theme.name} wallpaper=${this.theme.wallpaper.mode}`);
     console.log(
       `[output] layout ${this.outputs.map(({ kms, x, y }) => `${kms.connectorName}:${kms.currentModeId}@${x},${y}`).join(" ")}`,
     );
     try {
       this.drmHotplugMonitor = watchDrmHotplug((event) => {
         if (this.scheduleDisplayRefresh(150)) {
-          console.log(
-            `[output] DRM ${event.action}${event.sysname ? ` ${event.sysname}` : ""}`,
-          );
+          console.log(`[output] DRM ${event.action}${event.sysname ? ` ${event.sysname}` : ""}`);
         }
       });
       console.log("[output] DRM hotplug monitor ready");
@@ -1305,9 +1253,7 @@ export class CompositorServer {
 
     this.pointerDev = new EvdevPointer(this.readiness);
     this.pointerDev.on("motion", (ev: EvdevPointerMotion) => this.onPointerMotion(ev));
-    this.pointerDev.on("absolute", (ev: EvdevPointerAbsolute) =>
-      this.onPointerAbsolute(ev),
-    );
+    this.pointerDev.on("absolute", (ev: EvdevPointerAbsolute) => this.onPointerAbsolute(ev));
     this.pointerDev.on("button", (ev: EvdevPointerButton) => this.onPointerButton(ev));
     this.pointerDev.on("axis", (ev: EvdevPointerAxis) => this.onPointerAxis(ev));
     this.pointerDev.start();
@@ -1322,9 +1268,7 @@ export class CompositorServer {
       const session = new ClientSession(this, conn, this.nextClientId++);
       this.clients.add(session);
       conn.on("error", (err: Error) => {
-        console.warn(
-          `[client] transport error id=${session.clientId}: ${err.message}`,
-        );
+        console.warn(`[client] transport error id=${session.clientId}: ${err.message}`);
       });
       conn.on("close", () => {
         // Stop routing to this peer before clearing shared seat state. Both
@@ -1363,9 +1307,7 @@ export class CompositorServer {
     console.log(
       `KMS: ${this.outputs.length} output(s), desktop ${this.getKmsSize().width}x${this.getKmsSize().height} on ${this.kms.cardPath}`,
     );
-    console.log(
-      `Export: WAYLAND_DISPLAY=${this.displayName} XDG_RUNTIME_DIR=${this.runtimeDir}`,
-    );
+    console.log(`Export: WAYLAND_DISPLAY=${this.displayName} XDG_RUNTIME_DIR=${this.runtimeDir}`);
 
     // Auto-cancel a drag that's gone quiet for too long — a lost
     // terminating button-up (e.g. release happened outside the guest's
@@ -1548,11 +1490,7 @@ export class CompositorServer {
   }
 
   /** Called when an xwayland_surface serial is committed on a wl_surface. */
-  noteXwaylandSerial(
-    session: ClientSession,
-    surfaceId: number,
-    serial: bigint,
-  ): void {
+  noteXwaylandSerial(session: ClientSession, surfaceId: number, serial: bigint): void {
     if (serial === 0n) return;
     const surf = session.surfaceById(surfaceId);
     if (surf) surf.xwaylandSerial = serial;
@@ -1565,26 +1503,14 @@ export class CompositorServer {
    * Fallback when set_serial is missing from the Wayland stream but the
    * surface was created via xwayland_shell and XWM already saw WL_SURFACE_SERIAL.
    */
-  tryPairOrphanXwaylandSurface(
-    session: ClientSession,
-    surfaceId: number,
-  ): void {
+  tryPairOrphanXwaylandSurface(session: ClientSession, surfaceId: number): void {
     const surf = session.surfaceById(surfaceId);
-    if (
-      !surf ||
-      !surf.xwaylandPending ||
-      surf.xwaylandSerial != null ||
-      surf.x11Wid != null
-    ) {
+    if (!surf || !surf.xwaylandPending || surf.xwaylandSerial != null || surf.x11Wid != null) {
       return;
     }
-    const win =
-      this.xwm?.takeUnpairedSerialWindow((wid) => !this.xwayByWid.has(wid)) ??
-      null;
+    const win = this.xwm?.takeUnpairedSerialWindow((wid) => !this.xwayByWid.has(wid)) ?? null;
     if (!win || win.serial == null) return;
-    console.warn(
-      `[xwm] orphan pair surface=${surfaceId} ← wid=${win.wid} serial=${win.serial}`,
-    );
+    console.warn(`[xwm] orphan pair surface=${surfaceId} ← wid=${win.wid} serial=${win.serial}`);
     this.noteXwaylandSerial(session, surfaceId, win.serial);
   }
 
@@ -1595,16 +1521,10 @@ export class CompositorServer {
     }
     for (const session of this.clients) {
       for (const surf of session.surfaces()) {
-        if (
-          !surf.xwaylandPending ||
-          surf.xwaylandSerial != null ||
-          surf.x11Wid != null
-        ) {
+        if (!surf.xwaylandPending || surf.xwaylandSerial != null || surf.x11Wid != null) {
           continue;
         }
-        console.warn(
-          `[xwm] claim orphan surface=${surf.id} ← wid=${win.wid} serial=${serial}`,
-        );
+        console.warn(`[xwm] claim orphan surface=${surf.id} ← wid=${win.wid} serial=${serial}`);
         this.noteXwaylandSerial(session, surf.id, serial);
         return;
       }
@@ -1624,23 +1544,17 @@ export class CompositorServer {
     surf.role = "toplevel";
     if (win.title) surf.title = win.title;
 
-    const undecorated =
-      win.overrideRedirect || X11Wm.isUndecoratedType(win.windowType);
+    const undecorated = win.overrideRedirect || X11Wm.isUndecoratedType(win.windowType);
     surf.decoration = undecorated ? "none" : "server";
 
-    const parentPair =
-      win.transientFor != null ? this.xwayByWid.get(win.transientFor) : null;
-    const parentSurf = parentPair
-      ? parentPair.session.surfaceById(parentPair.surfaceId)
-      : null;
+    const parentPair = win.transientFor != null ? this.xwayByWid.get(win.transientFor) : null;
+    const parentSurf = parentPair ? parentPair.session.surfaceById(parentPair.surfaceId) : null;
 
     // Place transients/dialogs/modals over their parent; otherwise cascade if unset.
     const wantsParentPlace =
       !!parentSurf &&
       parentSurf.mapped &&
-      (win.transientFor != null ||
-        win.windowType === "dialog" ||
-        win.modal);
+      (win.transientFor != null || win.windowType === "dialog" || win.modal);
     if (wantsParentPlace && parentSurf) {
       const parentFrame = this.frameBox(parentSurf);
       const childW = win.width > 0 ? win.width : Math.max(1, surf.width);
@@ -1666,8 +1580,7 @@ export class CompositorServer {
 
     this.applyXwaylandGeometry(pending.session, pending.surfaceId, win);
     // Align X11 window with the Wayland content box so XQueryPointer matches.
-    const contentY =
-      surf.y + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
+    const contentY = surf.y + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
     this.xwm?.configureWindow(
       win.wid,
       surf.x,
@@ -1689,11 +1602,7 @@ export class CompositorServer {
     );
   }
 
-  private applyXwaylandGeometry(
-    session: ClientSession,
-    surfaceId: number,
-    win: XwmWindow,
-  ): void {
+  private applyXwaylandGeometry(session: ClientSession, surfaceId: number, win: XwmWindow): void {
     const surf = session.surfaceById(surfaceId);
     if (!surf) return;
     // Keep compositor slot placement when X still reports 0,0.
@@ -1728,7 +1637,7 @@ export class CompositorServer {
 
   displayOutputForGlobal(globalName: number): DisplayOutput | null {
     const index = this.outputGlobalNames.indexOf(globalName);
-    return index >= 0 ? this.outputs[index] ?? null : null;
+    return index >= 0 ? (this.outputs[index] ?? null) : null;
   }
 
   private addOutput(output: KmsOutput): void {
@@ -1800,12 +1709,14 @@ export class CompositorServer {
       if (output.primary && foundPrimary) output.primary = false;
       foundPrimary ||= output.primary;
     }
-    const normalized = normalizeLayoutOrigin(this.outputs.map((output) => ({
-      ...output,
-      id: output.kms.identity.id,
-      width: outputLogicalWidth(output),
-      height: outputLogicalHeight(output),
-    })));
+    const normalized = normalizeLayoutOrigin(
+      this.outputs.map((output) => ({
+        ...output,
+        id: output.kms.identity.id,
+        width: outputLogicalWidth(output),
+        height: outputLogicalHeight(output),
+      })),
+    );
     if (layoutsOverlap(normalized)) {
       this.rebuildOutputLayout();
       return;
@@ -1839,20 +1750,22 @@ export class CompositorServer {
     ) {
       throw new Error("Display layout must include every connected output");
     }
-    const arranged = normalizeLayoutOrigin(this.outputs.map((output) => {
-      const item = byId.get(output.kms.identity.id)!;
-      const scale120 = Math.max(120, Math.min(240, Math.round(item.scale120)));
-      const logicalWidth = Math.max(1, Math.round((output.kms.width * 120) / scale120));
-      const logicalHeight = Math.max(1, Math.round((output.kms.height * 120) / scale120));
-      return {
-        id: item.id,
-        x: Math.round(item.x),
-        y: Math.round(item.y),
-        width: logicalWidth,
-        height: logicalHeight,
-        scale120,
-      };
-    }));
+    const arranged = normalizeLayoutOrigin(
+      this.outputs.map((output) => {
+        const item = byId.get(output.kms.identity.id)!;
+        const scale120 = Math.max(120, Math.min(240, Math.round(item.scale120)));
+        const logicalWidth = Math.max(1, Math.round((output.kms.width * 120) / scale120));
+        const logicalHeight = Math.max(1, Math.round((output.kms.height * 120) / scale120));
+        return {
+          id: item.id,
+          x: Math.round(item.x),
+          y: Math.round(item.y),
+          width: logicalWidth,
+          height: logicalHeight,
+          scale120,
+        };
+      }),
+    );
     if (layoutsOverlap(arranged)) throw new Error("Displays cannot overlap");
     const requestedPrimary = requested.filter((item) => item.primary);
     if (requestedPrimary.length !== 1) {
@@ -1956,9 +1869,7 @@ export class CompositorServer {
     if (!owner) return false;
     const configured = loadSettings().displayMode;
     const topology = listDrmConnectors().filter(
-      (connector) =>
-        connector.cardPath === owner.cardPath &&
-        connector.connection === "connected",
+      (connector) => connector.cardPath === owner.cardPath && connector.connection === "connected",
     );
     let changed = false;
 
@@ -1984,14 +1895,8 @@ export class CompositorServer {
         );
         if (replacement) {
           const previousName = entry.kms.connectorName;
-          switchKmsConnector(
-            entry.kms,
-            replacement.connectorId,
-            configured ?? undefined,
-          );
-          console.log(
-            `[output] connector ${previousName} → ${entry.kms.connectorName}`,
-          );
+          switchKmsConnector(entry.kms, replacement.connectorId, configured ?? undefined);
+          console.log(`[output] connector ${previousName} → ${entry.kms.connectorName}`);
           changed = true;
         } else {
           const now = Date.now();
@@ -2008,8 +1913,7 @@ export class CompositorServer {
       this.lastMissingOutputLogMs = 0;
       if (!refresh.currentModeAvailable) {
         const nextMode =
-          (configured &&
-          entry.kms.modes.some((mode) => mode.id === configured)
+          (configured && entry.kms.modes.some((mode) => mode.id === configured)
             ? configured
             : null) ?? refresh.preferredModeId;
         if (nextMode) {
@@ -2027,9 +1931,7 @@ export class CompositorServer {
       }
     }
 
-    const activeIds = new Set(
-      this.outputs.map((output) => output.kms.connectorId),
-    );
+    const activeIds = new Set(this.outputs.map((output) => output.kms.connectorId));
     const usedCrtcs = new Set(this.outputs.map((output) => output.kms.crtcId));
     for (const connector of topology) {
       if (activeIds.has(connector.connectorId)) continue;
@@ -2046,10 +1948,7 @@ export class CompositorServer {
         console.log(`[output] added ${output.connectorName} ${output.currentModeId}`);
         changed = true;
       } catch (error) {
-        console.warn(
-          `[output] could not activate connector ${connector.connectorId}:`,
-          error,
-        );
+        console.warn(`[output] could not activate connector ${connector.connectorId}:`, error);
       }
     }
 
@@ -2124,11 +2023,11 @@ export class CompositorServer {
           outputLogicalWidth(output),
           outputLogicalHeight(output),
           [
-          XDG_TOPLEVEL_STATE_FULLSCREEN,
-          ...(this.focusedToplevel?.session === entry.session &&
-          this.focusedToplevel.surfaceId === surf.id
-            ? [XDG_TOPLEVEL_STATE_ACTIVATED]
-            : []),
+            XDG_TOPLEVEL_STATE_FULLSCREEN,
+            ...(this.focusedToplevel?.session === entry.session &&
+            this.focusedToplevel.surfaceId === surf.id
+              ? [XDG_TOPLEVEL_STATE_ACTIVATED]
+              : []),
           ],
         );
       } else if (surf.maximized) {
@@ -2138,23 +2037,16 @@ export class CompositorServer {
         const contentH = this.usesSsd(surf)
           ? Math.max(
               100,
-              outputLogicalHeight(output) -
-                (output.primary ? SSD_PANEL_H : 0) -
-                SSD_TITLEBAR_H,
+              outputLogicalHeight(output) - (output.primary ? SSD_PANEL_H : 0) - SSD_TITLEBAR_H,
             )
           : outputLogicalHeight(output);
-        entry.session.configureToplevel(
-          surf,
-          outputLogicalWidth(output),
-          contentH,
-          [
-            XDG_TOPLEVEL_STATE_MAXIMIZED,
-            ...(this.focusedToplevel?.session === entry.session &&
-            this.focusedToplevel.surfaceId === surf.id
-              ? [XDG_TOPLEVEL_STATE_ACTIVATED]
-              : []),
-          ],
-        );
+        entry.session.configureToplevel(surf, outputLogicalWidth(output), contentH, [
+          XDG_TOPLEVEL_STATE_MAXIMIZED,
+          ...(this.focusedToplevel?.session === entry.session &&
+          this.focusedToplevel.surfaceId === surf.id
+            ? [XDG_TOPLEVEL_STATE_ACTIVATED]
+            : []),
+        ]);
       } else {
         const w = surf.geomW > 0 ? surf.geomW : surf.width;
         const h = surf.geomH > 0 ? surf.geomH : surf.height;
@@ -2172,10 +2064,7 @@ export class CompositorServer {
           entry.session.configureToplevel(surf, nextW, nextH, states);
         }
         const chromeH = this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
-        const maxY = Math.max(
-          0,
-          kms.height - SSD_PANEL_H - chromeH - nextH,
-        );
+        const maxY = Math.max(0, kms.height - SSD_PANEL_H - chromeH - nextH);
         surf.x = Math.max(0, Math.min(Math.max(0, kms.width - nextW), surf.x));
         surf.y = Math.max(0, Math.min(maxY, surf.y));
       }
@@ -2196,9 +2085,7 @@ export class CompositorServer {
     if (!changed) return { changed: false, deadlineMs: 0 };
     const deadlineMs = Date.now() + timeoutMs;
     const timer = setTimeout(() => {
-      console.warn(
-        `[output] mode ${modeId} was not confirmed; reverting to ${previousModeId}`,
-      );
+      console.warn(`[output] mode ${modeId} was not confirmed; reverting to ${previousModeId}`);
       try {
         this.revertDisplayMode();
       } catch (error) {
@@ -2270,11 +2157,7 @@ export class CompositorServer {
     for (const c of this.clients) c.sendSelection(null);
   }
 
-  setSelection(
-    sourceSession: ClientSession,
-    sourceId: number | null,
-    _serial: number,
-  ): void {
+  setSelection(sourceSession: ClientSession, sourceId: number | null, _serial: number): void {
     if (sourceId == null || sourceId === 0) {
       this.clearSelection("cancelled");
       console.log("[clipboard] selection cleared");
@@ -2286,16 +2169,11 @@ export class CompositorServer {
       return;
     }
     const prev = this.selection;
-    if (
-      prev &&
-      (prev.sourceSession !== sourceSession || prev.sourceId !== sourceId)
-    ) {
+    if (prev && (prev.sourceSession !== sourceSession || prev.sourceId !== sourceId)) {
       prev.sourceSession.sendDataSourceCancelled(prev.sourceId);
     }
     this.selection = { sourceSession, sourceId, mimeTypes: [...mimes] };
-    console.log(
-      `[clipboard] selection set source=${sourceId} mimes=${mimes.join(",")}`,
-    );
+    console.log(`[clipboard] selection set source=${sourceId} mimes=${mimes.join(",")}`);
     for (const c of this.clients) c.sendSelection(this.selection);
   }
 
@@ -2324,10 +2202,7 @@ export class CompositorServer {
     const mimeTypes = sourceSession.primarySourceMimes(sourceId);
     if (!mimeTypes) return;
     const previous = this.primarySelection;
-    if (
-      previous &&
-      (previous.sourceSession !== sourceSession || previous.sourceId !== sourceId)
-    ) {
+    if (previous && (previous.sourceSession !== sourceSession || previous.sourceId !== sourceId)) {
       previous.sourceSession.sendPrimarySourceCancelled(previous.sourceId);
     }
     this.primarySelection = {
@@ -2354,11 +2229,7 @@ export class CompositorServer {
       }
       return;
     }
-    selection.sourceSession.sendPrimarySourceSend(
-      selection.sourceId,
-      mime,
-      fd,
-    );
+    selection.sourceSession.sendPrimarySourceSend(selection.sourceId, mime, fd);
   }
 
   issueActivationToken(): string {
@@ -2367,11 +2238,7 @@ export class CompositorServer {
     return token;
   }
 
-  activateWithToken(
-    token: string,
-    session: ClientSession,
-    surfaceId: number,
-  ): void {
+  activateWithToken(token: string, session: ClientSession, surfaceId: number): void {
     if (!this.activationTokens.delete(token)) return;
     const surface = session.toplevelFor(surfaceId);
     if (!surface?.mapped || surface.role !== "toplevel") return;
@@ -2418,13 +2285,9 @@ export class CompositorServer {
     const icon = iconId != null ? sourceSession.surfaceById(iconId) : null;
     const press = this.lastPointerPress;
     const startX =
-      press?.session === sourceSession && press.serial === serial
-        ? press.x
-        : this.cursorX;
+      press?.session === sourceSession && press.serial === serial ? press.x : this.cursorX;
     const startY =
-      press?.session === sourceSession && press.serial === serial
-        ? press.y
-        : this.cursorY;
+      press?.session === sourceSession && press.serial === serial ? press.y : this.cursorY;
     const previewOriginX = startX + (icon?.bufferOffsetX ?? 12);
     const previewOriginY = startY + (icon?.bufferOffsetY ?? 10);
     this.drag = {
@@ -2546,9 +2409,7 @@ export class CompositorServer {
 
     if (sameTarget && hit && prev) {
       const ssdY =
-        hit.surface.role === "toplevel" && this.usesSsd(hit.surface)
-          ? SSD_TITLEBAR_H
-          : 0;
+        hit.surface.role === "toplevel" && this.usesSsd(hit.surface) ? SSD_TITLEBAR_H : 0;
       const localX = this.cursorX - hit.surface.x;
       const localY = this.cursorY - hit.surface.y - ssdY;
       prev.session.sendDndMotion(prev.deviceId, timeMs, localX, localY);
@@ -2564,11 +2425,7 @@ export class CompositorServer {
     if (!hit) {
       // Over the desktop (no client surface) — let the shell live-highlight
       // a folder icon under the cursor, mirroring dragenter/dragleave.
-      this.shell?.onDesktopDragHover?.(
-        this.cursorX,
-        this.cursorY,
-        drag.mimeTypes,
-      );
+      this.shell?.onDesktopDragHover?.(this.cursorX, this.cursorY, drag.mimeTypes);
       return;
     }
     this.shell?.clearDesktopDragHover?.();
@@ -2584,9 +2441,7 @@ export class CompositorServer {
       );
       if (offerId != null) {
         const ssdY =
-          hit.surface.role === "toplevel" && this.usesSsd(hit.surface)
-            ? SSD_TITLEBAR_H
-            : 0;
+          hit.surface.role === "toplevel" && this.usesSsd(hit.surface) ? SSD_TITLEBAR_H : 0;
         const localX = this.cursorX - hit.surface.x;
         const localY = this.cursorY - hit.surface.y - ssdY;
         const serial = hit.session.nextSerial();
@@ -2606,9 +2461,7 @@ export class CompositorServer {
           offerId,
           deviceId,
         };
-        console.log(
-          `[dnd] enter surface=${hit.surface.id} client=${hit.session.clientId}`,
-        );
+        console.log(`[dnd] enter surface=${hit.surface.id} client=${hit.session.clientId}`);
       }
     }
   }
@@ -2624,9 +2477,7 @@ export class CompositorServer {
       const target = drag.currentTarget;
       target.session.sendDndDrop(target.deviceId);
       drag.sourceSession.sendDataSourceDndDropPerformed(drag.sourceId);
-      console.log(
-        `[dnd] drop surface=${target.surfaceId} client=${target.session.clientId}`,
-      );
+      console.log(`[dnd] drop surface=${target.surfaceId} client=${target.session.clientId}`);
       if (isDesktopSource) {
         // Handed off to a real client target — clear local desktop drag
         // state without touching the icon's saved layout position.
@@ -2654,7 +2505,9 @@ export class CompositorServer {
         console.log("[dnd] desktop-drop requesting text/uri-list");
         this.readDndData(drag, "text/uri-list", (data) => {
           if (!data) {
-            console.warn("[dnd] desktop-drop readDndData returned null — nothing was read from the source");
+            console.warn(
+              "[dnd] desktop-drop readDndData returned null — nothing was read from the source",
+            );
             this.beginDragReturn(drag, dropX, dropY);
             drag.sourceSession.sendDataSourceCancelled(drag.sourceId);
             this.markDirty();
@@ -2666,8 +2519,7 @@ export class CompositorServer {
             .map((u) => u.trim())
             .filter((u) => u.length > 0 && !u.startsWith("#"));
           console.log(`[dnd] desktop-drop uris=${uris.join(",")}`);
-          const accepted =
-            uris.length > 0 && shell.acceptDesktopDrop!(uris, dropX, dropY);
+          const accepted = uris.length > 0 && shell.acceptDesktopDrop!(uris, dropX, dropY);
           if (accepted) {
             drag.sourceSession.sendDataSourceDndDropPerformed(drag.sourceId);
             drag.sourceSession.sendDataSourceDndFinished(drag.sourceId);
@@ -2685,27 +2537,10 @@ export class CompositorServer {
     this.markDirty();
   }
 
-  private readDndData(
-    drag: DragSession,
-    mime: string,
-    cb: (data: Buffer | null) => void,
-  ): void {
+  private readDndData(drag: DragSession, mime: string, cb: (data: Buffer | null) => void): void {
     try {
-      const libc = getLibc();
-      const pipe2 = libc.func("int pipe2(int *pipefd, int flags)") as (
-        pipefd: Buffer,
-        flags: number,
-      ) => number;
       const O_CLOEXEC_FLAG = 0o2000000;
-      const pfds = Buffer.alloc(8);
-      const rc = pipe2(pfds, O_CLOEXEC_FLAG);
-      if (rc !== 0) {
-        console.warn(`[dnd] readDndData pipe2 failed rc=${rc}`);
-        cb(null);
-        return;
-      }
-      const readFd = pfds.readInt32LE(0);
-      const writeFd = pfds.readInt32LE(4);
+      const [readFd, writeFd] = createPipe(O_CLOEXEC_FLAG);
       console.log(
         `[dnd] readDndData pipe readFd=${readFd} writeFd=${writeFd} sourceId=${drag.sourceId} synthetic=${drag.sourceSession instanceof ShellDragSource}`,
       );
@@ -2769,9 +2604,7 @@ export class CompositorServer {
 
   /** True if this toplevel is already on the stacking list. */
   isStacked(session: ClientSession, surfaceId: number): boolean {
-    return this.stack.some(
-      (e) => e.session === session && e.surfaceId === surfaceId,
-    );
+    return this.stack.some((e) => e.session === session && e.surfaceId === surfaceId);
   }
 
   registerToplevel(session: ClientSession, surfaceId: number): void {
@@ -2793,47 +2626,30 @@ export class CompositorServer {
     const w = surf.geomW > 0 ? surf.geomW : surf.width;
     const h = surf.geomH > 0 ? surf.geomH : surf.height;
     const chromeH = this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
-    const maxContentH = Math.max(
-      100,
-      height - panelH - chromeH,
-    );
+    const maxContentH = Math.max(100, height - panelH - chromeH);
     const nextW = Math.min(w, width);
     const nextH = Math.min(h, maxContentH);
     if (nextW !== w || nextH !== h) {
-      session.configureToplevel(surf, nextW, nextH, [
-        XDG_TOPLEVEL_STATE_ACTIVATED,
-      ]);
+      session.configureToplevel(surf, nextW, nextH, [XDG_TOPLEVEL_STATE_ACTIVATED]);
     }
     surf.x = Math.max(output.x, Math.min(output.x + width - nextW, surf.x));
     surf.y = Math.max(
       0,
-      Math.min(
-        Math.max(output.y, output.y + height - panelH - chromeH - nextH),
-        surf.y,
-      ),
+      Math.min(Math.max(output.y, output.y + height - panelH - chromeH - nextH), surf.y),
     );
   }
 
   unregisterToplevel(session: ClientSession, surfaceId: number): void {
-    this.stack = this.stack.filter(
-      (e) => !(e.session === session && e.surfaceId === surfaceId),
-    );
+    this.stack = this.stack.filter((e) => !(e.session === session && e.surfaceId === surfaceId));
     this.taskOrder.delete(`${session.clientId}:${surfaceId}`);
-    if (
-      this.focusedToplevel?.session === session &&
-      this.focusedToplevel.surfaceId === surfaceId
-    ) {
+    if (this.focusedToplevel?.session === session && this.focusedToplevel.surfaceId === surfaceId) {
       this.focusedToplevel = null;
     }
     this.markDirty();
   }
 
   registerPopup(session: ClientSession, surfaceId: number): void {
-    if (
-      this.popupStack.some(
-        (e) => e.session === session && e.surfaceId === surfaceId,
-      )
-    ) {
+    if (this.popupStack.some((e) => e.session === session && e.surfaceId === surfaceId)) {
       return;
     }
     this.popupStack.push({ session, surfaceId });
@@ -2889,11 +2705,7 @@ export class CompositorServer {
     walk(surf);
   }
 
-  dismissPopup(
-    session: ClientSession,
-    surfaceId: number,
-    sendDone = true,
-  ): void {
+  dismissPopup(session: ClientSession, surfaceId: number, sendDone = true): void {
     const surf = session.surfaceById(surfaceId);
     if (!surf || surf.role !== "popup") {
       this.unregisterPopup(session, surfaceId);
@@ -2934,17 +2746,13 @@ export class CompositorServer {
     }
     // Restore keyboard focus to the focused toplevel when clearing all grabs.
     if (!session && this.focusedToplevel) {
-      this.focusedToplevel.session.keyboardEnter(
-        this.focusedToplevel.surfaceId,
-      );
+      this.focusedToplevel.session.keyboardEnter(this.focusedToplevel.surfaceId);
     }
   }
 
   /** Dismiss every popup for a client (grabbed or not), top-first. */
   dismissSessionPopups(session: ClientSession): void {
-    const mine = [...this.popupStack]
-      .reverse()
-      .filter((e) => e.session === session);
+    const mine = [...this.popupStack].reverse().filter((e) => e.session === session);
     for (const e of mine) {
       this.dismissPopup(e.session, e.surfaceId, true);
     }
@@ -2960,9 +2768,7 @@ export class CompositorServer {
   /** Move toplevel to the top of the stack (painted last / hit first). */
   raiseToplevel(session: ClientSession, surfaceId: number): void {
     // Reorder only — do not clear focusedToplevel (unregister would).
-    this.stack = this.stack.filter(
-      (e) => !(e.session === session && e.surfaceId === surfaceId),
-    );
+    this.stack = this.stack.filter((e) => !(e.session === session && e.surfaceId === surfaceId));
     this.stack.push({ session, surfaceId });
     this.markDirty();
   }
@@ -2980,21 +2786,16 @@ export class CompositorServer {
         return !!e.session.surfaceById(e.surfaceId)?.popupGrabbed;
       });
       if (hadGrab) {
-        console.log(
-          `[popup] dismiss grabs before focus toplevel=${topId}`,
-        );
+        console.log(`[popup] dismiss grabs before focus toplevel=${topId}`);
         this.dismissGrabbedPopups(session);
       }
     }
 
     const already =
-      this.focusedToplevel?.session === session &&
-      this.focusedToplevel.surfaceId === topId;
+      this.focusedToplevel?.session === session && this.focusedToplevel.surfaceId === topId;
 
     if (!already && this.focusedToplevel) {
-      const prev = this.focusedToplevel.session.surfaceById(
-        this.focusedToplevel.surfaceId,
-      );
+      const prev = this.focusedToplevel.session.surfaceById(this.focusedToplevel.surfaceId);
       if (prev?.role === "toplevel") {
         this.sendToplevelStates(this.focusedToplevel.session, prev, false);
       }
@@ -3018,11 +2819,7 @@ export class CompositorServer {
     this.markDirty();
   }
 
-  private sendToplevelStates(
-    session: ClientSession,
-    surf: SurfaceState,
-    activated: boolean,
-  ): void {
+  private sendToplevelStates(session: ClientSession, surf: SurfaceState, activated: boolean): void {
     const w = surf.geomW > 0 ? surf.geomW : surf.width;
     const h = surf.geomH > 0 ? surf.geomH : surf.height;
     if (w <= 0 || h <= 0) return;
@@ -3038,8 +2835,7 @@ export class CompositorServer {
     if (!surf || surf.role !== "toplevel") return;
     surf.minimized = true;
     const wasFocused =
-      this.focusedToplevel?.session === session &&
-      this.focusedToplevel.surfaceId === surfaceId;
+      this.focusedToplevel?.session === session && this.focusedToplevel.surfaceId === surfaceId;
     if (wasFocused) {
       this.focusedToplevel = null;
       if (this.focused === session) {
@@ -3051,11 +2847,7 @@ export class CompositorServer {
     if (wasFocused) {
       const next = [...this.stack].reverse().find((entry) => {
         const candidate = entry.session.surfaceById(entry.surfaceId);
-        return (
-          candidate?.mapped &&
-          candidate.role === "toplevel" &&
-          !candidate.minimized
-        );
+        return candidate?.mapped && candidate.role === "toplevel" && !candidate.minimized;
       });
       if (next) this.focusClient(next.session, next.surfaceId);
       else this.xwm?.setActiveWindow(null);
@@ -3074,9 +2866,7 @@ export class CompositorServer {
   /** Taskbar activation: restore, focus, or minimize the selected toplevel. */
   toggleTask(clientId: number, surfaceId: number): void {
     const entry = this.stack.find(
-      (candidate) =>
-        candidate.session.clientId === clientId &&
-        candidate.surfaceId === surfaceId,
+      (candidate) => candidate.session.clientId === clientId && candidate.surfaceId === surfaceId,
     );
     if (!entry) return;
     const surf = entry.session.surfaceById(surfaceId);
@@ -3104,13 +2894,10 @@ export class CompositorServer {
             this.focusedToplevel.surfaceId === surf.id,
           minimized: surf.minimized,
           order:
-            this.taskOrder.get(`${entry.session.clientId}:${surf.id}`) ??
-            Number.MAX_SAFE_INTEGER,
+            this.taskOrder.get(`${entry.session.clientId}:${surf.id}`) ?? Number.MAX_SAFE_INTEGER,
         };
       })
-      .filter(
-        (task): task is TaskWindowInfo & { order: number } => task !== null,
-      )
+      .filter((task): task is TaskWindowInfo & { order: number } => task !== null)
       .sort((a, b) => a.order - b.order)
       .map(({ order: _order, ...task }) => task);
   }
@@ -3165,11 +2952,7 @@ export class CompositorServer {
     // never receives its terminating button-up (e.g. release happened
     // outside the guest input surface entirely) and would otherwise be
     // stuck forever, since nothing else clears `this.drag`.
-    if (
-      ev.code === KEY_ESC &&
-      ev.value === 1 &&
-      (this.drag || this.shell?.desktopDragLabel?.())
-    ) {
+    if (ev.code === KEY_ESC && ev.value === 1 && (this.drag || this.shell?.desktopDragLabel?.())) {
       if (this.drag) this.cancelDrag();
       // A local desktop reposition has no compositor DragSession. This is
       // also harmless after cancelDrag() cleared an escalated desktop drag.
@@ -3267,14 +3050,8 @@ export class CompositorServer {
 
   private onPointerAbsolute(ev: EvdevPointerAbsolute): void {
     const kms = this.getKmsSize();
-    const nx = Math.max(
-      0,
-      Math.min(kms.width - 1, Math.round(ev.x * (kms.width - 1))),
-    );
-    const ny = Math.max(
-      0,
-      Math.min(kms.height - 1, Math.round(ev.y * (kms.height - 1))),
-    );
+    const nx = Math.max(0, Math.min(kms.width - 1, Math.round(ev.x * (kms.width - 1))));
+    const ny = Math.max(0, Math.min(kms.height - 1, Math.round(ev.y * (kms.height - 1))));
     const moved = nx !== this.cursorX || ny !== this.cursorY;
     this.cursorX = nx;
     this.cursorY = ny;
@@ -3334,8 +3111,7 @@ export class CompositorServer {
   /** Update SSD hover only after compositor z-order says the chrome is visible. */
   private updateSsdPointerHover(allowHit: boolean): boolean {
     if (!this.shell?.onSsdPointerMotion) return false;
-    const inside =
-      allowHit && this.hitVisibleSsd(this.cursorX, this.cursorY) != null;
+    const inside = allowHit && this.hitVisibleSsd(this.cursorX, this.cursorY) != null;
     return this.shell.onSsdPointerMotion({
       x: this.cursorX,
       y: this.cursorY,
@@ -3370,9 +3146,7 @@ export class CompositorServer {
     surface: SurfaceState;
   } | null {
     if (this.focusedToplevel) {
-      const surf = this.focusedToplevel.session.surfaceById(
-        this.focusedToplevel.surfaceId,
-      );
+      const surf = this.focusedToplevel.session.surfaceById(this.focusedToplevel.surfaceId);
       if (surf?.x11Wid != null && surf.mapped) {
         return { session: this.focusedToplevel.session, surface: surf };
       }
@@ -3439,11 +3213,7 @@ export class CompositorServer {
       }
     }
 
-    this.updatePointerFocus(
-      ev.timeMs,
-      false,
-      popupHit || popupGrabbed ? popupHit : undefined,
-    );
+    this.updatePointerFocus(ev.timeMs, false, popupHit || popupGrabbed ? popupHit : undefined);
     this.updateHoverEdges();
     const hit = this.pointerFocus;
 
@@ -3510,9 +3280,7 @@ export class CompositorServer {
 
   private handleSsdAction(action: SsdAction): void {
     const entry = this.stack.find(
-      (e) =>
-        e.surfaceId === action.surfaceId &&
-        e.session.clientId === action.clientId,
+      (e) => e.surfaceId === action.surfaceId && e.session.clientId === action.clientId,
     );
     if (!entry) {
       console.warn(
@@ -3548,8 +3316,7 @@ export class CompositorServer {
       const btnY0 = Math.floor((SSD_TITLEBAR_H - SSD_TITLEBAR_BTN) / 2);
       const btnY1 = btnY0 + SSD_TITLEBAR_BTN;
       const inBtnRow = y >= w.y + btnY0 && y < w.y + btnY1;
-      const closeX0 =
-        w.contentW - SSD_TITLEBAR_BTN_PAD - SSD_TITLEBAR_BTN;
+      const closeX0 = w.contentW - SSD_TITLEBAR_BTN_PAD - SSD_TITLEBAR_BTN;
       const maxX0 = closeX0 - SSD_TITLEBAR_BTN_GAP - SSD_TITLEBAR_BTN;
       const minX0 = maxX0 - SSD_TITLEBAR_BTN_GAP - SSD_TITLEBAR_BTN;
       if (inBtnRow) {
@@ -3579,9 +3346,7 @@ export class CompositorServer {
     const action = this.hitSsd(x, y);
     if (!action) return null;
     const candidateIndex = this.stack.findIndex(
-      (entry) =>
-        entry.surfaceId === action.surfaceId &&
-        entry.session.clientId === action.clientId,
+      (entry) => entry.surfaceId === action.surfaceId && entry.session.clientId === action.clientId,
     );
     if (candidateIndex < 0) return null;
     for (let i = this.stack.length - 1; i > candidateIndex; i--) {
@@ -3723,9 +3488,7 @@ export class CompositorServer {
       if (surf) {
         const gw = surf.geomW > 0 ? surf.geomW : surf.width;
         const gh = surf.geomH > 0 ? surf.geomH : surf.height;
-        g.session.configureToplevel(surf, gw, gh, [
-          XDG_TOPLEVEL_STATE_ACTIVATED,
-        ]);
+        g.session.configureToplevel(surf, gw, gh, [XDG_TOPLEVEL_STATE_ACTIVATED]);
       }
     }
     console.log(`[wm] end ${g.kind}`);
@@ -3744,13 +3507,7 @@ export class CompositorServer {
     if (surf.x11Wid != null) {
       const contentY = surf.y + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
       const size = this.contentSize(surf);
-      this.xwm?.configureWindow(
-        surf.x11Wid,
-        surf.x,
-        contentY,
-        size.w,
-        size.h,
-      );
+      this.xwm?.configureWindow(surf.x11Wid, surf.x, contentY, size.w, size.h);
     }
   }
 
@@ -3897,10 +3654,7 @@ export class CompositorServer {
       const width = outputLogicalWidth(output);
       const height = outputLogicalHeight(output);
       const contentH = this.usesSsd(surf)
-        ? Math.max(
-            100,
-            height - (output.primary ? SSD_PANEL_H : 0) - SSD_TITLEBAR_H,
-          )
+        ? Math.max(100, height - (output.primary ? SSD_PANEL_H : 0) - SSD_TITLEBAR_H)
         : height;
       session.configureToplevel(surf, width, contentH, [
         XDG_TOPLEVEL_STATE_MAXIMIZED,
@@ -3909,9 +3663,7 @@ export class CompositorServer {
     } else if (!want && surf.maximized) {
       surf.maximized = false;
       this.setGeometryPosition(surf, surf.savedX, surf.savedY);
-      session.configureToplevel(surf, surf.savedW, surf.savedH, [
-        XDG_TOPLEVEL_STATE_ACTIVATED,
-      ]);
+      session.configureToplevel(surf, surf.savedW, surf.savedH, [XDG_TOPLEVEL_STATE_ACTIVATED]);
     }
   }
 
@@ -3927,15 +3679,10 @@ export class CompositorServer {
       }
       surf.fullscreen = true;
       const output = this.placeMaximized(surf);
-      session.configureToplevel(
-        surf,
-        outputLogicalWidth(output),
-        outputLogicalHeight(output),
-        [
+      session.configureToplevel(surf, outputLogicalWidth(output), outputLogicalHeight(output), [
         XDG_TOPLEVEL_STATE_FULLSCREEN,
         XDG_TOPLEVEL_STATE_ACTIVATED,
-        ],
-      );
+      ]);
     } else if (!want && surf.fullscreen) {
       surf.fullscreen = false;
       if (surf.maximized) {
@@ -3949,25 +3696,17 @@ export class CompositorServer {
               (output.primary ? SSD_PANEL_H : 0) -
               (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0),
           ),
-          [
-          XDG_TOPLEVEL_STATE_MAXIMIZED,
-          XDG_TOPLEVEL_STATE_ACTIVATED,
-          ],
+          [XDG_TOPLEVEL_STATE_MAXIMIZED, XDG_TOPLEVEL_STATE_ACTIVATED],
         );
       } else {
         this.setGeometryPosition(surf, surf.savedX, surf.savedY);
-        session.configureToplevel(surf, surf.savedW, surf.savedH, [
-          XDG_TOPLEVEL_STATE_ACTIVATED,
-        ]);
+        session.configureToplevel(surf, surf.savedW, surf.savedH, [XDG_TOPLEVEL_STATE_ACTIVATED]);
       }
     }
   }
 
   /** Topmost mapped surface under the cursor (last in stack wins). */
-  private hitTest(
-    x: number,
-    y: number,
-  ): { session: ClientSession; surface: SurfaceState } | null {
+  private hitTest(x: number, y: number): { session: ClientSession; surface: SurfaceState } | null {
     // Popups sit above all toplevels.
     const popup = this.hitTestPopup(x, y);
     if (popup) return popup;
@@ -4005,12 +3744,7 @@ export class CompositorServer {
           continue;
         }
         const frame = this.frameBox(surf);
-        if (
-          x >= frame.x &&
-          y >= frame.y &&
-          x < frame.x + frame.w &&
-          y < frame.y + frame.h
-        ) {
+        if (x >= frame.x && y >= frame.y && x < frame.x + frame.w && y < frame.y + frame.h) {
           return { session: entry.session, surface: surf };
         }
         continue;
@@ -4047,12 +3781,7 @@ export class CompositorServer {
       if (x >= ox && y >= oy && x < ox + gw && y < oy + gh) {
         return { session: entry.session, surface: surf };
       }
-      if (
-        x >= surf.x &&
-        y >= surf.y &&
-        x < surf.x + surf.width &&
-        y < surf.y + surf.height
-      ) {
+      if (x >= surf.x && y >= surf.y && x < surf.x + surf.width && y < surf.y + surf.height) {
         return { session: entry.session, surface: surf };
       }
     }
@@ -4064,10 +3793,7 @@ export class CompositorServer {
     sendMotion: boolean,
     forcedHit?: { session: ClientSession; surface: SurfaceState } | null,
   ): void {
-    const hit =
-      forcedHit === undefined
-        ? this.hitTest(this.cursorX, this.cursorY)
-        : forcedHit;
+    const hit = forcedHit === undefined ? this.hitTest(this.cursorX, this.cursorY) : forcedHit;
     const prev = this.pointerFocus;
     const nextId = hit?.surface.id ?? null;
     const prevId = prev?.surfaceId ?? null;
@@ -4081,9 +3807,7 @@ export class CompositorServer {
 
     if (hit) {
       const ssdY =
-        hit.surface.role === "toplevel" && this.usesSsd(hit.surface)
-          ? SSD_TITLEBAR_H
-          : 0;
+        hit.surface.role === "toplevel" && this.usesSsd(hit.surface) ? SSD_TITLEBAR_H : 0;
       const localX = this.cursorX - hit.surface.x;
       const localY = this.cursorY - hit.surface.y - ssdY;
       if (this.pointerFocus?.surfaceId !== hit.surface.id) {
@@ -4118,10 +3842,7 @@ export class CompositorServer {
       this.clientCursor = null;
       changed = true;
     }
-    if (
-      this.clientCursorShape &&
-      (!session || this.clientCursorShape.session === session)
-    ) {
+    if (this.clientCursorShape && (!session || this.clientCursorShape.session === session)) {
       this.clientCursorShape = null;
       changed = true;
     }
@@ -4147,12 +3868,9 @@ export class CompositorServer {
     if (surf.role === "toplevel" || surf.role === "subsurface" || surf.role === "popup") return;
     if (
       this.clientCursor &&
-      (this.clientCursor.session !== session ||
-        this.clientCursor.surfaceId !== surfaceId)
+      (this.clientCursor.session !== session || this.clientCursor.surfaceId !== surfaceId)
     ) {
-      const prev = this.clientCursor.session.surfaceById(
-        this.clientCursor.surfaceId,
-      );
+      const prev = this.clientCursor.session.surfaceById(this.clientCursor.surfaceId);
       if (prev?.role === "cursor") prev.role = "none";
     }
     surf.role = "cursor";
@@ -4189,11 +3907,7 @@ export class CompositorServer {
     opaque = false,
   ): void {
     // Wayland wl_shm / linux-dmabuf ARGB8888 is premultiplied.
-    const srcWords = new Uint32Array(
-      src.buffer,
-      src.byteOffset,
-      src.byteLength >>> 2,
-    );
+    const srcWords = new Uint32Array(src.buffer, src.byteOffset, src.byteLength >>> 2);
     const stridePx = srcStride >>> 2;
     const gx0 = geom?.x ?? 0;
     const gy0 = geom?.y ?? 0;
@@ -4231,11 +3945,7 @@ export class CompositorServer {
         const si = sourceRow * stridePx + sourceCol;
         const pixel = srcWords[si]!;
         const inGeom =
-          !geom ||
-          (sourceCol >= gx0 &&
-            sourceCol < gx1 &&
-            sourceRow >= gy0 &&
-            sourceRow < gy1);
+          !geom || (sourceCol >= gx0 && sourceCol < gx1 && sourceRow >= gy0 && sourceRow < gy1);
         if (opaque) {
           if (inGeom) fb[py * pitchPx + px] = pixel;
           continue;
@@ -4252,22 +3962,15 @@ export class CompositorServer {
         }
         const dst = fb[di]!;
         const inv = 255 - a;
-        const r =
-          (((pixel >>> 16) & 0xff) + ((((dst >>> 16) & 0xff) * inv) / 255)) | 0;
-        const g =
-          (((pixel >>> 8) & 0xff) + ((((dst >>> 8) & 0xff) * inv) / 255)) | 0;
-        const b = ((pixel & 0xff) + (((dst & 0xff) * inv) / 255)) | 0;
+        const r = (((pixel >>> 16) & 0xff) + (((dst >>> 16) & 0xff) * inv) / 255) | 0;
+        const g = (((pixel >>> 8) & 0xff) + (((dst >>> 8) & 0xff) * inv) / 255) | 0;
+        const b = ((pixel & 0xff) + ((dst & 0xff) * inv) / 255) | 0;
         fb[di] = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
       }
     }
   }
 
-  private paintDragPreview(
-    fb: Uint32Array,
-    pitchPx: number,
-    width: number,
-    height: number,
-  ): void {
+  private paintDragPreview(fb: Uint32Array, pitchPx: number, width: number, height: number): void {
     const drag = this.drag;
 
     // Prefer client-provided drag icon surface when it has pixels.
@@ -4301,10 +4004,7 @@ export class CompositorServer {
 
     if (!drag && this.dragReturn) {
       const anim = this.dragReturn;
-      const progress = Math.min(
-        1,
-        Math.max(0, (monotonicMs() - anim.startedMs) / anim.durationMs),
-      );
+      const progress = Math.min(1, Math.max(0, (monotonicMs() - anim.startedMs) / anim.durationMs));
       if (progress >= 1) {
         this.dragReturn = null;
         return;
@@ -4328,22 +4028,11 @@ export class CompositorServer {
       return;
     }
 
-    const label =
-      drag?.label ||
-      this.shell?.desktopDragLabel?.() ||
-      null;
+    const label = drag?.label || this.shell?.desktopDragLabel?.() || null;
     if (!label) return;
 
     try {
-      this.shell?.paintDragPreview?.(
-        fb,
-        pitchPx,
-        width,
-        height,
-        this.cursorX,
-        this.cursorY,
-        label,
-      );
+      this.shell?.paintDragPreview?.(fb, pitchPx, width, height, this.cursorX, this.cursorY, label);
     } catch (err) {
       console.warn("[dnd] chip paint failed:", err);
     }
@@ -4403,8 +4092,7 @@ export class CompositorServer {
         ],
       };
     }
-    let edges =
-      g?.kind === "resize" ? g.edges : this.hoverEdges;
+    let edges = g?.kind === "resize" ? g.edges : this.hoverEdges;
     if (semanticShape >= 18 && semanticShape <= 29) {
       const semanticEdges: Record<number, number> = {
         18: XDG_TOPLEVEL_RESIZE_EDGE_RIGHT,
@@ -4620,34 +4308,24 @@ export class CompositorServer {
           this.cursorY >= candidate.y &&
           this.cursorX < candidate.x + outputLogicalWidth(candidate) &&
           this.cursorY < candidate.y + outputLogicalHeight(candidate),
-      ) ?? this.outputs.find((candidate) => candidate.primary) ?? this.outputs[0];
+      ) ??
+      this.outputs.find((candidate) => candidate.primary) ??
+      this.outputs[0];
     if (!output) return false;
     const logicalWidth = outputLogicalWidth(output);
     const logicalHeight = outputLogicalHeight(output);
-    const physicalX = Math.round(
-      ((this.cursorX - output.x) * output.kms.width) / logicalWidth,
-    );
-    const physicalY = Math.round(
-      ((this.cursorY - output.y) * output.kms.height) / logicalHeight,
-    );
+    const physicalX = Math.round(((this.cursorX - output.x) * output.kms.width) / logicalWidth);
+    const physicalY = Math.round(((this.cursorY - output.y) * output.kms.height) / logicalHeight);
     const descriptor = this.hardwareCursorImage();
     const previous = this.hardwareCursor;
     let active = false;
-    if (
-      previous?.connectorId === output.kms.connectorId &&
-      previous.imageKey === descriptor.key
-    ) {
+    if (previous?.connectorId === output.kms.connectorId && previous.imageKey === descriptor.key) {
       active = moveKmsCursor(output.kms, physicalX, physicalY);
     } else {
       for (const candidate of this.outputs) {
         if (candidate !== output) disableKmsCursor(candidate.kms);
       }
-      active = setKmsCursor(
-        output.kms,
-        descriptor.image,
-        physicalX,
-        physicalY,
-      );
+      active = setKmsCursor(output.kms, descriptor.image, physicalX, physicalY);
       if (active) descriptor.finish?.();
     }
     if (active) {
@@ -4699,15 +4377,7 @@ export class CompositorServer {
       if (surf) cc.session.finishSurfaceFrame(surf);
     }
     const fbShape = this.fallbackCursorShape();
-    this.drawShapeCursor(
-      fb,
-      pitchPx,
-      width,
-      height,
-      fbShape.shape,
-      fbShape.hotX,
-      fbShape.hotY,
-    );
+    this.drawShapeCursor(fb, pitchPx, width, height, fbShape.shape, fbShape.hotX, fbShape.hotY);
   }
 
   /** Request a composite + present on the next loop tick. */
@@ -4726,9 +4396,7 @@ export class CompositorServer {
         const budget = this.frameBudgetMs();
         const now = monotonicMs();
         if (this.nextCompositeDeadlineMs > now) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, this.nextCompositeDeadlineMs - now)
-          );
+          await new Promise((resolve) => setTimeout(resolve, this.nextCompositeDeadlineMs - now));
           continue;
         }
         this.needsComposite = false;
@@ -4755,12 +4423,8 @@ export class CompositorServer {
 
   private frameBudgetMs(): number {
     const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0];
-    const mode = primary?.kms.modes.find(
-      (candidate) => candidate.id === primary.kms.currentModeId,
-    );
-    return mode?.refreshMilliHz
-      ? 1_000_000 / mode.refreshMilliHz
-      : 1000 / 60;
+    const mode = primary?.kms.modes.find((candidate) => candidate.id === primary.kms.currentModeId);
+    return mode?.refreshMilliHz ? 1_000_000 / mode.refreshMilliHz : 1000 / 60;
   }
 
   private waitForCompositeWork(timeoutMs: number): Promise<void> {
@@ -4782,12 +4446,7 @@ export class CompositorServer {
   }
 
   /** Paint mapped xdg_popup surfaces above chrome and release their buffers. */
-  private paintPopups(
-    fb: Uint32Array,
-    pitchPx: number,
-    width: number,
-    height: number,
-  ): number {
+  private paintPopups(fb: Uint32Array, pitchPx: number, width: number, height: number): number {
     let painted = 0;
     for (const entry of this.popupStack) {
       const client = entry.session;
@@ -4831,10 +4490,7 @@ export class CompositorServer {
           );
           painted++;
         } catch (err) {
-          console.error(
-            `[composite] popup blit failed ${surf.width}x${surf.height}:`,
-            err,
-          );
+          console.error(`[composite] popup blit failed ${surf.width}x${surf.height}:`, err);
         }
       }
       client.finishSurfaceFrame(surf);
@@ -4857,9 +4513,7 @@ export class CompositorServer {
     return true;
   }
 
-  private finishPresentationFeedback(
-    feedback?: KmsPresentationFeedback,
-  ): void {
+  private finishPresentationFeedback(feedback?: KmsPresentationFeedback): void {
     const now = process.hrtime.bigint();
     const resolved = feedback ?? {
       sequence: 0,
@@ -4870,9 +4524,7 @@ export class CompositorServer {
       hardwareCompletion: false,
     };
     const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0];
-    const mode = primary?.kms.modes.find(
-      (candidate) => candidate.id === primary.kms.currentModeId,
-    );
+    const mode = primary?.kms.modes.find((candidate) => candidate.id === primary.kms.currentModeId);
     const refreshNs = mode?.refreshMilliHz
       ? Math.max(1, Math.round(1_000_000_000_000 / mode.refreshMilliHz))
       : 0;
@@ -5106,11 +4758,7 @@ export class CompositorServer {
       const client = entry.session;
       client.layout();
       const top = client.surfaceById(entry.surfaceId);
-      if (
-        top?.mapped &&
-        !client.isHidden(top) &&
-        this.usesSsd(top)
-      ) {
+      if (top?.mapped && !client.isHidden(top) && this.usesSsd(top)) {
         const size = this.contentSize(top);
         if (size.w > 0 && size.h > 0) {
           layers.push({
@@ -5146,10 +4794,7 @@ export class CompositorServer {
       for (const surface of client.paintTree(entry.surfaceId)) {
         client.updateSurfaceOutputs(surface);
         if (surface.mapped && surface.pixels && !client.isHidden(surface)) {
-          const ssdY =
-            surface.role === "toplevel" && this.usesSsd(surface)
-              ? SSD_TITLEBAR_H
-              : 0;
+          const ssdY = surface.role === "toplevel" && this.usesSsd(surface) ? SSD_TITLEBAR_H : 0;
           const useGeometry =
             surface.role === "toplevel" &&
             surface.geomW > 0 &&
@@ -5187,12 +4832,7 @@ export class CompositorServer {
         client.finishSurfaceFrame(surface);
       }
 
-      if (
-        top?.mapped &&
-        !client.isHidden(top) &&
-        this.usesSsd(top) &&
-        this.shell?.ssdRaster
-      ) {
+      if (top?.mapped && !client.isHidden(top) && this.usesSsd(top) && this.shell?.ssdRaster) {
         const size = this.contentSize(top);
         if (size.w > 0 && size.h > 0) {
           const ssd = this.shell.ssdRaster({
@@ -5204,8 +4844,7 @@ export class CompositorServer {
             contentH: size.h,
             title: top.title || "Window",
             focused:
-              this.focusedToplevel?.session === client &&
-              this.focusedToplevel.surfaceId === top.id,
+              this.focusedToplevel?.session === client && this.focusedToplevel.surfaceId === top.id,
             maximized: top.maximized,
           });
           layers.push({
@@ -5354,10 +4993,7 @@ export class CompositorServer {
                 primary: output.primary,
               }),
               (error) => {
-                console.error(
-                  `[composite] retained present ${physical.connectorName}:`,
-                  error,
-                );
+                console.error(`[composite] retained present ${physical.connectorName}:`, error);
                 return {
                   duration: monotonicMs() - presentStartedMs,
                   primary: output.primary,
@@ -5376,13 +5012,9 @@ export class CompositorServer {
       frameRenderMs += renderedMs - outputStartedMs;
     }
     const presented = await Promise.all(pendingPresents);
-    framePresentMs += presented.reduce(
-      (total, result) => total + result.duration,
-      0,
-    );
+    framePresentMs += presented.reduce((total, result) => total + result.duration, 0);
     this.finishPresentationFeedback(
-      presented.find((result) => result.primary)?.feedback ??
-        presented[0]?.feedback,
+      presented.find((result) => result.primary)?.feedback ?? presented[0]?.feedback,
     );
     this.profileFrames++;
     this.profileSceneMs += sceneFinishedMs - frameStartedMs;
@@ -5422,11 +5054,7 @@ export class CompositorServer {
       this.stage = Buffer.alloc(stageSize);
     }
     const stage = this.stage;
-    const fb = new Uint32Array(
-      stage.buffer,
-      stage.byteOffset,
-      stage.byteLength >>> 2,
-    );
+    const fb = new Uint32Array(stage.buffer, stage.byteOffset, stage.byteLength >>> 2);
     // Wallpaper from theme (atmosphere / gradient / image) — cached in @moire/theme.
     const pitchPx = kms.width;
     const wallPhase = (Date.now() / 60000) % 1; // ~60s period
@@ -5438,8 +5066,7 @@ export class CompositorServer {
     }
 
     try {
-      const primary =
-        this.outputs.find((output) => output.primary) ?? this.outputs[0]!;
+      const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0]!;
       this.shell?.setPrimaryOutput?.({
         x: primary.x,
         y: primary.y,
@@ -5487,15 +5114,9 @@ export class CompositorServer {
             try {
               // Paint from the committed pixel buffer directly — do not
               // Buffer.from() every frame (see docs/known-issues.md).
-              const ssdY =
-                surf.role === "toplevel" && this.usesSsd(surf)
-                  ? SSD_TITLEBAR_H
-                  : 0;
+              const ssdY = surf.role === "toplevel" && this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
               const useGeom =
-                surf.role === "toplevel" &&
-                surf.geomW > 0 &&
-                surf.geomH > 0 &&
-                !this.usesSsd(surf);
+                surf.role === "toplevel" && surf.geomW > 0 && surf.geomH > 0 && !this.usesSsd(surf);
               this.blitArgb(
                 fb,
                 pitchPx,
@@ -5564,13 +5185,7 @@ export class CompositorServer {
         this.ssdWindows = this.collectSsdWindows();
         // Fallback if shell only implements the bulk paintSsd API.
         if (!this.shell?.paintSsdWindow && this.shell?.paintSsd) {
-          this.shell.paintSsd(
-            fb,
-            pitchPx,
-            kms.width,
-            kms.height,
-            this.ssdWindows,
-          );
+          this.shell.paintSsd(fb, pitchPx, kms.width, kms.height, this.ssdWindows);
         }
         this.shell?.paint(fb, pitchPx, kms.width, kms.height);
       } catch (err) {
@@ -5648,10 +5263,7 @@ export class CompositorServer {
                   primary: output.primary,
                 }),
                 (error) => {
-                  console.error(
-                    `[composite] presentKms ${physical.connectorName}:`,
-                    error,
-                  );
+                  console.error(`[composite] presentKms ${physical.connectorName}:`, error);
                   return {
                     duration: monotonicMs() - presentStartedMs,
                     primary: output.primary,
@@ -5665,21 +5277,14 @@ export class CompositorServer {
             framePresentMs += monotonicMs() - renderedMs;
           }
         } catch (err) {
-          console.error(
-            `[composite] presentKms ${physical.connectorName}:`,
-            err,
-          );
+          console.error(`[composite] presentKms ${physical.connectorName}:`, err);
         }
         frameRenderMs += renderedMs - outputStartedMs;
       }
       const presented = await Promise.all(pendingPresents);
-      framePresentMs += presented.reduce(
-        (total, result) => total + result.duration,
-        0,
-      );
+      framePresentMs += presented.reduce((total, result) => total + result.duration, 0);
       this.finishPresentationFeedback(
-        presented.find((result) => result.primary)?.feedback ??
-          presented[0]?.feedback,
+        presented.find((result) => result.primary)?.feedback ?? presented[0]?.feedback,
       );
       this.profileFrames++;
       this.profileSceneMs += sceneFinishedMs - frameStartedMs;
@@ -5792,12 +5397,7 @@ class ClientSession {
     return !!top?.minimized;
   }
 
-  configureToplevel(
-    surface: SurfaceState,
-    width: number,
-    height: number,
-    states: number[],
-  ): void {
+  configureToplevel(surface: SurfaceState, width: number, height: number, states: number[]): void {
     if (surface.xdgToplevelId == null || surface.xdgSurfaceId == null) return;
     const buf = Buffer.alloc(states.length * 4);
     for (let i = 0; i < states.length; i++) {
@@ -5807,9 +5407,7 @@ class ClientSession {
       b.int(width).int(height).array(buf);
     });
     const serial = this.serial++;
-    this.send(surface.xdgSurfaceId, EV.xdg_surface_configure, (b) =>
-      b.uint(serial),
-    );
+    this.send(surface.xdgSurfaceId, EV.xdg_surface_configure, (b) => b.uint(serial));
   }
 
   requestClose(surface: SurfaceState): void {
@@ -5821,9 +5419,7 @@ class ClientSession {
       return;
     }
     if (surface.xdgToplevelId == null) return;
-    console.log(
-      `[ssd] close xdg client=${this.clientId} surface=${surface.id}`,
-    );
+    console.log(`[ssd] close xdg client=${this.clientId} surface=${surface.id}`);
     this.send(surface.xdgToplevelId, EV.xdg_toplevel_close, () => {});
   }
 
@@ -5841,19 +5437,13 @@ class ClientSession {
       });
       const surf = this.surfaceById(surfaceId);
       if (surf) surf.xwaylandPending = true;
-      console.log(
-        `[xwayland_shell] get_xwayland_surface id=${id} wl_surface=${surfaceId}`,
-      );
+      console.log(`[xwayland_shell] get_xwayland_surface id=${id} wl_surface=${surfaceId}`);
       // Serial may already be waiting on the XWM side.
       this.server.tryPairOrphanXwaylandSurface(this, surfaceId);
     }
   }
 
-  private handleXwaylandSurface(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handleXwaylandSurface(obj: WlObject, opcode: number, r: MessageReader): void {
     if (opcode === OP.xwayland_surface_destroy) {
       this.destroyObject(obj.id);
     } else if (opcode === OP.xwayland_surface_set_serial) {
@@ -5868,17 +5458,11 @@ class ClientSession {
       // back-to-back; applying here closes the race with the X11 ClientMessage
       // and avoids missing buffer-less association commits.
       if (serial !== 0n && obj.data?.wlSurfaceId != null) {
-        this.server.noteXwaylandSerial(
-          this,
-          obj.data.wlSurfaceId as number,
-          serial,
-        );
+        this.server.noteXwaylandSerial(this, obj.data.wlSurfaceId as number, serial);
         obj.data.pendingSerial = null;
       }
     } else {
-      console.warn(
-        `[xwayland_shell] unhandled xwayland_surface opcode=${opcode} id=${obj.id}`,
-      );
+      console.warn(`[xwayland_shell] unhandled xwayland_surface opcode=${opcode} id=${obj.id}`);
     }
   }
 
@@ -6086,13 +5670,13 @@ class ClientSession {
     if (ev.value === 1) this.pressedKeys.add(ev.code);
     else if (ev.value === 0) this.pressedKeys.delete(ev.code);
     // value 2 = repeat — still send as pressed
-    const state =
-      ev.value === 0
-        ? WL_KEYBOARD_KEY_STATE_RELEASED
-        : WL_KEYBOARD_KEY_STATE_PRESSED;
+    const state = ev.value === 0 ? WL_KEYBOARD_KEY_STATE_RELEASED : WL_KEYBOARD_KEY_STATE_PRESSED;
     const serial = this.serial++;
     this.send(this.keyboardId, EV.keyboard_key, (b) => {
-      b.uint(serial).uint(ev.timeMs >>> 0).uint(ev.code).uint(state);
+      b.uint(serial)
+        .uint(ev.timeMs >>> 0)
+        .uint(ev.code)
+        .uint(state);
     });
   }
 
@@ -6134,7 +5718,9 @@ class ClientSession {
   pointerMotion(timeMs: number, sx: number, sy: number): void {
     if (this.pointerId == null || this.pointerSurfaceId == null) return;
     this.send(this.pointerId, EV.pointer_motion, (b) => {
-      b.uint(timeMs >>> 0).fixed(sx).fixed(sy);
+      b.uint(timeMs >>> 0)
+        .fixed(sx)
+        .fixed(sy);
     });
     this.send(this.pointerId, EV.pointer_frame, () => {});
   }
@@ -6142,13 +5728,14 @@ class ClientSession {
   pointerButton(ev: EvdevPointerButton): number | null {
     if (this.pointerId == null || this.pointerSurfaceId == null) return null;
     const state =
-      ev.value === 0
-        ? WL_POINTER_BUTTON_STATE_RELEASED
-        : WL_POINTER_BUTTON_STATE_PRESSED;
+      ev.value === 0 ? WL_POINTER_BUTTON_STATE_RELEASED : WL_POINTER_BUTTON_STATE_PRESSED;
     const serial = this.serial++;
     this.lastInputSerial = serial;
     this.send(this.pointerId, EV.pointer_button, (b) => {
-      b.uint(serial).uint(ev.timeMs >>> 0).uint(ev.code).uint(state);
+      b.uint(serial)
+        .uint(ev.timeMs >>> 0)
+        .uint(ev.code)
+        .uint(state);
     });
     this.send(this.pointerId, EV.pointer_frame, () => {});
     return serial;
@@ -6218,17 +5805,10 @@ class ClientSession {
     }
   }
 
-  private dispatch(
-    objectId: number,
-    opcode: number,
-    msg: Buffer,
-    fds: number[],
-  ): void {
+  private dispatch(objectId: number, opcode: number, msg: Buffer, fds: number[]): void {
     const obj = this.objects.get(objectId);
     if (!obj) {
-      console.warn(
-        `[wl] unknown object id=${objectId} opcode=${opcode} size=${msg.length}`,
-      );
+      console.warn(`[wl] unknown object id=${objectId} opcode=${opcode} size=${msg.length}`);
       return;
     }
     const r = new MessageReader(msg, fds);
@@ -6380,9 +5960,7 @@ class ClientSession {
         this.handleXwaylandSurface(obj, opcode, r);
         break;
       default:
-        console.warn(
-          `[wl] unhandled ${obj.iface} id=${objectId} opcode=${opcode}`,
-        );
+        console.warn(`[wl] unhandled ${obj.iface} id=${objectId} opcode=${opcode}`);
         break;
     }
   }
@@ -6430,10 +6008,7 @@ class ClientSession {
     const iface = r.string()!;
     const version = r.uint();
     const id = r.newId();
-    const output =
-      iface === "wl_output"
-        ? this.server.displayOutputForGlobal(name)
-        : null;
+    const output = iface === "wl_output" ? this.server.displayOutputForGlobal(name) : null;
     this.objects.set(id, {
       id,
       iface,
@@ -6465,15 +6040,9 @@ class ClientSession {
       this.sendDrmBind(id);
     } else if (iface === "xwayland_shell_v1") {
       if (!this.isXwayland) {
-        console.warn(
-          `[xwayland_shell] rejected bind from non-Xwayland client id=${this.clientId}`,
-        );
+        console.warn(`[xwayland_shell] rejected bind from non-Xwayland client id=${this.clientId}`);
         this.objects.delete(id);
-        this.sendError(
-          WL_DISPLAY_ID,
-          0,
-          `xwayland_shell_v1 is only for Xwayland`,
-        );
+        this.sendError(WL_DISPLAY_ID, 0, `xwayland_shell_v1 is only for Xwayland`);
         return;
       }
       console.log(`[xwayland_shell] bound id=${id}`);
@@ -6482,8 +6051,7 @@ class ClientSession {
 
   /** wl_drm.bind — tell Mesa/Xwayland which render node to open. */
   private sendDrmBind(id: number): void {
-    const path =
-      this.server.getDmabufFeedback()?.device.path ?? "/dev/dri/renderD128";
+    const path = this.server.getDmabufFeedback()?.device.path ?? "/dev/dri/renderD128";
     this.send(id, EV.drm_device, (b) => b.string(path));
     this.send(id, EV.drm_format, (b) => b.uint(DRM_FORMAT_ARGB8888));
     this.send(id, EV.drm_format, (b) => b.uint(DRM_FORMAT_XRGB8888));
@@ -6589,17 +6157,12 @@ class ClientSession {
         b.uint(format).uint(0).uint(0);
       });
       this.send(dmabufId, EV.linux_dmabuf_modifier, (b) => {
-        b.uint(format)
-          .uint(DRM_FORMAT_MOD_INVALID_HI)
-          .uint(DRM_FORMAT_MOD_INVALID_LO);
+        b.uint(format).uint(DRM_FORMAT_MOD_INVALID_HI).uint(DRM_FORMAT_MOD_INVALID_LO);
       });
     }
   }
 
-  private sendOutputEvents(
-    id: number,
-    selectedOutput?: DisplayOutput | null,
-  ): void {
+  private sendOutputEvents(id: number, selectedOutput?: DisplayOutput | null): void {
     const output = selectedOutput ?? this.server.getDisplayOutputs()[0];
     if (!output) return;
     const { kms, x, y } = output;
@@ -6618,15 +6181,10 @@ class ClientSession {
       if (mode.id === kms.currentModeId) flags |= WL_OUTPUT_MODE_CURRENT;
       if (mode.preferred) flags |= WL_OUTPUT_MODE_PREFERRED;
       this.send(id, EV.output_mode, (b) => {
-        b.uint(flags)
-          .int(mode.width)
-          .int(mode.height)
-          .int(mode.refreshMilliHz);
+        b.uint(flags).int(mode.width).int(mode.height).int(mode.refreshMilliHz);
       });
     }
-    this.send(id, EV.output_scale, (b) =>
-      b.int(Math.max(1, Math.ceil(output.scale120 / 120))),
-    );
+    this.send(id, EV.output_scale, (b) => b.int(Math.max(1, Math.ceil(output.scale120 / 120))));
     this.send(id, EV.output_done, () => {});
   }
 
@@ -6640,10 +6198,7 @@ class ClientSession {
   outputChanged(): void {
     for (const object of this.objects.values()) {
       if (object.iface === "wl_output") {
-        this.sendOutputEvents(
-          object.id,
-          object.data?.output as DisplayOutput | undefined,
-        );
+        this.sendOutputEvents(object.id, object.data?.output as DisplayOutput | undefined);
       } else if (object.iface === "zxdg_output_v1") {
         const output = object.data?.output as DisplayOutput | undefined;
         if (output) this.sendXdgOutputEvents(object.id, output);
@@ -6677,20 +6232,14 @@ class ClientSession {
               x: surface.x,
               y:
                 surface.y +
-                (surface.role === "toplevel" &&
-                this.server.usesSsd(surface)
-                  ? SSD_TITLEBAR_H
-                  : 0),
+                (surface.role === "toplevel" && this.server.usesSsd(surface) ? SSD_TITLEBAR_H : 0),
               width: surface.width,
               height: surface.height,
             }).map((output) => output.objectId),
           )
         : new Set<number>();
 
-    const membership = outputMembershipDelta(
-      surface.enteredOutputIds,
-      desired,
-    );
+    const membership = outputMembershipDelta(surface.enteredOutputIds, desired);
     for (const outputId of membership.left) {
       this.send(surface.id, EV.surface_leave, (b) => b.uint(outputId));
     }
@@ -6718,10 +6267,7 @@ class ClientSession {
   outputRemoved(output: DisplayOutput): void {
     const removedIds = new Set(
       [...this.objects.values()]
-        .filter(
-          (object) =>
-            object.iface === "wl_output" && object.data?.output === output,
-        )
+        .filter((object) => object.iface === "wl_output" && object.data?.output === output)
         .map((object) => object.id),
     );
     for (const surface of this.surfaces()) {
@@ -6770,10 +6316,7 @@ class ClientSession {
         surface.subX = x;
         surface.subY = y;
       }
-    } else if (
-      opcode === OP_SUBSURFACE.place_above ||
-      opcode === OP_SUBSURFACE.place_below
-    ) {
+    } else if (opcode === OP_SUBSURFACE.place_above || opcode === OP_SUBSURFACE.place_below) {
       const siblingId = r.object();
       if (surface && surface.parentId != null && surfaceId != null) {
         this.reorderSubsurface(
@@ -6796,9 +6339,7 @@ class ClientSession {
     siblingId: number,
     above: boolean,
   ): void {
-    const parent = this.objects.get(parentId)?.data?.surface as
-      | SurfaceState
-      | undefined;
+    const parent = this.objects.get(parentId)?.data?.surface as SurfaceState | undefined;
     if (!parent) return;
     const kids = parent.children.filter((id) => id !== childId);
     if (siblingId === parentId) {
@@ -6833,9 +6374,7 @@ class ClientSession {
       if (keymap) {
         // format, fd, size — fd is ancillary only
         this.send(id, EV.keyboard_keymap, (b) => {
-          b.uint(WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)
-            .fd(keymap.fd)
-            .uint(keymap.size);
+          b.uint(WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1).fd(keymap.fd).uint(keymap.size);
         });
       }
       // repeat_info is since v4 — only send if the client bound that version.
@@ -6884,11 +6423,7 @@ class ClientSession {
     }
   }
 
-  private handleCursorShapeDevice(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handleCursorShapeDevice(obj: WlObject, opcode: number, r: MessageReader): void {
     if (opcode === OP.cursor_shape_device_set_shape) {
       r.uint(); // enter serial
       this.server.setClientCursorShape(this, r.uint());
@@ -6897,10 +6432,7 @@ class ClientSession {
     }
   }
 
-  private handleFractionalScaleManager(
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handleFractionalScaleManager(opcode: number, r: MessageReader): void {
     if (opcode === OP.fractional_scale_manager_get) {
       const id = r.newId();
       const surfaceId = r.object();
@@ -6921,17 +6453,13 @@ class ClientSession {
     const scale120 = this.server.outputForSurface(surface).scale120;
     if (object.data?.preferredScale === scale120) return;
     object.data = { ...object.data, preferredScale: scale120 };
-    this.send(objectId, EV.fractional_scale_preferred_scale, (b) =>
-      b.uint(scale120),
-    );
+    this.send(objectId, EV.fractional_scale_preferred_scale, (b) => b.uint(scale120));
   }
 
   private updateSurfacePreferredScale(surface: SurfaceState): void {
     for (const object of this.objects.values()) {
-      if (
-        object.iface === "wp_fractional_scale_v1" &&
-        object.data?.surfaceId === surface.id
-      ) this.sendPreferredScale(object.id, surface.id);
+      if (object.iface === "wp_fractional_scale_v1" && object.data?.surfaceId === surface.id)
+        this.sendPreferredScale(object.id, surface.id);
     }
   }
 
@@ -6956,9 +6484,7 @@ class ClientSession {
   }
 
   private sendXdgOutputEvents(id: number, output: DisplayOutput): void {
-    this.send(id, EV.xdg_output_logical_position, (b) =>
-      b.int(output.x).int(output.y),
-    );
+    this.send(id, EV.xdg_output_logical_position, (b) => b.int(output.x).int(output.y));
     this.send(id, EV.xdg_output_logical_size, (b) =>
       b.int(outputLogicalWidth(output)).int(outputLogicalHeight(output)),
     );
@@ -6981,11 +6507,7 @@ class ClientSession {
     });
   }
 
-  private handleViewport(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handleViewport(obj: WlObject, opcode: number, r: MessageReader): void {
     if (opcode === OP.viewport_destroy) {
       this.destroyObject(obj.id);
     } else if (opcode === OP.viewport_set_source) {
@@ -7001,11 +6523,7 @@ class ClientSession {
     }
   }
 
-  private handlePresentation(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handlePresentation(obj: WlObject, opcode: number, r: MessageReader): void {
     if (opcode === OP.presentation_destroy) {
       this.destroyObject(obj.id);
       return;
@@ -7042,11 +6560,7 @@ class ClientSession {
     }
   }
 
-  private handleXdgActivationToken(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handleXdgActivationToken(obj: WlObject, opcode: number, r: MessageReader): void {
     if (opcode === OP.activation_token_set_serial) {
       r.uint();
       r.object();
@@ -7060,10 +6574,7 @@ class ClientSession {
     }
   }
 
-  private handlePrimarySelectionManager(
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handlePrimarySelectionManager(opcode: number, r: MessageReader): void {
     if (opcode === OP.primary_manager_create_source) {
       const id = r.newId();
       this.objects.set(id, {
@@ -7087,11 +6598,7 @@ class ClientSession {
     }
   }
 
-  private handlePrimarySelectionSource(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handlePrimarySelectionSource(obj: WlObject, opcode: number, r: MessageReader): void {
     const source = obj.data?.source as DataSourceState | undefined;
     if (opcode === OP.primary_source_offer) {
       const mime = r.string();
@@ -7107,11 +6614,7 @@ class ClientSession {
     }
   }
 
-  private handlePrimarySelectionDevice(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handlePrimarySelectionDevice(obj: WlObject, opcode: number, r: MessageReader): void {
     if (opcode === OP.primary_device_set_selection) {
       const sourceId = r.object();
       const serial = r.uint();
@@ -7122,11 +6625,7 @@ class ClientSession {
     }
   }
 
-  private handlePrimarySelectionOffer(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handlePrimarySelectionOffer(obj: WlObject, opcode: number, r: MessageReader): void {
     const offer = obj.data?.offer as PrimaryOfferState | undefined;
     if (opcode === OP.primary_offer_receive) {
       const mime = r.string() ?? "";
@@ -7225,7 +6724,11 @@ class ClientSession {
       const mime = r.string() ?? "";
       const fd = r.fd();
       if (!offer) {
-        try { closeFd(fd); } catch { /* ok */ }
+        try {
+          closeFd(fd);
+        } catch {
+          /* ok */
+        }
         return;
       }
       if (offer.isDnd) {
@@ -7234,12 +6737,12 @@ class ClientSession {
       } else {
         // Clipboard receive: only allowed when offer matches current selection.
         const sel = this.server.getSelection();
-        if (
-          !sel ||
-          sel.sourceSession !== offer.sourceSession ||
-          sel.sourceId !== offer.sourceId
-        ) {
-          try { closeFd(fd); } catch { /* ok */ }
+        if (!sel || sel.sourceSession !== offer.sourceSession || sel.sourceId !== offer.sourceId) {
+          try {
+            closeFd(fd);
+          } catch {
+            /* ok */
+          }
           return;
         }
         this.server.forwardSelectionReceive(mime, fd);
@@ -7315,9 +6818,7 @@ class ClientSession {
     const WL_DND_ACTION_MOVE = 2;
     const WL_DND_ACTION_COPY = 1;
     const preferred =
-      (actions & WL_DND_ACTION_MOVE) !== 0
-        ? WL_DND_ACTION_MOVE
-        : WL_DND_ACTION_COPY;
+      (actions & WL_DND_ACTION_MOVE) !== 0 ? WL_DND_ACTION_MOVE : WL_DND_ACTION_COPY;
     this.send(offerId, EV.data_offer_source_actions, (b) => b.uint(actions));
     this.send(offerId, EV.data_offer_action, (b) => b.uint(preferred));
     return offerId;
@@ -7346,7 +6847,10 @@ class ClientSession {
   sendDndMotion(deviceId: number, timeMs: number, x: number, y: number): void {
     if (!this.objects.has(deviceId)) return;
     this.send(deviceId, EV.data_device_motion, (b) =>
-      b.uint(timeMs >>> 0).fixed(x).fixed(y),
+      b
+        .uint(timeMs >>> 0)
+        .fixed(x)
+        .fixed(y),
     );
   }
 
@@ -7393,13 +6897,8 @@ class ClientSession {
   /**
    * Announce seat selection on one device (or all). Pass null to clear.
    */
-  sendSelection(
-    sel: ClipboardSelection | null,
-    onlyDeviceId?: number,
-  ): void {
-    const devices = onlyDeviceId
-      ? [onlyDeviceId]
-      : [...this.dataDeviceIds];
+  sendSelection(sel: ClipboardSelection | null, onlyDeviceId?: number): void {
+    const devices = onlyDeviceId ? [onlyDeviceId] : [...this.dataDeviceIds];
     for (const deviceId of devices) {
       if (!this.objects.has(deviceId)) continue;
       if (!sel) {
@@ -7460,13 +6959,8 @@ class ClientSession {
     }
   }
 
-  sendPrimarySelection(
-    selection: PrimarySelection | null,
-    onlyDeviceId?: number,
-  ): void {
-    const devices = onlyDeviceId
-      ? [onlyDeviceId]
-      : [...this.primaryDeviceIds];
+  sendPrimarySelection(selection: PrimarySelection | null, onlyDeviceId?: number): void {
+    const devices = onlyDeviceId ? [onlyDeviceId] : [...this.primaryDeviceIds];
     for (const deviceId of devices) {
       if (!this.objects.has(deviceId)) continue;
       if (!selection) {
@@ -7520,11 +7014,7 @@ class ClientSession {
     }
   }
 
-  private handleXdgToplevelDecoration(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handleXdgToplevelDecoration(obj: WlObject, opcode: number, r: MessageReader): void {
     if (opcode === OP.xdg_toplevel_decoration_destroy) {
       this.destroyObject(obj.id);
     } else if (opcode === OP.xdg_toplevel_decoration_set_mode) {
@@ -7537,17 +7027,13 @@ class ClientSession {
         this.send(obj.id, EV.xdg_toplevel_decoration_configure, (b) =>
           b.uint(XDG_DECORATION_MODE_CLIENT),
         );
-        console.log(
-          `[deco] set_mode CLIENT toplevel=${toplevelId} surface=${surface?.id ?? "?"}`,
-        );
+        console.log(`[deco] set_mode CLIENT toplevel=${toplevelId} surface=${surface?.id ?? "?"}`);
       } else {
         if (surface) surface.decoration = "server";
         this.send(obj.id, EV.xdg_toplevel_decoration_configure, (b) =>
           b.uint(XDG_DECORATION_MODE_SERVER),
         );
-        console.log(
-          `[deco] set_mode SERVER toplevel=${toplevelId} surface=${surface?.id ?? "?"}`,
-        );
+        console.log(`[deco] set_mode SERVER toplevel=${toplevelId} surface=${surface?.id ?? "?"}`);
       }
     } else if (opcode === OP.xdg_toplevel_decoration_unset_mode) {
       const toplevelId = obj.data?.toplevelId as number | undefined;
@@ -7811,10 +7297,7 @@ class ClientSession {
           height: height * scale,
         });
       }
-    } else if (
-      opcode === OP.surface_set_opaque_region ||
-      opcode === OP.surface_set_input_region
-    ) {
+    } else if (opcode === OP.surface_set_opaque_region || opcode === OP.surface_set_input_region) {
       r.object();
     } else if (opcode === OP.surface_set_buffer_transform) {
       r.int();
@@ -7852,26 +7335,17 @@ class ClientSession {
       if (surface.bufferId && surface.bufferAttached) {
         const buf = this.getBuffer(surface.bufferId);
         if (!buf) {
-          console.error(
-            `[surface] commit missing buffer id=${surface.bufferId}`,
-          );
+          console.error(`[surface] commit missing buffer id=${surface.bufferId}`);
           surface.bufferAttached = false;
         } else {
           try {
             if (buf.kind === "shm") {
               const pool = buf.pool;
               if (!pool.map) {
-                throw new Error(
-                  `shm pool gone poolId=${buf.poolId} buf=${surface.bufferId}`,
-                );
+                throw new Error(`shm pool gone poolId=${buf.poolId} buf=${surface.bufferId}`);
               }
               const byteLen = buf.stride * buf.height;
-              surface.pixels = copyFromPool(
-                pool,
-                buf.offset,
-                byteLen,
-                surface.pixels,
-              );
+              surface.pixels = copyFromPool(pool, buf.offset, byteLen, surface.pixels);
               surface.stride = buf.stride;
               // wl_shm XRGB8888 leaves A=0 — blit skips those pixels.
               if (buf.format === WL_SHM_FORMAT_XRGB8888) {
@@ -7879,11 +7353,7 @@ class ClientSession {
               }
               surface.opaque = buf.format === WL_SHM_FORMAT_XRGB8888;
             } else {
-              const snapped = copyFromDmabuf(
-                buf,
-                this.server.getGbm(),
-                surface.pixels,
-              );
+              const snapped = copyFromDmabuf(buf, this.server.getGbm(), surface.pixels);
               surface.pixels = snapped.pixels;
               surface.stride = snapped.stride;
               // DRM XRGB8888 (Xwayland Glamor) same issue — A unused/zero.
@@ -7896,13 +7366,9 @@ class ClientSession {
             surface.bufferWidth = buf.width;
             surface.bufferHeight = buf.height;
             const viewport = [...this.objects.values()].find(
-              (item) =>
-                item.iface === "wp_viewport" &&
-                item.data?.surfaceId === surface.id,
+              (item) => item.iface === "wp_viewport" && item.data?.surfaceId === surface.id,
             );
-            const destination = viewport?.data?.destination as
-              | [number, number]
-              | undefined;
+            const destination = viewport?.data?.destination as [number, number] | undefined;
             surface.width =
               destination && destination[0] > 0
                 ? destination[0]
@@ -7938,10 +7404,7 @@ class ClientSession {
               // Nested grab: ensure parent chain is laid out above siblings.
               this.server.raisePopup(this, surface.id);
             }
-            if (
-              surface.role !== "cursor" &&
-              process.env.MOIRE_DEBUG_SURFACE === "1"
-            ) {
+            if (surface.role !== "cursor" && process.env.MOIRE_DEBUG_SURFACE === "1") {
               console.log(
                 `[surface] commit mapped id=${surface.id} ${surface.width}x${surface.height} @ ${surface.x},${surface.y} role=${surface.role} kind=${buf.kind} deco=${surface.decoration} x11=${surface.x11Wid} title=${JSON.stringify(surface.title)}`,
               );
@@ -8058,9 +7521,7 @@ class ClientSession {
         version: 3,
         data: { wlSurfaceId, xdgSurfaceId: obj.id },
       });
-      const surface = this.objects.get(wlSurfaceId)?.data?.surface as
-        | SurfaceState
-        | undefined;
+      const surface = this.objects.get(wlSurfaceId)?.data?.surface as SurfaceState | undefined;
       if (surface) {
         surface.role = "toplevel";
         surface.xdgToplevelId = id;
@@ -8072,23 +7533,18 @@ class ClientSession {
         surface.y = slot.y;
         // 0×0 = client picks its own size (xdg-shell). A fixed 800×600 hint
         // forced toolkit apps away from their requested geometry.
-        this.configureToplevel(surface, 0, 0, [
-          XDG_TOPLEVEL_STATE_ACTIVATED,
-        ]);
+        this.configureToplevel(surface, 0, 0, [XDG_TOPLEVEL_STATE_ACTIVATED]);
       }
     } else if (opcode === OP.xdg_surface_get_popup) {
       const id = r.newId();
       const parentXdgId = r.object(); // nullable
       const positionerId = r.object();
       const wlSurfaceId = obj.data!.wlSurfaceId as number;
-      const parentXdg = parentXdgId
-        ? this.objects.get(parentXdgId)
-        : undefined;
+      const parentXdg = parentXdgId ? this.objects.get(parentXdgId) : undefined;
       const parentWlId = (parentXdg?.data?.wlSurfaceId as number | undefined) ?? null;
       const posObj = this.objects.get(positionerId);
       const posSnap: PositionerState = {
-        ...((posObj?.data?.positioner as PositionerState | undefined) ??
-          emptyPositioner()),
+        ...((posObj?.data?.positioner as PositionerState | undefined) ?? emptyPositioner()),
       };
 
       this.objects.set(id, {
@@ -8104,13 +7560,9 @@ class ClientSession {
         },
       });
 
-      const surface = this.objects.get(wlSurfaceId)?.data?.surface as
-        | SurfaceState
-        | undefined;
+      const surface = this.objects.get(wlSurfaceId)?.data?.surface as SurfaceState | undefined;
       if (!surface || parentWlId == null) {
-        console.warn(
-          `[popup] get_popup missing surface/parent popup=${id} parent=${parentXdgId}`,
-        );
+        console.warn(`[popup] get_popup missing surface/parent popup=${id} parent=${parentXdgId}`);
         return;
       }
       surface.role = "popup";
@@ -8123,16 +7575,8 @@ class ClientSession {
 
       const parent = this.surfaceById(parentWlId);
       const kms = this.server.getKmsSize();
-      const origin = parent
-        ? this.server.windowGeomOrigin(parent)
-        : { x: 0, y: 0 };
-      const placed = placePopupRelative(
-        posSnap,
-        kms.width,
-        kms.height,
-        origin.x,
-        origin.y,
-      );
+      const origin = parent ? this.server.windowGeomOrigin(parent) : { x: 0, y: 0 };
+      const placed = placePopupRelative(posSnap, kms.width, kms.height, origin.x, origin.y);
       surface.popupRelX = placed.x;
       surface.popupRelY = placed.y;
       surface.popupConfW = placed.w;
@@ -8192,41 +7636,26 @@ class ClientSession {
       // Day-0: accept grab leniently (serial from pointer button / enter).
       const last = this.lastInputSerial;
       if (last !== 0 && serial > last) {
-        console.warn(
-          `[popup] grab serial=${serial} ahead of lastInput=${last} — accepting`,
-        );
+        console.warn(`[popup] grab serial=${serial} ahead of lastInput=${last} — accepting`);
       }
       surface.popupGrabbed = true;
       this.server.registerPopup(this, surface.id);
       // Keyboard focus on the popup for arrow-key menu navigation.
       this.server.setFocusedSession(this);
       this.keyboardEnter(surface.id);
-      console.log(
-        `[popup] grab surface=${surface.id} serial=${serial} lastInput=${last}`,
-      );
+      console.log(`[popup] grab surface=${surface.id} serial=${serial} lastInput=${last}`);
     } else if (opcode === OP.xdg_popup_reposition) {
       const positionerId = r.object();
       const token = r.uint();
       if (!surface) return;
       const posObj = this.objects.get(positionerId);
       const posSnap: PositionerState = {
-        ...((posObj?.data?.positioner as PositionerState | undefined) ??
-          emptyPositioner()),
+        ...((posObj?.data?.positioner as PositionerState | undefined) ?? emptyPositioner()),
       };
-      const parent = surface.parentId
-        ? this.surfaceById(surface.parentId)
-        : null;
+      const parent = surface.parentId ? this.surfaceById(surface.parentId) : null;
       const kms = this.server.getKmsSize();
-      const origin = parent
-        ? this.server.windowGeomOrigin(parent)
-        : { x: 0, y: 0 };
-      const placed = placePopupRelative(
-        posSnap,
-        kms.width,
-        kms.height,
-        origin.x,
-        origin.y,
-      );
+      const origin = parent ? this.server.windowGeomOrigin(parent) : { x: 0, y: 0 };
+      const placed = placePopupRelative(posSnap, kms.width, kms.height, origin.x, origin.y);
       surface.popupRelX = placed.x;
       surface.popupRelY = placed.y;
       surface.popupConfW = placed.w;
@@ -8237,21 +7666,13 @@ class ClientSession {
     }
   }
 
-  configurePopup(
-    surface: SurfaceState,
-    x: number,
-    y: number,
-    width: number,
-    height: number,
-  ): void {
+  configurePopup(surface: SurfaceState, x: number, y: number, width: number, height: number): void {
     if (surface.xdgPopupId == null || surface.xdgSurfaceId == null) return;
     this.send(surface.xdgPopupId, EV.xdg_popup_configure, (b) => {
       b.int(x).int(y).int(width).int(height);
     });
     const serial = this.serial++;
-    this.send(surface.xdgSurfaceId, EV.xdg_surface_configure, (b) =>
-      b.uint(serial),
-    );
+    this.send(surface.xdgSurfaceId, EV.xdg_surface_configure, (b) => b.uint(serial));
   }
 
   sendPopupDone(popupId: number): void {
@@ -8379,11 +7800,7 @@ class ClientSession {
     console.log(`[dmabuf] feedback sent id=${feedbackId} device=${device.path}`);
   }
 
-  private handleLinuxBufferParams(
-    obj: WlObject,
-    opcode: number,
-    r: MessageReader,
-  ): void {
+  private handleLinuxBufferParams(obj: WlObject, opcode: number, r: MessageReader): void {
     const params = obj.data?.params as DmabufParamsState | undefined;
     if (!params) return;
 
@@ -8509,9 +7926,7 @@ class ClientSession {
           version: 1,
           data: { buffer },
         });
-        this.send(obj.id, EV.linux_buffer_params_created, (b) =>
-          b.uint(bufferId),
-        );
+        this.send(obj.id, EV.linux_buffer_params_created, (b) => b.uint(bufferId));
         console.log(
           `[dmabuf] created buffer=${bufferId} ${width}x${height} fmt=0x${format.toString(16)} planes=${planes.length}`,
         );
@@ -8555,11 +7970,7 @@ class ClientSession {
     });
   }
 
-  private send(
-    objectId: number,
-    opcode: number,
-    build: (b: MessageBuilder) => void,
-  ): void {
+  private send(objectId: number, opcode: number, build: (b: MessageBuilder) => void): void {
     const b = new MessageBuilder();
     build(b);
     const { data, fds } = b.build(objectId, opcode);

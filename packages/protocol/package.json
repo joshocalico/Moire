@@ -8,8 +8,8 @@
     "./generated": "./src/generated.ts"
   },
   "scripts": {
-    "generate": "tsx ../../scripts/generate-wayland-protocol.ts --output src/generated.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ../../scripts/tsconfig.wayland-generator.json",
+    "generate": "pnpm --workspace-root exec tsx scripts/generate-wayland-protocol.ts --output packages/protocol/src/generated.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --workspace-root exec tsc -p scripts/tsconfig.wayland-generator.json",
     "build": "tsc -p tsconfig.json",
     "smoke:generated": "tsx src/generated.smoke.ts"
   },

@@ -1,6 +1,6 @@
 import React, { useId, useRef, useState, type ReactNode } from "react";
 import { Group, Rect, type HitKeyEvent, type HitPointerEvent } from "@moire/react-host";
-import { useWidgetTheme } from "../widget-theme.js";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type SplitViewOrientation = "horizontal" | "vertical";
 
@@ -53,12 +53,14 @@ export function SplitView(props: SplitViewProps): ReactNode {
   const handleKey = (event: HitKeyEvent) => {
     if (props.disabled || event.repeat) return;
     const step = (props.keyboardStep ?? 12) * (event.shiftKey ? 4 : 1);
-    const decrease = orientation === "horizontal"
-      ? event.key === "ArrowLeft" || event.code === 105
-      : event.key === "ArrowUp" || event.code === 103;
-    const increase = orientation === "horizontal"
-      ? event.key === "ArrowRight" || event.code === 106
-      : event.key === "ArrowDown" || event.code === 108;
+    const decrease =
+      orientation === "horizontal"
+        ? event.key === "ArrowLeft" || event.code === 105
+        : event.key === "ArrowUp" || event.code === 103;
+    const increase =
+      orientation === "horizontal"
+        ? event.key === "ArrowRight" || event.code === 106
+        : event.key === "ArrowDown" || event.code === 108;
     if (decrease) commit(firstSize - step);
     else if (increase) commit(firstSize + step);
     else if (event.key === "Home" || event.code === 102) commit(minFirst);

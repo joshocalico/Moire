@@ -1,4 +1,4 @@
-import { isLinux, listDrmConnectors } from "./index.js";
+import { isLinux, listDrmConnectors } from "./index";
 
 async function main() {
   if (!isLinux()) {
@@ -18,9 +18,7 @@ async function main() {
   for (const c of connectors) {
     const modePreview = c.modes.slice(0, 3).join(", ");
     const more = c.modes.length > 3 ? ` (+${c.modes.length - 3} more)` : "";
-    console.log(
-      `  ${c.cardPath}  connector ${c.connectorId}  ${c.connectorType}  ${c.connection}`,
-    );
+    console.log(`  ${c.cardPath}  connector ${c.connectorId}  ${c.connectorType}  ${c.connection}`);
     if (modePreview) {
       console.log(`    modes: ${modePreview}${more}`);
     }

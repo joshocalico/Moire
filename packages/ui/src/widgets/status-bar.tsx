@@ -1,7 +1,7 @@
 import React, { type ReactNode } from "react";
-import { Row, registerIntrinsicSize } from "./layout.js";
-import { Separator, Surface } from "./primitives.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { Row, registerIntrinsicSize } from "./layout";
+import { Separator, Surface } from "./primitives";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type StatusBarProps = {
   x?: number;

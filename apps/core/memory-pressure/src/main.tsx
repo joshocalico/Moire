@@ -78,7 +78,11 @@ function MemoryPressureDialog(
 
   return (
     <Surface width={props.width} height={props.height} fill={pal.bg}>
-      <Inset width={props.width} height={contentY} padding={{ top: 18, right: 18, bottom: 12, left: 18 }}>
+      <Inset
+        width={props.width}
+        height={contentY}
+        padding={{ top: 18, right: 18, bottom: 12, left: 18 }}
+      >
         <Vertical gap={12}>
           <Banner
             width={Math.max(1, props.width - 36)}
@@ -119,8 +123,17 @@ function MemoryPressureDialog(
           icon="app"
         />
       ) : (
-        <ScrollArea y={contentY} width={props.width} height={contentH} contentHeight={Math.max(contentH, candidates.length * 86 + 24)}>
-          <Inset width={props.width} height={Math.max(contentH, candidates.length * 86 + 24)} padding={{ horizontal: 18, vertical: 12 }}>
+        <ScrollArea
+          y={contentY}
+          width={props.width}
+          height={contentH}
+          contentHeight={Math.max(contentH, candidates.length * 86 + 24)}
+        >
+          <Inset
+            width={props.width}
+            height={Math.max(contentH, candidates.length * 86 + 24)}
+            padding={{ horizontal: 18, vertical: 12 }}
+          >
             <Vertical gap={8}>
               {candidates.map((item) => (
                 <ProgressRow
@@ -129,16 +142,18 @@ function MemoryPressureDialog(
                   title={item.name}
                   detail={`PID ${item.pid} · ${item.cpuPercent.toFixed(1)}% CPU`}
                   status={memory(item.rssBytes)}
-                  value={snapshot && snapshot.totalMemoryBytes > 0
-                    ? item.rssBytes / snapshot.totalMemoryBytes
-                    : 0}
-                  action={(
+                  value={
+                    snapshot && snapshot.totalMemoryBytes > 0
+                      ? item.rssBytes / snapshot.totalMemoryBytes
+                      : 0
+                  }
+                  action={
                     <Button
                       width={90}
                       label="Quit"
                       onPress={() => void quit(item.pid, item.name)}
                     />
-                  )}
+                  }
                   actionWidth={90}
                 />
               ))}
@@ -157,7 +172,12 @@ function MemoryPressureDialog(
           </Inset>
         </ScrollArea>
       )}
-      <Surface y={props.height - footerH - statusH} width={props.width} height={footerH} fill={pal.panel}>
+      <Surface
+        y={props.height - footerH - statusH}
+        width={props.width}
+        height={footerH}
+        fill={pal.panel}
+      >
         <Inset width={props.width} height={footerH} padding={{ horizontal: 14, vertical: 7 }}>
           <Horizontal gap={8} justify="end" align="center">
             <Button
@@ -197,9 +217,7 @@ async function main(): Promise<void> {
     win.destroy();
     app.quit();
   };
-  win.setContent((size) => (
-    <MemoryPressureDialog {...size} client={client} close={close} />
-  ));
+  win.setContent((size) => <MemoryPressureDialog {...size} client={client} close={close} />);
   win.onClose(close);
   app.addWindow(win);
   await app.run();

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import koffi from "koffi";
-import { assertLinux } from "./platform.js";
+import { assertLinux } from "./platform";
 
 export type DrmConnectorInfo = {
   cardPath: string;
@@ -119,18 +119,12 @@ export function listDrmConnectors(): DrmConnectorInfo[] {
   const close = libc.func("int close(int fd)");
 
   const libdrm = loadLibdrm();
-  const drmModeGetResources = libdrm.func(
-    "drmModeRes *drmModeGetResources(int fd)",
-  );
-  const drmModeFreeResources = libdrm.func(
-    "void drmModeFreeResources(drmModeRes *ptr)",
-  );
+  const drmModeGetResources = libdrm.func("drmModeRes *drmModeGetResources(int fd)");
+  const drmModeFreeResources = libdrm.func("void drmModeFreeResources(drmModeRes *ptr)");
   const drmModeGetConnector = libdrm.func(
     "drmModeConnector *drmModeGetConnector(int fd, uint32_t connectorId)",
   );
-  const drmModeFreeConnector = libdrm.func(
-    "void drmModeFreeConnector(drmModeConnector *ptr)",
-  );
+  const drmModeFreeConnector = libdrm.func("void drmModeFreeConnector(drmModeConnector *ptr)");
 
   // Register structs so koffi can decode pointers.
   void DrmModeModeInfo;
@@ -193,7 +187,12 @@ export function listDrmConnectors(): DrmConnectorInfo[] {
               const modeArr = koffi.decode(
                 conn.modes,
                 koffi.array(DrmModeModeInfo, conn.count_modes),
-              ) as Array<{ hdisplay: number; vdisplay: number; vrefresh: number; name: Buffer | string }>;
+              ) as Array<{
+                hdisplay: number;
+                vdisplay: number;
+                vrefresh: number;
+                name: Buffer | string;
+              }>;
 
               for (const mode of modeArr) {
                 const name =
@@ -202,9 +201,7 @@ export function listDrmConnectors(): DrmConnectorInfo[] {
                     : Buffer.from(mode.name as Buffer)
                         .toString("utf8")
                         .replace(/\0.*$/, "");
-                modes.push(
-                  name || `${mode.hdisplay}x${mode.vdisplay}@${mode.vrefresh}`,
-                );
+                modes.push(name || `${mode.hdisplay}x${mode.vdisplay}@${mode.vrefresh}`);
               }
             }
 
@@ -218,9 +215,7 @@ export function listDrmConnectors(): DrmConnectorInfo[] {
             out.push({
               cardPath,
               connectorId: conn.connector_id,
-              connectorType:
-                CONNECTOR_TYPES[conn.connector_type] ??
-                `type-${conn.connector_type}`,
+              connectorType: CONNECTOR_TYPES[conn.connector_type] ?? `type-${conn.connector_type}`,
               connection,
               modes,
             });

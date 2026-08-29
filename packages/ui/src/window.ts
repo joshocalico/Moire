@@ -20,8 +20,8 @@ import type {
   UiFrameEvent,
   UiPresentationMode,
   UiPointerEvent,
-} from "./platform.js";
-import { getMotionActivity, tickMotionFrame } from "./motion.js";
+} from "./platform";
+import { getMotionActivity, tickMotionFrame } from "./motion";
 
 export type WindowSize = { width: number; height: number };
 
@@ -191,9 +191,7 @@ export class Window {
   private closed = false;
   private readonly onCloseCallbacks = new Set<() => void>();
   private readonly invalidationCallbacks = new Set<() => void>();
-  private readonly compositorFrameCallbacks = new Set<
-    (timestampMs: number) => void
-  >();
+  private readonly compositorFrameCallbacks = new Set<(timestampMs: number) => void>();
   private animationsActive = false;
   /** Current Wayland/headless presentation path consumes software frames. */
   private readonly renderer = new SoftwareRenderer();
@@ -316,19 +314,11 @@ export class Window {
   getPerformanceSnapshot(): WindowPerformanceSnapshot {
     const now = performance.now();
     const submittedFramesPerSecond = measuredRate(this.recentSubmitTimes, now);
-    const compositorFramesPerSecond = measuredRate(
-      this.recentCompositorTimes,
-      now,
-    );
-    const presentedFramesPerSecond = measuredRate(
-      this.recentPresentationTimes,
-      now,
-    );
+    const compositorFramesPerSecond = measuredRate(this.recentCompositorTimes, now);
+    const presentedFramesPerSecond = measuredRate(this.recentPresentationTimes, now);
     const presentationIntervals = this.recentPresentationTimes
       .slice(1)
-      .map((sample, index) =>
-        sample.sourceMs - this.recentPresentationTimes[index]!.sourceMs,
-      )
+      .map((sample, index) => sample.sourceMs - this.recentPresentationTimes[index]!.sourceMs)
       .filter((interval) => interval > 0);
     return {
       width: this.width,
@@ -398,10 +388,7 @@ export class Window {
     this.requestRedraw();
   }
 
-  private attachPlatformWindow(
-    pw: PlatformWindow,
-    makeActive: boolean,
-  ): void {
+  private attachPlatformWindow(pw: PlatformWindow, makeActive: boolean): void {
     this.platformWin = pw;
     pw.onConfigure((w, h) => {
       const nextW = w > 0 ? w : this.width;
@@ -573,8 +560,8 @@ export class Window {
     if (platformWin.presentScene) {
       const rasterStartedAt = performance.now();
       const retained = !shouldReconcile
-        ? this.retainedRenderer.renderPresentation(this.root.container, viewport) ??
-          this.retainedRenderer.render(this.root.container, viewport)
+        ? (this.retainedRenderer.renderPresentation(this.root.container, viewport) ??
+          this.retainedRenderer.render(this.root.container, viewport))
         : this.retainedRenderer.render(this.root.container, viewport);
       this.lastLayerCount = retained.layers.length;
       const submitStartedAt = performance.now();
@@ -623,15 +610,11 @@ export class Window {
       if (ev.transport === "shm") this.shmFrameCount++;
       this.lastCopyMs = ev.copyMs;
       retainSample(this.recentCopyDurations, ev.copyMs);
-      this.lastDamagePercent = ev.totalPixels > 0
-        ? (ev.damagedPixels / ev.totalPixels) * 100
-        : 0;
+      this.lastDamagePercent = ev.totalPixels > 0 ? (ev.damagedPixels / ev.totalPixels) * 100 : 0;
       retainSample(this.recentDamagePercents, this.lastDamagePercent);
       this.pendingSubmissionTimes.set(ev.commitId, ev.submittedAtMs);
       if (this.pendingSubmissionTimes.size > 240) {
-        const oldest = this.pendingSubmissionTimes.keys().next().value as
-          | number
-          | undefined;
+        const oldest = this.pendingSubmissionTimes.keys().next().value as number | undefined;
         if (oldest != null) this.pendingSubmissionTimes.delete(oldest);
       }
       this.recentSubmitTimes.push({
@@ -660,9 +643,8 @@ export class Window {
         sourceMs: Number(wholeMs) + Number(fractionalMs) / 1_000_000,
         receivedAtMs: ev.receivedAtMs,
       });
-      this.displayRefreshHz = ev.refreshNs > 0
-        ? 1_000_000_000 / ev.refreshNs
-        : this.displayRefreshHz;
+      this.displayRefreshHz =
+        ev.refreshNs > 0 ? 1_000_000_000 / ev.refreshNs : this.displayRefreshHz;
       const submittedAtMs = this.pendingSubmissionTimes.get(ev.commitId);
       if (submittedAtMs != null) {
         retainSample(
@@ -748,9 +730,7 @@ export class Window {
     this.reconcileHoverAfterLayout();
     const activeScopeId = this.activeTrappedScopeId();
     const presentAutoFocusIds = new Set(
-      this.hits
-        .filter((hit) => hit.autoFocus && hit.focusId)
-        .map((hit) => hit.focusId!),
+      this.hits.filter((hit) => hit.autoFocus && hit.focusId).map((hit) => hit.focusId!),
     );
     for (const id of this.consumedAutoFocusIds) {
       if (!presentAutoFocusIds.has(id)) this.consumedAutoFocusIds.delete(id);
@@ -784,9 +764,7 @@ export class Window {
       return;
     }
     this.focusedHit =
-      this.hits.find(
-        (hit) => hit.focusable && hit.focusId === this.focusedId,
-      ) ?? null;
+      this.hits.find((hit) => hit.focusable && hit.focusId === this.focusedId) ?? null;
     if (!this.focusedHit) this.focusedId = null;
   }
 
@@ -843,9 +821,7 @@ export class Window {
       if (this.changeFocus(null)) this.flushAndDirty();
       return;
     }
-    const current = focusable.findIndex(
-      (hit) => hit.focusId === this.focusedId,
-    );
+    const current = focusable.findIndex((hit) => hit.focusId === this.focusedId);
     const nextIndex = reverse
       ? current <= 0
         ? focusable.length - 1
@@ -856,11 +832,7 @@ export class Window {
     if (this.changeFocus(focusable[nextIndex] ?? null)) this.flushAndDirty();
   }
 
-  private findTopHit(
-    x: number,
-    y: number,
-    pred: (h: HitRegion) => boolean,
-  ): HitRegion | null {
+  private findTopHit(x: number, y: number, pred: (h: HitRegion) => boolean): HitRegion | null {
     for (let i = this.hits.length - 1; i >= 0; i--) {
       const h = this.hits[i]!;
       if (hitRegionContains(h, x, y) && pred(h)) {
@@ -932,11 +904,7 @@ export class Window {
     }
 
     if (ev.type === "down" && ev.button === "left") {
-      const hit = this.findTopHit(
-        ev.x,
-        ev.y,
-        (h) => !!(h.onPointerDown || h.onPress),
-      );
+      const hit = this.findTopHit(ev.x, ev.y, (h) => !!(h.onPointerDown || h.onPress));
       this.downPos = { x: ev.x, y: ev.y };
       const focusHit = this.findTopHit(ev.x, ev.y, (candidate) => !!candidate.focusable);
       const focusChanged = this.changeFocus(focusHit);
@@ -965,8 +933,7 @@ export class Window {
 
     if (ev.type === "up" && ev.button === "left") {
       const hit =
-        this.capturedHit ??
-        this.findTopHit(ev.x, ev.y, (h) => !!(h.onPointerUp || h.onPress));
+        this.capturedHit ?? this.findTopHit(ev.x, ev.y, (h) => !!(h.onPointerUp || h.onPress));
       if (hit?.onPointerUp) {
         hit.onPointerUp(this.makeEvArgs(hit, ev));
       }
@@ -975,8 +942,7 @@ export class Window {
         const dx = ev.x - this.downPos.x;
         const dy = ev.y - this.downPos.y;
         if (dx * dx + dy * dy < 100) {
-          const pressHit =
-            this.capturedHit ?? this.findTopHit(ev.x, ev.y, (h) => !!h.onPress);
+          const pressHit = this.capturedHit ?? this.findTopHit(ev.x, ev.y, (h) => !!h.onPress);
           if (pressHit?.onPress) {
             pressHit.onPress(this.makeEvArgs(pressHit, ev));
           }
@@ -1009,12 +975,14 @@ export class Window {
       ctrlKey: ev.modifiers.ctrl,
       altKey: ev.modifiers.alt,
       metaKey: ev.modifiers.meta,
-      targetBounds: this.focusedHit ? {
-        x: this.focusedHit.x,
-        y: this.focusedHit.y,
-        width: this.focusedHit.width,
-        height: this.focusedHit.height,
-      } : undefined,
+      targetBounds: this.focusedHit
+        ? {
+            x: this.focusedHit.x,
+            y: this.focusedHit.y,
+            width: this.focusedHit.width,
+            height: this.focusedHit.height,
+          }
+        : undefined,
     };
     if (ev.type === "down" || ev.type === "repeat") {
       const activeScopeId = this.activeTrappedScopeId();
@@ -1044,8 +1012,7 @@ export class Window {
     const focused = this.focusedHit;
     if (!focused) return;
     const contextMenuKey =
-      ev.type === "down" &&
-      (ev.code === 139 || (ev.code === 68 && ev.modifiers.shift));
+      ev.type === "down" && (ev.code === 139 || (ev.code === 68 && ev.modifiers.shift));
     if (contextMenuKey && focused.onContextMenu) {
       const localX = Math.max(0, focused.width - 8);
       const localY = focused.height / 2;

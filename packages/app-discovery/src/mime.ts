@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { discoverApplications, xdgDataDirs } from "./applications.js";
-import type { DesktopEntry } from "./desktop.js";
+import { discoverApplications, xdgDataDirs } from "./applications";
+import type { DesktopEntry } from "./desktop";
 
 type Associations = {
   defaults: Map<string, string[]>;
@@ -33,7 +33,10 @@ function configDirs(): string[] {
 }
 
 function splitIds(value: string): string[] {
-  return value.split(";").map((v) => v.trim()).filter(Boolean);
+  return value
+    .split(";")
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
 function addUnique(map: Map<string, string[]>, key: string, values: string[]): void {
@@ -102,9 +105,7 @@ function loadAssociations(desktop: string): Associations {
     }
   }
   for (const root of xdgDataDirs()) {
-    const sections = parseAssociationFile(
-      path.join(root, "applications", "mimeinfo.cache"),
-    );
+    const sections = parseAssociationFile(path.join(root, "applications", "mimeinfo.cache"));
     for (const [mime, ids] of sections.get("MIME Cache") ?? []) {
       addUnique(out.added, mime, ids);
     }
@@ -157,9 +158,7 @@ function loadMimeGlobs(): MimeGlob[] {
       }
     }
   }
-  return globs.sort(
-    (a, b) => b.weight - a.weight || b.pattern.length - a.pattern.length,
-  );
+  return globs.sort((a, b) => b.weight - a.weight || b.pattern.length - a.pattern.length);
 }
 
 function loadSubclasses(): Map<string, string[]> {
@@ -233,9 +232,7 @@ export function buildDesktopExec(app: DesktopEntry, paths: string[]): string {
   });
   command = command.replaceAll(marker, "%").replace(/\s+/g, " ").trim();
   if (!usedFileCode && local.length > 0) command += ` ${local.join(" ")}`;
-  return app.terminal
-    ? `moire-terminal --command ${shellQuote(command)}`
-    : command;
+  return app.terminal ? `moire-terminal --command ${shellQuote(command)}` : command;
 }
 
 function writeDefault(mime: string, desktopId: string): void {
@@ -249,7 +246,10 @@ function writeDefault(mime: string, desktopId: string): void {
   sections.set("Added Associations", added);
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const preferred = ["Default Applications", "Added Associations", "Removed Associations"];
-  const names = [...preferred.filter((name) => sections.has(name)), ...[...sections.keys()].filter((name) => !preferred.includes(name))];
+  const names = [
+    ...preferred.filter((name) => sections.has(name)),
+    ...[...sections.keys()].filter((name) => !preferred.includes(name)),
+  ];
   const lines: string[] = [];
   for (const name of names) {
     lines.push(`[${name}]`);
@@ -325,7 +325,10 @@ export class MimeAssociationDatabase {
       }
     }
     const byId = new Map(this.applications.map((app) => [app.id, app]));
-    return ids.filter((id) => !removed.has(id)).map((id) => byId.get(id)).filter((app): app is DesktopEntry => !!app);
+    return ids
+      .filter((id) => !removed.has(id))
+      .map((id) => byId.get(id))
+      .filter((app): app is DesktopEntry => !!app);
   }
 
   applicationsForPath(filePath: string): DesktopEntry[] {

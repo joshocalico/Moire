@@ -1,15 +1,15 @@
 /** Overlay-backed select and editable combo-box controls. */
 import React, { useMemo, useState, type ReactNode } from "react";
 import { Group } from "@moire/react-host";
-import { useWidgetTheme, type ButtonSize } from "../widget-theme.js";
-import { Button } from "./button.js";
-import { Icon } from "./icon.js";
-import { IconButton } from "./icon-button.js";
-import { Vertical, registerIntrinsicSize } from "./layout.js";
-import { MenuItem } from "./menu.js";
-import { Popover } from "./overlay.js";
-import { ScrollArea } from "./scroll.js";
-import { TextField } from "./text-field.js";
+import { useWidgetTheme, type ButtonSize } from "#ui/widget-theme";
+import { Button } from "./button";
+import { Icon } from "./icon";
+import { IconButton } from "./icon-button";
+import { Vertical, registerIntrinsicSize } from "./layout";
+import { MenuItem } from "./menu";
+import { Popover } from "./overlay";
+import { ScrollArea } from "./scroll";
+import { TextField } from "./text-field";
 
 export type SelectOption = {
   id: string;
@@ -115,7 +115,12 @@ export function Select(props: SelectProps): ReactNode {
         label={selected?.label ?? props.placeholder ?? "Choose…"}
         disabled={props.disabled}
         trailingIcon={(style) => (
-          <Icon name={open ? "chevron-up" : "chevron-down"} size={style.size} color={style.color} symbolic />
+          <Icon
+            name={open ? "chevron-up" : "chevron-down"}
+            size={style.size}
+            color={style.color}
+            symbolic
+          />
         )}
         onPress={(event) => {
           if (event) {
@@ -172,9 +177,10 @@ export function ComboBox(props: ComboBoxProps): ReactNode {
   const filtered = useMemo(() => {
     const query = props.value.trim().toLocaleLowerCase();
     if (!query) return props.options;
-    return props.options.filter((option) =>
-      option.label.toLocaleLowerCase().includes(query) ||
-      option.description?.toLocaleLowerCase().includes(query),
+    return props.options.filter(
+      (option) =>
+        option.label.toLocaleLowerCase().includes(query) ||
+        option.description?.toLocaleLowerCase().includes(query),
     );
   }, [props.options, props.value]);
   const setOpenState = (next: boolean) => {

@@ -6,13 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import React, { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Application,
   Window,
@@ -63,7 +57,7 @@ import {
   normalizePlaceLabels,
   savePlaces,
   type FilePlace,
-} from "./places.js";
+} from "./places";
 
 type Entry = {
   name: string;
@@ -146,9 +140,7 @@ function breadcrumbSegments(cwd: string): BreadcrumbSegment[] {
   const h = home();
   const insideHome = resolved === h || resolved.startsWith(h + path.sep);
   const root = insideHome ? h : path.parse(resolved).root;
-  const segments: BreadcrumbSegment[] = [
-    { id: root, label: insideHome ? "Home" : root },
-  ];
+  const segments: BreadcrumbSegment[] = [{ id: root, label: insideHome ? "Home" : root }];
   let current = root;
   for (const part of path.relative(root, resolved).split(path.sep).filter(Boolean)) {
     current = path.join(current, part);
@@ -189,8 +181,7 @@ function pathToUri(p: string): string {
 
 function initialDirectory(argv: string[]): string {
   const fallback =
-    builtInPlaces().find((place) => place.id === "desktop")?.path ??
-    path.join(home(), "Desktop");
+    builtInPlaces().find((place) => place.id === "desktop")?.path ?? path.join(home(), "Desktop");
   const raw = argv.find((arg) => arg.length > 0 && !arg.startsWith("-"));
   if (!raw) return fallback;
 
@@ -226,16 +217,7 @@ function payloadToPaths(payload: unknown): string[] {
 }
 
 function actionIcon(icon?: string): IconName | undefined {
-  const known: IconName[] = [
-    "app",
-    "desktop",
-    "file",
-    "folder",
-    "grid",
-    "list",
-    "trash",
-    "up",
-  ];
+  const known: IconName[] = ["app", "desktop", "file", "folder", "grid", "list", "trash", "up"];
   return known.includes(icon as IconName) ? (icon as IconName) : undefined;
 }
 
@@ -293,10 +275,7 @@ function FilesApp(
   const travelHistory = (offset: -1 | 1) => {
     setNavigation((current) => ({
       ...current,
-      index: Math.max(
-        0,
-        Math.min(current.paths.length - 1, current.index + offset),
-      ),
+      index: Math.max(0, Math.min(current.paths.length - 1, current.index + offset)),
     }));
     setMenu(null);
   };
@@ -328,11 +307,8 @@ function FilesApp(
     () => entries.filter((entry) => selection.selectedKeys.has(entry.path)),
     [entries, selection.selectedKeys],
   );
-  const selectedEntry =
-    entries.find((entry) => entry.path === selection.primaryKey) ?? null;
-  const selectedFolderCount = selectedEntries.filter(
-    (entry) => entry.isDir,
-  ).length;
+  const selectedEntry = entries.find((entry) => entry.path === selection.primaryKey) ?? null;
+  const selectedFolderCount = selectedEntries.filter((entry) => entry.isDir).length;
   const selectedFileCount = selectedEntries.length - selectedFolderCount;
 
   useEffect(() => {
@@ -382,10 +358,7 @@ function FilesApp(
         const openActions = [
           {
             id: "open",
-            label:
-              context.paths.length === 1
-                ? "Open"
-                : `Open ${context.paths.length} Items`,
+            label: context.paths.length === 1 ? "Open" : `Open ${context.paths.length} Items`,
             description:
               context.paths.length === 1
                 ? context.directories[0]
@@ -489,8 +462,7 @@ function FilesApp(
             id: "toggle-view",
             label: view === "grid" ? "Use List View" : "Use Grid View",
             icon: view === "grid" ? "list" : "grid",
-            run: () =>
-              setView((current) => (current === "grid" ? "list" : "grid")),
+            run: () => setView((current) => (current === "grid" ? "list" : "grid")),
           },
         ];
       },
@@ -508,17 +480,13 @@ function FilesApp(
 
   const contextActions = useCallback(
     (entry: Entry): ContextMenuAction[] => {
-      const targets = selection.isSelected(entry.path)
-        ? selectedEntries
-        : [entry];
+      const targets = selection.isSelected(entry.path) ? selectedEntries : [entry];
       const context: FileActionContext = {
         source: "files",
         scope: "items",
         currentDirectory: cwd,
         paths: targets.map((target) => target.path),
-        mimeTypes: targets.map((target) =>
-          mimeDb.mimeTypeForPath(target.path),
-        ),
+        mimeTypes: targets.map((target) => mimeDb.mimeTypeForPath(target.path)),
         directories: targets.map((target) => target.isDir),
       };
       return actionRegistry.actionsFor(context).map((action) => ({
@@ -565,7 +533,9 @@ function FilesApp(
     const paths = payloadToPaths(payload);
     const hitPath = hitTestDropData(x, y);
     const targetDir = typeof hitPath === "string" ? hitPath : cwd;
-    console.log(`[files] onDropPayload cwd=${cwd} hitPath=${String(hitPath)} targetDir=${targetDir} paths=${JSON.stringify(paths)}`);
+    console.log(
+      `[files] onDropPayload cwd=${cwd} hitPath=${String(hitPath)} targetDir=${targetDir} paths=${JSON.stringify(paths)}`,
+    );
     for (const src of paths) {
       const dest = path.join(targetDir, path.basename(src));
       if (src === dest) {
@@ -672,9 +642,7 @@ function FilesApp(
     setPlaceList((current) => {
       const renamed = renamingPlaceId
         ? current.map((place) =>
-            place.id === renamingPlaceId
-              ? { ...place, label: renameDraft }
-              : place,
+            place.id === renamingPlaceId ? { ...place, label: renameDraft } : place,
           )
         : current;
       const normalized = normalizePlaceLabels(renamed);
@@ -702,9 +670,7 @@ function FilesApp(
     setPlaceList((current) => {
       const next = normalizePlaceLabels(
         current.map((place) =>
-          place.id === renamingPlaceId
-            ? { ...place, label: renameDraft }
-            : place,
+          place.id === renamingPlaceId ? { ...place, label: renameDraft } : place,
         ),
       );
       savePlaces(next);
@@ -730,7 +696,11 @@ function FilesApp(
 
   const commitLocation = (value: string): string | undefined => {
     const expanded =
-      value === "~" ? home() : value.startsWith(`~${path.sep}`) ? path.join(home(), value.slice(2)) : value;
+      value === "~"
+        ? home()
+        : value.startsWith(`~${path.sep}`)
+          ? path.join(home(), value.slice(2))
+          : value;
     const destination = path.resolve(cwd, expanded);
     try {
       if (!fs.statSync(destination).isDirectory()) return "Not a folder";
@@ -824,7 +794,7 @@ function FilesApp(
                 }}
               />
             </Row>
-            {placeList.map((place) => (
+            {placeList.map((place) =>
               editingPlaces && renamingPlaceId === place.id ? (
                 <Row
                   key={place.id}
@@ -928,10 +898,9 @@ function FilesApp(
                     }}
                   />
                 </DropZone>
-              )
-            ))}
-            {editingPlaces &&
-            !placeList.some((place) => place.path === cwd) ? (
+              ),
+            )}
+            {editingPlaces && !placeList.some((place) => place.path === cwd) ? (
               <Button
                 width={sideW - Math.round(SPACE.lg * ui)}
                 height={Math.round(34 * ui)}
@@ -958,7 +927,7 @@ function FilesApp(
               text={
                 selectedEntries.length > 1
                   ? `${selectedEntries.length} items selected`
-                  : selectedEntry?.name ?? "Nothing selected"
+                  : (selectedEntry?.name ?? "Nothing selected")
               }
               color={selectedEntries.length > 0 ? pal.text : pal.muted}
               fontSize={12}
@@ -980,10 +949,10 @@ function FilesApp(
                       .filter(Boolean)
                       .join(" · ")
                   : selectedEntry
-                  ? selectedEntry.isDir
-                    ? "Folder"
-                    : `${mimeDb.mimeTypeForPath(selectedEntry.path)} · ${formatSize(selectedEntry.size)}`
-                  : `${entries.length} ${entries.length === 1 ? "item" : "items"} in this folder`
+                    ? selectedEntry.isDir
+                      ? "Folder"
+                      : `${mimeDb.mimeTypeForPath(selectedEntry.path)} · ${formatSize(selectedEntry.size)}`
+                    : `${entries.length} ${entries.length === 1 ? "item" : "items"} in this folder`
               }
               color={pal.muted}
               fontSize={10}
@@ -1021,151 +990,146 @@ function FilesApp(
               <Surface x={0} y={0} width={contentW} height={bodyH} fill={pal.bg}>
                 {view === "grid" ? (
                   <Grid<Entry>
-                  width={contentW}
-                  height={bodyH}
-                  items={entries}
-                  itemWidth={cellW}
-                  itemHeight={cellH}
-                  gap={gridGap}
-                  padding={gridPadding}
-                  renderItem={(entry) => (
-                    <CollectionItem
-                      key={entry.path}
-                      width={cellW}
-                      height={cellH}
-                      focusId={`file:${entry.path}`}
-                      autoFocus={selection.focusKey === entry.path}
-                      dragSource={{
-                        mimeTypes: ["text/uri-list"],
-                        getPayload: () =>
-                          dragEntriesFor(entry)
-                            .map((target) => pathToUri(target.path))
-                            .join("\n") + "\n",
-                        label:
-                          selection.isSelected(entry.path) &&
-                          selectedEntries.length > 1
-                            ? `${selectedEntries.length} items`
-                            : entry.name,
-                        previewIcon: { name: iconFor(entry) },
-                      }}
-                      dropData={entry.isDir ? entry.path : undefined}
-                      onPress={(event) => selectEntry(entry, event)}
-                      onDoublePress={() => openEntry(entry)}
-                      onKeyDown={(event) => handleEntryKey(entry, event)}
-                      onContextMenu={(event) => {
-                        if (!selection.isSelected(entry.path)) {
-                          selection.select(entry.path);
-                        }
-                        const request: ContextMenuRequest = {
-                          x: event.x,
-                          y: event.y,
-                          title: contextTitleFor(entry),
-                          actions: contextActions(entry),
-                        };
-                        if (!props.onShowContextMenu?.(request)) {
-                          setMenu({
-                            kind: "entry",
-                            entry,
-                            x: event.x,
-                            y: event.y,
-                          });
-                        }
-                      }}
-                    >
-                      <GridItem
+                    width={contentW}
+                    height={bodyH}
+                    items={entries}
+                    itemWidth={cellW}
+                    itemHeight={cellH}
+                    gap={gridGap}
+                    padding={gridPadding}
+                    renderItem={(entry) => (
+                      <CollectionItem
+                        key={entry.path}
                         width={cellW}
                         height={cellH}
-                        label={entry.name}
-                        iconSize={iconSz}
-                        selected={selection.isSelected(entry.path)}
-                        interactive={false}
-                        icon={
-                          <Icon
-                            name={iconFor(entry)}
-                            size={iconSz}
-                            color={entry.isDir ? pal.accent : pal.text}
-                          />
-                        }
-                      />
-                    </CollectionItem>
-                  )}
+                        focusId={`file:${entry.path}`}
+                        autoFocus={selection.focusKey === entry.path}
+                        dragSource={{
+                          mimeTypes: ["text/uri-list"],
+                          getPayload: () =>
+                            dragEntriesFor(entry)
+                              .map((target) => pathToUri(target.path))
+                              .join("\n") + "\n",
+                          label:
+                            selection.isSelected(entry.path) && selectedEntries.length > 1
+                              ? `${selectedEntries.length} items`
+                              : entry.name,
+                          previewIcon: { name: iconFor(entry) },
+                        }}
+                        dropData={entry.isDir ? entry.path : undefined}
+                        onPress={(event) => selectEntry(entry, event)}
+                        onDoublePress={() => openEntry(entry)}
+                        onKeyDown={(event) => handleEntryKey(entry, event)}
+                        onContextMenu={(event) => {
+                          if (!selection.isSelected(entry.path)) {
+                            selection.select(entry.path);
+                          }
+                          const request: ContextMenuRequest = {
+                            x: event.x,
+                            y: event.y,
+                            title: contextTitleFor(entry),
+                            actions: contextActions(entry),
+                          };
+                          if (!props.onShowContextMenu?.(request)) {
+                            setMenu({
+                              kind: "entry",
+                              entry,
+                              x: event.x,
+                              y: event.y,
+                            });
+                          }
+                        }}
+                      >
+                        <GridItem
+                          width={cellW}
+                          height={cellH}
+                          label={entry.name}
+                          iconSize={iconSz}
+                          selected={selection.isSelected(entry.path)}
+                          interactive={false}
+                          icon={
+                            <Icon
+                              name={iconFor(entry)}
+                              size={iconSz}
+                              color={entry.isDir ? pal.accent : pal.text}
+                            />
+                          }
+                        />
+                      </CollectionItem>
+                    )}
                   />
                 ) : (
                   <ScrollArea
-                  width={contentW}
-                  height={bodyH}
-                  contentHeight={Math.max(
-                    bodyH,
-                    entries.length * Math.round(44 * ui) + pad,
-                  )}
-                >
-                  {entries.map((entry, index) => (
-                    <CollectionItem
-                      key={entry.path}
-                      x={Math.round(SPACE.sm * ui)}
-                      y={Math.round(SPACE.sm * ui) + index * Math.round(44 * ui)}
-                      width={contentW - Math.round(SPACE.lg * ui)}
-                      height={Math.round(40 * ui)}
-                      focusId={`file:${entry.path}`}
-                      autoFocus={selection.focusKey === entry.path}
-                      dragSource={{
-                        mimeTypes: ["text/uri-list"],
-                        getPayload: () =>
-                          dragEntriesFor(entry)
-                            .map((target) => pathToUri(target.path))
-                            .join("\n") + "\n",
-                        label:
-                          selection.isSelected(entry.path) &&
-                          selectedEntries.length > 1
-                            ? `${selectedEntries.length} items`
-                            : entry.name,
-                        previewIcon: { name: iconFor(entry) },
-                      }}
-                      dropData={entry.isDir ? entry.path : undefined}
-                      onPress={(event) => selectEntry(entry, event)}
-                      onDoublePress={() => openEntry(entry)}
-                      onKeyDown={(event) => handleEntryKey(entry, event)}
-                      onContextMenu={(event) => {
-                        if (!selection.isSelected(entry.path)) {
-                          selection.select(entry.path);
-                        }
-                        const request: ContextMenuRequest = {
-                          x: event.x,
-                          y: event.y,
-                          title: contextTitleFor(entry),
-                          actions: contextActions(entry),
-                        };
-                        if (!props.onShowContextMenu?.(request)) {
-                          setMenu({
-                            kind: "entry",
-                            entry,
-                            x: event.x,
-                            y: event.y,
-                          });
-                        }
-                      }}
-                    >
-                      <ListItem
+                    width={contentW}
+                    height={bodyH}
+                    contentHeight={Math.max(bodyH, entries.length * Math.round(44 * ui) + pad)}
+                  >
+                    {entries.map((entry, index) => (
+                      <CollectionItem
+                        key={entry.path}
+                        x={Math.round(SPACE.sm * ui)}
+                        y={Math.round(SPACE.sm * ui) + index * Math.round(44 * ui)}
                         width={contentW - Math.round(SPACE.lg * ui)}
                         height={Math.round(40 * ui)}
-                        title={entry.name}
-                        subtitle={
-                          entry.isDir
-                            ? "Folder"
-                            : `${mimeDb.mimeTypeForPath(entry.path)} · ${formatSize(entry.size)}`
-                        }
-                        selected={selection.isSelected(entry.path)}
-                        interactive={false}
-                        leading={
-                          <Icon
-                            name={iconFor(entry)}
-                            size={Math.round(22 * ui)}
-                            color={entry.isDir ? pal.accent : pal.text}
-                          />
-                        }
-                      />
-                    </CollectionItem>
-                  ))}
+                        focusId={`file:${entry.path}`}
+                        autoFocus={selection.focusKey === entry.path}
+                        dragSource={{
+                          mimeTypes: ["text/uri-list"],
+                          getPayload: () =>
+                            dragEntriesFor(entry)
+                              .map((target) => pathToUri(target.path))
+                              .join("\n") + "\n",
+                          label:
+                            selection.isSelected(entry.path) && selectedEntries.length > 1
+                              ? `${selectedEntries.length} items`
+                              : entry.name,
+                          previewIcon: { name: iconFor(entry) },
+                        }}
+                        dropData={entry.isDir ? entry.path : undefined}
+                        onPress={(event) => selectEntry(entry, event)}
+                        onDoublePress={() => openEntry(entry)}
+                        onKeyDown={(event) => handleEntryKey(entry, event)}
+                        onContextMenu={(event) => {
+                          if (!selection.isSelected(entry.path)) {
+                            selection.select(entry.path);
+                          }
+                          const request: ContextMenuRequest = {
+                            x: event.x,
+                            y: event.y,
+                            title: contextTitleFor(entry),
+                            actions: contextActions(entry),
+                          };
+                          if (!props.onShowContextMenu?.(request)) {
+                            setMenu({
+                              kind: "entry",
+                              entry,
+                              x: event.x,
+                              y: event.y,
+                            });
+                          }
+                        }}
+                      >
+                        <ListItem
+                          width={contentW - Math.round(SPACE.lg * ui)}
+                          height={Math.round(40 * ui)}
+                          title={entry.name}
+                          subtitle={
+                            entry.isDir
+                              ? "Folder"
+                              : `${mimeDb.mimeTypeForPath(entry.path)} · ${formatSize(entry.size)}`
+                          }
+                          selected={selection.isSelected(entry.path)}
+                          interactive={false}
+                          leading={
+                            <Icon
+                              name={iconFor(entry)}
+                              size={Math.round(22 * ui)}
+                              color={entry.isDir ? pal.accent : pal.text}
+                            />
+                          }
+                        />
+                      </CollectionItem>
+                    ))}
                   </ScrollArea>
                 )}
               </Surface>
@@ -1179,16 +1143,8 @@ function FilesApp(
           viewportHeight={props.height}
           x={menu.x}
           y={menu.y}
-          title={
-            menu.kind === "entry"
-              ? contextTitleFor(menu.entry)
-              : path.basename(cwd) || cwd
-          }
-          actions={
-            menu.kind === "entry"
-              ? contextActions(menu.entry)
-              : backgroundContextActions()
-          }
+          title={menu.kind === "entry" ? contextTitleFor(menu.entry) : path.basename(cwd) || cwd}
+          actions={menu.kind === "entry" ? contextActions(menu.entry) : backgroundContextActions()}
           onDismiss={() => setMenu(null)}
         />
       ) : null}

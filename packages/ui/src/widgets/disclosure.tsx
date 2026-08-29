@@ -1,9 +1,9 @@
 import React, { type ReactNode } from "react";
-import { Icon } from "./icon.js";
-import { Box, Horizontal, Inset, Measure, Vertical, registerIntrinsicSize } from "./layout.js";
-import { Pressable } from "./pressable.js";
-import { Separator, Surface, TextBlock } from "./primitives.js";
-import { useWidgetTheme } from "../widget-theme.js";
+import { Icon } from "./icon";
+import { Box, Horizontal, Inset, Measure, Vertical, registerIntrinsicSize } from "./layout";
+import { Pressable } from "./pressable";
+import { Separator, Surface, TextBlock } from "./primitives";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type DisclosureProps = {
   x?: number;
@@ -51,18 +51,46 @@ export function Disclosure(props: DisclosureProps): ReactNode {
           <Inset width={props.width} height={headerHeight} padding={{ horizontal: 14 }}>
             <Horizontal gap={10} align="center">
               <Box width={14} height={14}>
-                <Icon name={props.expanded ? "chevron-down" : "chevron-right"} size={14} color={pal.accent} symbolic />
+                <Icon
+                  name={props.expanded ? "chevron-down" : "chevron-right"}
+                  size={14}
+                  color={pal.accent}
+                  symbolic
+                />
               </Box>
               <Vertical flexGrow={1} gap={2} justify="center">
-                <TextBlock height={16} text={props.title} color={props.disabled ? pal.muted : pal.text} fontSize={12} fontWeight="medium" verticalAlign="center" overflow="ellipsis" maxLines={1} />
-                {props.description ? <TextBlock height={28} text={props.description} color={pal.muted} fontSize={10} wrap lineGap={2} verticalAlign="center" overflow="ellipsis" maxLines={2} /> : null}
+                <TextBlock
+                  height={16}
+                  text={props.title}
+                  color={props.disabled ? pal.muted : pal.text}
+                  fontSize={12}
+                  fontWeight="medium"
+                  verticalAlign="center"
+                  overflow="ellipsis"
+                  maxLines={1}
+                />
+                {props.description ? (
+                  <TextBlock
+                    height={28}
+                    text={props.description}
+                    color={pal.muted}
+                    fontSize={10}
+                    wrap
+                    lineGap={2}
+                    verticalAlign="center"
+                    overflow="ellipsis"
+                    maxLines={2}
+                  />
+                ) : null}
               </Vertical>
             </Horizontal>
           </Inset>
         </Box>
         {props.expanded ? (
           <Vertical height={props.contentHeight} gap={0}>
-            <Measure height={1}>{({ width }) => <Separator width={width} color={pal.borderSubtle} />}</Measure>
+            <Measure height={1}>
+              {({ width }) => <Separator width={width} color={pal.borderSubtle} />}
+            </Measure>
             <Box flexGrow={1}>{props.children}</Box>
           </Vertical>
         ) : null}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { EglOutputScaler } from "./egl-output.js";
-import { closeFd, O_CLOEXEC, O_RDWR, openPath } from "./libc.js";
+import { EglOutputScaler } from "./egl-output";
+import { closeFd, O_CLOEXEC, O_RDWR, openPath } from "./libc";
 
 const devicePath = process.env.MOIRE_RENDER_NODE ?? "/dev/dri/renderD128";
 const fd = openPath(devicePath, O_RDWR | O_CLOEXEC);
@@ -98,12 +98,7 @@ try {
   assert.ok(firstClientFrame.fd >= 0, "client target did not export a dma-buf fd");
   assert.ok(firstClientFrame.stride >= width * 4, "client target stride is invalid");
   scaler.releaseClientFrame(firstClientFrame.id);
-  const recycledClientFrame = scaler.renderClientFrame(
-    clientChannel,
-    source,
-    width,
-    height,
-  );
+  const recycledClientFrame = scaler.renderClientFrame(clientChannel, source, width, height);
   assert.equal(
     recycledClientFrame?.id,
     firstClientFrame.id,
@@ -114,8 +109,7 @@ try {
   const sceneWidth = 6;
   const sceneHeight = 4;
   const tile = new Uint8Array([
-    9, 31, 211, 255, 17, 47, 193, 255,
-    25, 63, 175, 255, 33, 79, 157, 255,
+    9, 31, 211, 255, 17, 47, 193, 255, 25, 63, 175, 255, 33, 79, 157, 255,
   ]);
   scaler.beginComposition({
     width: sceneWidth,
@@ -130,12 +124,7 @@ try {
         sourceStride: 8,
         revision: 1,
         destination: { x: 1, y: 1, width: 2, height: 2 },
-        transform: [
-          1, 0, 0, 0,
-          0, 1, 0, 0,
-          0, 0, 1, 0,
-          1, 0, 0, 1,
-        ],
+        transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1],
         transformOrigin: [0, 0, 0],
         sampling: "nearest",
       },
@@ -170,11 +159,7 @@ try {
     expected,
     "retained EGL composition changed z placement, transform, or channels",
   );
-  const geometrySource = new Uint8Array([
-    0, 0, 255, 255,
-    0, 255, 0, 255,
-    0, 0, 0, 0,
-  ]);
+  const geometrySource = new Uint8Array([0, 0, 255, 255, 0, 255, 0, 255, 0, 0, 0, 0]);
   scaler.beginComposition({
     width: 3,
     height: 1,
@@ -207,11 +192,7 @@ try {
   });
   assert.deepEqual(
     geometryTarget,
-    new Uint8Array([
-      0x33, 0x22, 0x11, 0xff,
-      0, 255, 0, 255,
-      0x33, 0x22, 0x11, 0xff,
-    ]),
+    new Uint8Array([0x33, 0x22, 0x11, 0xff, 0, 255, 0, 255, 0x33, 0x22, 0x11, 0xff]),
     "surface geometry mask did not discard opaque client padding",
   );
   const roundedSource = new Uint8Array(5 * 5 * 4);
@@ -416,12 +397,7 @@ try {
         sourceStride: 4,
         revision: 1,
         destination: { x: 0, y: 0, width: 1, height: 1 },
-        colorMatrix: [
-          0, 0, 0, 0, 0,
-          0, 1, 0, 0, 0,
-          0, 0, 1, 0, 0,
-          0, 0, 0, 1, 0,
-        ],
+        colorMatrix: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
         sampling: "nearest",
       },
     ],

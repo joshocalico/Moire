@@ -12,7 +12,7 @@
     "smoke": "tsx src/smoke.ts"
   },
   "dependencies": {
-    "koffi": "^2.10.1"
+    "@moire/sys": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

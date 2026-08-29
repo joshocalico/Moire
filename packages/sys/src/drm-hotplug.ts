@@ -1,5 +1,5 @@
 import koffi from "koffi";
-import { assertLinux } from "./platform.js";
+import { assertLinux } from "./platform";
 
 const POLLIN = 0x0001;
 
@@ -49,29 +49,17 @@ export function watchDrmHotplug(
   const monitorNew = libudev.func(
     "void *udev_monitor_new_from_netlink(void *udev, const char *name)",
   );
-  const monitorUnref = libudev.func(
-    "void *udev_monitor_unref(void *monitor)",
-  );
+  const monitorUnref = libudev.func("void *udev_monitor_unref(void *monitor)");
   const monitorFilter = libudev.func(
     "int udev_monitor_filter_add_match_subsystem_devtype(void *monitor, const char *subsystem, const char *devtype)",
   );
-  const monitorEnable = libudev.func(
-    "int udev_monitor_enable_receiving(void *monitor)",
-  );
+  const monitorEnable = libudev.func("int udev_monitor_enable_receiving(void *monitor)");
   const monitorGetFd = libudev.func("int udev_monitor_get_fd(void *monitor)");
-  const monitorReceive = libudev.func(
-    "void *udev_monitor_receive_device(void *monitor)",
-  );
+  const monitorReceive = libudev.func("void *udev_monitor_receive_device(void *monitor)");
   const deviceUnref = libudev.func("void *udev_device_unref(void *device)");
-  const deviceGetAction = libudev.func(
-    "const char *udev_device_get_action(void *device)",
-  );
-  const deviceGetDevnode = libudev.func(
-    "const char *udev_device_get_devnode(void *device)",
-  );
-  const deviceGetSysname = libudev.func(
-    "const char *udev_device_get_sysname(void *device)",
-  );
+  const deviceGetAction = libudev.func("const char *udev_device_get_action(void *device)");
+  const deviceGetDevnode = libudev.func("const char *udev_device_get_devnode(void *device)");
+  const deviceGetSysname = libudev.func("const char *udev_device_get_sysname(void *device)");
 
   const udev = udevNew();
   if (!udev) throw new Error("udev_new failed");
@@ -95,27 +83,30 @@ export function watchDrmHotplug(
 
   const pollFd = koffi.alloc(PollFd, 1);
   let stopped = false;
-  const timer = setInterval(() => {
-    if (stopped) return;
-    koffi.encode(pollFd, PollFd, { fd, events: POLLIN, revents: 0 });
-    if ((poll(pollFd, 1, 0) as number) <= 0) return;
-    const ready = koffi.decode(pollFd, PollFd) as { revents: number };
-    if (!(ready.revents & POLLIN)) return;
+  const timer = setInterval(
+    () => {
+      if (stopped) return;
+      koffi.encode(pollFd, PollFd, { fd, events: POLLIN, revents: 0 });
+      if ((poll(pollFd, 1, 0) as number) <= 0) return;
+      const ready = koffi.decode(pollFd, PollFd) as { revents: number };
+      if (!(ready.revents & POLLIN)) return;
 
-    for (;;) {
-      const device = monitorReceive(monitor);
-      if (!device) break;
-      try {
-        onChange({
-          action: String(deviceGetAction(device) ?? "change"),
-          devnode: nullableString(deviceGetDevnode(device)),
-          sysname: nullableString(deviceGetSysname(device)),
-        });
-      } finally {
-        deviceUnref(device);
+      for (;;) {
+        const device = monitorReceive(monitor);
+        if (!device) break;
+        try {
+          onChange({
+            action: String(deviceGetAction(device) ?? "change"),
+            devnode: nullableString(deviceGetDevnode(device)),
+            sysname: nullableString(deviceGetSysname(device)),
+          });
+        } finally {
+          deviceUnref(device);
+        }
       }
-    }
-  }, Math.max(50, pollIntervalMs));
+    },
+    Math.max(50, pollIntervalMs),
+  );
   timer.unref?.();
 
   return {

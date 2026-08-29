@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { TerminalBuffer } from "./model.js";
+import { TerminalBuffer } from "./model";
 
 const terminal = new TerminalBuffer(12, 3, 20);
 terminal.write("hello\r\n\x1b[31mred\x1b[0m");
@@ -15,7 +15,13 @@ assert.equal(snapshot.cursorLine, snapshot.lines.length - 1);
 
 terminal.write("\x1b[2J\x1b[Hfresh");
 snapshot = terminal.snapshot();
-assert.equal(snapshot.lines.at(-3)?.map((cell) => cell.char).join(""), "fresh");
+assert.equal(
+  snapshot.lines
+    .at(-3)
+    ?.map((cell) => cell.char)
+    .join(""),
+  "fresh",
+);
 
 terminal.write("\x1b]2;Moire shell\u0007");
 assert.equal(terminal.snapshot().title, "Moire shell");

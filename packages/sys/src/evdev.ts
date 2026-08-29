@@ -3,8 +3,8 @@
  */
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
-import { assertLinux } from "./platform.js";
-import { LinuxReadinessDispatcher } from "./readiness.js";
+import { assertLinux } from "./platform";
+import { LinuxReadinessDispatcher } from "./readiness";
 
 const EV_KEY = 0x01;
 // aarch64 / x86_64: timeval is 16 bytes, then type/code/value = 8 → 24
@@ -74,7 +74,6 @@ export class EvdevKeyboard extends EventEmitter {
       console.warn("[evdev] no input devices opened — keyboard disabled");
       return;
     }
-
   }
 
   stop(): void {
