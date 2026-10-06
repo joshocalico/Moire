@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Clock
+Comment=Time, timers, stopwatch, and alarms
+Exec=moire-clock
+TryExec=moire-clock
+Icon=moire-clock
+Terminal=false
+Type=Application
+Categories=Utility;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Clock

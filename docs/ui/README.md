@@ -14,7 +14,7 @@ pnpm --filter @moire/ui smoke
 3. `win.setContent(node | (size) => node)` with React elements from `@moire/ui`.
 4. `app.addWindow(win)` then `await app.run()`.
 
-`run()` loads prefs `uiScale`, installs TTF fonts, connects the platform, and loops `pump` → `tick` (~8ms) until quit.
+`run()` discovers platform personalization, installs TTF fonts, connects the platform, and loops `pump` → `tick` until quit.
 
 ## Theme access in widgets
 
@@ -22,11 +22,16 @@ pnpm --filter @moire/ui smoke
 import { themePalette, TYPE_ROLES, SPACE, usePalette } from "@moire/ui";
 
 const pal = themePalette(); // ARGB fills
+const inherited = usePalette(); // nearest provider/application palette
 const roles = TYPE_ROLES;   // display/title/body/caption/mono
 const gap = SPACE.md;       // 4/8/12/16/24
 ```
 
-Most widgets call `themePalette()` at render time (no React context). Prefer tokens over raw hex.
+Public widgets and app components using `usePalette()` resolve the nearest
+`WidgetThemeProvider`, falling back to the application/system theme.
+`themePalette()` remains a convenient non-contextual escape hatch for low-level
+plumbing. Prefer semantic recipes and tokens over raw hex. See
+[Personalization and themes](./personalization.md).
 
 ## Scale and fonts
 
@@ -56,7 +61,9 @@ Apps usually rely on `Application.run()` for install + scale from prefs.
 ## Further reading
 
 - [Application & Window](./application.md)
+- [Personalization & themes](./personalization.md)
 - [Widgets](./widgets.md)
+- [Icon design and verification](./icons.md)
 - [Motion](./motion.md)
 - [Images & icons](./images-and-icons.md)
 - [Platforms](./platforms.md)

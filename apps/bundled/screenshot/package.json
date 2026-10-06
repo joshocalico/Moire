@@ -1,0 +1,27 @@
+{
+  "name": "@moire/screenshot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Moire Screenshot",
+  "scripts": {
+    "start": "tsx src/main.tsx",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx src/smoke.tsx"
+  },
+  "dependencies": {
+    "@moire/sys": "workspace:*",
+    "@moire/ui": "workspace:*",
+    "react": "^19.0.0",
+    "@moire/react-host": "workspace:*",
+    "pngjs": "^7.0.0",
+    "@moire/dbus": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/pngjs": "^6.0.5"
+  }
+}

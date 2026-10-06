@@ -4,22 +4,30 @@ Use this file as a sidebar / SUMMARY for Markdown site generators (Docsify, mdBo
 
 - [Home](README.md)
 - [Roadmap](roadmap.md)
+- [Remaining acceptance gates](acceptance-plan.md)
 - [Getting started (dev VM)](dev-vm.md)
 - [Files & desktop overview](files-and-desktop.md)
 - [Files, desktop & UI completeness plan](files-desktop-ui-plan.md)
 - [Freedesktop MIME & actions](freedesktop-mime-and-actions.md)
+- [Network controls](network-controls.md)
+- [Battery status](battery-status.md)
+- [Known Bluetooth devices](bluetooth-controls.md)
+- [Removable drives](removable-drives.md)
 
 ## Architecture
 
 - [Overview](architecture/overview.md)
 - [Paint order & input](architecture/paint-and-input.md)
 - [react-host](architecture/react-host.md)
+- [GPU committed contents](architecture/gpu-residency.md)
 
 ## UI toolkit
 
 - [Overview](ui/README.md)
 - [Application & Window](ui/application.md)
+- [Personalization & themes](ui/personalization.md)
 - [Widgets](ui/widgets.md)
+- [Icon design and verification](ui/icons.md)
 - [Motion](ui/motion.md)
 - [Images & icons](ui/images-and-icons.md)
 - [Platforms](ui/platforms.md)
@@ -35,6 +43,8 @@ Use this file as a sidebar / SUMMARY for Markdown site generators (Docsify, mdBo
 - [Desktop icons](shell/desktop.md)
 
 ## Apps & session
+
+- [App suite and support matrix](apps/suite.md)
 
 - [Files](apps/files.md)
 - [Settings](apps/settings.md)

@@ -10,13 +10,13 @@ export function xdgDataDirs(): string[] {
 
 const iconPathCache = new Map<string, string | undefined>();
 
-/** Resolve a freedesktop application icon to a PNG the software renderer can load. */
+/** Resolve explicit PNGs and flat SVG artwork; Icon owns supported geometry/fallback. */
 export function resolveApplicationIcon(icon?: string): string | undefined {
   if (!icon) return undefined;
   if (iconPathCache.has(icon)) return iconPathCache.get(icon);
 
   if (path.isAbsolute(icon)) {
-    const resolved = icon.toLowerCase().endsWith(".png") && fs.existsSync(icon) ? icon : undefined;
+    const resolved = /\.(png|svg)$/i.test(icon) && fs.existsSync(icon) ? icon : undefined;
     iconPathCache.set(icon, resolved);
     return resolved;
   }
@@ -37,6 +37,12 @@ export function resolveApplicationIcon(icon?: string): string | undefined {
     if (fs.existsSync(pixmap)) {
       iconPathCache.set(icon, pixmap);
       return pixmap;
+    }
+    const svgName = icon.toLowerCase().endsWith(".svg") ? icon : `${icon}.svg`;
+    const vector = path.join(root, "icons", "hicolor", "scalable", "apps", svgName);
+    if (fs.existsSync(vector)) {
+      iconPathCache.set(icon, vector);
+      return vector;
     }
   }
 

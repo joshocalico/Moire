@@ -29,6 +29,7 @@ function mapWeight(w?: string): FontWeight {
 
 function mapFamily(f?: string): FontFamily {
   if (f === "mono" || f === "monospace") return "mono";
+  if (f === "serif") return "serif";
   return "sans";
 }
 

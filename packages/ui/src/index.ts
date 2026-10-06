@@ -4,13 +4,32 @@
  * Widgets / fonts / layout never import Wayland. Window I/O goes through
  * PlatformBackend (wayland | headless; cocoa/win32 later).
  */
-export { Application, type ApplicationOpts } from "./application";
+export { Application, type ApplicationOpts, type ApplicationTheme } from "./application";
+export {
+  DISCOVERABLE_ACCENTS,
+  THEME_FAMILIES,
+  discoverPersonalization,
+  mergePersonalization,
+  personalizeTheme,
+  type ColorScheme,
+  type PersonalizationOverrides,
+  type PersonalizationProfile,
+  type ThemeFamily,
+} from "./personalization";
+export {
+  IMPLEMENTED_WIDGET_THEME_FAMILIES,
+  getWidgetThemeFamily,
+  type WidgetThemeFamilyDefinition,
+} from "./theme-families/index";
 export {
   Window,
   hitTestDropData,
   requestActiveWindowRedraw,
+  writeClipboardText,
+  readClipboardText,
   type WindowOpts,
   type WindowSize,
+  type WindowActions,
   type WindowContent,
   type WindowPerformanceSnapshot,
   type PopupOptions,
@@ -30,6 +49,8 @@ export {
   type UiKeyModifiers,
   type UiFrameEvent,
   type UiPresentationMode,
+  type UiSurfaceVisibility,
+  type UiRenderingState,
   type PointerButton,
   type UiDataTransferItem,
   type UiDataTransfer,
@@ -79,6 +100,7 @@ export {
   Tween,
   createLoopValue,
   useAnimatedValue,
+  useDampedValue,
   useOscillation,
   useLoop,
   getMotionActivity,
@@ -86,6 +108,7 @@ export {
   tickAllMotions,
   type AnimationValue,
   type AnimatedValueOptions,
+  type DampedValueOptions,
   type OscillationOptions,
   type OwnedAnimationValue,
   type LoopOptions,
@@ -118,8 +141,11 @@ export {
   Spacer,
   Measure,
   useLayoutMetrics,
+  registerIntrinsicSize,
+  measureColumnContent,
   Label,
   TextBlock,
+  measureWrappedText,
   Surface,
   Panel,
   FocusRing,
@@ -138,6 +164,7 @@ export {
   ComboBox,
   Button,
   WidgetThemeProvider,
+  createPersonalizedWidgetTheme,
   createWidgetTheme,
   getWidgetTheme,
   resolveStatefulStyle,
@@ -147,6 +174,7 @@ export {
   Toggle,
   Slider,
   TextField,
+  TextArea,
   SearchField,
   Breadcrumbs,
   PathBar,
@@ -169,6 +197,8 @@ export {
   Pressable,
   ImageWidget,
   Icon,
+  applicationIcon,
+  ICON_NAMES,
   Draggable,
   CollectionItem,
   ContextMenuTrigger,
@@ -222,6 +252,7 @@ export type {
   SpacerProps,
   Insets,
   LabelProps,
+  WrappedTextStyle,
   FocusRingProps,
   ButtonProps,
   ButtonVariant,
@@ -278,6 +309,7 @@ export type {
   ToggleProps,
   SliderProps,
   TextFieldProps,
+  TextAreaProps,
   TextFieldSlot,
   SearchFieldProps,
   BreadcrumbSegment,
@@ -285,6 +317,7 @@ export type {
   PathBarProps,
   ProgressBarProps,
   ScrollAreaProps,
+  ScrollMetrics,
   ListProps,
   ListItemProps,
   ListItemSlot,
@@ -374,3 +407,68 @@ export type {
   HeatmapCell,
   HeatmapChartProps,
 } from "./widgets/index";
+
+export { ContentCard, ScrollColumn } from "./widgets/content-flow";
+export {
+  DocumentEditor,
+  SelectionToolbar,
+  placeSelectionToolbar,
+  layoutSelectionToolbar,
+  plainDocument,
+  parseDocument,
+  toggleDocumentMark,
+  replaceDocumentRange,
+  documentFragments,
+  equalDocuments,
+  selectionHasDocumentMark,
+  documentBoundary,
+} from "./widgets/index";
+export type {
+  DocumentEditorProps,
+  DocumentSelectionGeometry,
+  SelectionToolbarProps,
+  SelectionToolbarAction,
+  DocumentValue,
+  DocumentRun,
+  DocumentMarks,
+  DocumentMark,
+  DocumentSelection,
+} from "./widgets/index";
+export {
+  WindowFrame,
+  WindowHeader,
+  AdaptivePanes,
+  CollectionList,
+  CollectionRow,
+  PlaybackBar,
+  playbackBarHeight,
+  formatPlaybackTime,
+} from "./widgets/index";
+export type {
+  WindowFrameProps,
+  WindowHeaderProps,
+  AdaptivePane,
+  AdaptivePanesProps,
+  CollectionListProps,
+  CollectionRowProps,
+  PlaybackBarProps,
+} from "./widgets/index";
+export type { ContentCardProps, ScrollColumnProps } from "./widgets/content-flow";
+export { BrandMark, type BrandMarkProps } from "./widgets/brand-mark";
+export {
+  createSilkBackdrop,
+  SILK_LIMITS,
+  SILK_PALETTES,
+  type SilkBackdropSource,
+  type SilkBackdropOptions,
+  type SilkVariant,
+  type SilkPalette,
+} from "./backdrop/silk";
+export { Backdrop, type BackdropProps } from "./backdrop/backdrop";
+export { windowBackdropMotion, observeWindowBackdropMotion } from "./backdrop/window-motion";
+export type { RetainedMotionAdmission } from "./retained-motion-admission";
+export {
+  backdropPlacement,
+  resolveBackdropMotion,
+  type BackdropMotion,
+} from "./backdrop/placement";

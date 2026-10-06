@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadTheme, type MoireTheme, type WallpaperSpec } from "@moire/theme";
+import { applyThemeFamily, loadTheme, type MoireTheme, type WallpaperSpec } from "@moire/theme";
 import {
   activeThemePath,
   configDir,
@@ -25,7 +25,11 @@ export function bundledThemePath(dark: boolean): string {
 }
 
 export function themeForSettings(settings: MoireSettings): MoireTheme {
-  return loadTheme(bundledThemePath(settings.dark));
+  return applyThemeFamily(
+    loadTheme(bundledThemePath(settings.dark)),
+    settings.themeFamily,
+    settings.dark,
+  );
 }
 
 function settingsWallpaperToSpec(wp: WallpaperSettings, theme: MoireTheme): WallpaperSpec {

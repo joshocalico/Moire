@@ -1,6 +1,11 @@
 /** Shared menu surface and item primitives for app and compositor popups. */
 import React, { useId, useState, type ReactNode } from "react";
-import { Group, measureTextBounds, type HitKeyEvent } from "@moire/react-host";
+import {
+  Group,
+  measureTextBounds,
+  type HitKeyEvent,
+  type HitPointerEvent,
+} from "@moire/react-host";
 import {
   resolveStatefulStyle,
   useWidgetTheme,
@@ -33,6 +38,8 @@ export type MenuItemProps = {
   indicator?: boolean;
   autoFocus?: boolean;
   focusId?: string;
+  onFocusChange?: (focused: boolean) => void;
+  onPointerMove?: (event: HitPointerEvent) => void;
   onPress?: () => void;
 };
 
@@ -55,8 +62,8 @@ export function MenuItem(props: MenuItemProps): ReactNode {
   if (props.danger) states.push("danger");
   if (props.disabled) states.push("disabled");
   const root = resolveStatefulStyle(recipe.item, ...states);
-  const hovered = resolveStatefulStyle(recipe.item, "hover");
-  const pressed = resolveStatefulStyle(recipe.item, "pressed");
+  const hovered = resolveStatefulStyle(recipe.item, "hover", ...states);
+  const pressed = resolveStatefulStyle(recipe.item, "pressed", ...states);
   const label = resolveStatefulStyle(recipe.label, ...states);
   const description = resolveStatefulStyle(recipe.description, ...states);
   const leading = resolveStatefulStyle(recipe.leadingIcon, ...states);
@@ -108,7 +115,11 @@ export function MenuItem(props: MenuItemProps): ReactNode {
         focusable={!!props.onPress}
         autoFocus={props.autoFocus}
         focusId={props.focusId ?? `menu-item:${generatedId}`}
-        onFocusChange={setFocused}
+        onFocusChange={(next) => {
+          setFocused(next);
+          props.onFocusChange?.(next);
+        }}
+        onPointerMove={props.onPointerMove}
         onKeyDown={handleKey}
         onPress={props.onPress}
       />

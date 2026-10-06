@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Harmless fixed workload; this reports kernel credentials, not authentication evidence.
+set -euo pipefail
+printf 'Moire session probe: uid=%s gid=%s; no desktop or device access\n' "$(id -u)" "$(id -g)"

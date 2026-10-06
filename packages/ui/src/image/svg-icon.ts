@@ -67,6 +67,9 @@ function parseSvg(filePath: string): SvgArtwork {
   const cached = artworkCache.get(filePath);
   if (cached) return cached;
   const source = fs.readFileSync(filePath, "utf8");
+  // Reject unsupported artwork instead of silently returning a partial/blank icon.
+  if (/<(?:path|ellipse|text|image|use|g)\b|\btransform\s*=/i.test(source))
+    throw new Error(`SVG icon uses unsupported geometry: ${filePath}`);
   const rootMatch = source.match(/<svg\b([^>]*)>/i);
   if (!rootMatch) throw new Error(`SVG icon has no root: ${filePath}`);
   const root = attributes(rootMatch[1] ?? "");
@@ -121,6 +124,8 @@ function parseSvg(filePath: string): SvgArtwork {
       });
     }
   }
+  if (artwork.shapes.length === 0)
+    throw new Error(`SVG icon has no supported geometry: ${filePath}`);
   artworkCache.set(filePath, artwork);
   return artwork;
 }

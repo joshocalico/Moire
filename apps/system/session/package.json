@@ -2,7 +2,20 @@
   "name": "@moire/session",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "start": "bash ./moire-session"
+    "welcome": "tsx src/welcome.ts",
+    "start-desktop": "tsx src/start-desktop.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../../.."
+  },
+  "dependencies": {
+    "@moire/dbus": "workspace:*",
+    "@moire/greeter": "workspace:*"
+  },
+  "devDependencies": {
+    "@moire/compositor": "workspace:*",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }

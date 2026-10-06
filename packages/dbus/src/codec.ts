@@ -26,9 +26,9 @@ type TypeNode = {
 
 function alignment(node: TypeNode): number {
   if (node.code === "(" || node.code === "{") return 8;
-  if (node.code === "a" || "biuhsod".includes(node.code)) return 4;
+  if (node.code === "a" || "biuhso".includes(node.code)) return 4;
   if ("nq".includes(node.code)) return 2;
-  if ("xt".includes(node.code)) return 8;
+  if ("xtd".includes(node.code)) return 8;
   return 1;
 }
 

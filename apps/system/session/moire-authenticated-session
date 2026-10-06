@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Unprivileged post-PAM entry. Authentication belongs to the caller's display manager.
+set -euo pipefail
+exec node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/src/authenticated-session.mjs" "$@"

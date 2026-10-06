@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Moire Silk
+Description=Static Silk artwork; Escape shows actual boot details
+ModuleName=script
+
+[script]
+ImageDir=@THEME_DIR@
+ScriptFile=@THEME_DIR@/moire-silk.script

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Video Player
+Exec=moire-video-player %U
+TryExec=moire-video-player
+Icon=moire-video
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Player;
+MimeType=video/mp4;video/webm;video/x-matroska;video/quicktime;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.VideoPlayer

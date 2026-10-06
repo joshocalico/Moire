@@ -22,10 +22,25 @@ await app.run();
 | Method | Behavior |
 | --- | --- |
 | `addWindow(win)` | Register before or during run |
-| `run()` | Prefs scale → fonts → connect platform → mount windows → loop until quit |
+| `run()` | Discover personalization → fonts → connect platform → mount windows → loop until quit |
+| `getPersonalization()` | Read the normalized active system/application profile |
+| `setTheme(theme)` | Switch to `"system"`, a profile factory, or a concrete application theme |
+| `setPersonalization(overrides)` | Replace app-level overrides and update mounted windows |
 | `quit()` | Exit loop; destroy windows; disconnect |
 
 Env override: `MOIRE_UI_PLATFORM=wayland|headless`. On Linux with `WAYLAND_DISPLAY`, default is Wayland.
+
+System personalization is the default. Applications may override individual
+profile values in the constructor while retaining the rest:
+
+```ts
+const app = new Application({
+  personalization: { accent: "#bf5af2", reducedMotion: true },
+});
+```
+
+See [Personalization and themes](./personalization.md) for precedence and
+subtree providers.
 
 ## Window
 
@@ -36,6 +51,25 @@ Env override: `MOIRE_UI_PLATFORM=wayland|headless`. On Linux with `WAYLAND_DISPL
 | `requestRedraw()` | Force present on next tick |
 | `tick()` | Advance motions; if dirty, renderShell → rasterize → present |
 | `getWidth` / `getHeight` / `isClosed` | State |
+| `beginMove()` | Start a native move using the current input serial |
+| `requestClose()` | Use the same unsaved-change guard as a compositor close |
+| `setMaximized(boolean)` / `isMaximized()` | Request maximize/restore; read the state confirmed by the platform |
+| `minimize()` | Request native minimize when supported |
+
+`Window` implements `WindowActions`. Pass it to `WindowFrame` when using
+client decorations (`decorated: false`); the shared frame allocates the title,
+tabs, native controls and body. Close requests call the `setCloseGuard` callback;
+returning `false` leaves the window open. After an accepted close, repeated
+requests do not run the close callbacks again.
+
+```tsx
+const win = new Window({ title: "Files", width: 960, height: 640, decorated: false });
+win.setContent((size) => (
+  <WindowFrame {...size} title="Files" actions={win}>
+    {(body) => <FilesWorkspace {...body} />}
+  </WindowFrame>
+));
+```
 
 ### Render pipeline
 

@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Process Manager
+Name=System Monitor
 Comment=Inspect applications and manage system resources
 Exec=moire-process-manager
-Icon=utilities-system-monitor
+Icon=moire-monitor
 Terminal=false
 Categories=System;Monitor;
 OnlyShowIn=Moire;

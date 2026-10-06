@@ -17,6 +17,8 @@ export type TooltipProps = {
   offset?: number;
   tooltipWidth?: number;
   disabled?: boolean;
+  /** An interactive child can own hover while the tooltip supplies help. */
+  open?: boolean;
   children?: ReactNode;
 };
 
@@ -67,17 +69,25 @@ export function Tooltip(props: TooltipProps): ReactNode {
     cancelTimer();
     easeTo(opacity, 0, 18);
   };
+  useEffect(() => {
+    if (props.open == null) return;
+    if (props.open && !props.disabled) reveal();
+    else conceal();
+    return cancelTimer;
+  }, [props.open, props.disabled]);
 
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       {props.children}
-      <Rect
-        width={props.width}
-        height={props.height}
-        fill={0x00000000}
-        onPointerEnter={props.disabled ? undefined : reveal}
-        onPointerLeave={props.disabled ? undefined : conceal}
-      />
+      {props.open == null ? (
+        <Rect
+          width={props.width}
+          height={props.height}
+          fill={0x00000000}
+          onPointerEnter={props.disabled ? undefined : reveal}
+          onPointerLeave={props.disabled ? undefined : conceal}
+        />
+      ) : null}
       <Surface
         x={tipX}
         y={tipY}

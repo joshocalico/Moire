@@ -3,6 +3,7 @@ import { Group, Rect, type HitKeyEvent, type HitPointerEvent } from "@moire/reac
 import { useWidgetTheme } from "#ui/widget-theme";
 
 export type SplitViewOrientation = "horizontal" | "vertical";
+export type SplitViewPane = ReactNode | ((size: { width: number; height: number }) => ReactNode);
 
 export type SplitViewProps = {
   x?: number;
@@ -17,8 +18,8 @@ export type SplitViewProps = {
   dividerSize?: number;
   keyboardStep?: number;
   disabled?: boolean;
-  first: ReactNode;
-  second: ReactNode;
+  first: SplitViewPane;
+  second: SplitViewPane;
 };
 
 type DragOrigin = { pointer: number; size: number };
@@ -32,21 +33,21 @@ export function SplitView(props: SplitViewProps): ReactNode {
   const [dragging, setDragging] = useState(false);
   const dragOrigin = useRef<DragOrigin | null>(null);
   const orientation = props.orientation ?? "horizontal";
-  const dividerSize = Math.max(3, props.dividerSize ?? 7);
   const total = orientation === "horizontal" ? props.width : props.height;
+  const dividerSize = Math.min(Math.max(0, total), Math.max(3, props.dividerSize ?? 7));
   const available = Math.max(0, total - dividerSize);
-  const minFirst = Math.max(0, props.minFirst ?? 80);
-  const minSecond = Math.max(0, props.minSecond ?? 80);
+  const minFirst = Math.min(available, Math.max(0, props.minFirst ?? 80));
+  const minSecond = Math.min(available - minFirst, Math.max(0, props.minSecond ?? 80));
   const upper = Math.max(minFirst, available - minSecond);
   const firstSize = Math.max(minFirst, Math.min(upper, props.firstSize));
   const secondSize = Math.max(0, available - firstSize);
   const active = dragging || focused;
-  const visualThickness = active ? 3 : hovered ? 2 : 1;
+  const visualThickness = Math.min(dividerSize, active ? 3 : hovered ? 2 : 1);
   const visualOffset = Math.floor((dividerSize - visualThickness) / 2);
 
   const commit = (size: number) => {
     if (props.disabled) return;
-    props.onFirstSizeChange?.(Math.round(Math.max(minFirst, Math.min(upper, size))));
+    props.onFirstSizeChange?.(Math.max(minFirst, Math.min(upper, Math.round(size))));
   };
   const pointerAxis = (event: HitPointerEvent) =>
     orientation === "horizontal" ? event.x : event.y;
@@ -116,13 +117,18 @@ export function SplitView(props: SplitViewProps): ReactNode {
   );
 
   return (
-    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height} clip>
       <Group
         width={orientation === "horizontal" ? firstSize : props.width}
         height={orientation === "vertical" ? firstSize : props.height}
         clip
       >
-        {props.first}
+        {typeof props.first === "function"
+          ? props.first({
+              width: orientation === "horizontal" ? firstSize : props.width,
+              height: orientation === "vertical" ? firstSize : props.height,
+            })
+          : props.first}
       </Group>
       <Group
         x={orientation === "horizontal" ? firstSize + dividerSize : 0}
@@ -131,7 +137,12 @@ export function SplitView(props: SplitViewProps): ReactNode {
         height={orientation === "vertical" ? secondSize : props.height}
         clip
       >
-        {props.second}
+        {typeof props.second === "function"
+          ? props.second({
+              width: orientation === "horizontal" ? secondSize : props.width,
+              height: orientation === "vertical" ? secondSize : props.height,
+            })
+          : props.second}
       </Group>
       {divider}
     </Group>

@@ -2036,6 +2036,11 @@ async function overlaySelectSmoke(): Promise<void> {
   win.tick();
   await Promise.resolve();
   win.tick();
+  for (let frame = 0; frame < 8; frame++) {
+    await Promise.resolve();
+    win.tick();
+  }
+  assert.equal(win.isClosed(), false, "Select overlay entered a recursive update loop");
   platformWindow.injectPointer({ type: "down", x: 60, y: 108, button: "left", timeMs: 3 });
   platformWindow.injectPointer({ type: "up", x: 60, y: 108, button: "left", timeMs: 4 });
   assert.equal(value, "two", "Select option did not activate through the overlay host");
@@ -2349,31 +2354,55 @@ async function scrollAreaInteractionSmoke(): Promise<void> {
     timeMs: 1,
   });
   assert.equal(observedScroll, 30, "ScrollArea should preserve wheel deltas");
+  platformWindow.injectPointer({
+    type: "wheel",
+    x: 40,
+    y: 40,
+    deltaY: 20,
+    timeMs: 2,
+  });
+  assert.equal(observedScroll, 50, "ScrollArea should accumulate rapid wheel deltas");
 
   platformWindow.injectPointer({
     type: "down",
-    x: 104,
-    y: 30,
-    button: "left",
-    timeMs: 2,
-  });
-  platformWindow.injectPointer({
-    type: "move",
-    x: 104,
-    y: 70,
+    x: 109,
+    y: 90,
     button: "left",
     timeMs: 3,
   });
   platformWindow.injectPointer({
     type: "up",
-    x: 104,
-    y: 70,
+    x: 109,
+    y: 90,
     button: "left",
     timeMs: 4,
   });
+  assert.equal(observedScroll, 130, "ScrollArea track clicks should page instead of teleporting");
+
+  platformWindow.injectPointer({
+    type: "down",
+    x: 109,
+    y: 30,
+    button: "left",
+    timeMs: 5,
+  });
+  platformWindow.injectPointer({
+    type: "move",
+    x: 109,
+    y: 70,
+    button: "left",
+    timeMs: 6,
+  });
+  platformWindow.injectPointer({
+    type: "up",
+    x: 109,
+    y: 70,
+    button: "left",
+    timeMs: 7,
+  });
   assert.ok(
     observedScroll > 120,
-    "ScrollArea thumb should continuously scroll under pointer capture",
+    "ScrollArea's forgiving thumb gutter should continuously scroll under pointer capture",
   );
 
   win.destroy();
@@ -2676,7 +2705,7 @@ async function pathBarInteractionSmoke(): Promise<void> {
     modifiers: NO_MODIFIERS,
     timeMs: 4,
   });
-  assert.equal(committed, "/Alphax", "Edit should autofocus and commit typed input");
+  assert.equal(committed, "x", "Edit should autofocus, select the existing path and replace it");
 
   platformWindow.injectPointer({
     type: "down",
@@ -3203,12 +3232,17 @@ async function main() {
   dndRecipeSmoke();
   await dndRegistrySmoke();
   pathBarRecipeSmoke();
-  const app = new Application({ platform: "headless" });
+  const app = new Application({
+    platform: "headless",
+    personalization: { source: "application", accent: "#bf5af2" },
+  });
   const win = new Window({ title: "Smoke", width: 460, height: 600 });
   win.setContent(<SmokeApp onQuit={() => app.quit()} />);
   app.addWindow(win);
   setTimeout(() => app.quit(), 300);
   await app.run();
+  assert.equal(app.getPersonalization()?.source, "application");
+  assert.equal(app.getPersonalization()?.accent, "#bf5af2");
   console.log("[ui/smoke] ok");
 }
 

@@ -1,0 +1,27 @@
+{
+  "name": "@moire/greeter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/main.tsx",
+    "./continuation": "./src/controller.ts"
+  },
+  "scripts": {
+    "start": "tsx src/main.tsx",
+    "smoke": "tsx src/smoke.tsx",
+    "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../../.."
+  },
+  "dependencies": {
+    "@moire/ui": "workspace:*",
+    "@moire/react-host": "workspace:*",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@moire/prefs": "workspace:*",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

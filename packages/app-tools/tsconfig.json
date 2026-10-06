@@ -1,0 +1,5 @@
+{
+  "extends": "@moire/tsconfig/base.json",
+  "compilerOptions": { "jsx": "react" },
+  "include": ["src/**/*"]
+}

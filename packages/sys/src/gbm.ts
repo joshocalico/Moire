@@ -55,10 +55,45 @@ export type GbmMappedPixels = {
   stride: number;
 };
 
+/** The created resource takes ownership of fd only after construction succeeds. */
+export function openOwnedGbmImporter<T>(
+  kmsFd: number,
+  io: {
+    open: typeof openPath;
+    close: typeof closeFd;
+    create: (ownedFd: number) => T;
+  },
+): T {
+  const failures: unknown[] = [];
+  // An ordinary proc-fd open reopens the device, unlike dup/SCM_RIGHTS of its
+  // DRM fd. It has fresh DRM file/GEM state and remains subject to access checks.
+  // The caller must keep kmsFd alive throughout this synchronous operation.
+  for (const path of ["/dev/dri/renderD128", "/dev/dri/renderD129", `/proc/self/fd/${kmsFd}`]) {
+    let fd: number;
+    try {
+      fd = io.open(path, O_RDWR | O_CLOEXEC);
+    } catch (error) {
+      failures.push(error);
+      continue;
+    }
+    try {
+      const importer = io.create(fd);
+      console.log(`[gbm] independent import device on ${path}`);
+      return importer;
+    } catch (error) {
+      io.close(fd);
+      failures.push(error);
+    }
+  }
+  // Never borrow the EGL/KMS owner's DRM file after reopen failure.
+  throw new AggregateError(failures, "No independently opened GBM import device available");
+}
+
 export class GbmDevice {
+  private destroyed = false;
   private readonly lib: ReturnType<typeof koffi.load>;
   private readonly device: unknown;
-  /** Own the render-node fd if we opened it separately from the KMS card. */
+  /** Own an independently opened import-device fd, never the caller's KMS fd. */
   private readonly ownedFd: number | null;
   private readonly createBoImport: (
     device: unknown,
@@ -104,28 +139,13 @@ export class GbmDevice {
     this.deviceDestroy = this.lib.func("void gbm_device_destroy(void *gbm)");
   }
 
-  /**
-   * Prefer a render node for imports (card fd is often DRM master / scanout-only).
-   * Falls back to the KMS card fd.
-   */
+  /** Prefer a render node, then independently reopen the live KMS device. */
   static openForImport(kmsFd: number): GbmDevice {
-    for (const path of ["/dev/dri/renderD128", "/dev/dri/renderD129"]) {
-      try {
-        const fd = openPath(path, O_RDWR | O_CLOEXEC);
-        try {
-          const gbm = new GbmDevice(fd, fd);
-          console.log(`[gbm] import device on ${path}`);
-          return gbm;
-        } catch (err) {
-          closeFd(fd);
-          console.warn(`[gbm] create_device(${path}) failed:`, err);
-        }
-      } catch {
-        // node missing or permission
-      }
-    }
-    console.log("[gbm] import device on KMS card fd");
-    return new GbmDevice(kmsFd, null);
+    return openOwnedGbmImporter(kmsFd, {
+      open: openPath,
+      close: closeFd,
+      create: (fd) => new GbmDevice(fd, fd),
+    });
   }
 
   /**
@@ -145,6 +165,7 @@ export class GbmDevice {
     },
     into?: Uint8Array | null,
   ): GbmMappedPixels | null {
+    if (this.destroyed) throw new Error("GBM import device is destroyed");
     const cached = this.importedBos.get(args.fd);
     if (cached) {
       const mapped = this.mapImportedBo(cached, args, into);
@@ -165,10 +186,14 @@ export class GbmDevice {
       0,
     ];
 
-    const mod = args.modifier === 0xffffffffffffffffn ? 0n : args.modifier;
+    const importKinds: ("FD_MODIFIER" | "FD")[] = ["FD_MODIFIER"];
+    // The legacy FD struct has neither offset nor modifier attributes.
+    if (args.offset === 0 && (args.modifier === 0n || args.modifier === 0xffffffffffffffffn)) {
+      importKinds.push("FD");
+    }
 
     for (const usage of usageFlags) {
-      for (const kind of ["FD", "FD_MODIFIER"] as const) {
+      for (const kind of importKinds) {
         const fdBuf = koffi.alloc(GbmImportFdData, 1);
         const modBuf = koffi.alloc(GbmImportFdModifierData, 1);
         let bo: unknown = null;
@@ -194,7 +219,7 @@ export class GbmDevice {
               fds: [args.fd, 0, 0, 0],
               strides: [args.stride | 0, 0, 0, 0],
               offsets: [args.offset | 0, 0, 0, 0],
-              modifier: mod,
+              modifier: args.modifier,
             });
             importType = GBM_BO_IMPORT_FD_MODIFIER;
             importBuf = modBuf;
@@ -259,14 +284,6 @@ export class GbmDevice {
       const stride = (koffi.decode(strideOut, "uint32_t") as number) || args.stride;
       const byteLen = stride * args.height;
       const view = new Uint8Array(koffi.view(mapPtr, byteLen) as ArrayBuffer);
-      let nonzero = byteLen === 0;
-      for (let index = 0; index < Math.min(byteLen, 4096); index++) {
-        if (view[index] !== 0) {
-          nonzero = true;
-          break;
-        }
-      }
-      if (!nonzero) return null;
       const pixels = into?.byteLength === byteLen ? into : new Uint8Array(byteLen);
       pixels.set(view);
       return { pixels, stride };
@@ -290,6 +307,8 @@ export class GbmDevice {
   }
 
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     for (const bo of this.importedBos.values()) {
       try {
         this.boDestroy(bo);

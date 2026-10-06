@@ -1,6 +1,7 @@
 /** Renderer-neutral box, flow, and overlay layout primitives. */
 import React, {
   Children,
+  Fragment,
   createContext,
   isValidElement,
   useContext,
@@ -139,44 +140,67 @@ function collectFlexChildren(
   theme: WidgetTheme,
   direction: "row" | "column",
   align: "start" | "center" | "end" | "stretch",
+  availableWidth?: number,
 ): {
   specs: FlexChildSpec[];
   elements: ReactElement[];
 } {
   const specs: FlexChildSpec[] = [];
   const elements: ReactElement[] = [];
-  Children.forEach(children, (child) => {
-    if (!isValidElement(child)) return;
-    const props = child.props as FlexItemProps;
-    const intrinsic =
-      typeof child.type === "function" || typeof child.type === "object"
-        ? intrinsicSizeProviders.get(child.type as object)?.(
-            child.props as Record<string, unknown>,
-            theme,
-          )
-        : undefined;
-    const stretchesCrossAxis = (props.alignSelf ?? align) === "stretch";
-    specs.push({
-      // An intrinsic cross-axis size is a measurement hint, not an implicit
-      // fixed size. Supplying it to a stretching flow prevents prose and
-      // other responsive surfaces from receiving the parent's real width.
-      width:
-        props.width ??
-        (direction === "column" && stretchesCrossAxis ? undefined : intrinsic?.width),
-      height:
-        props.height ?? (direction === "row" && stretchesCrossAxis ? undefined : intrinsic?.height),
-      flexGrow: props.flexGrow ?? (child.type === Spacer ? 1 : undefined),
-      flexShrink: props.flexShrink,
-      minWidth: props.minWidth,
-      minHeight: props.minHeight,
-      maxWidth: props.maxWidth,
-      maxHeight: props.maxHeight,
-      aspectRatio: props.aspectRatio,
-      alignSelf: props.alignSelf,
-      margin: props.margin,
+  const collect = (nodes: ReactNode) =>
+    Children.forEach(nodes, (child) => {
+      if (!isValidElement(child)) return;
+      if (child.type === Fragment) {
+        collect((child.props as { children?: ReactNode }).children);
+        return;
+      }
+      const props = child.props as FlexItemProps;
+      const stretchesCrossAxis = (props.alignSelf ?? align) === "stretch";
+      const margin = resolveInsets(props.margin);
+      const inferredWidth =
+        availableWidth == null
+          ? undefined
+          : Math.max(
+              props.minWidth ?? 0,
+              Math.min(
+                props.maxWidth ?? Number.POSITIVE_INFINITY,
+                availableWidth - margin.left - margin.right,
+              ),
+            );
+      const measuredProps =
+        direction === "column" && stretchesCrossAxis && props.width == null && inferredWidth != null
+          ? { ...(child.props as object), width: inferredWidth }
+          : child.props;
+      const intrinsic =
+        typeof child.type === "function" || typeof child.type === "object"
+          ? intrinsicSizeProviders.get(child.type as object)?.(
+              measuredProps as Record<string, unknown>,
+              theme,
+            )
+          : undefined;
+      specs.push({
+        // An intrinsic cross-axis size is a measurement hint, not an implicit
+        // fixed size. Supplying it to a stretching flow prevents prose and
+        // other responsive surfaces from receiving the parent's real width.
+        width:
+          props.width ??
+          (direction === "column" && stretchesCrossAxis ? undefined : intrinsic?.width),
+        height:
+          props.height ??
+          (direction === "row" && stretchesCrossAxis ? undefined : intrinsic?.height),
+        flexGrow: props.flexGrow ?? (child.type === Spacer ? 1 : undefined),
+        flexShrink: props.flexShrink,
+        minWidth: props.minWidth,
+        minHeight: props.minHeight,
+        maxWidth: props.maxWidth,
+        maxHeight: props.maxHeight,
+        aspectRatio: props.aspectRatio,
+        alignSelf: props.alignSelf,
+        margin: props.margin,
+      });
+      elements.push(child as ReactElement);
     });
-    elements.push(child as ReactElement);
-  });
+  collect(children);
   return { specs, elements };
 }
 
@@ -199,7 +223,14 @@ function FlexLayout(props: RowProps & { direction: "row" | "column" }): ReactNod
   const width = props.width ?? allocated?.width ?? 0;
   const height = props.height ?? allocated?.height;
   const align = props.align ?? (props.direction === "row" ? "center" : "stretch");
-  const { specs, elements } = collectFlexChildren(props.children, theme, props.direction, align);
+  const padding = resolveInsets(props.padding);
+  const { specs, elements } = collectFlexChildren(
+    props.children,
+    theme,
+    props.direction,
+    align,
+    Math.max(0, width - padding.left - padding.right),
+  );
   const laid = layoutFlex(
     {
       direction: props.direction,
@@ -223,7 +254,10 @@ function FlexLayout(props: RowProps & { direction: "row" | "column" }): ReactNod
       {elements.map((element, index) => {
         const box = laid.children[index]!;
         return (
-          <LayoutMetricsContext.Provider key={element.key ?? index} value={box}>
+          <LayoutMetricsContext.Provider
+            key={element.key == null ? `index:${index}` : `key:${element.key}`}
+            value={box}
+          >
             <Group x={box.x} y={box.y} width={box.width} height={box.height}>
               {element}
             </Group>
@@ -252,6 +286,58 @@ export function Horizontal(props: RowProps): ReactNode {
 export function Vertical(props: ColumnProps): ReactNode {
   return <FlexLayout {...props} align={props.align ?? "stretch"} direction="column" />;
 }
+
+function flowIntrinsic(
+  props: RowProps,
+  theme: WidgetTheme,
+  direction: "row" | "column",
+  stretch: boolean,
+) {
+  const align = props.align ?? (stretch || direction === "column" ? "stretch" : "center");
+  const padding = resolveInsets(props.padding);
+  const { specs } = collectFlexChildren(
+    props.children,
+    theme,
+    direction,
+    align,
+    props.width == null ? undefined : Math.max(0, props.width - padding.left - padding.right),
+  );
+  const gap = props.gap ?? 8;
+  const naturalWidth =
+    direction === "row"
+      ? specs.reduce((sum, spec) => sum + (spec.width ?? 0), 0) +
+        Math.max(0, specs.length - 1) * gap
+      : Math.max(0, ...specs.map((spec) => spec.width ?? 0));
+  const laid = layoutFlex(
+    {
+      direction,
+      width: props.width ?? naturalWidth + padding.left + padding.right,
+      height: props.height,
+      gap,
+      padding: props.padding,
+      justify: props.justify,
+      align,
+      wrap: props.wrap,
+    },
+    specs,
+  );
+  return laid.container;
+}
+// A flow is also a child of other flows. Its natural size must include its
+// children; otherwise a nested details group receives zero height and every
+// following group paints over it.
+/** Natural column extent using the same width-aware measurement as flow rendering. */
+export function measureColumnContent(
+  props: ColumnProps,
+  theme: WidgetTheme,
+): { width: number; height: number } {
+  return flowIntrinsic({ ...props, height: undefined }, theme, "column", true);
+}
+
+registerIntrinsicSize(Row, (props, theme) => flowIntrinsic(props, theme, "row", false));
+registerIntrinsicSize(Horizontal, (props, theme) => flowIntrinsic(props, theme, "row", true));
+registerIntrinsicSize(Column, (props, theme) => flowIntrinsic(props, theme, "column", true));
+registerIntrinsicSize(Vertical, (props, theme) => flowIntrinsic(props, theme, "column", true));
 
 export type StackAlignment = "start" | "center" | "end" | "stretch";
 
@@ -294,7 +380,10 @@ export function Stack(props: StackProps): ReactNode {
           height: childHeight,
         };
         return (
-          <LayoutMetricsContext.Provider key={element.key ?? index} value={box}>
+          <LayoutMetricsContext.Provider
+            key={element.key == null ? `index:${index}` : `key:${element.key}`}
+            value={box}
+          >
             <Group x={box.x} y={box.y} width={box.width} height={box.height}>
               {element}
             </Group>

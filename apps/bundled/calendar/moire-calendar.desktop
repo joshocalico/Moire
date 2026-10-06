@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Calendar
+Comment=Local events and daily agenda
+Exec=moire-calendar
+TryExec=moire-calendar
+Icon=moire-calendar
+Terminal=false
+Type=Application
+Categories=Office;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Calendar

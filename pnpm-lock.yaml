@@ -18,6 +18,9 @@ importers:
         specifier: ^3.2.1
         version: 3.2.1
     devDependencies:
+      '@moire/protocol':
+        specifier: workspace:*
+        version: link:packages/protocol
       '@moire/tsconfig':
         specifier: workspace:*
         version: link:packages/tsconfig
@@ -28,6 +31,271 @@ importers:
         specifier: ^1.80.0
         version: 1.80.0
 
+  apps/bundled/archive-manager:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/calculator:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../../packages/prefs
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/calendar:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/characters:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../../packages/prefs
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/clock:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/colors:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/dictionary:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../../packages/prefs
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/disk-usage:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/document-viewer:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/editor:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../../packages/prefs
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   apps/bundled/files:
     dependencies:
       '@moire/app-discovery':
@@ -36,6 +304,217 @@ importers:
       '@moire/prefs':
         specifier: workspace:*
         version: link:../../../packages/prefs
+      '@moire/system-management':
+        specifier: workspace:*
+        version: link:../../../packages/system-management
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/font-viewer:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      opentype.js:
+        specifier: ^1.3.4
+        version: 1.3.5
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/opentype.js':
+        specifier: ^1.3.10
+        version: 1.3.10
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/help:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../../packages/prefs
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/image-viewer:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/music:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/notes:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../../packages/prefs
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/screenshot:
+    dependencies:
+      '@moire/dbus':
+        specifier: workspace:*
+        version: link:../../../packages/dbus
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@moire/sys':
+        specifier: workspace:*
+        version: link:../../../packages/sys
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/sound-recorder:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
       '@moire/ui':
         specifier: workspace:*
         version: link:../../../packages/ui
@@ -64,6 +543,53 @@ importers:
       '@moire/terminal':
         specifier: workspace:*
         version: link:../../../packages/terminal
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/video-player:
+    dependencies:
+      '@moire/app-tools':
+        specifier: workspace:*
+        version: link:../../../packages/app-tools
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/bundled/weather:
+    dependencies:
       '@moire/ui':
         specifier: workspace:*
         version: link:../../../packages/ui
@@ -127,6 +653,9 @@ importers:
         specifier: ^19.0.0
         version: 19.2.7
     devDependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
@@ -148,6 +677,9 @@ importers:
       '@moire/prefs':
         specifier: workspace:*
         version: link:../../../packages/prefs
+      '@moire/theme':
+        specifier: workspace:*
+        version: link:../../../packages/theme
       '@moire/ui':
         specifier: workspace:*
         version: link:../../../packages/ui
@@ -215,6 +747,34 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  apps/system/boot:
+    dependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@moire/sys':
+        specifier: workspace:*
+        version: link:../../../packages/sys
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   apps/system/compositor:
     dependencies:
       '@moire/app-discovery':
@@ -238,10 +798,47 @@ importers:
       '@moire/sys':
         specifier: workspace:*
         version: link:../../../packages/sys
+      '@moire/system-management':
+        specifier: workspace:*
+        version: link:../../../packages/system-management
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/system/greeter:
+    dependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../../../packages/react-host
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../../packages/prefs
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
       tsx:
         specifier: ^4.19.2
         version: 4.23.0
@@ -254,6 +851,9 @@ importers:
       '@moire/dbus':
         specifier: workspace:*
         version: link:../../../packages/dbus
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../../../packages/prefs
       '@moire/system-management':
         specifier: workspace:*
         version: link:../../../packages/system-management
@@ -299,7 +899,27 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  apps/system/session: {}
+  apps/system/session:
+    dependencies:
+      '@moire/dbus':
+        specifier: workspace:*
+        version: link:../../../packages/dbus
+      '@moire/greeter':
+        specifier: workspace:*
+        version: link:../greeter
+    devDependencies:
+      '@moire/compositor':
+        specifier: workspace:*
+        version: link:../compositor
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
 
   packages/app-discovery:
     dependencies:
@@ -310,6 +930,40 @@ importers:
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/app-tools:
+    dependencies:
+      '@moire/prefs':
+        specifier: workspace:*
+        version: link:../prefs
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../react-host
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../ui
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
       tsx:
         specifier: ^4.19.2
         version: 4.23.0
@@ -335,9 +989,27 @@ importers:
         specifier: ^2.3.0
         version: 2.3.0
     devDependencies:
+      '@moire/react-host':
+        specifier: workspace:*
+        version: link:../react-host
+      '@moire/ui':
+        specifier: workspace:*
+        version: link:../ui
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
@@ -406,6 +1078,9 @@ importers:
       '@moire/react-host':
         specifier: workspace:*
         version: link:../react-host
+      '@moire/system-management':
+        specifier: workspace:*
+        version: link:../system-management
       '@moire/theme':
         specifier: workspace:*
         version: link:../theme
@@ -509,6 +1184,9 @@ importers:
       '@moire/theme':
         specifier: workspace:*
         version: link:../theme
+      koffi:
+        specifier: ^2.10.1
+        version: 2.16.2
       opentype.js:
         specifier: ^1.3.4
         version: 1.3.5

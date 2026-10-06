@@ -3,10 +3,13 @@
  * Parallels Virtual Mouse primarily emits ABS_X/ABS_Y (tablet), not REL_X/REL_Y.
  */
 import fs from "node:fs";
+import type { SeatDeviceAccess } from "./seat";
 import { EventEmitter } from "node:events";
 import { assertLinux } from "./platform";
 import { getLibc } from "./libc";
 import { LinuxReadinessDispatcher } from "./readiness";
+import type { InputFixtureTrace } from "./input-fixture-trace";
+import { isScrollPointerEvent } from "./scroll-trace";
 
 const EV_SYN = 0x00;
 const EV_KEY = 0x01;
@@ -64,6 +67,31 @@ export type EvdevPointerAxis = {
   timeMs: number;
 };
 
+export type PointerDeviceIo = {
+  open(path: string): number;
+  read(fd: number, buffer: Buffer): number;
+  close(fd: number): void;
+  identity(fd: number): string;
+  grab(fd: number, path: string): void;
+};
+
+export function nativePointerDeviceIo(devices?: SeatDeviceAccess): PointerDeviceIo {
+  return {
+    open: (path) =>
+      devices
+        ? devices.open(path)
+        : fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK),
+    read: (fd, buffer) => fs.readSync(fd, buffer, 0, buffer.length, null),
+    close: (fd) => (devices ? devices.close(fd) : fs.closeSync(fd)),
+    identity: (fd) => {
+      const stat = fs.fstatSync(fd, { bigint: true });
+      if (!stat.isCharacterDevice()) throw new Error("Pointer input must be a character device");
+      return stat.rdev.toString();
+    },
+    grab: tryGrab,
+  };
+}
+
 type DeviceState = {
   path: string;
   buf: Buffer;
@@ -77,6 +105,9 @@ type DeviceState = {
   absDirty: boolean;
   absMax: number;
   pendingTimeMs: number;
+  traceAbsoluteSource: number | null;
+  traceRelativeSource: number | null;
+  traceWheelSource: number | null;
 };
 
 function listPointerDevices(): string[] {
@@ -112,18 +143,52 @@ export class EvdevPointer extends EventEmitter {
   private loggedFirstAbs = false;
   private loggedFirstRel = false;
 
-  constructor(private readonly readiness: LinuxReadinessDispatcher) {
+  private fixtureTrace: InputFixtureTrace | null = null;
+  private readonly io: PointerDeviceIo;
+  constructor(
+    private readonly readiness: Pick<LinuxReadinessDispatcher, "add" | "remove">,
+    private readonly deviceIo?: PointerDeviceIo,
+  ) {
     super();
+    this.io = deviceIo ?? nativePointerDeviceIo();
+  }
+
+  setInputFixtureTrace(trace: InputFixtureTrace): void {
+    this.fixtureTrace = trace;
+  }
+
+  private observe(callback: (trace: InputFixtureTrace) => void): void {
+    const trace = this.fixtureTrace;
+    if (!trace) return;
+    try {
+      if (trace.active()) callback(trace);
+    } catch {
+      this.fixtureTrace = null;
+      try {
+        trace.stop("io-error");
+      } catch {
+        /* Diagnostics cannot interrupt input. */
+      }
+    }
+  }
+
+  private forward(
+    name: "absolute" | "motion" | "button" | "axis",
+    event: EvdevPointerAbsolute | EvdevPointerMotion | EvdevPointerButton | EvdevPointerAxis,
+    source: number | null,
+  ): void {
+    this.observe((trace) => trace.link(event, source));
+    this.emit(name, event);
   }
 
   start(paths?: string[]): void {
-    assertLinux("evdev");
+    if (!this.deviceIo) assertLinux("evdev");
     const candidates = paths ?? listPointerDevices();
 
     for (const p of candidates) {
       try {
-        const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
-        tryGrab(fd, p);
+        const fd = this.io.open(p);
+        this.io.grab(fd, p);
         this.devices.set(fd, {
           path: p,
           buf: Buffer.alloc(0),
@@ -137,6 +202,9 @@ export class EvdevPointer extends EventEmitter {
           absDirty: false,
           absMax: DEFAULT_ABS_MAX,
           pendingTimeMs: 0,
+          traceAbsoluteSource: null,
+          traceRelativeSource: null,
+          traceWheelSource: null,
         });
         this.readiness.add(fd, () => this.poll());
         console.log(`[evdev] pointer opened ${p} fd=${fd}`);
@@ -155,7 +223,7 @@ export class EvdevPointer extends EventEmitter {
     for (const fd of this.devices.keys()) {
       this.readiness.remove(fd);
       try {
-        fs.closeSync(fd);
+        this.io.close(fd);
       } catch {
         // ok
       }
@@ -170,11 +238,15 @@ export class EvdevPointer extends EventEmitter {
       if (ax != null && ay != null) {
         if (dev.pendingAbsX != null) dev.lastAbsX = dev.pendingAbsX;
         if (dev.pendingAbsY != null) dev.lastAbsY = dev.pendingAbsY;
-        this.emit("absolute", {
-          x: norm(ax, dev.absMax),
-          y: norm(ay, dev.absMax),
-          timeMs: dev.pendingTimeMs,
-        } satisfies EvdevPointerAbsolute);
+        this.forward(
+          "absolute",
+          {
+            x: norm(ax, dev.absMax),
+            y: norm(ay, dev.absMax),
+            timeMs: dev.pendingTimeMs,
+          } satisfies EvdevPointerAbsolute,
+          dev.traceAbsoluteSource,
+        );
         if (!this.loggedFirstAbs) {
           this.loggedFirstAbs = true;
           console.log(
@@ -185,25 +257,36 @@ export class EvdevPointer extends EventEmitter {
       dev.pendingAbsX = null;
       dev.pendingAbsY = null;
       dev.absDirty = false;
+      dev.traceAbsoluteSource = null;
     } else if (dev.pendingDx !== 0 || dev.pendingDy !== 0) {
-      this.emit("motion", {
-        dx: dev.pendingDx,
-        dy: dev.pendingDy,
-        timeMs: dev.pendingTimeMs,
-      } satisfies EvdevPointerMotion);
+      this.forward(
+        "motion",
+        {
+          dx: dev.pendingDx,
+          dy: dev.pendingDy,
+          timeMs: dev.pendingTimeMs,
+        } satisfies EvdevPointerMotion,
+        dev.traceRelativeSource,
+      );
       if (!this.loggedFirstRel) {
         this.loggedFirstRel = true;
         console.log(`[evdev] relative pointer dx=${dev.pendingDx} dy=${dev.pendingDy}`);
       }
       dev.pendingDx = 0;
       dev.pendingDy = 0;
+      dev.traceRelativeSource = null;
     }
     if (dev.pendingWheel !== 0) {
-      this.emit("axis", {
-        value: dev.pendingWheel,
-        timeMs: dev.pendingTimeMs,
-      } satisfies EvdevPointerAxis);
+      this.forward(
+        "axis",
+        {
+          value: dev.pendingWheel,
+          timeMs: dev.pendingTimeMs,
+        } satisfies EvdevPointerAxis,
+        dev.traceWheelSource,
+      );
       dev.pendingWheel = 0;
+      dev.traceWheelSource = null;
     }
   }
 
@@ -214,7 +297,7 @@ export class EvdevPointer extends EventEmitter {
     for (const [fd, dev] of this.devices) {
       try {
         const chunk = Buffer.alloc(INPUT_EVENT_SIZE * 16);
-        const n = fs.readSync(fd, chunk, 0, chunk.length, null);
+        const n = this.io.read(fd, chunk);
         if (n <= 0) continue;
         let buf = Buffer.concat([dev.buf, chunk.subarray(0, n)]);
         while (buf.length >= INPUT_EVENT_SIZE) {
@@ -226,6 +309,27 @@ export class EvdevPointer extends EventEmitter {
           const sec = Number(raw.readBigUInt64LE(0));
           const usec = Number(raw.readBigUInt64LE(8));
           const timeMs = sec * 1000 + Math.floor(usec / 1000);
+          if (this.listenerCount("rawPointer") > 0 && isScrollPointerEvent(type, code)) {
+            this.emit("rawPointer", { stage: "raw", device: dev.path, type, code, value, timeMs });
+          }
+          let source: number | null = null;
+          if (type === EV_KEY || isScrollPointerEvent(type, code))
+            this.observe((trace) => {
+              const rdev = this.io.identity(fd);
+              source = trace.write({
+                layer: "raw-pointer",
+                device: { path: dev.path, rdev, fd },
+                type,
+                code,
+                value,
+                timeMs,
+              });
+            });
+          if (type === EV_ABS && (code === ABS_X || code === ABS_Y))
+            dev.traceAbsoluteSource = source;
+          if (type === EV_REL && (code === REL_X || code === REL_Y))
+            dev.traceRelativeSource = source;
+          if (type === EV_REL && code === REL_WHEEL) dev.traceWheelSource = source;
           dev.pendingTimeMs = timeMs;
 
           if (type === EV_ABS) {
@@ -243,11 +347,15 @@ export class EvdevPointer extends EventEmitter {
           } else if (type === EV_KEY) {
             if (code === BTN_LEFT || code === BTN_RIGHT || code === BTN_MIDDLE) {
               this.flush(dev);
-              this.emit("button", {
-                code,
-                value,
-                timeMs,
-              } satisfies EvdevPointerButton);
+              this.forward(
+                "button",
+                {
+                  code,
+                  value,
+                  timeMs,
+                } satisfies EvdevPointerButton,
+                source,
+              );
             }
           } else if (type === EV_SYN && code === SYN_REPORT) {
             this.flush(dev);
@@ -273,19 +381,22 @@ export class EvdevPointer extends EventEmitter {
     this.devices.delete(oldFd);
     this.readiness.remove(oldFd);
     try {
-      fs.closeSync(oldFd);
+      this.io.close(oldFd);
     } catch {
       // already gone
     }
     try {
-      const newFd = fs.openSync(dev.path, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
-      tryGrab(newFd, dev.path);
+      const newFd = this.io.open(dev.path);
+      this.io.grab(newFd, dev.path);
       this.devices.set(newFd, {
         ...dev,
         buf: Buffer.alloc(0),
         pendingDx: 0,
         pendingDy: 0,
         pendingWheel: 0,
+        traceAbsoluteSource: null,
+        traceRelativeSource: null,
+        traceWheelSource: null,
       });
       this.readiness.add(newFd, () => this.poll());
       console.log(`[evdev] reopened ${dev.path} as fd=${newFd}`);

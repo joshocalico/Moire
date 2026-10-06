@@ -7,6 +7,13 @@ import {
   type MoireTheme,
   type ThemePalette,
 } from "./theme";
+import {
+  discoverPersonalization,
+  personalizeTheme,
+  type PersonalizationProfile,
+} from "./personalization";
+import { applyWidgetThemeFamily } from "./theme-families/index";
+import { foregroundOn, mixColor, mixControlFill } from "./theme-families/color";
 
 export type WidgetState =
   | "rest"
@@ -124,6 +131,13 @@ export type TabsRecipe = {
   icon: StatefulStyle<WidgetIconStyle>;
   indicator: WidgetBoxStyle;
   divider: { fill: number; height: number };
+  /** Header tab colors can differ from standard in-content tabs. */
+  titlebar?: {
+    tab: StatefulStyle<WidgetBoxStyle>;
+    label: StatefulStyle<WidgetTextStyle>;
+    icon: StatefulStyle<WidgetIconStyle>;
+    selectedInteraction?: { hoverFill: number; pressedFill: number };
+  };
   metrics: {
     height: number;
     paddingX: number;
@@ -378,9 +392,9 @@ function buttonRecipe(
 
   if (variant === "primary") {
     fill = palette.accentLine;
-    hover = mixArgb(palette.accentLine, palette.accent, 0.24);
-    pressed = mixArgb(palette.accentLine, palette.bg, 0.24);
-    label = 0xffffffff;
+    hover = mixControlFill(palette.accentLine, palette.accent, 0.24);
+    pressed = mixControlFill(palette.accentLine, palette.bg, 0.24);
+    label = foregroundOn(fill);
     stroke = mixArgb(palette.accentLine, palette.accent, 0.4);
   } else if (variant === "ghost") {
     fill = 0x00000000;
@@ -390,9 +404,9 @@ function buttonRecipe(
     rim = false;
   } else if (variant === "danger") {
     fill = palette.danger;
-    hover = mixArgb(palette.danger, 0xffffffff, 0.12);
-    pressed = mixArgb(palette.danger, palette.bg, 0.24);
-    label = 0xffffffff;
+    hover = mixControlFill(palette.danger, 0xffffffff, 0.12);
+    pressed = mixControlFill(palette.danger, palette.bg, 0.24);
+    label = foregroundOn(fill);
     stroke = mixArgb(palette.danger, palette.bg, 0.18);
     rim = false;
   }
@@ -402,7 +416,8 @@ function buttonRecipe(
     states: {
       hover: { fill: hover },
       pressed: { fill: pressed },
-      focused: { stroke: palette.focusRing, strokeWidth: 1 },
+      selected: { fill: palette.selection, stroke: palette.accentLine, strokeWidth: 1 },
+      focused: { stroke: palette.focusRing, strokeWidth: 2 },
       disabled: {
         fill: variant === "ghost" ? 0x00000000 : withAlpha(fill, 0x70),
         stroke: variant === "ghost" ? undefined : withAlpha(stroke ?? fill, 0x50),
@@ -892,7 +907,7 @@ function checkboxRecipe(size: ButtonSize, palette: ThemePalette): CheckboxRecipe
     },
     mark: {
       base: {
-        color: 0xffffffff,
+        color: foregroundOn(palette.accentLine),
         fontSize: metrics.markSize,
         fontWeight: "bold",
       },
@@ -1379,6 +1394,77 @@ export function createWidgetTheme(theme: MoireTheme = getTheme()): WidgetTheme {
   };
 }
 
+export function createPersonalizedWidgetTheme(
+  profile: PersonalizationProfile,
+  base?: MoireTheme,
+): WidgetTheme {
+  let theme = applyWidgetThemeFamily(createWidgetTheme(personalizeTheme(profile, base)), profile);
+  if (profile.themeFamily === "moire") {
+    const pal = theme.foundations.palette;
+    const background = mixColor(pal.panel, pal.accent, 0.12);
+    const selected = mixColor(pal.panel, pal.accent, 0.32);
+    const header = (recipe: TabsRecipe): TabsRecipe => ({
+      ...recipe,
+      titlebar: {
+        tab: {
+          base: { fill: background, radius: recipe.root.radius },
+          states: {
+            hover: { fill: mixColor(background, pal.text, 0.04) },
+            pressed: { fill: mixColor(background, pal.bg, 0.12) },
+            selected: {
+              fill: selected,
+              stroke: mixColor(pal.panel, pal.accentLine, 0.65),
+              strokeWidth: 1,
+            },
+            focused: { stroke: pal.focusRing, strokeWidth: 2 },
+            disabled: { fill: background, stroke: undefined, strokeWidth: 0 },
+          },
+        },
+        label: {
+          ...recipe.label,
+          base: { ...recipe.label.base, color: pal.text },
+          states: {
+            ...recipe.label.states,
+            selected: { color: pal.text, fontWeight: "medium" },
+          },
+        },
+        icon: {
+          ...recipe.icon,
+          states: { ...recipe.icon.states, selected: { color: pal.text } },
+        },
+        selectedInteraction: {
+          hoverFill: mixColor(selected, pal.text, 0.04),
+          pressedFill: mixColor(selected, pal.bg, 0.12),
+        },
+      },
+    });
+    theme = {
+      ...theme,
+      recipes: {
+        ...theme.recipes,
+        tabs: {
+          small: header(theme.recipes.tabs.small),
+          medium: header(theme.recipes.tabs.medium),
+          large: header(theme.recipes.tabs.large),
+        },
+      },
+    };
+  }
+  if (!profile.reducedMotion) return theme;
+  return {
+    ...theme,
+    foundations: {
+      ...theme.foundations,
+      motion: {
+        ...theme.foundations.motion,
+        fastMs: 0,
+        normalMs: 0,
+        slowMs: 0,
+      },
+    },
+  };
+}
+
 let fallbackSource: MoireTheme | null = null;
 let fallbackTheme: WidgetTheme | null = null;
 
@@ -1386,7 +1472,14 @@ export function getWidgetTheme(): WidgetTheme {
   const source = getTheme();
   if (source !== fallbackSource || !fallbackTheme) {
     fallbackSource = source;
-    fallbackTheme = createWidgetTheme(source);
+    fallbackTheme = createPersonalizedWidgetTheme(
+      discoverPersonalization(process.platform, {
+        themeFamily: source.family ?? "moire",
+        colorScheme: source.name.endsWith("light") ? "light" : "dark",
+        accent: source.tokens.accent,
+      }),
+      source,
+    );
   }
   return fallbackTheme;
 }
@@ -1402,6 +1495,11 @@ export function WidgetThemeProvider(props: WidgetThemeProviderProps): ReactNode 
   return (
     <WidgetThemeContext.Provider value={props.theme}>{props.children}</WidgetThemeContext.Provider>
   );
+}
+
+/** Internal bridge for non-JSX window plumbing; application code should use the provider directly. */
+export function wrapWidgetTheme(theme: WidgetTheme, children: ReactNode): ReactNode {
+  return <WidgetThemeProvider theme={theme}>{children}</WidgetThemeProvider>;
 }
 
 export function useWidgetTheme(): WidgetTheme {

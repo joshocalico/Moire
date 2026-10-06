@@ -37,6 +37,19 @@ Visual policy lives in renderer-neutral recipe data. Applications can replace
 recipes for a complete subtree while retaining widget interaction and layout:
 
 ```tsx
+const app = new Application(); // follows system personalization
+const branded = new Application({
+  personalization: { accent: "#bf5af2", reducedTransparency: true },
+});
+```
+
+The precedence is nested `WidgetThemeProvider`, application override, Moire
+system preferences, platform discovery, then portable fallback. System changes
+propagate to mounted windows and popups. `Application.getPersonalization()`
+exposes what was discovered; `setTheme()` and `setPersonalization()` support
+live application changes.
+
+```tsx
 import { Button, WidgetThemeProvider, createWidgetTheme } from "@moire/ui";
 
 const base = createWidgetTheme();
@@ -95,5 +108,10 @@ Layout wrappers and Label/Surface/Panel/Separator now live in JSX modules;
 visual primitives inherit foundation colors from the nearest subtree theme.
 Dialog adds recipe-owned chrome and body geometry on top of those primitives.
 Software and EGL consume the same resulting scene.
+
+Platform-flavored recipe families live behind the registry in
+`src/theme-families/`. Cupertino is split into foundations, buttons,
+fields/segmented controls, form controls, and transient surfaces; widgets
+themselves contain no family checks.
 
 Hard rule: `widgets/`, `font/`, `layout/` never import Wayland/koffi.

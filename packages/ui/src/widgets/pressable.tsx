@@ -1,10 +1,12 @@
 /**
  * Pressable — interactive container with eased hover/press fill motion.
  */
-import React, { useRef, type ReactNode } from "react";
+import React, { useId, useRef, useState, type ReactNode } from "react";
 import { Group, Rect, type HitKeyEvent, type HitPointerEvent } from "@moire/react-host";
 import { easeTo, useMotionValue } from "#ui/motion";
 import { useWidgetTheme } from "#ui/widget-theme";
+import { contrastRatio, foregroundOn } from "#ui/theme-family-color";
+import { FocusRing } from "./primitives";
 
 export type PressableProps = {
   x?: number;
@@ -30,6 +32,8 @@ export type PressableProps = {
   autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
+  onHoverChange?: (hovered: boolean) => void;
+  onPointerMove?: (event: HitPointerEvent) => void;
   onKeyDown?: (event: HitKeyEvent) => void;
 };
 
@@ -59,6 +63,9 @@ function lerpArgb(from: number, to: number, t: number): number {
 
 export function Pressable(props: PressableProps): ReactNode {
   const pal = useWidgetTheme().foundations.palette;
+  const generatedId = useId();
+  const [focused, setFocused] = useState(false);
+  const focusable = props.focusable ?? !!(props.onPress || props.onDoublePress);
   const hoverMv = useMotionValue(0);
   const pressMv = useMotionValue(0);
   const lastClick = useRef(0);
@@ -77,6 +84,12 @@ export function Pressable(props: PressableProps): ReactNode {
       fill = lerpArgb(hovered, props.pressedFill ?? pal.pressed, p);
     }
   }
+  // An accent-colored primary fill can equal the theme's focus stroke. Keep
+  // transparent controls' existing policy; opaque fills can establish contrast.
+  const focusColor =
+    focused && fill >>> 24 === 0xff && contrastRatio(fill, pal.focusRing) < 3
+      ? foregroundOn(fill)
+      : pal.focusRing;
 
   const handlePress = (event?: HitPointerEvent) => {
     if (props.disabled) return;
@@ -106,6 +119,7 @@ export function Pressable(props: PressableProps): ReactNode {
             ? undefined
             : () => {
                 easeTo(hoverMv, 100, 18);
+                props.onHoverChange?.(true);
               }
         }
         onPointerLeave={
@@ -114,8 +128,10 @@ export function Pressable(props: PressableProps): ReactNode {
             : () => {
                 easeTo(hoverMv, 0, 14);
                 easeTo(pressMv, 0, 20);
+                props.onHoverChange?.(false);
               }
         }
+        onPointerMove={props.disabled ? undefined : props.onPointerMove}
         onPointerDown={
           props.disabled
             ? undefined
@@ -132,11 +148,29 @@ export function Pressable(props: PressableProps): ReactNode {
         }
         onPress={props.disabled ? undefined : handlePress}
         onContextMenu={props.disabled ? undefined : props.onContextMenu}
-        focusable={!props.disabled && props.focusable}
+        focusable={!props.disabled && focusable}
         autoFocus={props.autoFocus}
-        focusId={props.focusId}
-        onFocusChange={props.onFocusChange}
-        onKeyDown={props.disabled ? undefined : props.onKeyDown}
+        focusId={props.focusId ?? `pressable:${generatedId}`}
+        onFocusChange={(next) => {
+          setFocused(next);
+          props.onFocusChange?.(next);
+        }}
+        onKeyDown={
+          props.disabled
+            ? undefined
+            : (props.onKeyDown ??
+              ((event: HitKeyEvent) => {
+                if (event.repeat) return;
+                if (
+                  event.key === "Enter" ||
+                  event.key === " " ||
+                  event.code === 28 ||
+                  event.code === 57
+                ) {
+                  props.onPress?.();
+                }
+              }))
+        }
       />
       {props.indicatorColor != null && !props.disabled ? (
         <Rect
@@ -153,6 +187,16 @@ export function Pressable(props: PressableProps): ReactNode {
         />
       ) : null}
       {props.children}
+      {focused &&
+      !props.disabled &&
+      !(props.stroke === focusColor && (props.strokeWidth ?? 0) > 0) ? (
+        <FocusRing
+          width={props.width}
+          height={props.height}
+          radius={props.radius}
+          color={focusColor}
+        />
+      ) : null}
     </Group>
   );
 }

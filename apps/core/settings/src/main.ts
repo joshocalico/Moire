@@ -1,6 +1,8 @@
 /**
  * Moire Settings — out-of-process @moire/ui app with real prefs apply.
  */
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createElement, useState, useEffect, useRef, type ReactNode } from "react";
 import {
   Application,
@@ -10,17 +12,17 @@ import {
   Label,
   Button,
   Toggle,
-  Checkbox,
   Separator,
   Tabs,
   Slider,
   ProgressBar,
   ScrollArea,
   Surface,
+  PropertyList,
   OverlayHost,
   Select,
   SegmentedControl,
-  themePalette,
+  usePalette,
   setUiScaleFactor,
   getUiScaleFactor,
   DisplayArrangement,
@@ -29,12 +31,14 @@ import {
 } from "@moire/ui";
 import {
   applySettings,
+  updateSettings,
   loadSettings,
   readSystemVolume,
   type MoireSettings,
   type WallpaperSettings,
 } from "@moire/prefs";
 import { SessionBus } from "@moire/dbus";
+import { THEME_FAMILIES, THEME_FAMILY_LABELS, parseThemeFamily } from "@moire/theme";
 
 type DisplayController = DisplayState & {
   getState: () => Promise<DisplayState>;
@@ -87,26 +91,42 @@ type PendingDisplayMode = {
 
 /** Appearance / Sound body height so parent Yoga gets a real flex slot (nested
  *  Columns without height collapse to 0 and overlap siblings). */
-const BODY_MIN_H = 300;
+const BODY_MIN_H = 380;
 
-function SettingsApp(
+export function SettingsApp(
   props: WindowSize & {
     onQuit: () => void;
     initial: MoireSettings;
+    reducedMotion?: boolean;
+    onReducedMotionChange?: (value: boolean) => Promise<void>;
     display: DisplayController | null;
   },
 ): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   const [tab, setTab] = useState(
     Math.max(0, Math.min(3, Number(process.env.MOIRE_SETTINGS_TAB ?? 0))),
   );
   const [dark, setDark] = useState(props.initial.dark);
+  const [themeFamily, setThemeFamily] = useState(props.initial.themeFamily);
   const [notifs, setNotifs] = useState(props.initial.notifications);
   const [volume, setVolume] = useState(props.initial.volume);
   const [scale, setScale] = useState(sliderFromUiScale(props.initial.uiScale));
   const [showDesktopIcons, setShowDesktopIcons] = useState(props.initial.showDesktopIcons);
   const [wallpaper, setWallpaper] = useState<WallpaperSettings | null>(props.initial.wallpaper);
   const [status, setStatus] = useState("");
+  const [motionSaving, setMotionSaving] = useState(false);
+  const [displayStatus, setDisplayStatus] = useState("");
+  const [displayBusy, setDisplayBusy] = useState(false);
+  const displayOperation = useRef(false);
+  const displayRefreshRequired = useRef(false);
+  const displayTrial = useRef<"mode" | "layout" | null>(null);
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
   const [displayMode, setDisplayMode] = useState(props.display?.current ?? "");
   const [displayModes, setDisplayModes] = useState(props.display?.modes ?? []);
   const [displayPreferred, setDisplayPreferred] = useState(props.display?.preferred ?? "");
@@ -132,7 +152,6 @@ function SettingsApp(
   const innerW = Math.max(1, props.width - pad * 2);
   const bodyH = Math.max(1, props.height - pad * 2);
   const bodyMin = Math.round(BODY_MIN_H * ui);
-  const rowH = Math.round(28 * ui);
   const labelH = Math.round(20 * ui);
   const titleH = Math.round(28 * ui);
   const tabH = Math.round(32 * ui);
@@ -141,20 +160,9 @@ function SettingsApp(
   const sliderH = Math.round(24 * ui);
 
   const push = (patch: Partial<MoireSettings>, note?: string) => {
-    const next: MoireSettings = {
-      dark,
-      notifications: notifs,
-      volume,
-      uiScale: uiScaleFromSlider(scale),
-      displayMode: displayMode || props.initial.displayMode,
-      // Display layout is persisted by the compositor after confirmation.
-      // Re-read it so an unrelated Appearance save never erases that state.
-      displayOutputs: loadSettings().displayOutputs,
-      showDesktopIcons,
-      wallpaper,
-      ...patch,
-    };
+    const next = updateSettings(patch);
     if (patch.dark != null) setDark(patch.dark);
+    if (patch.themeFamily != null) setThemeFamily(patch.themeFamily);
     if (patch.notifications != null) setNotifs(patch.notifications);
     if (patch.volume != null) setVolume(patch.volume);
     if (patch.uiScale != null) setScale(sliderFromUiScale(patch.uiScale));
@@ -181,6 +189,13 @@ function SettingsApp(
     }, 120);
   };
 
+  useEffect(
+    () => () => {
+      if (scaleTimer.current) clearTimeout(scaleTimer.current);
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!status) return;
     const t = setTimeout(() => setStatus(""), 2200);
@@ -198,64 +213,113 @@ function SettingsApp(
     return () => clearTimeout(t);
   }, [volume]);
 
-  useEffect(() => {
-    if (!pendingDisplayMode) return;
-    const update = () => {
-      const remaining = Math.max(0, Math.ceil((pendingDisplayMode.deadlineMs - Date.now()) / 1000));
-      setDisplayCountdown(remaining);
-      if (remaining === 0) {
-        setDisplayMode(pendingDisplayMode.previous);
-        setSelectedResolution(resolutionForMode(pendingDisplayMode.previous));
-        setPendingDisplayMode(null);
-        setStatus("Display mode reverted automatically");
+  const updateDisplayState = (next: DisplayState) => {
+    setDisplayModes(next.modes);
+    setDisplayPreferred(next.preferred);
+    setDisplayName(next.name || "Display");
+    setConnectedOutputs(next.outputs);
+    setDisplayMode(next.current);
+    setSelectedResolution(resolutionForMode(next.current));
+  };
+
+  const runDisplayOperation = async (
+    note: string,
+    operation: () => Promise<boolean>,
+    accepted: () => void | Promise<void>,
+  ) => {
+    if (displayOperation.current) return;
+    displayOperation.current = true;
+    setDisplayBusy(true);
+    setDisplayStatus(note);
+    try {
+      if (!(await operation())) throw new Error("Display service rejected the request");
+      if (mounted.current) await accepted();
+    } catch (error) {
+      if (mounted.current) {
+        setDisplayStatus(
+          `${note.replace(/…$/, "")} failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        setSelectedResolution(resolutionForMode(displayMode));
       }
+    } finally {
+      displayOperation.current = false;
+      if (mounted.current) setDisplayBusy(false);
+    }
+  };
+
+  // The compositor owns automatic rollback. Verify its actual state rather
+  // than claiming the previous layout is active when the timer expires.
+  const refreshExpiredTrial = () => {
+    const display = props.display;
+    if (!display || displayOperation.current) return false;
+    displayRefreshRequired.current = true;
+    void runDisplayOperation(
+      "Checking display rollback…",
+      async () => {
+        const next = await display.getState();
+        if (mounted.current) updateDisplayState(next);
+        return true;
+      },
+      () => {
+        displayRefreshRequired.current = false;
+        displayTrial.current = null;
+        setPendingDisplayMode(null);
+        setPendingDisplayLayout(null);
+        setDisplayStatus("Display trial expired · current settings refreshed");
+      },
+    );
+    return true;
+  };
+
+  useEffect(() => {
+    const trial = pendingDisplayMode ?? pendingDisplayLayout;
+    if (!trial) return;
+    let checked = false;
+    const update = () => {
+      const remaining = Math.max(0, Math.ceil((trial.deadlineMs - Date.now()) / 1000));
+      setDisplayCountdown(remaining);
+      if (!remaining && !checked) checked = refreshExpiredTrial();
     };
     update();
     const timer = setInterval(update, 250);
     return () => clearInterval(timer);
-  }, [pendingDisplayMode]);
-
-  useEffect(() => {
-    if (!pendingDisplayLayout) return;
-    const delay = Math.max(0, pendingDisplayLayout.deadlineMs - Date.now());
-    const timer = setTimeout(() => {
-      setConnectedOutputs(pendingDisplayLayout.previous);
-      setPendingDisplayLayout(null);
-      setStatus("Display arrangement reverted automatically");
-    }, delay + 100);
-    return () => clearTimeout(timer);
-  }, [pendingDisplayLayout]);
+  }, [pendingDisplayMode, pendingDisplayLayout]);
 
   useEffect(() => {
     const display = props.display;
     if (!display) return;
     let disposed = false;
-    const refresh = () => {
-      if (pendingDisplayMode) return;
+    let refreshing = false;
+    const timer = setInterval(() => {
+      if (refreshing || displayOperation.current) return;
+      if (displayTrial.current) {
+        if (displayRefreshRequired.current) refreshExpiredTrial();
+        return;
+      }
+      refreshing = true;
       void display
         .getState()
         .then((next) => {
-          if (disposed) return;
-          setDisplayModes(next.modes);
-          setDisplayPreferred(next.preferred);
-          setDisplayName(next.name || "Display");
-          setConnectedOutputs(next.outputs);
-          if (next.current && next.current !== displayMode) {
-            setDisplayMode(next.current);
-            setSelectedResolution(resolutionForMode(next.current));
-            setStatus(`Display updated · ${displayModeLabel(next.current)}`);
-          }
+          if (!disposed && !displayOperation.current && !displayTrial.current)
+            updateDisplayState(next);
         })
-        .catch((error) => {
-          if (!disposed) console.warn("[settings] display refresh failed:", error);
+        .catch((error: unknown) => {
+          if (!disposed && !displayOperation.current && !displayTrial.current)
+            setDisplayStatus(
+              `Display service unavailable: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        })
+        .finally(() => {
+          refreshing = false;
         });
-    };
-    const timer = setInterval(refresh, 2_000);
+    }, 2_000);
     return () => {
       disposed = true;
       clearInterval(timer);
     };
-  }, [props.display, pendingDisplayMode, displayMode]);
+  }, [props.display]);
+
+  const displayLocked = displayBusy || pendingDisplayMode != null || pendingDisplayLayout != null;
 
   const parsedModes = displayModes
     .map(parseDisplayMode)
@@ -301,38 +365,37 @@ function SettingsApp(
     (props.display ? Math.round(18 * ui) + btnH : 0) +
     (props.display ? (pendingDisplayMode ? Math.round(62 * ui) : Math.round(18 * ui)) : 0) +
     Math.max(0, displaySectionCount - 1) * Math.round(10 * ui);
-  const scrollContentH = tab === 1 ? Math.max(bodyMin, displayContentH) : bodyMin;
+  const stackedAppearance = innerW < 420;
+  const appearanceLabelW = Math.min(Math.round(180 * ui), Math.round(innerW * 0.4));
+  const appearanceControlW = Math.max(1, innerW - (stackedAppearance ? 24 : appearanceLabelW + 36));
+  const appearanceRowH = Math.round((stackedAppearance ? 90 : 64) * ui);
+  const appearanceContentH = appearanceRowH * 7 + 60;
+  const scrollContentH =
+    tab === 0 ? appearanceContentH : tab === 1 ? Math.max(bodyMin, displayContentH) : bodyMin;
   const scrollViewportH = Math.max(
     Math.round(72 * ui),
     bodyH - titleH - tabH - footH - 1 - Math.round(48 * ui),
   );
 
   const requestDisplayMode = (modeId: string) => {
-    if (!props.display || modeId === displayMode) return;
+    const display = props.display;
+    if (!display || modeId === displayMode || displayTrial.current || displayOperation.current)
+      return;
     const previous = displayMode;
-    setStatus(`Switching to ${displayModeLabel(modeId)}…`);
-    void props.display
-      .setMode(modeId)
-      .then((changed) => {
-        if (!changed) return;
+    void runDisplayOperation(
+      "Changing display mode…",
+      () => display.setMode(modeId),
+      () => {
+        displayTrial.current = "mode";
         setDisplayMode(modeId);
         setSelectedResolution(resolutionForMode(modeId));
-        setPendingDisplayMode({
-          previous,
-          target: modeId,
-          deadlineMs: Date.now() + 15_000,
-        });
-        setStatus("");
-      })
-      .catch((error: unknown) => {
-        setStatus(
-          `Display change failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
+        setPendingDisplayMode({ previous, target: modeId, deadlineMs: Date.now() + 15_000 });
+        setDisplayStatus("");
+      },
+    );
   };
 
   const requestResolution = (resolution: string) => {
-    setSelectedResolution(resolution);
     const candidates = parsedModes
       .filter((mode) => mode.resolution === resolution)
       .sort((a, b) => {
@@ -340,32 +403,37 @@ function SettingsApp(
         if (b.id === displayPreferred) return 1;
         return b.refreshMilliHz - a.refreshMilliHz;
       });
-    const target = candidates[0];
-    if (target) requestDisplayMode(target.id);
+    if (candidates[0]) requestDisplayMode(candidates[0].id);
   };
 
   const confirmDisplayMode = () => {
-    if (!props.display || !pendingDisplayMode) return;
-    void props.display.confirmMode().then((confirmed) => {
-      if (!confirmed) return;
+    const display = props.display;
+    if (!display || !pendingDisplayMode) return;
+    void runDisplayOperation("Keeping display mode…", display.confirmMode, () => {
+      displayTrial.current = null;
       setPendingDisplayMode(null);
-      setStatus(`Kept ${displayModeLabel(displayMode)}`);
+      setDisplayStatus(`Kept ${displayModeLabel(displayMode)}`);
     });
   };
 
   const revertDisplayMode = () => {
-    if (!props.display || !pendingDisplayMode) return;
-    const previous = pendingDisplayMode.previous;
-    void props.display.revertMode().then(() => {
-      setDisplayMode(previous);
-      setSelectedResolution(resolutionForMode(previous));
+    const display = props.display;
+    if (!display || !pendingDisplayMode) return;
+    void runDisplayOperation("Reverting display mode…", display.revertMode, async () => {
+      displayRefreshRequired.current = true;
+      const next = await display.getState();
+      if (!mounted.current) return;
+      updateDisplayState(next);
+      displayRefreshRequired.current = false;
+      displayTrial.current = null;
       setPendingDisplayMode(null);
-      setStatus(`Reverted to ${displayModeLabel(previous)}`);
+      setDisplayStatus(`Reverted to ${displayModeLabel(next.current)}`);
     });
   };
 
   const requestDisplayLayout = (next: ConnectedOutput[]) => {
-    if (!props.display) return;
+    const display = props.display;
+    if (!display || displayTrial.current || displayOperation.current) return;
     const normalized = next.map((output) => {
       const mode = parseDisplayMode(output.mode);
       return mode
@@ -377,37 +445,40 @@ function SettingsApp(
         : output;
     });
     const previous = connectedOutputs;
-    setStatus("Applying display arrangement…");
-    void props.display
-      .setLayout(normalized)
-      .then((changed) => {
-        if (!changed) return;
+    void runDisplayOperation(
+      "Applying display arrangement…",
+      () => display.setLayout(normalized),
+      () => {
+        displayTrial.current = "layout";
         setConnectedOutputs(normalized);
         setPendingDisplayLayout({ previous, deadlineMs: Date.now() + 15_000 });
-        setStatus("");
-      })
-      .catch((error: unknown) => {
-        setStatus(
-          `Arrangement rejected: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
+        setDisplayStatus("");
+      },
+    );
   };
 
   const confirmDisplayLayout = () => {
-    void props.display?.confirmLayout().then((confirmed) => {
-      if (!confirmed) return;
+    const display = props.display;
+    if (!display || !pendingDisplayLayout) return;
+    void runDisplayOperation("Keeping display arrangement…", display.confirmLayout, () => {
+      displayTrial.current = null;
       setPendingDisplayLayout(null);
-      setStatus("Display arrangement saved");
+      setDisplayStatus("Display arrangement saved");
     });
   };
 
   const revertDisplayLayout = () => {
-    if (!pendingDisplayLayout) return;
-    const previous = pendingDisplayLayout.previous;
-    void props.display?.revertLayout().then(() => {
-      setConnectedOutputs(previous);
+    const display = props.display;
+    if (!display || !pendingDisplayLayout) return;
+    void runDisplayOperation("Reverting display arrangement…", display.revertLayout, async () => {
+      displayRefreshRequired.current = true;
+      const next = await display.getState();
+      if (!mounted.current) return;
+      updateDisplayState(next);
+      displayRefreshRequired.current = false;
+      displayTrial.current = null;
       setPendingDisplayLayout(null);
-      setStatus("Display arrangement reverted");
+      setDisplayStatus("Display arrangement reverted");
     });
   };
 
@@ -439,7 +510,7 @@ function SettingsApp(
         createElement(Label, {
           text: "Settings",
           fontSize: 22,
-          fontWeight: "bold",
+          fontWeight: "medium",
           width: innerW,
           height: titleH,
         }),
@@ -460,90 +531,160 @@ function SettingsApp(
             contentHeight: scrollContentH,
           },
           tab === 0
-            ? createElement(
-                Column,
-                {
-                  width: innerW,
-                  height: bodyMin,
-                  minHeight: bodyMin,
-                  gap: Math.round(12 * ui),
-                },
-                createElement(Toggle, {
-                  on: dark,
-                  label: "Dark theme",
-                  onChange: (on) => push({ dark: on }, on ? "Dark theme" : "Light theme"),
-                  width: Math.min(Math.round(280 * ui), innerW),
-                  height: rowH,
-                }),
-                createElement(Checkbox, {
-                  checked: notifs,
-                  label: "Show desktop notifications",
-                  onChange: (v) =>
-                    push({ notifications: v }, v ? "Notifications on" : "Notifications off"),
-                  width: Math.min(Math.round(360 * ui), innerW),
-                  height: rowH,
-                }),
-                createElement(Label, {
-                  text: `UI scale  ${Math.round(uiScaleFromSlider(scale) * 100)}%`,
-                  width: innerW,
-                  height: labelH,
-                }),
-                createElement(Slider, {
-                  width: Math.min(Math.round(360 * ui), innerW),
-                  value: scale,
-                  onChange: setScaleLive,
-                  height: sliderH,
-                }),
-                createElement(Separator, { width: innerW, height: 1 }),
-                createElement(Label, {
-                  text: "Wallpaper",
-                  fontWeight: "medium",
-                  width: innerW,
-                  height: labelH,
-                }),
-                createElement(
-                  Row,
+            ? createElement(PropertyList, {
+                width: innerW,
+                height: appearanceContentH,
+                rowHeight: appearanceRowH,
+                descriptionRowHeight: appearanceRowH,
+                labelWidth: appearanceLabelW,
+                stacked: stackedAppearance,
+                scrollbar: false,
+                sections: [
                   {
-                    width: innerW,
-                    height: btnH,
-                    gap: Math.round(8 * ui),
-                    align: "center",
+                    id: "style",
+                    label: "Appearance",
+                    items: [
+                      {
+                        id: "family",
+                        label: "Desktop style",
+                        description: "Applies to apps and window chrome",
+                        value: createElement(Select, {
+                          width: appearanceControlW,
+                          height: btnH,
+                          value: themeFamily,
+                          viewportWidth: props.width,
+                          viewportHeight: props.height,
+                          options: THEME_FAMILIES.map((family) => ({
+                            id: family,
+                            label: THEME_FAMILY_LABELS[family],
+                          })),
+                          onChange: (value) => {
+                            const family = parseThemeFamily(value);
+                            push({ themeFamily: family }, `${THEME_FAMILY_LABELS[family]} applied`);
+                          },
+                        }),
+                      },
+                      {
+                        id: "scheme",
+                        label: "Color scheme",
+                        description: "Choose light or dark surfaces",
+                        value: createElement(SegmentedControl, {
+                          width: appearanceControlW,
+                          height: btnH,
+                          value: dark ? "dark" : "light",
+                          options: [
+                            { id: "light", label: "Light" },
+                            { id: "dark", label: "Dark" },
+                          ],
+                          onChange: (value) =>
+                            push(
+                              { dark: value === "dark" },
+                              value === "dark" ? "Dark theme" : "Light theme",
+                            ),
+                        }),
+                      },
+                      {
+                        id: "motion",
+                        label: "Reduce motion",
+                        description: "Saved for Moire apps",
+                        value: createElement(Toggle, {
+                          on: props.reducedMotion ?? props.initial.reducedMotion,
+                          disabled: motionSaving || !props.onReducedMotionChange,
+                          onChange: (value) => {
+                            if (motionSaving || !props.onReducedMotionChange) return;
+                            setMotionSaving(true);
+                            void props
+                              .onReducedMotionChange(value)
+                              .then(() => setStatus("Motion preference saved"))
+                              .catch((error: unknown) =>
+                                setStatus(
+                                  `Could not save motion preference: ${error instanceof Error ? error.message : String(error)}`,
+                                ),
+                              )
+                              .finally(() => {
+                                if (mounted.current) setMotionSaving(false);
+                              });
+                          },
+                        }),
+                      },
+                      {
+                        id: "scale",
+                        label: "Interface size",
+                        description: `${Math.round(uiScaleFromSlider(scale) * 100)}% scale`,
+                        value: createElement(Slider, {
+                          width: appearanceControlW,
+                          height: sliderH,
+                          value: scale,
+                          onChange: setScaleLive,
+                        }),
+                      },
+                    ],
                   },
-                  createElement(Button, {
-                    width: Math.round(100 * ui),
-                    height: btnH,
-                    label: "Atmosphere",
-                    variant:
-                      wallpaper?.mode === "atmosphere" || wallpaper == null
-                        ? "primary"
-                        : "secondary",
-                    onPress: () =>
-                      push({ wallpaper: { mode: "atmosphere" } }, "Wallpaper: Atmosphere"),
-                  }),
-                  createElement(Button, {
-                    width: Math.round(88 * ui),
-                    height: btnH,
-                    label: "Gradient",
-                    variant: wallpaper?.mode === "gradient" ? "primary" : "secondary",
-                    onPress: () => push({ wallpaper: { mode: "gradient" } }, "Wallpaper: Gradient"),
-                  }),
-                  createElement(Button, {
-                    width: Math.round(76 * ui),
-                    height: btnH,
-                    label: "Solid",
-                    variant: wallpaper?.mode === "solid" ? "primary" : "secondary",
-                    onPress: () => push({ wallpaper: { mode: "solid" } }, "Wallpaper: Solid"),
-                  }),
-                ),
-                createElement(Checkbox, {
-                  checked: showDesktopIcons,
-                  label: "Show desktop icons",
-                  onChange: (v) =>
-                    push({ showDesktopIcons: v }, v ? "Desktop icons on" : "Desktop icons off"),
-                  width: Math.min(Math.round(360 * ui), innerW),
-                  height: rowH,
-                }),
-              )
+                  {
+                    id: "desktop",
+                    label: "Desktop",
+                    items: [
+                      {
+                        id: "wallpaper",
+                        label: "Wallpaper",
+                        description: "Theme default follows the desktop style",
+                        value: createElement(Select, {
+                          width: appearanceControlW,
+                          height: btnH,
+                          value: wallpaper?.mode ?? "default",
+                          viewportWidth: props.width,
+                          viewportHeight: props.height,
+                          options: [
+                            { id: "default", label: "Theme default" },
+                            { id: "atmosphere", label: "Atmosphere" },
+                            { id: "gradient", label: "Gradient" },
+                            { id: "solid", label: "Solid color" },
+                            ...(wallpaper?.mode === "image"
+                              ? [{ id: "image", label: "Custom image" }]
+                              : []),
+                          ],
+                          onChange: (value) => {
+                            if (value === "default")
+                              push({ wallpaper: null }, "Theme wallpaper restored");
+                            else if (
+                              value === "atmosphere" ||
+                              value === "gradient" ||
+                              value === "solid"
+                            )
+                              push({ wallpaper: { mode: value } }, `Wallpaper: ${value}`);
+                          },
+                        }),
+                      },
+                      {
+                        id: "icons",
+                        label: "Desktop icons",
+                        description: "Show files and folders on the desktop",
+                        value: createElement(Toggle, {
+                          on: showDesktopIcons,
+                          onChange: (on) =>
+                            push(
+                              { showDesktopIcons: on },
+                              on ? "Desktop icons on" : "Desktop icons off",
+                            ),
+                        }),
+                      },
+                      {
+                        id: "notifications",
+                        label: "Notifications",
+                        description: "Allow desktop notifications",
+                        value: createElement(Toggle, {
+                          on: notifs,
+                          onChange: (on) =>
+                            push(
+                              { notifications: on },
+                              on ? "Notifications on" : "Notifications off",
+                            ),
+                        }),
+                      },
+                    ],
+                  },
+                ],
+              })
             : null,
           tab === 1
             ? createElement(
@@ -571,7 +712,7 @@ function SettingsApp(
                       items: arrangementItems,
                       selectedId: selectedOutputId,
                       onSelect: setSelectedOutputId,
-                      onChange: pendingDisplayLayout
+                      onChange: displayLocked
                         ? undefined
                         : (items: DisplayArrangementItem[]) => {
                             const positions = new Map(items.map((item) => [item.id, item]));
@@ -599,7 +740,7 @@ function SettingsApp(
                           ?.primary
                           ? "primary"
                           : "secondary",
-                        disabled: pendingDisplayLayout != null,
+                        disabled: displayLocked,
                         onPress: () =>
                           requestDisplayLayout(
                             connectedOutputs.map((output) => ({
@@ -635,7 +776,7 @@ function SettingsApp(
                         options: [120, 150, 180, 210, 240].map((scale120) => ({
                           id: String(scale120),
                           label: `${Math.round((scale120 / 120) * 100)}%`,
-                          disabled: pendingDisplayLayout != null,
+                          disabled: displayLocked,
                         })),
                         value: String(selectedOutput.scale120),
                         onChange: (value) =>
@@ -658,6 +799,7 @@ function SettingsApp(
                         height: btnH,
                         label: "Keep",
                         variant: "primary",
+                        disabled: displayBusy,
                         onPress: confirmDisplayLayout,
                       }),
                       createElement(Button, {
@@ -665,6 +807,7 @@ function SettingsApp(
                         height: btnH,
                         label: "Revert",
                         variant: "secondary",
+                        disabled: displayBusy,
                         onPress: revertDisplayLayout,
                       }),
                       createElement(Label, {
@@ -700,6 +843,7 @@ function SettingsApp(
                         };
                       }),
                       value: selectedResolution,
+                      disabled: displayLocked,
                       onChange: requestResolution,
                     })
                   : createElement(Label, {
@@ -729,7 +873,7 @@ function SettingsApp(
                       value: refreshModes.some((mode) => mode.id === displayMode)
                         ? displayMode
                         : refreshModes[0]?.id,
-                      disabled: refreshModes.length <= 1,
+                      disabled: displayLocked || refreshModes.length <= 1,
                       onChange: requestDisplayMode,
                     })
                   : null,
@@ -760,6 +904,7 @@ function SettingsApp(
                           height: Math.round(32 * ui),
                           label: "Keep",
                           variant: "primary",
+                          disabled: displayBusy,
                           onPress: confirmDisplayMode,
                         }),
                         createElement(Button, {
@@ -767,6 +912,7 @@ function SettingsApp(
                           height: Math.round(32 * ui),
                           label: "Revert",
                           variant: "secondary",
+                          disabled: displayBusy,
                           onPress: revertDisplayMode,
                         }),
                       ),
@@ -854,7 +1000,7 @@ function SettingsApp(
             gap: Math.round(8 * ui),
           },
           createElement(Label, {
-            text: status || " ",
+            text: (tab === 1 ? displayStatus : "") || status || " ",
             color: pal.accent,
             width: Math.max(Math.round(120 * ui), innerW - Math.round(120 * ui)),
             height: Math.round(18 * ui),
@@ -1036,6 +1182,8 @@ async function main() {
     createElement(SettingsApp, {
       ...size,
       initial,
+      reducedMotion: app.getPersonalization()?.reducedMotion ?? initial.reducedMotion,
+      onReducedMotionChange: (value) => app.setSessionReducedMotion(value),
       display: displayConnection?.controller ?? null,
       onQuit: () => {
         displayConnection?.bus.close();
@@ -1052,7 +1200,8 @@ async function main() {
   await app.run();
 }
 
-main().catch((err) => {
-  console.error("[settings]", err);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch((err) => {
+    console.error("[settings]", err);
+    process.exit(1);
+  });

@@ -1,0 +1,18 @@
+{
+  "sourceStorePath": "/nix/store/lw160254lcl9kf8yhz6m1zv71hjld72b-source",
+  "sourceFilesDigest": "6ffb08fe3698efe0f1d7e2f7b7c24d47e0b6bd6bd6575a17156fc0ef8d60ae1f",
+  "derivation": "/nix/store/21qz1hplcw7wi5bpclf45x42z4bh6b43-moire-boot-0.0.0.drv",
+  "filteredSource": "/nix/store/w2z15yrkid52j81jpzy0c3vnfg57dxcq-source",
+  "verifiedFilteredRecords": 599,
+  "package": "/nix/store/hi1cbijd23xnnj5ycac3f1b9j421nbbb-moire-boot-0.0.0",
+  "evdevSourceSha256": "ab3c20f4d9a887e59c88fe8408d2693394fe8722d5f7dd8e875ebf996a9013f7",
+  "compiledEvdev": [
+    {
+      "file": "lib/moire-boot/src/entry/chunk-4L4RVQHA.mjs",
+      "sha256": "63c6459aee3442cdfd47a1ea50d7b2510f371a43adfcf5d6d982776c133980c3",
+      "positiveCountGuard": true,
+      "registrationBeforePublish": true
+    }
+  ],
+  "scope": "source/artifact provenance only; no real input/console/graphics device validation"
+}

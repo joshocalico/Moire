@@ -24,7 +24,7 @@ import {
   Vertical,
   Window,
   setUiScaleFactor,
-  themePalette,
+  usePalette,
   type WindowSize,
 } from "@moire/ui";
 
@@ -39,7 +39,7 @@ function MemoryPressureDialog(
     close: () => void;
   },
 ): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Reviewing application memory…");

@@ -42,3 +42,9 @@ line, area, grouped and stacked bars, scatter, donut, radial, sparkline, and
 heatmap compositions under the same palette and data model. Each public sample has a matching prop table in
 [`ui/widgets.md`](../ui/widgets.md); the Code tab is illustrative usage rather
 than a substitute for that API reference.
+
+Theme Lab exercises normalized system personalization and provider-scoped live
+overrides across all named recipe families, schemes, accents, reduced motion,
+and reduced transparency. It is the first visual checkpoint for each family;
+family-specific widget recipe work should expand it rather than create a
+separate renderer path.

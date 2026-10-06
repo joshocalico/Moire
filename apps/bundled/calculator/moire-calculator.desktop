@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Calculator
+Comment=Calculate arithmetic expressions
+Exec=moire-calculator
+TryExec=moire-calculator
+Icon=moire-calculator
+Terminal=false
+Categories=Utility;Calculator;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Calculator

@@ -12,6 +12,7 @@ export type SsdWindowInfo = {
   contentW: number;
   contentH: number;
   title: string;
+  appId?: string;
   focused: boolean;
   maximized: boolean;
 };

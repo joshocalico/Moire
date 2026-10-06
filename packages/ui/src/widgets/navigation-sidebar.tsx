@@ -1,6 +1,6 @@
 import React, { type ReactNode } from "react";
 import { Group, Rect } from "@moire/react-host";
-import { CollectionItem } from "./interaction";
+import { CollectionItem, type CollectionItemProps } from "./interaction";
 import { Icon, type IconName } from "./icon";
 import { IconButton } from "./icon-button";
 import { ListItem } from "./list";
@@ -25,6 +25,10 @@ export type NavigationSidebarItem = {
   icon?: IconName;
   disabled?: boolean;
   removable?: boolean;
+  /** False for provider-owned places whose order cannot be persisted. */
+  movable?: boolean;
+  moveDirections?: readonly (-1 | 1)[];
+  leading?: ReactNode;
 };
 
 export type NavigationSidebarSection = {
@@ -46,6 +50,14 @@ export type NavigationSidebarProps = {
   onMove?: (item: NavigationSidebarItem, direction: -1 | 1) => void;
   header?: ReactNode;
   footer?: ReactNode;
+  labelCase?: "upper" | "preserve";
+  getItemProps?: (
+    item: NavigationSidebarItem,
+  ) => Omit<CollectionItemProps, "width" | "height" | "children">;
+  renderItem?: (
+    item: NavigationSidebarItem,
+    size: { width: number; height: number; selected: boolean },
+  ) => ReactNode;
 };
 
 const ROW_H = 40;
@@ -62,6 +74,7 @@ type SidebarRowProps = {
   onSelect?: (item: NavigationSidebarItem) => void;
   onRemove?: (item: NavigationSidebarItem) => void;
   onMove?: (item: NavigationSidebarItem, direction: -1 | 1) => void;
+  itemProps?: Omit<CollectionItemProps, "width" | "height" | "children">;
 };
 
 function SidebarRow(props: SidebarRowProps): ReactNode {
@@ -74,18 +87,20 @@ function SidebarRow(props: SidebarRowProps): ReactNode {
         focusId={`sidebar:${props.item.id}`}
         disabled={props.item.disabled}
         onPress={() => props.onSelect?.(props.item)}
+        {...props.itemProps}
       >
         <ListItem
           width={props.width}
           height={ROW_H - 2}
-          size="small"
+          size="medium"
           title={props.item.label}
           subtitle={props.item.subtitle}
           selected={props.selected}
           disabled={props.item.disabled}
           interactive={false}
           leading={
-            props.item.icon ? (
+            props.item.leading ??
+            (props.item.icon ? (
               <Group width={26} height={26}>
                 <Rect
                   width={26}
@@ -104,7 +119,7 @@ function SidebarRow(props: SidebarRowProps): ReactNode {
                   color={props.item.disabled ? pal.muted : props.selected ? pal.accent : pal.text}
                 />
               </Group>
-            ) : undefined
+            ) : undefined)
           }
         />
       </CollectionItem>
@@ -116,7 +131,12 @@ function SidebarRow(props: SidebarRowProps): ReactNode {
               height={24}
               icon={<Icon name="chevron-up" size={12} symbolic />}
               variant="ghost"
-              disabled={props.index === 0}
+              disabled={
+                props.item.movable === false ||
+                (props.item.moveDirections
+                  ? !props.item.moveDirections.includes(-1)
+                  : props.index === 0)
+              }
               onPress={() => props.onMove?.(props.item, -1)}
             />
             <IconButton
@@ -124,7 +144,12 @@ function SidebarRow(props: SidebarRowProps): ReactNode {
               height={24}
               icon={<Icon name="chevron-down" size={12} symbolic />}
               variant="ghost"
-              disabled={props.index === props.itemCount - 1}
+              disabled={
+                props.item.movable === false ||
+                (props.item.moveDirections
+                  ? !props.item.moveDirections.includes(1)
+                  : props.index === props.itemCount - 1)
+              }
               onPress={() => props.onMove?.(props.item, 1)}
             />
             {props.item.removable ? (
@@ -193,9 +218,13 @@ export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {
                     {section.label ? (
                       <Inset height={HEADER_H} padding={{ horizontal: pad / 2 }}>
                         <TextBlock
-                          text={section.label.toUpperCase()}
-                          color={pal.accent}
-                          fontSize={10}
+                          text={
+                            props.labelCase === "preserve"
+                              ? section.label
+                              : section.label.toUpperCase()
+                          }
+                          color={props.labelCase === "preserve" ? pal.muted : pal.accent}
+                          fontSize={props.labelCase === "preserve" ? 12 : 10}
                           fontWeight="medium"
                           verticalAlign="center"
                           overflow="ellipsis"
@@ -204,18 +233,27 @@ export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {
                       </Inset>
                     ) : null}
                     {section.items.map((item, index) => (
-                      <SidebarRow
-                        key={item.id}
-                        item={item}
-                        index={index}
-                        itemCount={section.items.length}
-                        width={width - pad}
-                        editing={Boolean(props.editing)}
-                        selected={props.selectedId === item.id}
-                        onSelect={props.onSelect}
-                        onRemove={props.onRemove}
-                        onMove={props.onMove}
-                      />
+                      <React.Fragment key={item.id}>
+                        {props.renderItem?.(item, {
+                          width: width - pad,
+                          height: ROW_H,
+                          selected: props.selectedId === item.id,
+                        }) ?? (
+                          <SidebarRow
+                            key={item.id}
+                            item={item}
+                            index={index}
+                            itemCount={section.items.length}
+                            width={width - pad}
+                            editing={Boolean(props.editing)}
+                            selected={props.selectedId === item.id}
+                            onSelect={props.onSelect}
+                            onRemove={props.onRemove}
+                            onMove={props.onMove}
+                            itemProps={props.getItemProps?.(item)}
+                          />
+                        )}
+                      </React.Fragment>
                     ))}
                   </Vertical>
                 ))}

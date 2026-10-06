@@ -1,0 +1,21 @@
+// Root-editable, session-local allow rule. The following immutable rule denies
+// every other non-root request, including stock actions that default to YES.
+polkit.addRule(function(action, subject) {
+  if (subject.user === "root") return;
+  var permittedActions = [
+    "org.freedesktop.udisks2.filesystem-mount",
+    "org.freedesktop.udisks2.eject-media",
+    "org.freedesktop.udisks2.power-off-drive"
+  ];
+  if (permittedActions.indexOf(action.id) === -1) return;
+  var removable = action.lookup("drive.removable");
+  var permitted = subject.local === true && subject.active === true && removable === "true";
+  // Capture the daemon's authoritative subject for the production request.
+  // Polkit 127's active flag is UID-wide, not per-PID foreground membership.
+  polkit.log("MOIRE_STORAGE_AUTH " + JSON.stringify({
+    action: action.id, pid: subject.pid, user: subject.user,
+    local: subject.local, active: subject.active, removable: removable,
+    permitted: permitted
+  }));
+  if (permitted) return polkit.Result.YES;
+});

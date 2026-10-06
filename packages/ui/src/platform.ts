@@ -1,6 +1,12 @@
 /**
  * PlatformBackend — OS window I/O. Widgets/fonts never import platforms.
  */
+import {
+  discoverPersonalization,
+  type PersonalizationProfile,
+  type PersonalizationOverrides,
+} from "./personalization";
+export type { PersonalizationProfile } from "./personalization";
 export type PointerButton = "left" | "right" | "middle";
 
 export type UiPointerEvent = {
@@ -130,6 +136,8 @@ export type PlatformWindowOpts = {
   resizable?: boolean;
   /** Ask the compositor for server chrome. Default true. */
   decorated?: boolean;
+  /** Request compositor-sized fullscreen presentation before the first commit. */
+  fullscreen?: boolean;
 };
 
 export type PlatformPopupOpts = {
@@ -144,8 +152,30 @@ export type PlatformPopupOpts = {
 };
 
 export type UiPresentationMode = "auto" | "egl" | "shm";
+/** Explicit compositor observation; unknown must not be treated as visible. */
+export type UiSurfaceVisibility = "visible" | "hidden" | "unknown";
+
+/** Rendering authority is per actual submitted frame, never aggregate diagnostics. */
+export type UiRenderingState =
+  | Readonly<{ kind: "hardware-retained"; commitId: number }>
+  | Readonly<{
+      kind: "static";
+      reason:
+        | "pending"
+        | "software"
+        | "flat"
+        | "readback"
+        | "virtual"
+        | "unknown-execution"
+        | "awaiting-output"
+        | "backend-loss"
+        | "destroyed";
+      commitId?: number;
+    }>;
 
 export type UiFrameEvent =
+  | { type: "output-accepted"; commitId: number; execution: "software" | "virtual" }
+  | { type: "output-revoked"; commitId: number }
   | {
       type: "submitted";
       commitId: number;
@@ -188,10 +218,21 @@ export type UiFrameEvent =
     };
 
 export interface PlatformWindow {
+  getRenderingState(): UiRenderingState;
+  onRenderingChange(cb: (state: UiRenderingState) => void): () => void;
+  getVisibility(): UiSurfaceVisibility;
+  /** Changes are independent of this surface's commits and frame callbacks. */
+  onVisibilityChange(cb: (visibility: UiSurfaceVisibility) => void): () => void;
   setTitle(title: string): void;
   setSize(w: number, h: number): void;
   /** Begin an interactive compositor move using the current pointer press. */
   beginMove(): void;
+  /** Native window state actions; absent on platforms that cannot provide them. */
+  setMaximized?(maximized: boolean): void;
+  isMaximized?(): boolean;
+  setFullscreen?(fullscreen: boolean): void;
+  isFullscreen?(): boolean;
+  minimize?(): void;
   /** Present ARGB8888 pixels and optional buffer-space damage. */
   present(
     pixels: Uint8Array,
@@ -219,15 +260,34 @@ export interface PlatformBackend {
   createPopup?(opts: PlatformPopupOpts): PlatformWindow;
   /** Runtime facts from the backend actually serving this application. */
   getDiagnostics(): PlatformDiagnostics;
+  /** Appearance and accessibility preferences discoverable on this platform. */
+  getPersonalization(): PersonalizationProfile;
+  /** Optional live platform appearance subscription. */
+  onPersonalizationChange?(callback: (profile: PersonalizationProfile) => void): () => void;
+  /** Seat text clipboard; unsupported backends omit these methods. */
+  writeClipboardText?(text: string): Promise<void>;
+  readClipboardText?(): Promise<string>;
   pump(): void;
   disconnect(): void;
+}
+
+export function platformPersonalization(
+  platform: string,
+  overrides: PersonalizationOverrides = {},
+): PersonalizationProfile {
+  return discoverPersonalization(platform, overrides);
 }
 
 export type PlatformDiagnostics = {
   platform: string;
   displayServer: string;
   transport: string;
-  presentation: "retained-egl-dmabuf" | "software-egl-dmabuf" | "software-shm" | "headless";
+  presentation:
+    | "retained-egl-dmabuf"
+    | "retained-egl-shm"
+    | "software-egl-dmabuf"
+    | "software-shm"
+    | "headless";
   requestedAcceleration: string;
   accelerated: boolean;
   display?: string;

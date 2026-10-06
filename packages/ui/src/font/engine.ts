@@ -9,7 +9,7 @@ import opentype from "opentype.js";
 import type { Font as OtFont, Path as OtPath } from "opentype.js";
 
 export type FontWeight = "regular" | "medium" | "bold";
-export type FontFamily = "sans" | "mono";
+export type FontFamily = "sans" | "mono" | "serif";
 
 export type TextStyle = {
   family?: FontFamily;
@@ -41,6 +41,7 @@ function fontsDir(): string {
 
 function faceFile(family: FontFamily, weight: FontWeight): string {
   const dir = fontsDir();
+  if (family === "serif") return path.join(dir, "DejaVuSerif.ttf");
   if (family === "mono") {
     return path.join(dir, "IBMPlexMono-Regular.ttf");
   }
@@ -61,6 +62,7 @@ export class FontEngine {
       ["sans", "medium"],
       ["sans", "bold"],
       ["mono", "regular"],
+      ["serif", "regular"],
     ];
     try {
       for (const [family, weight] of specs) {
@@ -98,6 +100,15 @@ export class FontEngine {
       this.faces.get(`${family}:regular`) ??
       this.faces.get("sans:regular") ??
       null
+    );
+  }
+
+  /** Whether the selected bundled face contains every visible code point. */
+  supportsText(text: string, style: TextStyle = {}): boolean {
+    const font = this.face(style);
+    if (!font) return false;
+    return [...text].every(
+      (character) => /\s/u.test(character) || font.charToGlyphIndex(character) > 0,
     );
   }
 

@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { SessionBus } from "@moire/dbus";
+import { attachDesktopControls } from "./desktop-controls";
+import { attachStorageControls } from "./storage-controls";
+import { createUDisksStorageAdapter } from "./udisks-storage";
 import {
   SYSTEM_MANAGEMENT_BUS,
   SYSTEM_MANAGEMENT_INTERFACE,
@@ -67,9 +71,8 @@ function procStat(pid: number): { ticks: number; rssBytes: number } {
   return { ticks, rssBytes: rssPages * 4096 };
 }
 
-function commandLine(pid: number): string {
-  const value = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " ").trim();
-  return value || fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim();
+function processArguments(pid: number): string[] {
+  return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
 }
 
 function workingDirectory(pid: number): string {
@@ -80,54 +83,168 @@ function workingDirectory(pid: number): string {
   }
 }
 
-type Identity = { name: string; appId: string; protected: boolean };
+export type ProcessIdentity = { name: string; appId: string; protected: boolean };
+export type ProcessCatalog = {
+  scripts: ReadonlyMap<string, ProcessIdentity>;
+  launchers: ReadonlyMap<string, ProcessIdentity>;
+  tsxScripts: ReadonlySet<string>;
+};
 
-function identify(command: string, cwd: string, fallback: string): Identity {
-  const source = `${command} ${cwd}`;
-  const known: Array<[RegExp, string, string, boolean]> = [
+/** Read identities from this installation, never from a process's working directory. */
+export function loadProcessCatalog(root: string): ProcessCatalog {
+  const scripts = new Map<string, ProcessIdentity>();
+  const launchers = new Map<string, ProcessIdentity>();
+  const register = (directory: string, identity: ProcessIdentity, launcher?: string) => {
+    for (const extension of ["ts", "tsx"])
+      scripts.set(path.join(root, "apps", directory, "src", `main.${extension}`), identity);
+    if (launcher) launchers.set(path.join(root, "apps", directory, launcher), identity);
+  };
+  const existing: Array<[string, string, string, boolean, string?]> = [
+    ["system/compositor", "Moire Compositor", "org.moire.Compositor", true],
+    ["system/session", "Moire Session", "org.moire.Session", true, "moire-session"],
+    ["system/management-service", "System Management Service", "org.moire.SystemManagement", true],
+    ["system/portal", "Desktop Portal", "org.moire.Portal", true, "moire-portal"],
+    ["core/settings", "Settings", "org.moire.Settings", false, "moire-settings"],
     [
-      /apps\/system\/compositor|@moire\/compositor/,
-      "Moire Compositor",
-      "org.moire.Compositor",
-      true,
-    ],
-    [/apps\/system\/session|moire-session/, "Moire Session", "org.moire.Session", true],
-    [
-      /management-service|@moire\/system-management-service/,
-      "System Management Service",
-      "org.moire.SystemManagement",
-      true,
-    ],
-    [/apps\/system\/portal|@moire\/portal/, "Desktop Portal", "org.moire.Portal", true],
-    [/apps\/core\/settings|@moire\/settings/, "Settings", "org.moire.Settings", false],
-    [
-      /apps\/core\/process-manager|@moire\/process-manager/,
-      "Process Manager",
+      "core/process-manager",
+      "System Monitor",
       "org.moire.ProcessManager",
       false,
+      "moire-process-manager",
     ],
     [
-      /apps\/core\/memory-pressure|@moire\/memory-pressure/,
+      "core/memory-pressure",
       "Memory Pressure",
       "org.moire.MemoryPressure",
       false,
+      "moire-memory-pressure",
     ],
-    [/apps\/bundled\/files|@moire\/files/, "Files", "org.moire.Files", false],
-    [/apps\/bundled\/terminal|@moire\/terminal-app/, "Terminal", "org.moire.Terminal", false],
-    [/apps\/developer\/showcase|@moire\/showcase/, "Widget Showcase", "org.moire.Showcase", false],
-    [/apps\/developer\/benchmark|@moire\/benchmark/, "Moire Bench", "org.moire.Benchmark", false],
-    [/\bXwayland\b/, "Xwayland", "org.moire.Xwayland", true],
-    [/\bdbus-daemon\b/, "D-Bus Session", "org.freedesktop.DBus", true],
+    ["bundled/files", "Files", "org.moire.Files", false, "moire-files"],
+    ["bundled/terminal", "Terminal", "org.moire.Terminal", false, "moire-terminal"],
+    ["developer/showcase", "Widget Showcase", "org.moire.Showcase", false, "moire-showcase"],
+    ["developer/benchmark", "Moire Bench", "org.moire.Benchmark", false, "moire-benchmark"],
   ];
-  for (const [pattern, name, appId, protectedProcess] of known) {
-    if (pattern.test(source)) return { name, appId, protected: protectedProcess };
+  for (const [directory, name, appId, protectedProcess, launcher] of existing)
+    register(directory, { name, appId, protected: protectedProcess }, launcher);
+  for (const category of ["bundled", "core", "developer"]) {
+    const categoryPath = path.join(root, "apps", category);
+    if (!fs.existsSync(categoryPath)) continue;
+    for (const app of fs.readdirSync(categoryPath, { withFileTypes: true })) {
+      if (!app.isDirectory()) continue;
+      const directory = path.join(categoryPath, app.name);
+      for (const entry of fs.readdirSync(directory)) {
+        if (!entry.endsWith(".desktop")) continue;
+        const values = new Map<string, string>();
+        let inEntry = false;
+        for (const line of fs.readFileSync(path.join(directory, entry), "utf8").split("\n")) {
+          if (line.startsWith("[")) inEntry = line.trim() === "[Desktop Entry]";
+          else if (inEntry) {
+            const match = /^(Name|StartupWMClass|Exec)=(.*)$/.exec(line);
+            if (match) values.set(match[1]!, match[2]!.trim());
+          }
+        }
+        const name = values.get("Name"),
+          appId = values.get("StartupWMClass");
+        const launcher = values.get("Exec")?.split(/\s+/)[0];
+        if (!name || !appId || !launcher || !/^moire-[a-z0-9-]+$/.test(launcher)) continue;
+        register(`${category}/${app.name}`, { name, appId, protected: false }, launcher);
+      }
+    }
   }
-  return {
-    name: fallback || path.basename(command.split(/\s+/)[0] ?? "Process"),
-    appId: "",
-    protected: false,
-  };
+  const tsxScripts = new Set<string>();
+  const tsxLauncher = path.join(root, "node_modules", ".bin", "tsx");
+  if (fs.existsSync(tsxLauncher)) {
+    tsxScripts.add(tsxLauncher);
+    tsxScripts.add(fs.realpathSync(tsxLauncher));
+  }
+  return { scripts, launchers, tsxScripts };
 }
+
+function scriptArgument(
+  args: readonly string[],
+  runtime: "node" | "tsx" | "shell",
+): { value: string; index: number } | null {
+  const withValue = new Set(
+    runtime === "node"
+      ? ["--require", "-r", "--import", "--loader", "--experimental-loader", "--conditions", "-C"]
+      : runtime === "tsx"
+        ? ["--tsconfig"]
+        : [],
+  );
+  const flags = new Set(
+    runtime === "node"
+      ? [
+          "--enable-source-maps",
+          "--no-warnings",
+          "--experimental-strip-types",
+          "--inspect",
+          "--inspect-brk",
+        ]
+      : runtime === "tsx"
+        ? ["--no-cache"]
+        : ["-e", "-u", "-eu", "-ue"],
+  );
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index]!;
+    if (argument === "--")
+      return args[index + 1] ? { value: args[index + 1]!, index: index + 1 } : null;
+    if (!argument.startsWith("-")) return { value: argument, index };
+    const option = argument.split("=")[0]!;
+    if (withValue.has(option)) {
+      if (!argument.includes("=")) index++;
+    } else if (!flags.has(option)) return null;
+  }
+  return null;
+}
+
+/** Only the executed entrypoint identifies an app; document arguments and cwd cannot. */
+export function identifyProcess(
+  argv: readonly string[],
+  cwd: string,
+  fallback: string,
+  catalog: ProcessCatalog,
+): ProcessIdentity {
+  const executable = argv[0] ?? "";
+  const basename = path.basename(executable);
+  const external =
+    basename === "Xwayland"
+      ? { name: "Xwayland", appId: "org.moire.Xwayland", protected: true }
+      : basename === "dbus-daemon"
+        ? { name: "D-Bus Session", appId: "org.freedesktop.DBus", protected: true }
+        : null;
+  if (external) return external;
+  const resolve = (value: string) => path.resolve(cwd || "/", value);
+  const launcher = catalog.launchers.get(resolve(executable));
+  if (launcher) return launcher;
+  let script: string | null = null;
+  if (basename === "node" || basename === "nodejs") {
+    const argument = scriptArgument(argv.slice(1), "node");
+    script = argument?.value ?? null;
+    if (argument) {
+      let entrypoint = resolve(argument.value);
+      try {
+        entrypoint = fs.realpathSync(entrypoint);
+      } catch {
+        /* Missing processes remain unidentified. */
+      }
+      if (catalog.tsxScripts.has(entrypoint))
+        script = scriptArgument(argv.slice(argument.index + 2), "tsx")?.value ?? null;
+    }
+  } else if (basename === "tsx") script = scriptArgument(argv.slice(1), "tsx")?.value ?? null;
+  else if (["bash", "sh", "zsh"].includes(basename)) {
+    const argument = scriptArgument(argv.slice(1), "shell");
+    if (argument) {
+      const identity = catalog.launchers.get(resolve(argument.value));
+      if (identity) return identity;
+    }
+  }
+  const identity = script ? catalog.scripts.get(resolve(script)) : undefined;
+  return identity ?? { name: fallback || basename || "Process", appId: "", protected: false };
+}
+
+const processCatalog = loadProcessCatalog(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.."),
+);
 
 function cpuPercent(pid: number, ticks: number, now: number): number {
   const previous = cpuSamples.get(pid);
@@ -140,9 +257,10 @@ function readProcess(pid: number, now = performance.now()): ManagedProcess | nul
   try {
     const status = procStatus(pid);
     if (procOwner(status) !== uid) return null;
-    const command = commandLine(pid);
+    const argv = processArguments(pid);
+    const command = argv.join(" ") || fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim();
     const comm = statusValue(status, "Name") ?? "Process";
-    const identity = identify(command, workingDirectory(pid), comm);
+    const identity = identifyProcess(argv, workingDirectory(pid), comm, processCatalog);
     const stat = procStat(pid);
     return {
       pid,
@@ -176,11 +294,11 @@ function memoryInfo(): Omit<SystemSnapshot, "processes"> {
   };
 }
 
-function watchMemoryPressure(): void {
+function watchMemoryPressure(): () => void {
   let criticalSamples = 0;
   let dialog: ChildProcess | null = null;
   let cooldownUntil = 0;
-  setInterval(() => {
+  const timer = setInterval(() => {
     const memory = memoryInfo();
     const pressure =
       memory.totalMemoryBytes > 0 ? 1 - memory.availableMemoryBytes / memory.totalMemoryBytes : 0;
@@ -209,6 +327,41 @@ function watchMemoryPressure(): void {
       cooldownUntil = Date.now() + 60_000;
     }
   }, 2_000).unref();
+  return () => {
+    clearInterval(timer);
+    dialog?.kill("SIGTERM");
+  };
+}
+
+/** Normal process signals must retire owned audio children before leaving. */
+export function bindManagementShutdown(
+  bus: Pick<SessionBus, "close" | "onDisconnect">,
+  controls: { dispose(): Promise<void> },
+  stopWatch: () => void = () => {},
+): () => Promise<void> {
+  let pending: Promise<void> | null = null;
+  let removeDisconnect = () => {};
+  const shutdown = (): Promise<void> => {
+    if (pending) return pending;
+    process.off("SIGTERM", onSignal);
+    process.off("SIGINT", onSignal);
+    removeDisconnect();
+    stopWatch();
+    pending = Promise.resolve()
+      .then(() => controls.dispose())
+      .finally(() => bus.close());
+    return pending;
+  };
+  const onSignal = () => {
+    void shutdown().catch((error) => {
+      console.error("[system-management] shutdown:", error);
+      process.exitCode = 1;
+    });
+  };
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
+  removeDisconnect = bus.onDisconnect(onSignal);
+  return shutdown;
 }
 
 function snapshot(): SystemSnapshot {
@@ -284,11 +437,42 @@ async function main(): Promise<void> {
   });
   const ownership = await bus.requestName(SYSTEM_MANAGEMENT_BUS);
   if (ownership !== 1) throw new Error(`Could not own ${SYSTEM_MANAGEMENT_BUS}`);
-  watchMemoryPressure();
+  const controls = await attachDesktopControls(bus, { notificationActions: true });
+  let storage: ReturnType<typeof attachStorageControls>;
+  try {
+    const adapter = await createUDisksStorageAdapter();
+    try {
+      storage = attachStorageControls(bus, {
+        adapter,
+        onError: () =>
+          console.error("[system-management] storage: status publication or cleanup failed"),
+      });
+    } catch (error) {
+      await adapter.dispose();
+      throw error;
+    }
+  } catch (error) {
+    await controls.dispose().finally(() => bus.close());
+    throw error;
+  }
+  bindManagementShutdown(
+    bus,
+    {
+      async dispose() {
+        try {
+          await storage.dispose();
+        } finally {
+          await controls.dispose();
+        }
+      },
+    },
+    watchMemoryPressure(),
+  );
   console.log(`[system-management] ready as ${SYSTEM_MANAGEMENT_BUS}`);
 }
 
-main().catch((error: unknown) => {
-  console.error("[system-management] fatal:", error);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch((error: unknown) => {
+    console.error("[system-management] fatal:", error);
+    process.exit(1);
+  });

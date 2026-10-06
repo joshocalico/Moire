@@ -1,13 +1,21 @@
-import { default as React, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  default as React,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Group, Rect, Text, measureTextBounds } from "@moire/react-host";
-import { themePalette } from "#ui/theme";
 import { getWidgetTheme, useWidgetTheme } from "#ui/widget-theme";
 import { Button } from "./button";
-import { Icon, type IconName } from "./icon";
+import { Icon, applicationIcon, type IconName } from "./icon";
 import { Pressable } from "./pressable";
 import { MenuItem } from "./menu";
 import { ScrollArea } from "./scroll";
 import { SearchField } from "./search-field";
+import { FocusScope } from "./focus";
 import { easeTo, useMotionValue } from "#ui/motion";
 
 function LayerSurface(props: {
@@ -55,6 +63,8 @@ export type ContextMenuProps = {
   actions: ContextMenuAction[];
   onDismiss: () => void;
   width?: number;
+  /** Maximum total popup height, including its shadow and entrance motion. */
+  maxHeight?: number;
   /** Render as the contents of a native popup surface at local origin. */
   surface?: boolean;
 };
@@ -63,6 +73,7 @@ export function contextMenuSurfaceSize(
   actions: readonly ContextMenuAction[],
   title?: string,
   width = 244,
+  maxHeight = 480,
 ): { width: number; height: number } {
   const recipe = getWidgetTheme().recipes.menu.medium;
   const separators = actions.filter((action) => action.separatorBefore).length;
@@ -72,7 +83,7 @@ export function contextMenuSurfaceSize(
     separators * recipe.metrics.separatorGap +
     recipe.metrics.surfacePadding;
   // Shadow extends 6px right/8px down; entrance settles upward by 5px.
-  return { width: width + 6, height: menuHeight + 13 };
+  return { width: width + 6, height: Math.max(1, Math.min(menuHeight + 13, maxHeight)) };
 }
 
 export function ContextMenu(props: ContextMenuProps): ReactNode {
@@ -80,23 +91,59 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
   const pal = theme.foundations.palette;
   const recipe = theme.recipes.menu.medium;
   const reveal = useMotionValue(0);
+  const menuId = useId();
   const [closing, setClosing] = useState(false);
+  const closingRequested = useRef(false);
   const afterClose = useRef<(() => void) | null>(null);
   const finalized = useRef(false);
-  const width = props.width ?? 244;
+  const width = Math.max(
+    1,
+    Math.min(props.width ?? 244, props.viewportWidth - (props.surface ? 6 : 22)),
+  );
   const rowH = recipe.metrics.rowHeight;
-  const titleH = props.title ? recipe.metrics.headerHeight : recipe.metrics.surfacePadding;
+  const preferredTitleH = props.title ? recipe.metrics.headerHeight : recipe.metrics.surfacePadding;
   const separators = props.actions.filter((action) => action.separatorBefore).length;
-  const height =
-    titleH +
-    props.actions.length * rowH +
-    separators * recipe.metrics.separatorGap +
-    recipe.metrics.surfacePadding;
+  const contentH = props.actions.length * rowH + separators * recipe.metrics.separatorGap;
+  const height = Math.max(
+    1,
+    Math.min(
+      preferredTitleH + contentH + recipe.metrics.surfacePadding,
+      (props.maxHeight ?? 480) - 13,
+      props.viewportHeight - (props.surface ? 13 : 29),
+    ),
+  );
+  const titleH = Math.min(preferredTitleH, height);
+  const bodyH = Math.max(0, height - titleH - recipe.metrics.surfacePadding);
+  const enabledIndices = props.actions.flatMap((action, index) => (action.disabled ? [] : [index]));
+  const firstEnabled = enabledIndices[0] ?? -1;
+  const [activeIndex, setActiveIndex] = useState(firstEnabled);
+  const [scrollY, setScrollY] = useState(0);
+  const rowOffsets: number[] = [];
+  let offset = 0;
+  for (const action of props.actions) {
+    if (action.separatorBefore) offset += recipe.metrics.separatorGap;
+    rowOffsets.push(offset);
+    offset += rowH;
+  }
+  const activeTop = rowOffsets[activeIndex];
+  useLayoutEffect(() => {
+    if (!enabledIndices.includes(activeIndex)) setActiveIndex(firstEnabled);
+  }, [props.actions, activeIndex, firstEnabled]);
+  useLayoutEffect(() => {
+    if (activeTop === undefined) return;
+    setScrollY((current) =>
+      activeTop < current
+        ? activeTop
+        : activeTop + rowH > current + bodyH
+          ? activeTop + rowH - bodyH
+          : current,
+    );
+  }, [activeTop, rowH, bodyH]);
   const x = props.surface ? 0 : Math.max(8, Math.min(props.x, props.viewportWidth - width - 8));
-  const y = props.surface ? 0 : Math.max(8, Math.min(props.y, props.viewportHeight - height - 8));
+  const y = props.surface ? 0 : Math.max(8, Math.min(props.y, props.viewportHeight - height - 13));
   const progress = Math.max(0, Math.min(1, reveal.get() / 100));
   const animatedY = y + Math.round((1 - progress) * 5);
-  let rowY = titleH;
+  let rowY = 0;
 
   useEffect(() => {
     easeTo(reveal, 100, 24);
@@ -111,14 +158,16 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
   }, [closing, progress, props]);
 
   const dismiss = (callback?: () => void) => {
-    if (closing) return;
+    if (closingRequested.current) return;
+    closingRequested.current = true;
     afterClose.current = callback ?? null;
     setClosing(true);
     easeTo(reveal, 0, 28);
   };
 
   const rows: ReactNode[] = [];
-  for (const action of props.actions) {
+  for (const [index, action] of props.actions.entries()) {
+    const icon = action.icon;
     if (action.separatorBefore) {
       rows.push(
         <Rect
@@ -143,13 +192,19 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
         label={action.label}
         description={action.description}
         leading={
-          action.icon
-            ? (style) => <Icon name={action.icon!} size={style.size} color={style.color} />
-            : undefined
+          icon ? (style) => <Icon name={icon} size={style.size} color={style.color} /> : undefined
         }
         indicator
         danger={action.danger}
         disabled={action.disabled}
+        focusId={`context-menu:${menuId}:${action.id}`}
+        autoFocus={index === activeIndex}
+        onFocusChange={(focused) => {
+          if (focused) setActiveIndex(index);
+        }}
+        // Layout reconciliation also emits enter/leave when scrolling below
+        // a stationary pointer. Only actual movement changes menu selection.
+        onPointerMove={() => setActiveIndex(index)}
         onPress={() => {
           if (!action.disabled) dismiss(action.onPress);
         }}
@@ -159,7 +214,12 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
   }
 
   return (
-    <Group x={0} y={0} width={props.viewportWidth} height={props.viewportHeight}>
+    <FocusScope
+      width={props.viewportWidth}
+      height={props.viewportHeight}
+      active={!closing}
+      onEscape={() => dismiss()}
+    >
       <Rect
         x={0}
         y={0}
@@ -197,10 +257,43 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
               fontWeight={recipe.header.fontWeight}
             />
           ) : null}
-          {rows}
+          <Group
+            width={width}
+            height={height}
+            onGlobalKeyDown={(event) => {
+              const move = (direction: -1 | 1) => {
+                if (!enabledIndices.length) return;
+                const current = enabledIndices.indexOf(activeIndex);
+                const next = (current + direction + enabledIndices.length) % enabledIndices.length;
+                setActiveIndex(enabledIndices[next] ?? firstEnabled);
+              };
+              if (event.key === "ArrowDown" || event.code === 108) move(1);
+              else if (event.key === "ArrowUp" || event.code === 103) move(-1);
+              else if (event.key === "Home" || event.code === 102) setActiveIndex(firstEnabled);
+              else if (event.key === "End" || event.code === 107) {
+                setActiveIndex(enabledIndices[enabledIndices.length - 1] ?? -1);
+              } else if (event.key === "Tab" || event.code === 15) {
+                move(event.shiftKey ? -1 : 1);
+              } else return false;
+              return true;
+            }}
+          >
+            <ScrollArea
+              y={titleH}
+              width={width}
+              height={bodyH}
+              contentHeight={contentH}
+              scrollY={scrollY}
+              onScroll={setScrollY}
+              smooth={false}
+              fill={0x00000000}
+            >
+              {rows}
+            </ScrollArea>
+          </Group>
         </LayerSurface>
       </Group>
-    </Group>
+    </FocusScope>
   );
 }
 
@@ -233,7 +326,7 @@ export type OpenWithPickerProps = {
 };
 
 export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
-  const pal = themePalette();
+  const pal = useWidgetTheme().foundations.palette;
   const [query, setQuery] = useState("");
   const [scrollY, setScrollY] = useState(0);
   const width = props.standalone
@@ -344,7 +437,7 @@ export function OpenWithPicker(props: OpenWithPickerProps): ReactNode {
         <Icon
           x={14}
           y={14}
-          name="app"
+          name={applicationIcon(choice.id)}
           path={choice.iconPath}
           size={28}
           color={selected === choice.id ? pal.accent : pal.text}

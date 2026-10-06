@@ -3,13 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./startup": "./src/startup.ts"
+  },
   "bin": {
     "moire": "./src/main.ts"
   },
   "scripts": {
     "dev": "tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "smoke:capture": "tsx src/capture.smoke.ts"
   },
   "dependencies": {
     "@moire/app-discovery": "workspace:*",
@@ -18,11 +22,14 @@
     "@moire/protocol": "workspace:*",
     "@moire/prefs": "workspace:*",
     "@moire/shell": "workspace:*",
-    "@moire/sys": "workspace:*"
+    "@moire/sys": "workspace:*",
+    "pngjs": "^7.0.0",
+    "@moire/system-management": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "@types/pngjs": "^6.0.5"
   }
 }

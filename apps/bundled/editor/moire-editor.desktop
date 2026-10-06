@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Text Editor
+Comment=Edit text documents
+Exec=moire-editor %U
+TryExec=moire-editor
+Icon=moire-editor
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;text/markdown;text/x-log;application/json;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Editor

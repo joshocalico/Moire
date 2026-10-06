@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, type ReactNode } from "react";
 import { Group, Rect, Text, type HitPointerEvent } from "@moire/react-host";
-import { themePalette } from "#ui/theme";
+import { useWidgetTheme } from "#ui/widget-theme";
 
 export type DisplayArrangementItem = {
   id: string;
@@ -23,7 +23,7 @@ export type DisplayArrangementProps = {
 
 /** Compact, draggable monitor map shared by Settings and future setup flows. */
 export function DisplayArrangement(props: DisplayArrangementProps): ReactNode {
-  const pal = themePalette();
+  const pal = useWidgetTheme().foundations.palette;
   const [preview, setPreview] = useState<DisplayArrangementItem[] | null>(null);
   const items = preview ?? props.items;
   const drag = useRef<{

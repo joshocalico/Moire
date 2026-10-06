@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Characters
+Comment=Find and copy Unicode characters
+Exec=moire-characters
+TryExec=moire-characters
+Icon=moire-characters
+Terminal=false
+Categories=Utility;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Characters

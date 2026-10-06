@@ -16,7 +16,7 @@ export function SearchField(props: SearchFieldProps): ReactNode {
   return (
     <TextField
       {...fieldProps}
-      leading={(style) => <Icon name="search" size={style.size} color={style.color} />}
+      leading={(style) => <Icon symbolic name="search" size={style.size} color={style.color} />}
       trailing={
         canClear
           ? (style) => (
@@ -27,6 +27,7 @@ export function SearchField(props: SearchFieldProps): ReactNode {
                 variant="ghost"
                 icon={(iconStyle) => (
                   <Icon
+                    symbolic
                     name="close"
                     size={Math.min(style.size, iconStyle.size)}
                     color={style.color}

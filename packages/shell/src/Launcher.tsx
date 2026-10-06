@@ -1,8 +1,21 @@
 import { resolveApplicationIcon, type DesktopEntry } from "@moire/app-discovery";
 import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import { Group, Rect, Text } from "@moire/react-host";
-import { themePalette } from "@moire/theme";
-import { Icon, Label, ListItem, ScrollArea, Surface, SearchField } from "./widgets";
+import { themePalette, getTheme } from "@moire/theme";
+import {
+  Icon,
+  Label,
+  ListItem,
+  ScrollArea,
+  Surface,
+  SearchField,
+  applicationIcon,
+} from "./widgets";
+
+export type LauncherLaunchState =
+  | { kind: "idle" }
+  | { kind: "pending"; appName: string }
+  | { kind: "failed"; appName: string };
 
 export type LauncherProps = {
   open: boolean;
@@ -11,13 +24,13 @@ export type LauncherProps = {
   apps: DesktopEntry[];
   query: string;
   selected: number;
+  launchState?: LauncherLaunchState;
   onQueryChange: (q: string) => void;
   onLaunch: (app: DesktopEntry) => void;
   onDismiss: () => void;
   onSelect: (i: number) => void;
 };
 
-const BOX_W = 420;
 const ROW_H = 44;
 const PAD = 16;
 const SEARCH_Y = 46;
@@ -29,8 +42,11 @@ export function Launcher(props: LauncherProps): ReactNode {
   const [scrollY, setScrollY] = useState(0);
   const previousSelected = useRef(props.selected);
   const previousQuery = useRef(props.query);
+  const launchState = props.launchState ?? { kind: "idle" };
   const pal = themePalette();
   const panelH = pal.panelHeight;
+  const family = getTheme().family;
+  const boxW = Math.min(420, props.screenW - 28);
   const maxBoxH = Math.max(240, Math.min(600, props.screenH - panelH - 24));
   const desiredListH = Math.max(ROW_H * 3, props.apps.length * ROW_H);
   const boxH = Math.min(maxBoxH, Math.max(300, LIST_TOP + desiredListH + FOOTER_H));
@@ -58,9 +74,12 @@ export function Launcher(props: LauncherProps): ReactNode {
 
   if (!props.open) return null;
 
-  const x = 14;
+  const x =
+    family === "redmond" || family === "cupertino" || family === "gnomish"
+      ? Math.floor((props.screenW - boxW) / 2)
+      : 14;
   const y = props.screenH - panelH - boxH - 8;
-  const listW = BOX_W - PAD * 2;
+  const listW = boxW - PAD * 2;
 
   const rows = props.apps.map((app, i) => {
     const rowY = i * ROW_H;
@@ -78,12 +97,17 @@ export function Launcher(props: LauncherProps): ReactNode {
           title={truncate(app.name, 48)}
           leading={
             <Icon
-              name={app.categories.includes("FileManager") ? "folder" : "app"}
+              name={
+                applicationIcon(app.id) === "app" && app.categories.includes("FileManager")
+                  ? "folder"
+                  : applicationIcon(app.id)
+              }
               path={resolveApplicationIcon(app.icon)}
               size={26}
             />
           }
           selected={selected}
+          disabled={launchState.kind === "pending"}
           onPress={() => props.onLaunch(app)}
         />
       </Group>
@@ -100,8 +124,16 @@ export function Launcher(props: LauncherProps): ReactNode {
         fill={0x01000000}
         onPress={props.onDismiss}
       />
-      <Surface x={x} y={y} width={BOX_W} height={boxH} fill={pal.surface}>
-        <Rect x={0} y={0} width={BOX_W} height={1} fill={pal.rimLight} />
+      <Surface
+        x={x}
+        y={y}
+        width={boxW}
+        height={boxH}
+        fill={pal.panel}
+        radius={pal.radiusLg}
+        onPress={() => {}}
+      >
+        <Rect x={0} y={0} width={boxW} height={1} fill={pal.rimLight} />
         <Label
           x={PAD}
           y={16}
@@ -118,6 +150,7 @@ export function Launcher(props: LauncherProps): ReactNode {
           value={props.query}
           placeholder="Search applications"
           focused
+          autoFocus
           onChange={props.onQueryChange}
           onCancel={props.onDismiss}
           onSubmit={() => {
@@ -130,7 +163,7 @@ export function Launcher(props: LauncherProps): ReactNode {
           y={92}
           text="ALL APPLICATIONS"
           color={pal.muted}
-          fontSize={10}
+          fontSize={11}
           fontWeight="medium"
         />
         <ScrollArea
@@ -157,9 +190,15 @@ export function Launcher(props: LauncherProps): ReactNode {
         <Text
           x={PAD}
           y={boxH - 22}
-          text={`${props.apps.length} ${props.apps.length === 1 ? "application" : "applications"}`}
-          color={pal.muted}
-          fontSize={10}
+          text={
+            launchState.kind === "failed"
+              ? `Could not start ${truncate(launchState.appName, 26)}. Try again.`
+              : launchState.kind === "pending"
+                ? `Starting ${truncate(launchState.appName, 38)}…`
+                : `${props.apps.length} ${props.apps.length === 1 ? "application" : "applications"}`
+          }
+          color={launchState.kind === "failed" ? pal.danger : pal.muted}
+          fontSize={11}
         />
       </Surface>
     </Group>

@@ -1,6 +1,30 @@
 # Roadmap
 
+## Current handoff, 2026-10-05
+
+Read [the canonical handoff](../HANDOFF.md) before resuming. Current stopping
+scope is greeter only, then another agent. The final C63 R6 image adopts Josh's
+accepted centred design and has native AccountsService discovery, same-process
+wrong/blank PAM denial retry, two authenticated desktop/login/logout/fresh-picker
+cycles and Reduce motion proof. Animated boot splash remains unfinished, with
+the original Silk Fold E v0 sample linked in the handoff. No VM is running;
+the exclusive lease is released. Preserve images and coordinate future tests
+with Recovery.
+
+Next-agent priorities include boot animation/device handoff, secure lock and
+suspend, hardware/tearing qualification, Wi-Fi, Bluetooth, audio, brightness and battery integration, real app/portal/input/accessibility
+workflows, recovery, installation and upgrades. Hand-editable /etc configuration
+is a product preference. [C44 optional persistence](daily-use-plan.md) already preserves home and `/etc/moire` across clean cold boots; this greeter image attaches no data disk and keeps edits in RAM. Sudden-loss durability and native UI saves remain unqualified.
+The historical shipped/source tables below do not imply native R6 acceptance
+for the wider feature set.
+
 Status of the Moire desktop relative to day-0 and near-term work. Dates are not committed; order reflects dependency and product priority.
+
+The current build sequence is the [daily-use integration plan](daily-use-plan.md).
+C33 supplies twenty apps with passing exact installed workflow checks and a
+scoped native Screenshot → Files → Image Viewer checkpoint. Native drag input,
+physical tearing and wider native workflows remain unfinished. Existing
+Wayland/XWayland and LibreOffice integration are foundations to preserve.
 
 ## Shipped (post-`v0.2.0`)
 
@@ -41,7 +65,7 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Flexible compositor rendering | In progress — selectable software/EGL output, composition effects contract, timings, layered GLES + GBM scanout                                                                                                                                                                                                       |
 | Accelerated native clients    | In progress — generated TS Wayland bindings plus pooled retained EGL/GBM dma-buf presentation are default with software/SHM fallback; rectangles, shadows, clipped images, and cached text layers avoid full-window rasterization; next glyph atlas, retained group-opacity surfaces, and compositor zero-copy import |
 | Widget styling v2             | In progress — semantic recipes and foundations now cover radius, borders, density, focus, opacity, motion, and elevation; shared overlay/focus/select/dialog/toast primitives and their live showcase tranche are shipped; next state/theme matrices and remaining chrome migration                                   |
-| Theme families                | Planned — Cupertino (macOS), Redmond (Windows), Plasmid (Qt/KDE), and Gnomish (GTK/GNOME), implemented as renderer-neutral Moire foundations and widget recipes                                                                                                                                                       |
+| Theme families                | In progress — normalized discovery, app/provider overrides, live propagation, and Theme Lab are shipped; Cupertino now has modular foundations plus core control/form/transient-surface recipes; next complete its collection/navigation/chrome recipes before starting Redmond, Plasmid, and Gnomish                         |
 | App UI audit                  | Settings display controls now use shared Select/SegmentedControl widgets; migrate Settings (the last app using raw `createElement`) to JSX and continue replacing app-local sizing with intrinsic layout                                                                                                              |
 | Text input / IME              | Implement `zwp_text_input_v3` with a real input-method broker; do not advertise a no-op global                                                                                                                                                                                                                        |
 
@@ -50,8 +74,8 @@ Checkpoint tag **`v0.2.0`** marks the tree before Files/desktop/DnD/wallpaper ex
 | Item                      | Notes                                                                                                 |
 | ------------------------- | ----------------------------------------------------------------------------------------------------- |
 | File thumbnails           | Image widget ready; generators not shipped                                                            |
-| Trash / storage providers | Native freedesktop Trash, UDisks2-backed volumes, and optional protocol providers; no GVFS dependency |
-| Notifications             | Prefs field exists; no toast daemon                                                                   |
+| Trash / storage providers | Native freedesktop Trash and UDisks2 provider exist. [C50 optional removable image](removable-drives.md) has native mount/open/unmount/USB PowerOff proof; optical Eject remains unqualified. UDisks/Polkit stay disabled in the default greeter image. |
+| Notifications             | [Session service and bounded history](desktop-services.md) exist, with replacement, expiry, actions and DND. Images, markup, sound and persisted history are unsupported; wider native UI acceptance remains scoped to existing evidence. |
 | Portal expansion          | FileChooser, Settings, Screenshot, Wallpaper, and other Moire-native backend interfaces               |
 | Multi-monitor             | Per-output wallpapers, rotation, mirror mode, cross-GPU handoff, atomic KMS commits                   |
 | X11 XDND                  | Out of scope for pure X11; Xwayland via Wayland DnD only                                              |

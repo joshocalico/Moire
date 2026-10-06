@@ -959,21 +959,24 @@ threshold/session behavior.
 | `x`, `y` | `number` | `0` |
 | `name` | `IconName` \| string | required |
 | `size` | `number` | `16` |
-| `path` | `string` | optional PNG path |
-| `color` | `number` | fallback geometry only |
-| `symbolic` | `boolean` | `false`; load runtime SVG and apply `color` |
+| `path` | `string` | optional explicit PNG or supported SVG artwork |
+| `color` | `number` | theme text; tints vector and fallback geometry |
+| `symbolic` | `boolean` | excludes the legacy bitmap fallback when no explicit path is supplied |
 
-Names: `folder`, `file`, `image`, `app`, `trash`, `home`, `desktop`,
-`downloads`, `up`, `grid`, `list`, `search`, `close`, `chevron-up`,
-`chevron-down`, `chevron-left`, `chevron-right`, and `remove`.
+The source catalog in `widgets/icon.tsx` derives `IconName` from one list.
+It includes navigation, window actions and distinct bundled app identities.
+`applicationIcon(appId)` resolves both Moire app IDs and desktop-file IDs to
+the same identity; unknown applications receive the generic app glyph.
 
 Symbolic source files live at `packages/ui/icons/<name>.svg`. They use a small,
 auditable SVG subset (rounded rectangles, circles, lines, polylines, and
 polygons), rasterize once with 4×4 antialiasing, and cache by size/tint into the
 backend-neutral `Image` scene primitive. This keeps the source elegant and
 inspectable without coupling widgets to the software or EGL renderer. Bundled
-PNG artwork remains available for colorful file/media icons when `symbolic` is
-false; an explicit `.svg` path automatically takes the vector route.
+vectors are the default at every size. Explicit application artwork remains
+authoritative; legacy PNGs remain a fallback for a missing vector. Unsupported
+SVG geometry is rejected instead of silently painting a partial or blank icon.
+See [Icon design and verification](icons.md).
 
 ### `ImageWidget`
 
@@ -1056,6 +1059,20 @@ from a registry without depending on plugin code. `OpenWithPicker` receives
 plain application choices, separates Recommended and Other Applications,
 supports search and keyboard selection, and exposes separate one-time and
 default-assignment callbacks.
+
+`ContextMenu` focuses its first enabled action on opening. Up and Down wrap
+through enabled actions; Home and End jump to the first and last. Tab and
+Shift+Tab stay inside the menu. Enter or Space activates once, and Escape
+dismisses even when every action is disabled. Pointer movement and focus update
+the active row. Activation waits for the existing close animation to finish.
+
+Long menus keep their heading fixed and scroll the action list with the wheel
+or scrollbar. Keyboard navigation scrolls the active row into view. The menu
+clamps its width and height to the supplied viewport; `maxHeight` defaults to
+480 pixels including the shadow and entrance motion. Native popup callers can
+use `contextMenuSurfaceSize(actions, title, width, maxHeight)` with the available
+viewport height, then supply the configured popup dimensions to `ContextMenu`
+with `surface` enabled.
 
 ---
 
@@ -1306,3 +1323,91 @@ and disabled/inactive/scrim opacity. Component recipes remain the place for
 variant/size/state decisions. Apps should choose semantics such as
 `elevation="medium"` or `size="small"`; pixel-level overrides are compatibility
 escape hatches rather than a second theme system.
+
+## Natural content flow
+
+`Button` can omit `width`. It measures the active recipe's label, font, padding
+and icon slots; `minWidth` supplies a lower bound. An explicit width still wins
+for spatial controls such as calculator keys. Buttons participate in Row/Column
+intrinsic layout without callers measuring strings.
+
+`TextBlock` and `Label` with `wrap` receive their actual allocated column width
+before intrinsic measurement. Explicit newlines and long words use the same
+wrap engine for measurement and rendering. `measureWrappedText` exposes that
+engine when a spatial canvas needs a measured paragraph.
+
+`ContentCard` stacks its children with theme spacing and padding and determines
+its natural height. `ScrollColumn` stacks content and owns its scroll extent;
+provide a viewport size or place it in an allocated layout container. Help and
+Dictionary use these widgets for prose and definition cards. Their callers no
+longer estimate paragraph heights or advance card coordinates.
+
+```tsx
+<ScrollColumn width={width} height={height}>
+  <Label text="Definitions" fontSize={22} />
+  <ContentCard>
+    <Label text="Noun" color={palette.accent} />
+    <Label text={definition} wrap />
+  </ContentCard>
+</ScrollColumn>
+```
+
+The intrinsic-content smoke exercises real themed buttons, native keyboard
+activation, icon slots, wrapped paragraphs, nested cards, resize and scrolling.
+These capabilities establish reusable layout behavior; the app suite's complete
+visual refinement remains a separate stage.
+
+## Application workspaces
+
+`WindowFrame` allocates client decorations and passes the remaining
+`WindowSize` to its child function. Supply `title`, optional `icon`, an optional
+`tabs(size)` slot, and the real `Window` as `actions`. Header background presses
+start a native move; a double press requests maximize/restore. Minimize,
+maximize and close controls use the same native actions and close guard as the
+rest of the window. Without `actions`, the frame omits those controls.
+
+`AdaptivePanes` allocates stable `navigation`, `collection`, `content` and
+optional `accessory` slots. Each pane has an `id`, `title` and `render(size)`
+function. Preferred/minimum/maximum widths are framebuffer pixels; omitted
+defaults follow the UI scale. `onWidthChange` makes a divider controlled so an
+application can persist it. When minima no longer fit, accessory, navigation
+and collection collapse in that order. Shared navigation opens a collapsed
+pane and Escape returns to content. Hidden panes remain mounted with inactive
+focus scopes, preserving editor state while suppressing hidden input targets.
+
+```tsx
+<AdaptivePanes
+  width={width}
+  height={height}
+  navigation={{ id: "notebooks", title: "Notebooks", render: (size) => <Notebooks {...size} /> }}
+  collection={{ id: "notes", title: "Notes", render: (size) => <NotesList {...size} /> }}
+  content={{ id: "document", title: "Document", render: (size) => <NoteEditor {...size} /> }}
+/>
+```
+
+`CollectionList` uses stable item keys, virtualized rows, selection and keyboard
+focus. `CollectionRow` supplies shared title/subtitle/trailing presentation.
+Use these for note and track collections; use `Table` when users need sortable
+columns. Applications retain their domain models and selection state.
+
+`DocumentEditor` consumes a controlled `DocumentValue` with canonical `text`
+and sparse `runs`. Supported marks are bold, underline and highlight; links,
+italic and block styles are not implemented. `parseDocument` validates stored
+values at the boundary. Runs use UTF-16 offsets and must not split surrogate
+pairs. Measured styled fragments determine wrapping, caret positions and
+selection rectangles. Keyboard edits, clipboard operations and formatting
+participate in undo/redo. External document replacement resets history.
+
+Set `selectionToolbar` to show the shared toolbar beside the visible selected
+range. Its actions retain editor focus; geometry follows scrolling and resize.
+`onSelectionChange` reports editor-local visible rectangles and the caret for
+other consumers, plus the actual toolbar bounds when shown. The editor reserves
+measured top clearance so a selection on the first line can show its toolbar
+above the text. Applications own persistence and unsaved-change decisions.
+
+`PlaybackBar` owns responsive transport, seek, time and volume presentation.
+Use `playbackBarHeight(width)` when allocating a persistent bottom bar. Pass
+actual playback state and callbacks; previous, next, stop and queue controls
+appear or enable only when their corresponding operation is available. `ready`
+gates seeking and volume; `canPlay` also permits reopening a stopped track.
+The widget does not create a player or own a queue.

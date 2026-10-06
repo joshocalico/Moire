@@ -1,0 +1,22 @@
+{
+  "name": "@moire/archive-manager",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.tsx",
+    "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../../..",
+    "smoke": "tsx src/smoke.ts"
+  },
+  "dependencies": {
+    "@moire/app-tools": "workspace:*",
+    "@moire/ui": "workspace:*",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,54 @@
+# Escape belongs to Plymouth's daemon, which switches to the built-in details.
+# There are no keyboard, progress, refresh or animation callbacks in this theme.
+Window.SetBackgroundTopColor(8 / 255, 10 / 255, 16 / 255);
+Window.SetBackgroundBottomColor(8 / 255, 10 / 255, 16 / 255);
+
+silk.image = Image("silk-fold.png");
+silk.sprites = [];
+
+fun layout_silk()
+{
+  local.index;
+  local.width;
+  local.height;
+  local.scale;
+  local.scaled_width;
+  local.scaled_height;
+  local.image;
+  local.sprite;
+
+  for (index = 0; silk.sprites[index]; index++)
+    silk.sprites[index].SetOpacity(0);
+  silk.sprites = [];
+
+  if (!silk.image || silk.image.GetWidth() <= 0 || silk.image.GetHeight() <= 0)
+    return;
+
+  for (index = 0; Window.GetWidth(index) > 0; index++)
+  {
+    width = Window.GetWidth(index);
+    height = Window.GetHeight(index);
+    if (height <= 0)
+      continue;
+
+    # Contain-fit retains the entire composition without stretching or cropping.
+    scale = width / silk.image.GetWidth();
+    if (height / silk.image.GetHeight() < scale)
+      scale = height / silk.image.GetHeight();
+    scaled_width = Math.Int(silk.image.GetWidth() * scale);
+    scaled_height = Math.Int(silk.image.GetHeight() * scale);
+    if (scaled_width < 1)
+      scaled_width = 1;
+    if (scaled_height < 1)
+      scaled_height = 1;
+
+    image = silk.image.Scale(scaled_width, scaled_height);
+    sprite = Sprite(image);
+    sprite.SetPosition(Window.GetX(index) + (width - scaled_width) / 2,
+                       Window.GetY(index) + (height - scaled_height) / 2, 0);
+    silk.sprites[index] = sprite;
+  }
+}
+
+layout_silk();
+Plymouth.SetDisplayHotplugFunction(layout_silk);

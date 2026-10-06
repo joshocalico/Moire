@@ -1,6 +1,6 @@
-import React, { type ReactNode } from "react";
+import React, { useEffect, useState, type ReactNode } from "react";
 import { Group, Rect } from "@moire/react-host";
-import { CollectionItem } from "./interaction";
+import { CollectionItem, type CollectionItemProps } from "./interaction";
 import { Pressable } from "./pressable";
 import { Separator, Surface, TextBlock } from "./primitives";
 import { Inset } from "./layout";
@@ -33,6 +33,16 @@ export type TableProps<T = unknown> = {
   rows: readonly T[];
   getRowKey: (row: T, index: number) => string;
   selectedKey?: string | null;
+  selectedKeys?: ReadonlySet<string>;
+  focusedKey?: string | null;
+  getRowProps?: (
+    row: T,
+    index: number,
+  ) => Omit<CollectionItemProps, "width" | "height" | "children">;
+  scrollY?: number;
+  onScroll?: (offset: number) => void;
+  sortRows?: boolean;
+  variant?: "surface" | "plain";
   onSelect?: (row: T, index: number) => void;
   onActivate?: (row: T, index: number) => void;
   sort?: TableSort | null;
@@ -74,13 +84,30 @@ export function Table<T>(props: TableProps<T>): ReactNode {
   const bodyHeight = Math.max(1, props.height - headerHeight);
   const columns = resolveColumns(props.columns, props.width);
   const rows = [...props.rows];
-  if (props.sort) {
+  if (props.sort && props.sortRows !== false) {
     const column = props.columns.find((entry) => entry.id === props.sort?.columnId);
     if (column?.getValue) {
       const direction = props.sort.direction === "ascending" ? 1 : -1;
       rows.sort((a, b) => direction * compareValues(column.getValue!(a), column.getValue!(b)));
     }
   }
+  const [internalScroll, setInternalScroll] = useState(0);
+  const scrollY = props.scrollY ?? internalScroll;
+  const setScroll = (offset: number) => {
+    if (props.scrollY === undefined) setInternalScroll(offset);
+    props.onScroll?.(offset);
+  };
+  const focusedIndex = rows.findIndex(
+    (row, index) => props.getRowKey(row, index) === props.focusedKey,
+  );
+  useEffect(() => {
+    if (focusedIndex < 0) return;
+    const top = focusedIndex * rowHeight;
+    if (top < scrollY) setScroll(top);
+    else if (top + rowHeight > scrollY + bodyHeight) setScroll(top + rowHeight - bodyHeight);
+    // Scroll changes must not repeatedly pull a manually scrolled view back to focus.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedIndex, props.focusedKey, bodyHeight, rowHeight]);
 
   return (
     <Surface
@@ -88,10 +115,10 @@ export function Table<T>(props: TableProps<T>): ReactNode {
       y={props.y}
       width={props.width}
       height={props.height}
-      fill={pal.surface}
-      radius={pal.radiusMd}
-      stroke={pal.borderSubtle}
-      strokeWidth={1}
+      fill={props.variant === "plain" ? pal.bg : pal.surface}
+      radius={props.variant === "plain" ? 0 : pal.radiusMd}
+      stroke={props.variant === "plain" ? undefined : pal.borderSubtle}
+      strokeWidth={props.variant === "plain" ? 0 : 1}
       clip
     >
       <Surface width={props.width} height={headerHeight} fill={pal.panel}>
@@ -127,7 +154,7 @@ export function Table<T>(props: TableProps<T>): ReactNode {
                 <TextBlock
                   text={`${column.label}${arrow ? `  ${arrow}` : ""}`}
                   color={active ? pal.accent : pal.muted}
-                  fontSize={11}
+                  fontSize={12}
                   fontWeight="medium"
                   verticalAlign="center"
                   overflow="ellipsis"
@@ -154,9 +181,11 @@ export function Table<T>(props: TableProps<T>): ReactNode {
           items={rows}
           itemHeight={rowHeight}
           getKey={props.getRowKey}
+          scrollY={scrollY}
+          onScroll={setScroll}
           renderItem={(row, index) => {
             const key = props.getRowKey(row, index);
-            const selected = key === props.selectedKey;
+            const selected = props.selectedKeys?.has(key) ?? key === props.selectedKey;
             return (
               <Group width={props.width} height={rowHeight}>
                 {props.striped && index % 2 === 1 ? (
@@ -171,6 +200,7 @@ export function Table<T>(props: TableProps<T>): ReactNode {
                   focusId={`table-row:${key}`}
                   onPress={() => props.onSelect?.(row, index)}
                   onDoublePress={() => props.onActivate?.(row, index)}
+                  {...props.getRowProps?.(row, index)}
                 />
                 {columns.map((column) => {
                   const value = column.getValue?.(row);

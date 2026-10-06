@@ -22,9 +22,35 @@ import { Surface, TextBlock } from "./primitives";
 type OverlayRender = () => ReactNode;
 type OverlayController = {
   mount(id: string, render: OverlayRender): void;
-  update(id: string): void;
   unmount(id: string): void;
 };
+
+type OverlayStore = {
+  children: ReactNode;
+  listeners: Set<() => void>;
+  renderedChildren: ReactNode;
+};
+
+/**
+ * Keep portal content reactive without asking OverlayHost to replace its
+ * registry entry after every child render. Updating that registry from an
+ * effect whose dependency is a freshly-created ReactNode feeds the host's
+ * own render back into itself (Select/ComboBox popovers used to recurse
+ * until the application exited).
+ */
+function OverlaySlot(props: { store: OverlayStore }): ReactNode {
+  const [, setRevision] = useState(0);
+  useEffect(() => {
+    const listener = () => setRevision((revision) => revision + 1);
+    props.store.listeners.add(listener);
+    return () => {
+      props.store.listeners.delete(listener);
+    };
+  }, [props.store]);
+  const children = props.store.children;
+  props.store.renderedChildren = children;
+  return children;
+}
 
 const OverlayContext = createContext<OverlayController | null>(null);
 
@@ -55,11 +81,7 @@ export function OverlayHost(props: OverlayHostProps): ReactNode {
     });
     requestActiveWindowRedraw();
   }, []);
-  const update = useCallback((id: string) => {
-    setEntries((current) => (current.has(id) ? new Map(current) : current));
-    requestActiveWindowRedraw();
-  }, []);
-  const controller = useMemo(() => ({ mount, update, unmount }), [mount, unmount, update]);
+  const controller = useMemo(() => ({ mount, unmount }), [mount, unmount]);
   return (
     <OverlayContext.Provider value={controller}>
       <Group width={props.width} height={props.height}>
@@ -82,17 +104,26 @@ export type OverlayPortalProps = {
 export function OverlayPortal(props: OverlayPortalProps): ReactNode {
   const controller = useContext(OverlayContext);
   const id = useId();
-  const latest = useRef(props.children);
-  latest.current = props.children;
+  const store = useRef<OverlayStore>({
+    children: props.children,
+    listeners: new Set(),
+    renderedChildren: null,
+  }).current;
+  store.children = props.children;
   useEffect(() => {
     if (!controller) return;
-    const render = () => latest.current;
+    const render = () => <OverlaySlot store={store} />;
     controller.mount(id, render);
     return () => controller.unmount(id);
-  }, [controller, id]);
+  }, [controller, id, store]);
   useEffect(() => {
-    controller?.update(id);
-  }, [controller, id, props.children]);
+    if (!controller || store.listeners.size === 0) return;
+    // Notify only when the slot has not consumed this owner update. Tracking
+    // the rendered child avoids both feedback loops and dropped updates when
+    // a menu closes, reopens, or moves keyboard focus between frames.
+    if (store.renderedChildren === store.children) return;
+    for (const listener of store.listeners) listener();
+  });
   return controller ? null : props.children;
 }
 
@@ -100,6 +131,7 @@ export type ModalBarrierProps = {
   width: number;
   height: number;
   visible?: boolean;
+  active?: boolean;
   onDismiss?: () => void;
 };
 
@@ -112,8 +144,8 @@ export function ModalBarrier(props: ModalBarrierProps): ReactNode {
       width={props.width}
       height={props.height}
       fill={((alpha << 24) | (theme.foundations.palette.bg & 0x00ffffff)) >>> 0}
-      onPress={props.onDismiss}
-      onContextMenu={props.onDismiss}
+      onPress={props.active === false ? undefined : props.onDismiss}
+      onContextMenu={props.active === false ? undefined : props.onDismiss}
     />
   );
 }
@@ -166,6 +198,7 @@ export function Popover(props: PopoverProps): ReactNode {
       <Group width={props.viewportWidth} height={props.viewportHeight}>
         {props.dismissOnOutside !== false ? (
           <ModalBarrier
+            active={props.open}
             width={props.viewportWidth}
             height={props.viewportHeight}
             visible={props.modal}
@@ -236,6 +269,7 @@ export function Sheet(props: SheetProps): ReactNode {
     <OverlayPortal>
       <Group width={props.viewportWidth} height={props.viewportHeight}>
         <ModalBarrier
+          active={props.open}
           width={props.viewportWidth}
           height={props.viewportHeight}
           onDismiss={props.onDismiss}
@@ -310,6 +344,7 @@ export function ConfirmationDialog(props: ConfirmationDialogProps): ReactNode {
     <OverlayPortal>
       <Group width={props.viewportWidth} height={props.viewportHeight}>
         <ModalBarrier
+          active={props.open}
           width={props.viewportWidth}
           height={props.viewportHeight}
           onDismiss={props.onDismiss}

@@ -1,5 +1,5 @@
 /** Recipe-driven grid cells and a scroll-backed generic grid collection. */
-import React, { type ReactNode } from "react";
+import React, { useEffect, useState, type ReactNode } from "react";
 import { Group, Rect, measureTextBounds, type HitPointerEvent } from "@moire/react-host";
 import { resolveStatefulStyle, useWidgetTheme, type ButtonSize } from "#ui/widget-theme";
 import { Pressable } from "./pressable";
@@ -132,6 +132,11 @@ export type GridProps<T = unknown> = {
   gap?: number;
   padding?: number;
   scrollbar?: boolean;
+  fill?: number;
+  getKey?: (item: T, index: number) => string | number;
+  focusedKey?: string | number | null;
+  scrollY?: number;
+  onScroll?: (offset: number) => void;
 };
 
 export function Grid<T>(props: GridProps<T>): ReactNode {
@@ -141,6 +146,38 @@ export function Grid<T>(props: GridProps<T>): ReactNode {
   const columns = Math.max(1, Math.floor((innerWidth + gap) / (props.itemWidth + gap)));
   const rows = Math.ceil(props.items.length / columns);
   const contentHeight = padding * 2 + (rows > 0 ? rows * (props.itemHeight + gap) - gap : 0);
+  const [internalScroll, setInternalScroll] = useState(0);
+  const scrollY = Math.max(
+    0,
+    Math.min(Math.max(0, contentHeight - props.height), props.scrollY ?? internalScroll),
+  );
+  const setScroll = (offset: number) => {
+    if (props.scrollY === undefined) setInternalScroll(offset);
+    props.onScroll?.(offset);
+  };
+  const focusIndex =
+    props.focusedKey == null
+      ? -1
+      : props.items.findIndex(
+          (item, index) => (props.getKey?.(item, index) ?? index) === props.focusedKey,
+        );
+  useEffect(() => {
+    if (focusIndex < 0) return;
+    const top = padding + Math.floor(focusIndex / columns) * (props.itemHeight + gap);
+    if (top < scrollY) setScroll(top);
+    else if (top + props.itemHeight > scrollY + props.height)
+      setScroll(top + props.itemHeight - props.height);
+    // Manual scrolling does not repeatedly snap back to the focused cell.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusIndex, props.focusedKey, columns, props.height, props.itemHeight]);
+  const first = Math.max(
+    0,
+    (Math.floor((scrollY - padding) / (props.itemHeight + gap)) - 2) * columns,
+  );
+  const last = Math.min(
+    props.items.length,
+    (Math.ceil((scrollY + props.height) / (props.itemHeight + gap)) + 2) * columns,
+  );
 
   return (
     <ScrollArea
@@ -150,13 +187,17 @@ export function Grid<T>(props: GridProps<T>): ReactNode {
       height={props.height}
       contentHeight={Math.max(props.height, contentHeight)}
       scrollbar={props.scrollbar}
+      fill={props.fill}
+      scrollY={scrollY}
+      onScroll={setScroll}
     >
-      {props.items.map((item, index) => {
+      {props.items.slice(first, last).map((item, offset) => {
+        const index = first + offset;
         const column = index % columns;
         const row = Math.floor(index / columns);
         return (
           <Group
-            key={index}
+            key={props.getKey?.(item, index) ?? index}
             x={padding + column * (props.itemWidth + gap)}
             y={padding + row * (props.itemHeight + gap)}
             width={props.itemWidth}

@@ -7,8 +7,11 @@
  * renderer-owned pair of GBM scanout targets for direct presentation.
  */
 import koffi from "koffi";
+import { bindNativeFunction } from "./ffi";
+import { classifyEglExecution, hasOpaqueEglScene, type EglExecution } from "./egl-capability";
 import { closeFd } from "./libc";
 import { assertLinux } from "./platform";
+import { canRetireKmsFramebuffer, isKmsFramebufferWritable } from "./kms";
 
 const EGL_PLATFORM_GBM_KHR = 0x31d7;
 const EGL_OPENGL_ES_API = 0x30a0;
@@ -30,6 +33,14 @@ const EGL_LINUX_DRM_FOURCC_EXT = 0x3271;
 const EGL_DMA_BUF_PLANE0_FD_EXT = 0x3272;
 const EGL_DMA_BUF_PLANE0_OFFSET_EXT = 0x3273;
 const EGL_DMA_BUF_PLANE0_PITCH_EXT = 0x3274;
+const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT = 0x3443;
+const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT = 0x3444;
+const GL_FRAMEBUFFER_BINDING = 0x8ca6;
+const GL_CURRENT_PROGRAM = 0x8b8d;
+const GL_VIEWPORT = 0x0ba2;
+const GL_ACTIVE_TEXTURE = 0x84e0;
+const GL_TEXTURE_BINDING_2D = 0x8069;
+const GL_SCISSOR_BOX = 0x0c10;
 
 const GL_VERTEX_SHADER = 0x8b31;
 const GL_FRAGMENT_SHADER = 0x8b30;
@@ -112,6 +123,15 @@ function uintOut(call: (out: unknown) => void): number {
   }
 }
 
+export type EglTransferCounter = { count: number; bytes: number };
+export type EglTransferOperation =
+  | "textureUpload"
+  | "gpuReadback"
+  | "dmabufImport"
+  | "gpuCopy"
+  | "cpuCopy";
+export type EglOutputOptions = { measureTransfers?: boolean };
+
 export type EglOutputInfo = {
   eglVendor: string;
   eglVersion: string;
@@ -158,9 +178,50 @@ export type EglClientPresent = {
   damage: readonly EglDamageRect[];
 };
 
+export type EglDmabufSnapshotInput = {
+  width: number;
+  height: number;
+  format: number;
+  plane: { fd: number; offset: number; stride: number; modifier: bigint };
+};
+
+/** Immutable GPU snapshot independent of its producer's buffer and fd lifetime. */
+export class EglResidentImage {
+  private destroyed = false;
+  constructor(
+    readonly owner: object,
+    readonly width: number,
+    readonly height: number,
+    private readonly read: () => Uint8Array,
+    private readonly release: () => void,
+  ) {}
+  get isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  /** Tight BGRA, allocated/read only when diagnostic or CPU fallback requests it. */
+  readbackPixels(): Uint8Array {
+    if (this.destroyed) throw new Error("EGL resident image is destroyed");
+    return this.read();
+  }
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.release();
+  }
+}
+
+type ResidentResource = { texture: number; framebuffer: number };
+type SnapshotProgram = {
+  program: number;
+  position: number;
+  texCoord: number;
+  sampler: number;
+  opaque: number;
+};
+
 export type EglCompositionLayer = {
   id: string;
-  pixels: Uint8Array;
+  pixels: Uint8Array | EglResidentImage;
   sourceWidth: number;
   sourceHeight: number;
   sourceStride: number;
@@ -177,6 +238,12 @@ export type EglCompositionLayer = {
   transformOrigin?: readonly [number, number, number?];
   sampling?: "nearest" | "linear";
   surfaceGeometry?: { x: number; y: number; width: number; height: number };
+  /** Actual frame, independent of the buffer's CSD shadow padding. */
+  contentShape?: {
+    bounds: { x: number; y: number; width: number; height: number };
+    radii: readonly [number, number, number, number];
+    outside: "discard" | "translucent-shadow";
+  };
   cornerRadius?: number | readonly [number, number, number, number];
   dropShadow?: {
     offsetX: number;
@@ -234,7 +301,7 @@ type BackdropCache = {
 type DamageRect = { x: number; y: number; width: number; height: number };
 
 type LayerSnapshot = {
-  pixels: Uint8Array;
+  pixels: Uint8Array | EglResidentImage;
   revision: number | undefined;
   signature: string;
   bounds: DamageRect;
@@ -250,7 +317,16 @@ function rectUnion(a: DamageRect | null, b: DamageRect): DamageRect {
 }
 
 function rectsIntersect(a: DamageRect, b: DamageRect): boolean {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+  return (
+    a.width > 0 &&
+    a.height > 0 &&
+    b.width > 0 &&
+    b.height > 0 &&
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
 }
 
 function clampRect(rect: DamageRect, width: number, height: number): DamageRect {
@@ -311,6 +387,7 @@ function layerSignature(layer: EglCompositionLayer): string {
     transformOrigin: layer.transformOrigin,
     sampling: layer.sampling,
     surfaceGeometry: layer.surfaceGeometry,
+    contentShape: layer.contentShape,
     cornerRadius: layer.cornerRadius,
     dropShadow: layer.dropShadow,
     backdropBlur: layer.backdropBlur,
@@ -392,6 +469,10 @@ type ClientTargetPool = {
 export class EglOutputScaler {
   readonly info: EglOutputInfo;
 
+  get execution(): EglExecution {
+    return classifyEglExecution(this.info);
+  }
+
   private readonly gbm: ReturnType<typeof koffi.load>;
   private readonly drm: ReturnType<typeof koffi.load>;
   private readonly egl: ReturnType<typeof koffi.load>;
@@ -434,7 +515,10 @@ export class EglOutputScaler {
   private readonly glVertexAttribPointer: NativeFunction;
   private readonly glDrawArrays: NativeFunction;
   private readonly glReadPixels: NativeFunction;
-  private readonly glFlush: NativeFunction;
+  private readonly glFinish: () => void;
+  private readonly glGetIntegerv: NativeFunction;
+  private readonly glIsEnabled: NativeFunction;
+  private readonly glGetError: () => number;
   private readonly glEglImageTargetTexture: NativeFunction;
   private readonly gbmBoCreate: NativeFunction;
   private readonly gbmBoDestroy: NativeFunction;
@@ -457,6 +541,9 @@ export class EglOutputScaler {
   private readonly uvRectLocation: number;
   private readonly layerSizeLocation: number;
   private readonly cornerRadiiLocation: number;
+  private readonly contentShapeModeLocation: number;
+  private readonly contentShapeBoundsLocation: number;
+  private readonly contentShapeRadiiLocation: number;
   private readonly modeLocation: number;
   private readonly shadowRectLocation: number;
   private readonly shadowRadiusLocation: number;
@@ -486,8 +573,10 @@ export class EglOutputScaler {
   private readonly layerTextures = new Map<string, CachedTexture>();
   private readonly layerGeometry = new Map<string, CachedLayerGeometry>();
   private readonly backdropCaches = new Map<string, BackdropCache>();
-  private readonly pixelIds = new WeakMap<Uint8Array, number>();
+  private readonly pixelIds = new WeakMap<Uint8Array | EglResidentImage, number>();
   private nextPixelId = 1;
+  private readonly residentImages = new Map<EglResidentImage, ResidentResource>();
+  private snapshotProgram: SnapshotProgram | null = null;
   private readonly effectPositions = new Float32Array(8);
   private readonly effectTexCoords = new Float32Array(8);
   private readonly outputTexCoords = new Float32Array(8);
@@ -511,9 +600,24 @@ export class EglOutputScaler {
   private targetWidth = 0;
   private targetHeight = 0;
   private readback: Uint8Array | null = null;
+  private clientReadback: Uint8Array | null = null;
   private destroyed = false;
+  private readonly transferCounters: Record<EglTransferOperation, EglTransferCounter> = {
+    textureUpload: { count: 0, bytes: 0 },
+    gpuReadback: { count: 0, bytes: 0 },
+    dmabufImport: { count: 0, bytes: 0 },
+    gpuCopy: { count: 0, bytes: 0 },
+    cpuCopy: { count: 0, bytes: 0 },
+  };
+  private completionWaitCount = 0;
+  private completionWaitCpuElapsedMs = 0;
+  private readonly measureTransfers: boolean;
 
-  constructor(private readonly drmFd: number) {
+  constructor(
+    private readonly drmFd: number,
+    options: EglOutputOptions = {},
+  ) {
+    this.measureTransfers = options.measureTransfers ?? process.env.MOIRE_GPU_METRICS === "1";
     assertLinux("EGL compositor output");
     this.gbm = loadFirst(["libgbm.so.1", "libgbm.so"]);
     this.egl = loadFirst(["libEGL.so.1", "libEGL.so"]);
@@ -748,7 +852,14 @@ export class EglOutputScaler {
     this.glReadPixels = this.gl.func(
       "void glReadPixels(int x, int y, int width, int height, unsigned int format, unsigned int type, _Out_ void *pixels)",
     ) as NativeFunction;
-    this.glFlush = this.gl.func("void glFlush(void)") as NativeFunction;
+    this.glFinish = bindNativeFunction<() => void>(this.gl, "void glFinish(void)");
+    this.glGetIntegerv = this.gl.func(
+      "void glGetIntegerv(unsigned int pname, _Out_ int *params)",
+    ) as NativeFunction;
+    this.glIsEnabled = this.gl.func(
+      "unsigned char glIsEnabled(unsigned int cap)",
+    ) as NativeFunction;
+    this.glGetError = bindNativeFunction<() => number>(this.gl, "unsigned int glGetError(void)");
     this.program = this.createProgram();
     const glGetAttribLocation = this.gl.func(
       "int glGetAttribLocation(unsigned int program, const char *name)",
@@ -765,6 +876,15 @@ export class EglOutputScaler {
     this.uvRectLocation = Number(glGetUniformLocation(this.program, "u_uv_rect"));
     this.layerSizeLocation = Number(glGetUniformLocation(this.program, "u_layer_size"));
     this.cornerRadiiLocation = Number(glGetUniformLocation(this.program, "u_corner_radii"));
+    this.contentShapeModeLocation = Number(
+      glGetUniformLocation(this.program, "u_content_shape_mode"),
+    );
+    this.contentShapeBoundsLocation = Number(
+      glGetUniformLocation(this.program, "u_content_shape_bounds"),
+    );
+    this.contentShapeRadiiLocation = Number(
+      glGetUniformLocation(this.program, "u_content_shape_radii"),
+    );
     this.modeLocation = Number(glGetUniformLocation(this.program, "u_mode"));
     this.shadowRectLocation = Number(glGetUniformLocation(this.program, "u_shadow_rect"));
     this.shadowRadiusLocation = Number(glGetUniformLocation(this.program, "u_shadow_radius"));
@@ -850,14 +970,23 @@ export class EglOutputScaler {
     return shader;
   }
 
-  private createProgram(): number {
+  private createProgram(snapshot = false): number {
     const vertex = this.createShader(
       GL_VERTEX_SHADER,
       "attribute vec2 a_position; attribute vec2 a_tex_coord; varying vec2 v_tex_coord; void main() { gl_Position = vec4(a_position, 0.0, 1.0); v_tex_coord = a_tex_coord; }",
     );
     const fragment = this.createShader(
       GL_FRAGMENT_SHADER,
-      `precision mediump float;
+      snapshot
+        ? `precision mediump float;
+uniform sampler2D u_texture;
+uniform float u_force_opaque;
+varying vec2 v_tex_coord;
+void main() {
+  vec4 color = texture2D(u_texture, v_tex_coord);
+  gl_FragColor = vec4(color.bgr, mix(color.a, 1.0, u_force_opaque));
+}`
+        : `precision mediump float;
 uniform sampler2D u_texture;
 uniform float u_opacity;
 uniform vec4 u_surface_geometry;
@@ -865,6 +994,9 @@ uniform float u_has_surface_geometry;
 uniform vec4 u_uv_rect;
 uniform vec2 u_layer_size;
 uniform vec4 u_corner_radii;
+uniform float u_content_shape_mode;
+uniform vec4 u_content_shape_bounds;
+uniform vec4 u_content_shape_radii;
 uniform float u_mode;
 uniform vec4 u_shadow_rect;
 uniform float u_shadow_radius;
@@ -900,6 +1032,24 @@ bool outside_rounded_rect(vec2 local) {
   return corner && distance(local, center) > radius;
 }
 
+float frame_coverage(vec2 local) {
+  vec2 p = local - u_content_shape_bounds.xy;
+  vec2 size = u_content_shape_bounds.zw;
+  bool outside = p.x < 0.0 || p.y < 0.0 || p.x >= size.x || p.y >= size.y;
+  if (outside) return u_content_shape_mode > 1.5 ? 1.0 : 0.0;
+  bool left = p.x < size.x * 0.5;
+  bool top = p.y < size.y * 0.5;
+  float radius = top
+    ? (left ? u_content_shape_radii.x : u_content_shape_radii.y)
+    : (left ? u_content_shape_radii.w : u_content_shape_radii.z);
+  if (radius <= 0.0) return 1.0;
+  bool corner = (left ? p.x < radius : p.x > size.x - radius) &&
+                (top ? p.y < radius : p.y > size.y - radius);
+  if (!corner) return 1.0;
+  vec2 center = vec2(left ? radius : size.x - radius, top ? radius : size.y - radius);
+  return clamp(radius + 0.5 - distance(p, center), 0.0, 1.0);
+}
+
 void main() {
   if (u_mode > 1.5 && u_mode < 2.5) {
     vec4 color = texture2D(u_texture, v_tex_coord) * 0.227027;
@@ -923,14 +1073,23 @@ void main() {
   if (outside_rounded_rect(local)) discard;
 
   vec4 color = texture2D(u_texture, v_tex_coord);
+  float coverage = 1.0;
+  if (u_content_shape_mode > 0.5) {
+    coverage = frame_coverage(local);
+    if (coverage <= 0.0) discard;
+    vec2 p = local - u_content_shape_bounds.xy;
+    bool outside = p.x < 0.0 || p.y < 0.0 ||
+                   p.x >= u_content_shape_bounds.z || p.y >= u_content_shape_bounds.w;
+    if (outside && color.a > 0.999) discard;
+  }
   if (u_mode > 2.5) {
     float luminance = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
     color.rgb = mix(vec3(luminance), color.rgb, u_saturation);
     color.rgb = color.rgb * (1.0 - u_tint_color.a) + u_tint_color.rgb * u_tint_color.a;
-    gl_FragColor = color * u_opacity;
+    gl_FragColor = color * u_opacity * coverage;
     return;
   }
-  if (u_has_surface_geometry > 0.5) {
+  if (u_has_surface_geometry > 0.5 && u_content_shape_mode < 0.5) {
     bool outside =
       v_tex_coord.x < u_surface_geometry.x ||
       v_tex_coord.y < u_surface_geometry.y ||
@@ -952,7 +1111,7 @@ void main() {
     color = vec4(mapped.b, mapped.g, mapped.r, mapped.a);
   }
   if (u_output_swizzle > 0.5) color = color.bgra;
-  gl_FragColor = color * u_opacity;
+  gl_FragColor = color * u_opacity * coverage;
 }`,
     );
     const glCreateProgram = this.gl.func("unsigned int glCreateProgram(void)") as NativeFunction;
@@ -993,6 +1152,43 @@ void main() {
     } finally {
       glDeleteShader(vertex);
       glDeleteShader(fragment);
+    }
+  }
+
+  /** Cumulative actual boundary calls; bytes are payload or referenced import extent. */
+  getTransferMetrics() {
+    const counter = (operation: EglTransferOperation) =>
+      this.measureTransfers ? { ...this.transferCounters[operation] } : null;
+    return {
+      enabled: this.measureTransfers,
+      textureUpload: counter("textureUpload"),
+      gpuReadback: counter("gpuReadback"),
+      dmabufImport: counter("dmabufImport"),
+      gpuCopy: counter("gpuCopy"),
+      cpuCopy: counter("cpuCopy"),
+      completionWait: this.measureTransfers
+        ? { count: this.completionWaitCount, cpuElapsedMs: this.completionWaitCpuElapsedMs }
+        : null,
+      // No timer query exists here. glFinish wall duration is not GPU execution time.
+      gpuExecutionMs: null,
+    };
+  }
+  private noteTransfer(operation: EglTransferOperation, bytes: number): void {
+    if (!this.measureTransfers) return;
+    this.transferCounters[operation].count++;
+    this.transferCounters[operation].bytes += bytes;
+  }
+  private finishGpuWork(): void {
+    if (!this.measureTransfers) {
+      this.glFinish();
+      return;
+    }
+    const started = performance.now();
+    try {
+      this.glFinish();
+    } finally {
+      this.completionWaitCount++;
+      this.completionWaitCpuElapsedMs += performance.now() - started;
     }
   }
 
@@ -1039,9 +1235,235 @@ void main() {
         source,
       );
     }
+    this.noteTransfer("textureUpload", width * height * 4);
+  }
+
+  private residentResource(image: EglResidentImage): ResidentResource {
+    if (this.destroyed || image.isDestroyed) throw new Error("EGL resident image is destroyed");
+    if (image.owner !== this) throw new Error("EGL resident image belongs to another scaler");
+    const resource = this.residentImages.get(image);
+    if (!resource) throw new Error("EGL resident image is not owned by this scaler");
+    return resource;
+  }
+
+  /** Save only GL state changed by import/copy/readback; retained uniforms stay untouched. */
+  private preserveSnapshotState(): () => void {
+    const integer = (name: number, count = 1): Int32Array => {
+      const value = new Int32Array(count);
+      this.glGetIntegerv(name, value);
+      return value;
+    };
+    const framebuffer = integer(GL_FRAMEBUFFER_BINDING)[0]!;
+    const program = integer(GL_CURRENT_PROGRAM)[0]!;
+    const viewport = integer(GL_VIEWPORT, 4);
+    const scissor = integer(GL_SCISSOR_BOX, 4);
+    const blendEnabled = Boolean(this.glIsEnabled(GL_BLEND));
+    const scissorEnabled = Boolean(this.glIsEnabled(GL_SCISSOR_TEST));
+    const activeTexture = integer(GL_ACTIVE_TEXTURE)[0]!;
+    this.glActiveTexture(GL_TEXTURE0);
+    const texture = integer(GL_TEXTURE_BINDING_2D)[0]!;
+    return () => {
+      this.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+      this.glUseProgram(program);
+      this.glViewport(...viewport);
+      this.glScissor(...scissor);
+      (blendEnabled ? this.glEnable : this.glDisable)(GL_BLEND);
+      (scissorEnabled ? this.glEnable : this.glDisable)(GL_SCISSOR_TEST);
+      this.glActiveTexture(GL_TEXTURE0);
+      this.glBindTexture(GL_TEXTURE_2D, texture);
+      this.glActiveTexture(activeTexture);
+    };
+  }
+
+  private residentSnapshotProgram(): SnapshotProgram {
+    if (this.snapshotProgram) return this.snapshotProgram;
+    const program = this.createProgram(true);
+    const attribute = this.gl.func(
+      "int glGetAttribLocation(unsigned int program, const char *name)",
+    ) as NativeFunction;
+    const uniform = this.gl.func(
+      "int glGetUniformLocation(unsigned int program, const char *name)",
+    ) as NativeFunction;
+    this.snapshotProgram = {
+      program,
+      position: Number(attribute(program, "a_position")),
+      texCoord: Number(attribute(program, "a_tex_coord")),
+      sampler: Number(uniform(program, "u_texture")),
+      opaque: Number(uniform(program, "u_force_opaque")),
+    };
+    return this.snapshotProgram;
+  }
+
+  /**
+   * GPU-copy a single-plane ARGB/XRGB image before allowing producer reuse.
+   * The caller keeps fd ownership on success and failure (EGL EXT import spec).
+   */
+  snapshotDmabuf(input: EglDmabufSnapshotInput): EglResidentImage {
+    if (this.destroyed) throw new Error("EGL output scaler is destroyed");
+    const { width, height, format, plane } = input;
+    const eglInteger = (value: number, positive: boolean) =>
+      Number.isInteger(value) && value >= (positive ? 1 : 0) && value <= 0x7fffffff;
+    if (
+      !eglInteger(width, true) ||
+      !eglInteger(height, true) ||
+      !eglInteger(plane.fd, false) ||
+      !eglInteger(plane.offset, false) ||
+      !eglInteger(plane.stride, true) ||
+      plane.stride < width * 4
+    )
+      throw new RangeError("Invalid dma-buf snapshot dimensions or plane");
+    if (format !== DRM_FORMAT_ARGB8888 && format !== DRM_FORMAT_XRGB8888)
+      throw new Error("DMA-buf snapshot supports only single-plane ARGB8888/XRGB8888");
+    const extensions = new Set(this.info.eglExtensions.split(/\s+/));
+    if (!extensions.has("EGL_EXT_image_dma_buf_import"))
+      throw new Error("EGL_EXT_image_dma_buf_import is unavailable");
+    if (plane.modifier < 0n || plane.modifier > 0xffffffffffffffffn)
+      throw new RangeError("Invalid dma-buf modifier");
+    const implicitModifier = plane.modifier === 0xffffffffffffffffn;
+    const modifierExtension = extensions.has("EGL_EXT_image_dma_buf_import_modifiers");
+    if (!implicitModifier && plane.modifier !== 0n && !modifierExtension)
+      throw new Error("Nonlinear dma-buf import requires EGL_EXT_image_dma_buf_import_modifiers");
+    const attributes = [
+      EGL_WIDTH,
+      width,
+      EGL_HEIGHT,
+      height,
+      EGL_LINUX_DRM_FOURCC_EXT,
+      format,
+      EGL_DMA_BUF_PLANE0_FD_EXT,
+      plane.fd,
+      EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+      plane.offset,
+      EGL_DMA_BUF_PLANE0_PITCH_EXT,
+      plane.stride,
+    ];
+    if (modifierExtension && !implicitModifier)
+      attributes.push(
+        EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT,
+        Number(plane.modifier & 0xffffffffn) | 0,
+        EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
+        Number(plane.modifier >> 32n) | 0,
+      );
+    attributes.push(EGL_NONE);
+    const restore = this.preserveSnapshotState();
+    let importedImage: unknown = null,
+      importedTexture = 0,
+      texture = 0,
+      framebuffer = 0;
+    try {
+      const pendingError = this.glGetError();
+      if (pendingError !== 0)
+        throw new Error(
+          `GLES had an error before dma-buf snapshot: 0x${pendingError.toString(16)}`,
+        );
+      importedImage = this.eglCreateImage(
+        this.display,
+        null,
+        EGL_LINUX_DMA_BUF_EXT,
+        null,
+        new Int32Array(attributes),
+      );
+      if (pointerAddress(importedImage) === 0n)
+        throw new Error("eglCreateImageKHR dma-buf snapshot import failed");
+      this.noteTransfer("dmabufImport", plane.stride * height);
+      const genTextures = this.gl.func(
+        "void glGenTextures(int n, _Out_ unsigned int *textures)",
+      ) as NativeFunction;
+      const genFramebuffers = this.gl.func(
+        "void glGenFramebuffers(int n, _Out_ unsigned int *framebuffers)",
+      ) as NativeFunction;
+      importedTexture = uintOut((out) => void genTextures(1, out));
+      this.configureTexture(importedTexture);
+      this.glEglImageTargetTexture(GL_TEXTURE_2D, importedImage);
+      const importError = this.glGetError();
+      if (importError !== 0)
+        throw new Error(`GLES dma-buf texture import failed: 0x${importError.toString(16)}`);
+      texture = uintOut((out) => void genTextures(1, out));
+      framebuffer = uintOut((out) => void genFramebuffers(1, out));
+      this.configureTexture(texture);
+      this.glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        width,
+        height,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        null,
+      );
+      this.bindColorTarget(framebuffer, texture);
+      this.glViewport(0, 0, width, height);
+      this.glDisable(GL_BLEND);
+      this.glDisable(GL_SCISSOR_TEST);
+      const shader = this.residentSnapshotProgram();
+      this.glUseProgram(shader.program);
+      this.glUniform1i(shader.sampler, 0);
+      this.glUniform1f(shader.opaque, format === DRM_FORMAT_XRGB8888 ? 1 : 0);
+      this.glBindTexture(GL_TEXTURE_2D, importedTexture);
+      this.glEnableVertexAttribArray(shader.position);
+      this.glEnableVertexAttribArray(shader.texCoord);
+      this.glVertexAttribPointer(shader.position, 2, GL_FLOAT, 0, 0, FULL_QUAD_POSITIONS);
+      this.glVertexAttribPointer(shader.texCoord, 2, GL_FLOAT, 0, 0, UNIT_QUAD_TEX_COORDS);
+      this.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+      // Wait before dropping the import, so wl_buffer.release permits immediate reuse.
+      this.finishGpuWork();
+      const copyError = this.glGetError();
+      if (copyError !== 0)
+        throw new Error(`GLES dma-buf snapshot copy failed: 0x${copyError.toString(16)}`);
+      this.noteTransfer("gpuCopy", width * height * 4);
+      const resource = { texture, framebuffer };
+      const image = new EglResidentImage(
+        this,
+        width,
+        height,
+        () => {
+          const live = this.residentResource(image);
+          const restoreReadback = this.preserveSnapshotState();
+          try {
+            const pixels = new Uint8Array(width * height * 4);
+            this.glBindFramebuffer(GL_FRAMEBUFFER, live.framebuffer);
+            this.glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+            const readError = this.glGetError();
+            if (readError !== 0)
+              throw new Error(`GLES resident readback failed: 0x${readError.toString(16)}`);
+            this.noteTransfer("gpuReadback", pixels.byteLength);
+            return pixels;
+          } finally {
+            restoreReadback();
+          }
+        },
+        () => {
+          if (!this.residentImages.delete(image)) return;
+          this.glDeleteFramebuffers(1, new Uint32Array([resource.framebuffer]));
+          this.glDeleteTextures(1, new Uint32Array([resource.texture]));
+        },
+      );
+      this.residentImages.set(image, resource);
+      texture = 0;
+      framebuffer = 0;
+      return image;
+    } finally {
+      if (framebuffer) this.glDeleteFramebuffers(1, new Uint32Array([framebuffer]));
+      if (texture) this.glDeleteTextures(1, new Uint32Array([texture]));
+      if (importedTexture) this.glDeleteTextures(1, new Uint32Array([importedTexture]));
+      if (pointerAddress(importedImage) !== 0n) this.eglDestroyImage(this.display, importedImage);
+      restore();
+    }
   }
 
   private textureForLayer(layer: EglCompositionLayer): number {
+    if (layer.pixels instanceof EglResidentImage) {
+      const resource = this.residentResource(layer.pixels);
+      if (layer.sourceWidth !== layer.pixels.width || layer.sourceHeight !== layer.pixels.height) {
+        throw new RangeError("Resident layer dimensions differ from its image");
+      }
+      this.glBindTexture(GL_TEXTURE_2D, resource.texture);
+      const filter = layer.sampling === "nearest" ? GL_NEAREST : GL_LINEAR;
+      this.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+      this.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+      return resource.texture;
+    }
     let cached = this.layerTextures.get(layer.id);
     if (!cached) {
       const glGenTextures = this.gl.func(
@@ -1082,6 +1504,7 @@ void main() {
     const tightStride = layer.sourceWidth * 4;
     if (layer.sourceStride !== tightStride) {
       upload = new Uint8Array(tightStride * layer.sourceHeight);
+      this.noteTransfer("cpuCopy", upload.byteLength);
       for (let row = 0; row < layer.sourceHeight; row++) {
         upload.set(
           layer.pixels.subarray(row * layer.sourceStride, row * layer.sourceStride + tightStride),
@@ -1118,6 +1541,7 @@ void main() {
         upload,
       );
     }
+    this.noteTransfer("textureUpload", layer.sourceWidth * layer.sourceHeight * 4);
     cached.width = layer.sourceWidth;
     cached.height = layer.sourceHeight;
     cached.revision = layer.revision;
@@ -1125,7 +1549,7 @@ void main() {
     return cached.texture;
   }
 
-  private pixelIdentity(pixels: Uint8Array): number {
+  private pixelIdentity(pixels: Uint8Array | EglResidentImage): number {
     let id = this.pixelIds.get(pixels);
     if (id != null) return id;
     id = this.nextPixelId++;
@@ -1497,6 +1921,7 @@ void main() {
     this.glUniform1f(this.opacityLocation, layer.opacity ?? 1);
     this.glUniform1f(this.hasGeometryLocation, 0);
     this.glUniform1f(this.saturationLocation, effect.saturation ?? 1);
+    this.setContentShape(layer);
     const tint = effect.tint ?? 0;
     this.glUniform4f(
       this.tintColorLocation,
@@ -1529,6 +1954,24 @@ void main() {
     this.glUniform4f(this.cornerRadiiLocation, radii[0]!, radii[1]!, radii[2]!, radii[3]!);
     this.writeTexQuad(this.effectTexCoords, x0, y0, x1, y1);
     this.drawQuad(this.effectPositions, this.effectTexCoords);
+  }
+
+  private setContentShape(layer: EglCompositionLayer): void {
+    const shape = layer.contentShape;
+    this.glUniform1f(
+      this.contentShapeModeLocation,
+      shape ? (shape.outside === "discard" ? 1 : 2) : 0,
+    );
+    if (!shape) return;
+    const { bounds, radii } = shape;
+    this.glUniform4f(
+      this.contentShapeBoundsLocation,
+      bounds.x - layer.destination.x,
+      bounds.y - layer.destination.y,
+      bounds.width,
+      bounds.height,
+    );
+    this.glUniform4f(this.contentShapeRadiiLocation, radii[0], radii[1], radii[2], radii[3]);
   }
 
   private compositionDamage(scene: EglCompositionScene): DamageRect | null {
@@ -1599,7 +2042,10 @@ void main() {
             scene.height,
           );
           if (!rectsIntersect(damage, sample)) continue;
-          const grown = rectUnion(damage, layer.destination);
+          // Rebuild the entire sampled stack, including kernel padding. Pixels
+          // outside the old damage clip still contain last frame's final stack
+          // (menus/chrome above this material), not its source backdrop.
+          const grown = rectUnion(damage, sample);
           if (
             grown.x !== damage.x ||
             grown.y !== damage.y ||
@@ -1642,12 +2088,14 @@ void main() {
     } else if (clip) {
       bounds = clip;
     }
-    if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+    if (!bounds) {
       this.glDisable(GL_SCISSOR_TEST);
       return;
     }
     this.glEnable(GL_SCISSOR_TEST);
-    this.glScissor(bounds.x, bounds.y, bounds.width, bounds.height);
+    // An empty intersection clips everything. Disabling scissoring here lets
+    // retained text outside the cleared damage region accumulate each frame.
+    this.glScissor(bounds.x, bounds.y, Math.max(0, bounds.width), Math.max(0, bounds.height));
   }
 
   /** Compose retained, revisioned layers into one logical GPU scene. */
@@ -1655,6 +2103,13 @@ void main() {
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
     if (scene.width < 1 || scene.height < 1) {
       throw new RangeError("EGL composition scene has invalid dimensions");
+    }
+    for (const layer of scene.layers) {
+      if (layer.pixels instanceof EglResidentImage) {
+        this.residentResource(layer.pixels);
+        if (layer.sourceWidth !== layer.pixels.width || layer.sourceHeight !== layer.pixels.height)
+          throw new RangeError("Resident layer dimensions differ from its image");
+      }
     }
     this.compositionFrame++;
     const damage = this.compositionDamage(scene);
@@ -1757,6 +2212,7 @@ void main() {
       this.glUniform1f(this.modeLocation, 0);
       this.glUniform1f(this.opacityLocation, layer.opacity ?? 1);
       this.setColorMatrix(layer.colorMatrix);
+      this.setContentShape(layer);
       const geometry = layer.surfaceGeometry;
       this.glUniform1f(this.hasGeometryLocation, geometry ? 1 : 0);
       if (geometry) {
@@ -1841,6 +2297,7 @@ void main() {
     this.glUniform1f(this.hasGeometryLocation, 0);
     this.glUniform1f(this.hasColorMatrixLocation, 0);
     this.glUniform1f(this.outputSwizzleLocation, directScanout ? 1 : 0);
+    this.glUniform1f(this.contentShapeModeLocation, 0);
     this.glDisable(GL_BLEND);
 
     const u0 = output.x / this.sourceWidth;
@@ -1901,6 +2358,7 @@ void main() {
       if (pointerAddress(image) === 0n) {
         throw new Error("eglCreateImageKHR dma-buf import failed");
       }
+      this.noteTransfer("dmabufImport", stride * output.targetHeight);
 
       const glGenTextures = this.gl.func(
         "void glGenTextures(int n, _Out_ unsigned int *textures)",
@@ -2003,6 +2461,12 @@ void main() {
       const outputPrefix = `${output.id}:`;
       for (const [staleKey, stale] of this.directTargets) {
         if (staleKey === key || !staleKey.startsWith(outputPrefix)) continue;
+        if (
+          !stale.targets.every((target) =>
+            canRetireKmsFramebuffer(this.drmFd, target.framebufferId),
+          )
+        )
+          continue;
         for (const target of stale.targets) this.destroyDirectTarget(target);
         this.directTargets.delete(staleKey);
       }
@@ -2023,13 +2487,20 @@ void main() {
       this.directTargets.set(key, pool);
     }
     if (!advance) return pool.lastRendered ?? pool.targets[0];
-    const target = pool.targets[pool.nextIndex]!;
-    pool.nextIndex = (pool.nextIndex + 1) % pool.targets.length;
+    const target = [
+      pool.targets[pool.nextIndex]!,
+      pool.targets[(pool.nextIndex + 1) % pool.targets.length]!,
+    ].find((candidate) => isKmsFramebufferWritable(this.drmFd, candidate.framebufferId, output.id));
+    if (!target) throw new Error(`No idle GBM scanout target for ${output.id}`);
+    pool.nextIndex = target === pool.targets[0] ? 1 : 0;
     pool.lastRendered = target;
     return target;
   }
 
   private destroyDirectTarget(target: DirectOutputTarget): void {
+    // Failed shutdown/modeset leaves native ownership unresolved. Retain the BO
+    // rather than unregistering storage that may still be scanned out.
+    if (!canRetireKmsFramebuffer(this.drmFd, target.framebufferId)) return;
     try {
       this.drmModeRmFb(this.drmFd, target.framebufferId);
     } catch {
@@ -2041,7 +2512,12 @@ void main() {
     this.gbmBoDestroy(target.bo);
   }
 
-  private createClientTarget(channel: string, width: number, height: number): ClientTarget {
+  private createClientTarget(
+    channel: string,
+    width: number,
+    height: number,
+    formatRequested = DRM_FORMAT_ARGB8888,
+  ): ClientTarget {
     if (!this.info.eglExtensions.includes("EGL_EXT_image_dma_buf_import")) {
       throw new Error("EGL_EXT_image_dma_buf_import is unavailable");
     }
@@ -2059,7 +2535,7 @@ void main() {
         this.gbmDevice,
         width,
         height,
-        DRM_FORMAT_ARGB8888,
+        formatRequested,
         GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR,
       );
       if (pointerAddress(bo) === 0n) {
@@ -2069,8 +2545,8 @@ void main() {
       const format = Number(this.gbmBoGetFormat(bo));
       const modifier = BigInt(this.gbmBoGetModifier(bo) as bigint | number);
       fd = Number(this.gbmBoGetFd(bo));
-      if (stride < width * 4 || fd < 0) {
-        throw new Error("GBM client target has invalid stride or dma-buf fd");
+      if (stride < width * 4 || fd < 0 || format !== formatRequested) {
+        throw new Error("GBM client target has invalid stride, format or dma-buf fd");
       }
 
       const imageAttributes = new Int32Array([
@@ -2092,6 +2568,7 @@ void main() {
       if (pointerAddress(image) === 0n) {
         throw new Error("eglCreateImageKHR client dma-buf failed");
       }
+      this.noteTransfer("dmabufImport", stride * height);
 
       const glGenTextures = this.gl.func(
         "void glGenTextures(int n, _Out_ unsigned int *textures)",
@@ -2149,6 +2626,23 @@ void main() {
     this.clientTargets.delete(pool.key);
   }
 
+  /** Retired geometry/format pools still count while a compositor owns their buffers. */
+  private canAllocateClientTarget(channel: string): boolean {
+    let count = 0;
+    for (const pool of this.clientTargets.values())
+      if (pool.channel === channel) count += pool.targets.length;
+    return count < 3;
+  }
+
+  hasClientFrame(id: string): boolean {
+    return (
+      !this.destroyed &&
+      [...this.clientTargets.values()].some((pool) =>
+        pool.targets.some((target) => target.id === id),
+      )
+    );
+  }
+
   /**
    * Upload a software scene once, then present it from a renderer-owned GBM
    * BO. This is the transport bridge for native Wayland clients; a future
@@ -2180,8 +2674,10 @@ void main() {
       pool = { channel, key, retired: false, targets: [] };
       this.clientTargets.set(key, pool);
     }
+    // Returning to a held prior geometry/format makes this pool current again.
+    pool.retired = false;
     let target = pool.targets.find((candidate) => !candidate.busy);
-    if (!target && pool.targets.length < 3) {
+    if (!target && pool.targets.length < 3 && this.canAllocateClientTarget(channel)) {
       target = this.createClientTarget(channel, width, height);
       pool.targets.push(target);
     }
@@ -2202,7 +2698,8 @@ void main() {
       target.framebuffer,
       false,
     );
-    this.glFlush();
+    this.finishGpuWork();
+    this.noteTransfer("gpuCopy", width * height * 4);
     target.busy = true;
     return {
       id: target.id,
@@ -2220,7 +2717,8 @@ void main() {
   renderClientComposition(channel: string, scene: EglCompositionScene): EglClientPresent | null {
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
     const { width, height } = scene;
-    const key = `${channel}:${width}x${height}`;
+    const format = hasOpaqueEglScene(scene) ? DRM_FORMAT_XRGB8888 : DRM_FORMAT_ARGB8888;
+    const key = `${channel}:${width}x${height}:${format}`;
     const previousKey = this.currentClientPool.get(channel);
     if (previousKey && previousKey !== key) {
       const previous = this.clientTargets.get(previousKey);
@@ -2236,9 +2734,11 @@ void main() {
       pool = { channel, key, retired: false, targets: [] };
       this.clientTargets.set(key, pool);
     }
+    // Returning to a held prior geometry/format makes this pool current again.
+    pool.retired = false;
     let target = pool.targets.find((candidate) => !candidate.busy);
-    if (!target && pool.targets.length < 3) {
-      target = this.createClientTarget(channel, width, height);
+    if (!target && pool.targets.length < 3 && this.canAllocateClientTarget(channel)) {
+      target = this.createClientTarget(channel, width, height, format);
       pool.targets.push(target);
     }
     if (!target) return null;
@@ -2261,7 +2761,8 @@ void main() {
       // the one-pass software upload does not need this extra conversion.
       true,
     );
-    this.glFlush();
+    this.finishGpuWork();
+    this.noteTransfer("gpuCopy", width * height * 4);
     target.busy = true;
     return {
       id: target.id,
@@ -2286,6 +2787,31 @@ void main() {
     }
   }
 
+  /** Keep retained EGL rendering when a driver cannot allocate exportable BOs. */
+  renderClientCompositionReadback(scene: EglCompositionScene): {
+    pixels: Uint8Array;
+    width: number;
+    height: number;
+  } {
+    this.beginComposition(scene);
+    const bytes = scene.width * scene.height * 4;
+    if (this.clientReadback?.byteLength !== bytes) {
+      this.clientReadback = new Uint8Array(bytes);
+    }
+    this.renderOutput({
+      id: "client-readback",
+      x: 0,
+      y: 0,
+      width: scene.width,
+      height: scene.height,
+      targetWidth: scene.width,
+      targetHeight: scene.height,
+      targetPitch: scene.width * 4,
+      target: this.clientReadback,
+    });
+    return { pixels: this.clientReadback, width: scene.width, height: scene.height };
+  }
+
   /** Retire every target belonging to a destroyed Wayland surface. */
   dropClientChannel(channel: string): void {
     this.currentClientPool.delete(channel);
@@ -2303,9 +2829,10 @@ void main() {
   renderOutputDirect(output: EglDirectOutput): EglDirectPresent {
     const target = this.directTargetFor(output, true);
     this.paintOutput(output, target.texture, target.framebuffer, true);
-    // Submit the render without stalling the CPU. KMS consumes the dma-buf's
-    // implicit fence and the page-flip completion controls target reuse.
-    this.glFlush();
+    // Software GBM renderers do not attach a kernel fence to their CPU work.
+    // Finish before publishing pixels to KMS (or a client buffer above).
+    // Page-flip completion still controls reuse of the two scanout targets.
+    this.finishGpuWork();
     return {
       framebufferId: target.framebufferId,
       stride: target.stride,
@@ -2323,6 +2850,7 @@ void main() {
     }
     this.glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
     this.glReadPixels(0, 0, target.width, target.height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    this.noteTransfer("gpuReadback", target.width * target.height * 4);
   }
 
   renderOutput(output: EglScaleOutput): void {
@@ -2368,7 +2896,9 @@ void main() {
       GL_UNSIGNED_BYTE,
       tight,
     );
+    this.noteTransfer("gpuReadback", tightBytes);
     if (tight !== output.target) {
+      this.noteTransfer("cpuCopy", tightBytes);
       const rowBytes = output.targetWidth * 4;
       for (let row = 0; row < output.targetHeight; row++) {
         output.target.set(
@@ -2393,6 +2923,9 @@ void main() {
       }
       this.clientTargets.clear();
       this.currentClientPool.clear();
+      for (const image of this.residentImages.keys()) image.destroy();
+      if (this.snapshotProgram) this.glDeleteProgram(this.snapshotProgram.program);
+      this.snapshotProgram = null;
       const textures = [
         this.sourceTexture,
         this.targetTexture,

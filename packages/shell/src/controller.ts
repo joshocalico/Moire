@@ -10,6 +10,7 @@ import {
 } from "@moire/app-discovery";
 import {
   createShellRoot,
+  hitRegionContains,
   rasterize,
   renderShell,
   type HitRegion,
@@ -26,10 +27,12 @@ import {
   createSelectionState,
   reduceSelection,
   reconcileSelection,
+  keyFromEvdev,
   type ContextMenuAction,
   type IconName,
   type SelectionAction,
   type SelectionState,
+  type ScrollMetrics,
 } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
 import { themePalette } from "@moire/theme";
@@ -37,8 +40,35 @@ import { createElement, useEffect, useMemo } from "react";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Panel } from "./Panel";
-import { Launcher } from "./Launcher";
+import { Panel, panelStatusGeometry } from "./Panel";
+import { TaskOverflow, TASK_WINDOWS_SCOPE } from "./TaskOverflow";
+import { NotificationsTray } from "./NotificationsTray";
+import { networkPresentation, type NetworkPresentation } from "./network-presentation";
+import { createVolumeIntent } from "./volume-intent";
+import type { QuickSettingsDetailsView } from "./QuickSettingsDetails";
+import {
+  QuickSettings,
+  NotificationBanner,
+  scrollQuickControlIntoView,
+  type PopupAnchor,
+  type DesktopControlActions,
+  QUICK_SETTINGS_SCOPE,
+  NOTIFICATIONS_SCOPE,
+} from "./QuickSettings";
+import type {
+  DesktopCapabilities,
+  DesktopStatusState,
+} from "@moire/system-management/desktop-status";
+import {
+  bluetoothPairingBlocksConnections,
+  bluetoothTrustBlocksControls,
+  type BluetoothDevice,
+  type BluetoothNearbyDevice,
+  type BluetoothId,
+} from "@moire/system-management/bluetooth-status";
+import { isDeepStrictEqual } from "node:util";
+import type { WifiAccessPoint } from "@moire/system-management/network-status";
+import { Launcher, type LauncherLaunchState } from "./Launcher";
 import { TitleBar } from "./TitleBar";
 import { Label } from "./widgets";
 import {
@@ -57,7 +87,46 @@ import {
 import type { SsdAction, SsdWindowInfo, TaskWindowAction, TaskWindowInfo } from "./ssd";
 import { Group, Rect, measureText } from "@moire/react-host";
 
-export type ShellSpawn = (opts: { exec: string }) => { unref?: () => void };
+export type ShellSpawn = (opts: { exec: string }) => {
+  unref?: () => void;
+  once?: {
+    (event: "spawn", listener: () => void): unknown;
+    (event: "error", listener: (error: Error) => void): unknown;
+  };
+};
+
+/** Pointer and scroll geometry only; no producer/body/keyboard payloads. */
+export type ShellScrollObservation =
+  | {
+      stage: "hit";
+      popup: string | null;
+      view: string;
+      x: number;
+      y: number;
+      deltaY: number;
+      before: number;
+      after: number;
+      bounds: { x: number; y: number; width: number; height: number } | null;
+      clip: { x: number; y: number; width: number; height: number } | null;
+    }
+  | {
+      stage: "offset";
+      popup: string | null;
+      view: string;
+      offset: number;
+      contentHeight: number | null;
+      viewportHeight: number | null;
+      maxScroll: number | null;
+    }
+  | {
+      stage: "paint";
+      popup: string | null;
+      view: string;
+      revision: number;
+      offset: number;
+      bodyChecksum: number | null;
+      footerChecksum: number | null;
+    };
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
@@ -84,7 +153,7 @@ export type ShellBridge = {
   beginSsdFrame(): void;
   /**
    * Paint one SSD titlebar into the framebuffer.
-   * Call in stack order immediately after that window's client buffers so
+   * Call immediately after the parent buffer, before its above-parent children, so
    * chrome participates in window z-order (not a global overlay on top).
    */
   paintSsdWindow(
@@ -95,7 +164,7 @@ export type ShellBridge = {
     window: SsdWindowInfo,
   ): void;
   ssdRaster(window: SsdWindowInfo): ShellRasterSurface;
-  /** Paint all SSD titlebars (bottom→top). Prefer per-window paint in composite. */
+  /** Paint a bottom→top batch after beginSsdFrame; multiple batches accumulate hits. */
   paintSsd(
     fb: Uint32Array,
     pitchPx: number,
@@ -105,6 +174,8 @@ export type ShellBridge = {
   ): void;
   /** Hit-test SSD chrome; returns action or null. */
   hitSsd(x: number, y: number): SsdAction | null;
+  /** A client regained seat focus, including reactivation of the same client. */
+  onClientFocus?(): void;
   onKey(ev: { code: number; value: number }): boolean;
   onPointerButton(ev: {
     timeMs: number;
@@ -120,6 +191,7 @@ export type ShellBridge = {
   /** Wheel input for launcher/menu scroll regions. */
   onPointerAxis?(ev: { x: number; y: number; deltaY: number }): boolean;
   setTasks?(tasks: TaskWindowInfo[]): void;
+  setDesktopStatus(state: DesktopStatusState): void;
   /**
    * Pointer over empty desktop (no window under cursor).
    * Handles icon select / open. Returns true if consumed.
@@ -199,7 +271,6 @@ export type ShellBridge = {
 };
 
 const KEY_ESC = 1;
-const KEY_BACKSPACE = 14;
 const KEY_ENTER = 28;
 const KEY_LEFTCTRL = 29;
 const KEY_LEFTSHIFT = 42;
@@ -254,7 +325,40 @@ const US_MAP: Record<number, string> = {
   11: "0",
   57: " ",
   12: "-",
+  13: "=",
+  26: "[",
+  27: "]",
+  39: ";",
+  40: "'",
+  41: "`",
+  43: "\\",
+  51: ",",
+  52: ".",
   53: "/",
+};
+
+const US_SHIFT_MAP: Record<number, string> = {
+  2: "!",
+  3: "@",
+  4: "#",
+  5: "$",
+  6: "%",
+  7: "^",
+  8: "&",
+  9: "*",
+  10: "(",
+  11: ")",
+  12: "_",
+  13: "+",
+  26: "{",
+  27: "}",
+  39: ":",
+  40: '"',
+  41: "~",
+  43: "|",
+  51: "<",
+  52: ">",
+  53: "?",
 };
 
 type ShellAppProps = {
@@ -264,6 +368,7 @@ type ShellAppProps = {
   open: boolean;
   query: string;
   selected: number;
+  launchState: LauncherLaunchState;
   apps: DesktopEntry[];
   tasks: TaskWindowInfo[];
   clock: string;
@@ -273,6 +378,55 @@ type ShellAppProps = {
   onLaunch: (app: DesktopEntry) => void;
   onDismiss: () => void;
   onTaskPress: (task: TaskWindowInfo) => void;
+  controlsOpen: boolean;
+  notificationsOpen: boolean;
+  taskOverflowOpen: boolean;
+  overflowAnchor: PopupAnchor | null;
+  overflowTasks: readonly TaskWindowInfo[];
+  onTaskOverflowToggle(anchor: PopupAnchor, tasks: readonly TaskWindowInfo[]): void;
+  onTaskOverflowPress(task: TaskWindowInfo): void;
+  controlsView: "main" | QuickSettingsDetailsView;
+  notificationView: "active" | "history";
+  volumeDraft?: { value: number; caption: string };
+  onLogout?: () => void;
+  onControlsView(view: "main" | QuickSettingsDetailsView): void;
+  onNotificationView(view: "active" | "history"): void;
+  onNotificationsToggle(): void;
+  onVolumeStart(): void;
+  onVolumeChange(value: number): void;
+  onVolumeCommit(value: number): void;
+  onVolumeCancel(): void;
+  wifiSelection?: WifiAccessPoint;
+  wifiPassword: string;
+  onWifiSelect(ap: WifiAccessPoint): void;
+  onWifiPasswordChange(value: string): void;
+  onWifiConnect(): void;
+  onWifiCancel(): void;
+  onWifiRefresh(): void;
+  onWifiSelectionCancel(): void;
+  onBluetoothChange(device: BluetoothDevice, connected: boolean): void;
+  onBluetoothRefresh(): void;
+  onBluetoothDiscoveryStart?: (adapterId: BluetoothId) => void;
+  onBluetoothDiscoveryStop?: () => void;
+  onBluetoothPair?: (device: BluetoothNearbyDevice) => void;
+  onBluetoothPairCancel?: () => void;
+  onBluetoothPromptResponse?: (promptId: BluetoothId, accepted: boolean) => void;
+  onBluetoothInputResponse?: (promptId: BluetoothId, value: string) => void;
+  onBluetoothTrustRequest?: (device: BluetoothDevice, trusted: boolean) => void;
+  onBluetoothTrustConfirm?: (challengeId: BluetoothId) => void;
+  onBluetoothTrustCancel?: (challengeId: BluetoothId) => void;
+  onSettings(): void;
+  status: DesktopStatusState;
+  cachedCapabilities?: DesktopCapabilities;
+  cachedNetworkPresentation?: NetworkPresentation;
+  controlsBusy: boolean;
+  volumeBlocked: boolean;
+  controlsError: string;
+  controlsScrollY: number;
+  onControlsScroll: (value: number, metrics?: ScrollMetrics) => void;
+  onControlsToggle: () => void;
+  onControlsDismiss: () => void;
+  onControlAction: (action: (actions: DesktopControlActions) => Promise<void>) => void;
 };
 
 function ShellApp(props: ShellAppProps) {
@@ -287,6 +441,21 @@ function ShellApp(props: ShellAppProps) {
     }
   }, [filtered.length, props.selected, props.onSelect]);
 
+  const anchors = panelStatusGeometry({
+    screenW: props.primaryOutput.width,
+    screenH: props.primaryOutput.height,
+    clock: props.clock,
+    onControlsClick: props.onControlsToggle,
+    onNotificationsClick: props.onNotificationsToggle,
+    onTaskOverflowClick: props.onTaskOverflowToggle,
+    taskCount: props.tasks.length,
+    status: props.status,
+    cachedCapabilities: props.cachedCapabilities,
+    notificationCount:
+      props.status.kind === "ready"
+        ? props.status.snapshot.notices.filter((item) => !item.closed).length
+        : 0,
+  });
   return createElement(
     "group",
     { x: 0, y: 0, width: props.width, height: props.height },
@@ -305,6 +474,16 @@ function ShellApp(props: ShellAppProps) {
         tasks: props.tasks,
         onLauncherClick: props.onToggle,
         onTaskPress: props.onTaskPress,
+        onControlsClick: props.onControlsToggle,
+        onNotificationsClick: props.onNotificationsToggle,
+        onTaskOverflowClick: props.onTaskOverflowToggle,
+        status: props.status,
+        cachedCapabilities: props.cachedCapabilities,
+        cachedNetworkPresentation: props.cachedNetworkPresentation,
+        notificationCount:
+          props.status.kind === "ready"
+            ? props.status.snapshot.notices.filter((item) => !item.closed).length
+            : 0,
       }),
       createElement(Launcher, {
         open: props.open,
@@ -313,10 +492,102 @@ function ShellApp(props: ShellAppProps) {
         apps: filtered,
         query: props.query,
         selected: props.selected,
+        launchState: props.launchState,
         onQueryChange: props.onQuery,
         onLaunch: props.onLaunch,
         onDismiss: props.onDismiss,
         onSelect: props.onSelect,
+      }),
+      props.controlsOpen || props.notificationsOpen || props.taskOverflowOpen
+        ? null
+        : createElement(NotificationBanner, {
+            screenW: props.primaryOutput.width,
+            state: props.status,
+            onDismiss: (id: number, revision: number) =>
+              props.onControlAction((actions) => actions.dismiss(id, revision)),
+          }),
+      createElement(QuickSettings, {
+        open: props.controlsOpen,
+        screenW: props.primaryOutput.width,
+        screenH: props.primaryOutput.height,
+        state: props.status,
+        cachedCapabilities: props.cachedCapabilities,
+        cachedNetworkPresentation: props.cachedNetworkPresentation,
+        busy: props.controlsBusy,
+        error: props.controlsError,
+        scrollY: props.controlsScrollY,
+        onScroll: props.onControlsScroll,
+        anchor: anchors.controls!,
+        view: props.controlsView,
+        onViewChange: props.onControlsView,
+        onLogout: props.onLogout,
+        volumeDraft: props.volumeDraft,
+        onVolumeStart: props.onVolumeStart,
+        onVolumeChange: props.volumeBlocked ? undefined : props.onVolumeChange,
+        onVolumeCommit: props.onVolumeCommit,
+        onVolumeCancel: props.onVolumeCancel,
+        wifiSelection: props.wifiSelection,
+        wifiPassword: props.wifiPassword,
+        onWifiSelect: props.onWifiSelect,
+        onWifiPasswordChange: props.onWifiPasswordChange,
+        onWifiConnect: props.onWifiConnect,
+        onWifiCancel: props.onWifiCancel,
+        onWifiRefresh: props.onWifiRefresh,
+        onWifiSelectionCancel: props.onWifiSelectionCancel,
+        onBluetoothChange: props.onBluetoothChange,
+        onBluetoothRefresh: props.onBluetoothRefresh,
+        onBluetoothDiscoveryStart: props.onBluetoothDiscoveryStart,
+        onBluetoothDiscoveryStop: props.onBluetoothDiscoveryStop,
+        onBluetoothPair: props.onBluetoothPair,
+        onBluetoothPairCancel: props.onBluetoothPairCancel,
+        onBluetoothPromptResponse: props.onBluetoothPromptResponse,
+        onBluetoothInputResponse: props.onBluetoothInputResponse,
+        onBluetoothTrustRequest: props.onBluetoothTrustRequest,
+        onBluetoothTrustConfirm: props.onBluetoothTrustConfirm,
+        onBluetoothTrustCancel: props.onBluetoothTrustCancel,
+        onMuteChange: props.volumeBlocked
+          ? undefined
+          : (value) => props.onControlAction((actions) => actions.setMute(value)),
+        onDoNotDisturbChange: (value) =>
+          props.onControlAction((actions) => actions.setDoNotDisturb(value)),
+        onSettings: props.onSettings,
+        onDismiss: props.onControlsDismiss,
+      }),
+      createElement(TaskOverflow, {
+        open: props.taskOverflowOpen,
+        screenW: props.primaryOutput.width,
+        screenH: props.primaryOutput.height,
+        anchor: props.overflowAnchor ?? anchors.controls!,
+        tasks: props.overflowTasks,
+        onTaskPress: props.onTaskOverflowPress,
+        onDismiss: props.onControlsDismiss,
+      }),
+      createElement(NotificationsTray, {
+        open: props.notificationsOpen,
+        screenW: props.primaryOutput.width,
+        screenH: props.primaryOutput.height,
+        anchor: anchors.notifications!,
+        state: props.status,
+        busy: props.controlsBusy,
+        error: props.controlsError,
+        now: Date.now(),
+        view: props.notificationView,
+        onViewChange: props.onNotificationView,
+        scrollY: props.controlsScrollY,
+        onScroll: props.onControlsScroll,
+        onClose: props.onControlsDismiss,
+        onClearAll: (pairs) =>
+          props.onControlAction(async (actions) => {
+            const result = await actions.dismissMany(pairs);
+            if (result.skipped)
+              throw new Error(
+                `${result.dismissed} dismissed; ${result.skipped} changed or closed notices preserved`,
+              );
+          }),
+        onInvokeAction: (id, key, revision) =>
+          props.onControlAction((actions) => actions.invokeAction(id, key, revision)),
+        onDismiss: (id: number, revision: number) =>
+          props.onControlAction((actions) => actions.dismiss(id, revision)),
       }),
     ),
   );
@@ -328,14 +599,17 @@ function ShellApp(props: ShellAppProps) {
 export function createShell(
   spawn: ShellSpawn,
   onTaskAction: (action: TaskWindowAction) => void = () => {},
+  controls?: DesktopControlActions,
+  observeScroll?: ((event: ShellScrollObservation) => void) & { active?: () => boolean },
+  onLogout?: () => void,
 ): ShellBridge {
   const root: ShellRoot = createShellRoot();
   let primaryOutput = { x: 0, y: 0, width: 1, height: 1 };
   const moireRoot =
     process.env.MOIRE_ROOT ??
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-  const settingsExec = `pnpm --dir ${moireRoot} --filter @moire/settings start`;
-  const filesExec = `pnpm --dir ${moireRoot} --filter @moire/files start`;
+  const settingsExec = `pnpm --dir ${shellQuote(moireRoot)} --filter @moire/settings start`;
+  const filesExec = `pnpm --dir ${shellQuote(moireRoot)} --filter @moire/files start`;
   const builtinApps: DesktopEntry[] = [
     {
       id: "moire-settings.desktop",
@@ -373,8 +647,140 @@ export function createShell(
   const activationPortal = new FileActivationPortalClient();
   let mimeDb = activation.mimeDatabase;
   let open = process.env.MOIRE_SHELL_START_OPEN === "1";
+  let popup: "controls" | "notifications" | "windows" | null = null;
+  let taskOverflow: { anchor: PopupAnchor; keys: readonly string[] } | null = null;
+  const popupOpen = () => popup !== null;
+  const popupScope = () => {
+    const pairing = status.kind === "ready" ? status.snapshot.bluetooth.pairing : null;
+    if (
+      popup === "controls" &&
+      controlsView === "bluetooth" &&
+      pairing?.kind === "ready" &&
+      pairing.prompt &&
+      bluetoothFlow?.owner === (status.kind === "ready" ? status.owner : null) &&
+      bluetoothFlow.leaseId === pairing.lease?.id
+    )
+      return `quick:bluetooth:prompt:${pairing.prompt.id}`;
+    const trust = status.kind === "ready" ? status.snapshot.bluetooth.trust : null;
+    if (
+      popup === "controls" &&
+      controlsView === "bluetooth" &&
+      trust?.kind === "ready" &&
+      trust.operation.kind === "confirmation"
+    )
+      return `quick:bluetooth:trust:${trust.operation.challengeId}`;
+    return popup === "controls"
+      ? QUICK_SETTINGS_SCOPE
+      : popup === "windows"
+        ? TASK_WINDOWS_SCOPE
+        : NOTIFICATIONS_SCOPE;
+  };
+  let controlsView: "main" | QuickSettingsDetailsView = "main";
+  let notificationView: "active" | "history" = "active";
+  let bluetoothViewEpoch = 0;
+  let controlsBusy = false;
+  let controlsError = "";
+  let controlsFocusId: string | null = null;
+  let controlsFocusedHit: HitRegion | null = null;
+  let controlsScrollY = 0;
+  let scrollPaintPending = false;
+  let scrollViewport: { x: number; y: number; width: number; height: number } | null = null;
+  const forwardedModifiers = new Set<number>();
+  let status: DesktopStatusState = { kind: "unavailable", message: "Desktop controls unavailable" };
+  let bluetoothFlow: { owner: string; leaseId: BluetoothId } | null = null;
+  let bluetoothStart: { owner: string; epoch: number; canceled: boolean } | null = null;
+  let bluetoothPromptFocus: {
+    id: BluetoothId;
+    restoreId: string | null;
+    restoreScrollY: number;
+  } | null = null;
+  let bluetoothTrustFlow: { owner: string; challengeId: BluetoothId } | null = null;
+  let bluetoothTrustStart: { owner: string; epoch: number; canceled: boolean } | null = null;
+  const bluetoothPendingActions = new Set<string>();
+  const trustObservation = () => {
+    if (status.kind !== "ready") return null;
+    const trust = status.snapshot.bluetooth.trust;
+    return trust?.kind === "ready" && trust.operation.kind === "confirmation"
+      ? { owner: status.owner, revision: status.snapshot.revision, operation: trust.operation }
+      : null;
+  };
+  const cancelTrust = (challengeId: BluetoothId) => {
+    const current = trustObservation(),
+      flow = bluetoothTrustFlow;
+    if (
+      !current ||
+      !flow ||
+      current.owner !== flow.owner ||
+      current.operation.challengeId !== challengeId ||
+      flow.challengeId !== challengeId ||
+      !controls?.cancelBluetoothTrust
+    )
+      return;
+    bluetoothAction(
+      `trust-cancel:${challengeId}`,
+      () =>
+        controls.cancelBluetoothTrust!({
+          owner: flow.owner,
+          revision: current.revision,
+          challengeId,
+        }),
+      () => popup === "controls" && controlsView === "bluetooth",
+    );
+  };
+  const cleanupBluetoothTrust = () => {
+    if (bluetoothTrustStart) bluetoothTrustStart.canceled = true;
+    const flow = bluetoothTrustFlow;
+    if (flow) cancelTrust(flow.challengeId);
+    bluetoothTrustFlow = null;
+  };
+  const pairingObservation = () => {
+    if (status.kind !== "ready") return null;
+    const pairing = status.snapshot.bluetooth.pairing;
+    return pairing?.kind === "ready"
+      ? { owner: status.owner, revision: status.snapshot.revision, pairing }
+      : null;
+  };
+  const cleanupBluetoothFlow = () => {
+    cleanupBluetoothTrust();
+    if (bluetoothStart) bluetoothStart.canceled = true;
+    const flow = bluetoothFlow,
+      current = pairingObservation();
+    bluetoothFlow = null;
+    bluetoothPromptFocus = null;
+    if (
+      !flow ||
+      !current ||
+      current.owner !== flow.owner ||
+      current.pairing.lease?.id !== flow.leaseId ||
+      !controls?.stopBluetoothDiscovery
+    )
+      return;
+    void controls
+      .stopBluetoothDiscovery({ ...flow, revision: current.revision })
+      .catch((error) => console.warn("[shell] Bluetooth cleanup outcome", error));
+  };
+  const bluetoothAction = (key: string, action: () => Promise<void>, isCurrent: () => boolean) => {
+    if (bluetoothPendingActions.has(key)) return;
+    bluetoothPendingActions.add(key);
+    controlsError = "";
+    dirty = true;
+    void action()
+      .catch((error) => {
+        if (isCurrent()) controlsError = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        bluetoothPendingActions.delete(key);
+        dirty = true;
+      });
+  };
+  const volumeIntent = createVolumeIntent(status);
+  // A password exists only in this popup's transient draft. It is never a preference.
+  let wifiDraft: { owner: string; ap: WifiAccessPoint; password: string } | null = null;
+  let cachedCapabilities: DesktopCapabilities | undefined;
+  let cachedNetworkPresentation: NetworkPresentation | undefined;
   let query = "";
   let selected = 0;
+  let launchState: LauncherLaunchState = { kind: "idle" };
   let clock = formatClock();
   let tasks: TaskWindowInfo[] = [];
   let dirty = true;
@@ -396,8 +802,12 @@ export function createShell(
   let metaHeld = false;
   let ctrlHeld = false;
   let shiftHeld = false;
-  let overlayPointerGrab = false;
-  let overlayDownHit: HitRegion | null = null;
+  let altHeld = false;
+  let overlayGrab: {
+    button: number;
+    hit: HitRegion | null;
+    activation: HitRegion | null;
+  } | null = null;
   let shellHover: HitRegion | null = null;
 
   type SsdHit = HitRegion & { identity: string; stripKey: string };
@@ -821,22 +1231,288 @@ export function createShell(
     }
   }, 1000).unref?.();
 
-  const launch = (app: DesktopEntry) => {
-    const exec = app.terminal ? `moire-terminal --command ${shellQuote(app.exec)}` : app.exec;
-    try {
-      const child = spawn({ exec });
-      child.unref?.();
-      console.log(`[shell] launch ${app.id} → ${exec}`);
-    } catch (err) {
-      console.error(`[shell] launch failed ${app.id}:`, err);
-    }
+  const dismissLauncher = () => {
     open = false;
     query = "";
     selected = 0;
+    launchState = { kind: "idle" };
     dirty = true;
+  };
+  const dismissControls = () => {
+    cleanupBluetoothFlow();
+    bluetoothViewEpoch++;
+    (hits.find((hit) => hit.focusId === controlsFocusId) ?? controlsFocusedHit)?.onFocusChange?.(
+      false,
+    );
+    controlsFocusedHit = null;
+    controlsFocusId = null;
+    popup = null;
+    taskOverflow = null;
+    volumeIntent.cancel();
+    wifiDraft = null;
+    dirty = true;
+  };
+  const toggleControls = () => {
+    if (popup === "controls") {
+      dismissControls();
+      return;
+    }
+    dismissControls();
+    dismissLauncher();
+    popup = "controls";
+    controlsView = "main";
+    controlsError = "";
+    controlsFocusId = null;
+    controlsScrollY = 0;
+    dirty = true;
+    ensureOverlayHits();
+    hits.find((hit) => hit.focusId === controlsFocusId)?.onFocusChange?.(true);
+    dirty = true;
+  };
+  const resetPopupFocus = () => {
+    (hits.find((hit) => hit.focusId === controlsFocusId) ?? controlsFocusedHit)?.onFocusChange?.(
+      false,
+    );
+    controlsFocusedHit = null;
+    volumeIntent.cancel();
+    controlsFocusId = null;
+    controlsScrollY = 0;
+    dirty = true;
+  };
+  const toggleNotifications = () => {
+    if (popup === "notifications") {
+      dismissControls();
+      return;
+    }
+    dismissControls();
+    dismissLauncher();
+    popup = "notifications";
+    notificationView = "active";
+    controlsError = "";
+    resetPopupFocus();
+    ensureOverlayHits();
+  };
+  const toggleTaskOverflow = (anchor: PopupAnchor, hiddenTasks: readonly TaskWindowInfo[]) => {
+    if (popup === "windows") {
+      dismissControls();
+      return;
+    }
+    dismissControls();
+    dismissLauncher();
+    taskOverflow = {
+      anchor: { ...anchor },
+      keys: hiddenTasks.map((task) => `${task.clientId}:${task.surfaceId}`),
+    };
+    popup = "windows";
+    resetPopupFocus();
+    ensureOverlayHits();
+  };
+  const activateOverflowTask = (task: TaskWindowInfo) => {
+    const current = tasks.find(
+      (item) => item.clientId === task.clientId && item.surfaceId === task.surfaceId,
+    );
+    dismissControls();
+    if (current) onTaskAction({ clientId: current.clientId, surfaceId: current.surfaceId });
+  };
+  const volumeDraft = () => {
+    const draft = volumeIntent.state;
+    if (draft.kind === "editing")
+      return { value: draft.value, caption: `Requested ${Math.round(draft.value * 100)}%` };
+    if (draft.kind === "pending" || draft.kind === "unknown")
+      return {
+        value: draft.intent.value,
+        caption:
+          draft.kind === "pending"
+            ? `Updating to ${Math.round(draft.intent.value * 100)}%…`
+            : draft.message,
+      };
+    return undefined;
+  };
+  const volumeLocked = () =>
+    volumeIntent.state.kind === "pending" || volumeIntent.state.kind === "unknown";
+  const commitVolume = (value: number) => {
+    volumeIntent.change(value);
+    const intent = volumeIntent.commit();
+    if (!intent || !controls) return;
+    if (
+      status.kind !== "ready" ||
+      status.owner !== intent.owner ||
+      status.snapshot.revision !== intent.revision
+    )
+      return;
+    controlsBusy = true;
+    controlsError = "";
+    dirty = true;
+    void controls
+      .setVolume(intent.value)
+      .then(
+        () => volumeIntent.result(intent, { kind: "succeeded" }),
+        (error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          volumeIntent.result(intent, {
+            kind: "unknown",
+            message: "Outcome unknown; waiting for actual sound status",
+          });
+          controlsError = message;
+        },
+      )
+      .finally(() => {
+        controlsBusy = false;
+        dirty = true;
+      });
+  };
+  const controlAction = (
+    action: (actions: DesktopControlActions) => Promise<void>,
+    isCurrent: () => boolean = () => true,
+  ) => {
+    if (controlsBusy || !controls) return;
+    controlsBusy = true;
+    controlsError = "";
+    dirty = true;
+    void action(controls)
+      .catch((error) => {
+        if (isCurrent()) controlsError = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        controlsBusy = false;
+        dirty = true;
+      });
+  };
+  const connectWifi = () => {
+    const draft = wifiDraft;
+    if (
+      !draft ||
+      !controls ||
+      controlsBusy ||
+      status.kind !== "ready" ||
+      status.owner !== draft.owner ||
+      status.snapshot.wifi.kind !== "ready"
+    )
+      return;
+    const wifi = status.snapshot.wifi;
+    if (
+      !wifi.canConnect ||
+      wifi.operation.kind === "connecting" ||
+      wifi.operation.kind === "cancelling" ||
+      wifi.operation.kind === "unknown"
+    )
+      return;
+    const ap = wifi.accessPoints.find((ap) => ap.id === draft.ap.id);
+    if (!ap || ap.ssid !== draft.ap.ssid || ap.security !== draft.ap.security || ap.connected) {
+      wifiDraft = null;
+      controlsError = "Wi-Fi selection changed; choose the network again";
+      dirty = true;
+      return;
+    }
+    wifiDraft = null;
+    controlAction(async (actions) => {
+      try {
+        await actions.connectWifi(ap.id, draft.password);
+      } catch {
+        // Never display a remote daemon's raw error beside a submitted secret.
+        throw new Error("Wi-Fi request failed; check the observed network status");
+      }
+    });
+  };
+
+  const launch = (app: DesktopEntry) => {
+    if (launchState.kind === "pending") return;
+    const attempt: LauncherLaunchState = { kind: "pending", appName: app.name };
+    launchState = attempt;
+    dirty = true;
+    const exec = app.terminal ? `moire-terminal --command ${shellQuote(app.exec)}` : app.exec;
+    const started = () => {
+      if (launchState !== attempt) return;
+      console.log(`[shell] launch ${app.id} → ${exec}`);
+      dismissLauncher();
+    };
+    const failed = (error: unknown) => {
+      console.error(`[shell] launch failed ${app.id}:`, error);
+      if (launchState !== attempt) return;
+      launchState = { kind: "failed", appName: app.name };
+      dirty = true;
+    };
+    try {
+      const child = spawn({ exec });
+      if (child.once) {
+        child.once("error", failed);
+        child.once("spawn", started);
+      } else {
+        started();
+      }
+      child.unref?.();
+    } catch (error) {
+      failed(error);
+    }
   };
 
   const rebuild = (width: number, height: number) => {
+    // Bind actions to this observation, never to a later service owner or revision.
+    const bluetoothObservation = status;
+    const bluetoothEpoch = bluetoothViewEpoch;
+    const pairObservation = pairingObservation();
+    const ownsBluetoothPairing = !!(
+      bluetoothFlow &&
+      pairObservation &&
+      bluetoothFlow.owner === pairObservation.owner &&
+      bluetoothFlow.leaseId === pairObservation.pairing.lease?.id
+    );
+    const bluetoothCurrent = () =>
+      popup === "controls" &&
+      controlsView === "bluetooth" &&
+      bluetoothEpoch === bluetoothViewEpoch &&
+      (bluetoothObservation.kind === "ready"
+        ? status.kind === "ready" &&
+          status.owner === bluetoothObservation.owner &&
+          status.snapshot.revision === bluetoothObservation.snapshot.revision
+        : status === bluetoothObservation);
+    const changeBluetooth = (device: BluetoothDevice, connected: boolean) => {
+      if (
+        !bluetoothCurrent() ||
+        controlsBusy ||
+        bluetoothObservation.kind !== "ready" ||
+        status.kind !== "ready" ||
+        status.snapshot.updating
+      )
+        return;
+      const observed = bluetoothObservation.snapshot.bluetooth;
+      const current = status.snapshot.bluetooth;
+      if (
+        bluetoothPairingBlocksConnections(current.pairing) ||
+        bluetoothTrustBlocksControls(current.trust)
+      )
+        return;
+      if (
+        observed.status.kind !== "ready" ||
+        current.status.kind !== "ready" ||
+        current.status.policy !== "interactive" ||
+        current.operation.kind === "pending" ||
+        current.operation.kind === "unknown"
+      )
+        return;
+      const original = observed.status.devices.find((item) => item.id === device.id);
+      const live = current.status.devices.find((item) => item.id === device.id);
+      const adapter = current.status.adapters.find((item) => item.id === device.adapterId);
+      const originalAdapter = observed.status.adapters.find((item) => item.id === device.adapterId);
+      if (
+        !original ||
+        !live ||
+        !isDeepStrictEqual(original, device) ||
+        !isDeepStrictEqual(original, live) ||
+        !isDeepStrictEqual(originalAdapter, adapter) ||
+        (connected ? !live.trusted : !live.connected) ||
+        !adapter?.powered ||
+        live.connected === connected
+      )
+        return;
+      const request = {
+        owner: bluetoothObservation.owner,
+        revision: bluetoothObservation.snapshot.revision,
+        id: original.id,
+        connected,
+      };
+      controlAction((actions) => actions.setBluetoothConnected(request), bluetoothCurrent);
+    };
     const pal = themePalette();
     const panelTasks = tasks.map((task) => {
       const normalized = task.appId.toLowerCase().replace(/\.desktop$/, "");
@@ -861,20 +1537,412 @@ export function createShell(
           open,
           query,
           selected,
+          launchState,
           apps,
           clock,
           tasks: panelTasks,
-          onToggle: () => {
-            open = !open;
-            if (!open) {
-              query = "";
-              selected = 0;
-            }
+          controlsOpen: popup === "controls",
+          notificationsOpen: popup === "notifications",
+          taskOverflowOpen: popup === "windows",
+          overflowAnchor: taskOverflow?.anchor ?? null,
+          overflowTasks: panelTasks.filter((task) =>
+            taskOverflow?.keys.includes(`${task.clientId}:${task.surfaceId}`),
+          ),
+          onTaskOverflowToggle: toggleTaskOverflow,
+          onTaskOverflowPress: activateOverflowTask,
+          controlsView,
+          onLogout,
+          notificationView,
+          volumeDraft: volumeDraft(),
+          onControlsView: (view) => {
+            if (controlsView === "bluetooth" && view !== "bluetooth") cleanupBluetoothFlow();
+            bluetoothViewEpoch++;
+            resetPopupFocus();
+            if (view !== "network") wifiDraft = null;
+            controlsView = view;
+          },
+          onNotificationView: (view) => {
+            resetPopupFocus();
+            notificationView = view;
+          },
+          onNotificationsToggle: toggleNotifications,
+          onVolumeStart: () => {
+            if (controls) volumeIntent.begin();
+            controlsError = "";
             dirty = true;
+          },
+          onVolumeChange: (value) => {
+            volumeIntent.change(value);
+            dirty = true;
+          },
+          onVolumeCommit: commitVolume,
+          onVolumeCancel: () => {
+            volumeIntent.cancel();
+            dirty = true;
+          },
+          wifiSelection: wifiDraft?.ap,
+          wifiPassword: wifiDraft?.password ?? "",
+          onWifiSelect: (ap) => {
+            if (
+              status.kind !== "ready" ||
+              status.snapshot.wifi.kind !== "ready" ||
+              !status.snapshot.wifi.canConnect ||
+              controlsBusy
+            )
+              return;
+            const current = status.snapshot.wifi.accessPoints.find((item) => item.id === ap.id);
+            if (!current || current.security === "unsupported" || current.connected) return;
+            wifiDraft = { owner: status.owner, ap: current, password: "" };
+            controlsError = "";
+            resetPopupFocus();
+          },
+          onWifiPasswordChange: (value) => {
+            if (wifiDraft && value.length <= 256 && !value.includes("\0"))
+              wifiDraft = { ...wifiDraft, password: value };
+            dirty = true;
+          },
+          onWifiConnect: connectWifi,
+          onWifiSelectionCancel: () => {
+            wifiDraft = null;
+            resetPopupFocus();
+          },
+          onWifiRefresh: () => controlAction((actions) => actions.refreshWifi()),
+          onBluetoothChange: changeBluetooth,
+          onBluetoothRefresh: () => {
+            if (
+              !bluetoothCurrent() ||
+              (status.kind === "ready" &&
+                (status.snapshot.updating ||
+                  status.snapshot.bluetooth.operation.kind === "pending"))
+            )
+              return;
+            controlAction((actions) => actions.refreshBluetooth(), bluetoothCurrent);
+          },
+          onBluetoothDiscoveryStart: controls?.startBluetoothDiscovery
+            ? (adapterId) => {
+                const current = pairingObservation();
+                if (
+                  !bluetoothCurrent() ||
+                  !current ||
+                  bluetoothStart ||
+                  current.pairing.lease ||
+                  (status.kind === "ready" &&
+                    bluetoothTrustBlocksControls(status.snapshot.bluetooth.trust)) ||
+                  current.pairing.attempt.kind === "unknown" ||
+                  controlsBusy ||
+                  status.kind !== "ready" ||
+                  status.snapshot.updating ||
+                  status.snapshot.bluetooth.operation.kind === "pending" ||
+                  status.snapshot.bluetooth.operation.kind === "unknown" ||
+                  !current.pairing.adapters.some(
+                    (adapter) => adapter.id === adapterId && adapter.powered,
+                  )
+                )
+                  return;
+                const ticket = { owner: current.owner, epoch: bluetoothViewEpoch, canceled: false };
+                bluetoothStart = ticket;
+                bluetoothAction(
+                  "start",
+                  async () => {
+                    try {
+                      await controls.startBluetoothDiscovery!({
+                        owner: current.owner,
+                        revision: current.revision,
+                        adapterId,
+                      });
+                      const observed = pairingObservation();
+                      if (
+                        observed?.owner === ticket.owner &&
+                        observed.pairing.lease?.adapterId === adapterId
+                      ) {
+                        bluetoothFlow = { owner: ticket.owner, leaseId: observed.pairing.lease.id };
+                        if (
+                          ticket.canceled ||
+                          ticket.epoch !== bluetoothViewEpoch ||
+                          popup !== "controls" ||
+                          controlsView !== "bluetooth"
+                        )
+                          cleanupBluetoothFlow();
+                      }
+                    } finally {
+                      if (bluetoothStart === ticket) bluetoothStart = null;
+                    }
+                  },
+                  () => !ticket.canceled && ticket.epoch === bluetoothViewEpoch,
+                );
+              }
+            : undefined,
+          onBluetoothDiscoveryStop:
+            ownsBluetoothPairing && controls?.stopBluetoothDiscovery
+              ? () => {
+                  if (bluetoothCurrent()) cleanupBluetoothFlow();
+                }
+              : undefined,
+          onBluetoothPair:
+            ownsBluetoothPairing && controls?.beginBluetoothPair
+              ? (device) => {
+                  const current = pairingObservation(),
+                    flow = bluetoothFlow;
+                  if (
+                    !bluetoothCurrent() ||
+                    !current ||
+                    !flow ||
+                    current.owner !== flow.owner ||
+                    current.pairing.lease?.id !== flow.leaseId ||
+                    (status.kind === "ready" &&
+                      bluetoothTrustBlocksControls(status.snapshot.bluetooth.trust)) ||
+                    current.pairing.attempt.kind === "pending" ||
+                    current.pairing.attempt.kind === "unknown" ||
+                    !current.pairing.devices.some((candidate) =>
+                      isDeepStrictEqual(candidate, device),
+                    )
+                  )
+                    return;
+                  bluetoothAction(
+                    "pair",
+                    () =>
+                      controls.beginBluetoothPair!({
+                        ...flow,
+                        revision: current.revision,
+                        deviceId: device.id,
+                      }),
+                    bluetoothCurrent,
+                  );
+                }
+              : undefined,
+          onBluetoothPairCancel:
+            ownsBluetoothPairing && controls?.cancelBluetoothPair
+              ? () => {
+                  const current = pairingObservation(),
+                    flow = bluetoothFlow;
+                  if (
+                    !bluetoothCurrent() ||
+                    !current ||
+                    !flow ||
+                    current.owner !== flow.owner ||
+                    current.pairing.lease?.id !== flow.leaseId ||
+                    current.pairing.attempt.kind !== "pending"
+                  )
+                    return;
+                  const attemptId = current.pairing.attempt.id;
+                  bluetoothAction(
+                    `cancel:${attemptId}`,
+                    () =>
+                      controls.cancelBluetoothPair!({
+                        ...flow,
+                        revision: current.revision,
+                        attemptId,
+                      }),
+                    bluetoothCurrent,
+                  );
+                }
+              : undefined,
+          onBluetoothPromptResponse:
+            ownsBluetoothPairing && controls?.respondBluetoothPrompt
+              ? (promptId, accepted) => {
+                  const current = pairingObservation(),
+                    flow = bluetoothFlow;
+                  if (
+                    !bluetoothCurrent() ||
+                    !current ||
+                    !flow ||
+                    current.owner !== flow.owner ||
+                    current.pairing.lease?.id !== flow.leaseId ||
+                    current.pairing.attempt.kind !== "pending" ||
+                    current.pairing.prompt?.id !== promptId ||
+                    (current.pairing.prompt.kind !== "confirmation" &&
+                      current.pairing.prompt.kind !== "authorization")
+                  )
+                    return;
+                  const attemptId = current.pairing.attempt.id;
+                  bluetoothAction(
+                    `prompt:${promptId}`,
+                    () =>
+                      controls.respondBluetoothPrompt!({
+                        ...flow,
+                        revision: current.revision,
+                        attemptId,
+                        promptId,
+                        accepted,
+                      }),
+                    bluetoothCurrent,
+                  );
+                }
+              : undefined,
+          onBluetoothInputResponse:
+            ownsBluetoothPairing && controls?.respondBluetoothInput
+              ? (promptId, value) => {
+                  const current = pairingObservation(),
+                    flow = bluetoothFlow;
+                  if (
+                    !bluetoothCurrent() ||
+                    !current ||
+                    !flow ||
+                    current.owner !== flow.owner ||
+                    current.pairing.lease?.id !== flow.leaseId ||
+                    current.pairing.attempt.kind !== "pending" ||
+                    current.pairing.prompt?.id !== promptId ||
+                    (current.pairing.prompt.kind !== "pin-entry" &&
+                      current.pairing.prompt.kind !== "passkey-entry")
+                  )
+                    return;
+                  const attemptId = current.pairing.attempt.id;
+                  bluetoothAction(
+                    `input:${promptId}`,
+                    () =>
+                      controls.respondBluetoothInput!({
+                        ...flow,
+                        revision: current.revision,
+                        attemptId,
+                        promptId,
+                        value,
+                      }),
+                    bluetoothCurrent,
+                  );
+                }
+              : undefined,
+          onBluetoothTrustRequest: controls?.requestBluetoothTrust
+            ? (device, trusted) => {
+                if (
+                  !bluetoothCurrent() ||
+                  controlsBusy ||
+                  bluetoothTrustStart ||
+                  status.kind !== "ready" ||
+                  status.snapshot.updating
+                )
+                  return;
+                const current = status.snapshot.bluetooth;
+                if (
+                  current.status.kind !== "ready" ||
+                  current.trust?.kind !== "ready" ||
+                  bluetoothTrustBlocksControls(current.trust) ||
+                  bluetoothPairingBlocksConnections(current.pairing) ||
+                  current.operation.kind === "pending" ||
+                  current.operation.kind === "unknown" ||
+                  !current.status.devices.some((item) => isDeepStrictEqual(item, device)) ||
+                  device.trusted === trusted
+                )
+                  return;
+                const ticket = { owner: status.owner, epoch: bluetoothViewEpoch, canceled: false };
+                const revision = status.snapshot.revision;
+                bluetoothTrustStart = ticket;
+                bluetoothAction(
+                  "trust-request",
+                  async () => {
+                    try {
+                      await controls.requestBluetoothTrust!({
+                        owner: ticket.owner,
+                        revision,
+                        id: device.id,
+                        trusted,
+                      });
+                      const observed = trustObservation();
+                      if (
+                        observed?.owner === ticket.owner &&
+                        observed.operation.id === device.id &&
+                        observed.operation.trusted === trusted
+                      ) {
+                        bluetoothTrustFlow = {
+                          owner: ticket.owner,
+                          challengeId: observed.operation.challengeId,
+                        };
+                        if (
+                          ticket.canceled ||
+                          ticket.epoch !== bluetoothViewEpoch ||
+                          popup !== "controls" ||
+                          controlsView !== "bluetooth"
+                        )
+                          cleanupBluetoothTrust();
+                      }
+                    } finally {
+                      if (bluetoothTrustStart === ticket) bluetoothTrustStart = null;
+                    }
+                  },
+                  () => !ticket.canceled && ticket.epoch === bluetoothViewEpoch,
+                );
+              }
+            : undefined,
+          onBluetoothTrustConfirm:
+            controls?.confirmBluetoothTrust && bluetoothTrustFlow
+              ? (challengeId) => {
+                  const current = trustObservation(),
+                    flow = bluetoothTrustFlow;
+                  if (
+                    !bluetoothCurrent() ||
+                    !current ||
+                    !flow ||
+                    current.owner !== flow.owner ||
+                    current.operation.challengeId !== challengeId ||
+                    flow.challengeId !== challengeId
+                  )
+                    return;
+                  bluetoothAction(
+                    `trust-confirm:${challengeId}`,
+                    () =>
+                      controls.confirmBluetoothTrust!({
+                        owner: flow.owner,
+                        revision: current.revision,
+                        challengeId,
+                      }),
+                    bluetoothCurrent,
+                  );
+                }
+              : undefined,
+          onBluetoothTrustCancel:
+            controls?.cancelBluetoothTrust && bluetoothTrustFlow ? cancelTrust : undefined,
+          onWifiCancel: () => {
+            wifiDraft = null;
+            controlAction((actions) => actions.cancelWifi());
+          },
+          onSettings: () => {
+            dismissControls();
+            const settings = apps.find(
+              (app) => app.id === "moire-settings.desktop" || app.id === "moire-settings",
+            );
+            if (settings) launch(settings);
+            else {
+              controlsError = "Settings application unavailable";
+              dirty = true;
+            }
+          },
+          status,
+          cachedCapabilities,
+          cachedNetworkPresentation,
+          controlsBusy,
+          volumeBlocked: volumeLocked(),
+          controlsError,
+          controlsScrollY,
+          onControlsScroll: (value, metrics) => {
+            controlsScrollY = value;
+            dirty = true;
+            if (observeScroll && (observeScroll.active?.() ?? true)) {
+              scrollPaintPending = true;
+              observeScroll({
+                stage: "offset",
+                popup,
+                view: popup === "notifications" ? notificationView : controlsView,
+                offset: value,
+                contentHeight: metrics?.contentHeight ?? null,
+                viewportHeight: metrics?.viewportHeight ?? null,
+                maxScroll: metrics?.maxScroll ?? null,
+              });
+            }
+          },
+          onControlsToggle: toggleControls,
+          onControlsDismiss: dismissControls,
+          onControlAction: controlAction,
+          onToggle: () => {
+            dismissControls();
+            if (open) dismissLauncher();
+            else {
+              open = true;
+              dirty = true;
+            }
           },
           onQuery: (q: string) => {
             query = q;
             selected = 0;
+            if (launchState.kind === "failed") launchState = { kind: "idle" };
             dirty = true;
           },
           onSelect: (i: number) => {
@@ -882,12 +1950,7 @@ export function createShell(
             dirty = true;
           },
           onLaunch: launch,
-          onDismiss: () => {
-            open = false;
-            query = "";
-            selected = 0;
-            dirty = true;
-          },
+          onDismiss: dismissLauncher,
           onTaskPress: (task: TaskWindowInfo) => {
             onTaskAction({
               clientId: task.clientId,
@@ -925,9 +1988,74 @@ export function createShell(
     overlayRevision++;
     overlayRuns = buildAlphaRuns(overlay, width, height);
     hits = painted.hits;
+    if (observeScroll && (observeScroll.active?.() ?? true) && scrollPaintPending) {
+      scrollPaintPending = false;
+      const body = hits.find((hit) => hit.onWheel && hit.focusScopeId === popupScope());
+      scrollViewport = body
+        ? { x: body.x, y: body.y, width: body.width, height: body.height }
+        : null;
+      const checksum = (bounds: { x: number; y: number; width: number; height: number } | null) => {
+        if (!bounds) return null;
+        const pixels = new Uint32Array(
+          painted.pixels.buffer,
+          painted.pixels.byteOffset,
+          painted.pixels.byteLength / 4,
+        );
+        let hash = 2166136261;
+        for (
+          let y = Math.max(0, Math.ceil(bounds.y));
+          y < Math.min(height, Math.floor(bounds.y + bounds.height));
+          y++
+        )
+          for (
+            let x = Math.max(0, Math.ceil(bounds.x));
+            x < Math.min(width, Math.floor(bounds.x + bounds.width));
+            x++
+          )
+            hash = Math.imul(hash ^ pixels[y * width + x]!, 16777619) >>> 0;
+        return hash;
+      };
+      const footer = hits.find((hit) => hit.focusId === "notifications:history");
+      observeScroll({
+        stage: "paint",
+        popup,
+        view: popup === "notifications" ? notificationView : controlsView,
+        revision: overlayRevision,
+        offset: controlsScrollY,
+        bodyChecksum: checksum(scrollViewport),
+        footerChecksum: checksum(footer ?? null),
+      });
+    }
     ow = width;
     oh = height;
     dirty = false;
+    // Temporary operation readiness must not move keyboard focus. Keep the
+    // owned control's identity until it disappears or the user traverses away.
+    const currentPopupHit = hits.find(
+      (hit) => hit.focusScopeId === popupScope() && hit.focusId === controlsFocusId,
+    );
+    if (currentPopupHit) controlsFocusedHit = currentPopupHit;
+    const temporarilyDisabled =
+      controlsBusy || volumeLocked() || (status.kind === "ready" && status.snapshot.updating);
+    if (popupOpen() && !(controlsFocusId && temporarilyDisabled) && !currentPopupHit) {
+      const first =
+        hits.find((hit) => hit.focusable && hit.autoFocus && hit.focusScopeId === popupScope()) ??
+        hits.find((hit) => hit.focusable && hit.focusScopeId === popupScope());
+      controlsFocusedHit?.onFocusChange?.(false);
+      controlsFocusId = first?.focusId ?? null;
+      controlsFocusedHit = first ?? null;
+      first?.onFocusChange?.(true);
+      if (first) dirty = true;
+    }
+  };
+
+  const ensureOverlayHits = () => {
+    if (dirty || !overlay) {
+      rebuild(
+        ow || primaryOutput.x + primaryOutput.width,
+        oh || primaryOutput.y + primaryOutput.height,
+      );
+    }
   };
 
   /** Cache non-transparent runs once per raster instead of scanning every
@@ -1110,7 +2238,7 @@ export function createShell(
 
   const prepareSsdWindow = (window: SsdWindowInfo): ShellRasterSurface => {
     const stripKey = `${window.clientId}:${window.surfaceId}`;
-    const signature = `${window.contentW}:${window.title}:${window.focused ? 1 : 0}:${window.maximized ? 1 : 0}`;
+    const signature = `${window.contentW}:${window.title}:${window.appId ?? ""}:${window.focused ? 1 : 0}:${window.maximized ? 1 : 0}`;
     const titlebarH = themePalette().titlebarHeight;
     ssdSeen.add(stripKey);
     let strip = ssdStripCache.get(stripKey);
@@ -1138,6 +2266,7 @@ export function createShell(
           y: 0,
           width: window.contentW,
           title: window.title,
+          appId: window.appId,
           focused: window.focused,
           maximized: window.maximized,
           onDrag: () => {
@@ -1174,16 +2303,14 @@ export function createShell(
 
     strip.hits.forEach((h, index) => {
       ssdHits.push({
+        ...h,
         identity: `${stripKey}:${index}`,
         stripKey,
         x: window.x + h.x,
         y: window.y + h.y,
-        width: h.width,
-        height: h.height,
-        onPress: h.onPress,
-        onPointerEnter: h.onPointerEnter,
-        onPointerLeave: h.onPointerLeave,
-        onPointerMove: h.onPointerMove,
+        pointerClip: h.pointerClip
+          ? { ...h.pointerClip, x: window.x + h.pointerClip.x, y: window.y + h.pointerClip.y }
+          : undefined,
       });
     });
     return {
@@ -1471,6 +2598,85 @@ export function createShell(
   };
 
   return {
+    setDesktopStatus(next) {
+      let restoreBluetoothFocus = false;
+      if (status.kind !== "ready" || next.kind !== "ready" || status.owner !== next.owner) {
+        if (bluetoothStart) bluetoothStart.canceled = true;
+        bluetoothFlow = null;
+        if (bluetoothTrustStart) bluetoothTrustStart.canceled = true;
+        bluetoothTrustFlow = null;
+        bluetoothPromptFocus = null;
+        bluetoothViewEpoch++;
+      }
+      const nextPairing = next.kind === "ready" ? next.snapshot.bluetooth.pairing : null;
+      const pairPrompt = nextPairing?.kind === "ready" ? nextPairing.prompt : null;
+      const nextTrust = next.kind === "ready" ? next.snapshot.bluetooth.trust : null;
+      const trustPrompt =
+        nextTrust?.kind === "ready" && nextTrust.operation.kind === "confirmation"
+          ? nextTrust.operation
+          : null;
+      const prompt = pairPrompt ?? (trustPrompt ? { id: trustPrompt.challengeId } : null);
+      if (
+        trustPrompt &&
+        bluetoothTrustStart &&
+        next.kind === "ready" &&
+        next.owner === bluetoothTrustStart.owner
+      )
+        bluetoothTrustFlow = { owner: next.owner, challengeId: trustPrompt.challengeId };
+      if (!trustPrompt) bluetoothTrustFlow = null;
+      if (
+        popup === "controls" &&
+        controlsView === "bluetooth" &&
+        (bluetoothFlow || bluetoothTrustFlow || bluetoothPromptFocus) &&
+        next.kind === "ready"
+      ) {
+        if (prompt && bluetoothPromptFocus?.id !== prompt.id) {
+          const restoreId = bluetoothPromptFocus?.restoreId ?? controlsFocusId;
+          const restoreScrollY = bluetoothPromptFocus?.restoreScrollY ?? controlsScrollY;
+          resetPopupFocus();
+          bluetoothPromptFocus = { id: prompt.id, restoreId, restoreScrollY };
+        } else if (!prompt && bluetoothPromptFocus) {
+          const { restoreId, restoreScrollY } = bluetoothPromptFocus;
+          resetPopupFocus();
+          controlsScrollY = restoreScrollY;
+          controlsFocusId = restoreId;
+          restoreBluetoothFocus = true;
+          bluetoothPromptFocus = null;
+        }
+      }
+      volumeIntent.observe(next);
+      if (wifiDraft) {
+        const wifi = next.kind === "ready" ? next.snapshot.wifi : null;
+        const ap =
+          wifi?.kind === "ready"
+            ? wifi.accessPoints.find((ap) => ap.id === wifiDraft?.ap.id)
+            : null;
+        if (
+          next.kind !== "ready" ||
+          next.owner !== wifiDraft.owner ||
+          wifi?.kind !== "ready" ||
+          !wifi.canConnect ||
+          !ap ||
+          ap.ssid !== wifiDraft.ap.ssid ||
+          ap.security !== wifiDraft.ap.security ||
+          ap.connected
+        )
+          wifiDraft = null;
+      }
+      if (next.kind === "ready") {
+        cachedCapabilities = next.snapshot.capabilities;
+        cachedNetworkPresentation = networkPresentation(next.snapshot.network, next.snapshot.wifi);
+      }
+      status = next;
+      dirty = true;
+      if (restoreBluetoothFocus) {
+        ensureOverlayHits();
+        hits
+          .find((hit) => hit.focusId === controlsFocusId && hit.focusScopeId === popupScope())
+          ?.onFocusChange?.(true);
+        dirty = true;
+      }
+    },
     setPrimaryOutput(next) {
       if (
         primaryOutput.x === next.x &&
@@ -1499,6 +2705,12 @@ export function createShell(
         });
       if (!changed) return;
       tasks = nextTasks;
+      if (
+        popup === "windows" &&
+        taskOverflow &&
+        !tasks.some((task) => taskOverflow?.keys.includes(`${task.clientId}:${task.surfaceId}`))
+      )
+        dismissControls();
       dirty = true;
     },
     paint(fb, pitchPx, width, height) {
@@ -1545,7 +2757,7 @@ export function createShell(
     },
 
     paintSsd(fb, pitchPx, width, height, windows) {
-      ssdHits = [];
+      // beginSsdFrame owns reset; multiple stack-slot calls accumulate hits.
       for (const w of windows) {
         paintSsdWindow(fb, pitchPx, width, height, w);
       }
@@ -1555,7 +2767,7 @@ export function createShell(
       ssdPending.current = null;
       for (let i = ssdHits.length - 1; i >= 0; i--) {
         const h = ssdHits[i]!;
-        if (x >= h.x && y >= h.y && x < h.x + h.width && y < h.y + h.height) {
+        if (hitRegionContains(h, x, y)) {
           h.onPress?.({
             x,
             y,
@@ -1568,13 +2780,35 @@ export function createShell(
       return null;
     },
 
+    onClientFocus() {
+      dismissControls();
+      desktopKeyboardActive = false;
+      if (desktopMenu) {
+        desktopMenu = null;
+        dirty = true;
+      }
+    },
+
     onKey(ev) {
+      const clientModifier =
+        ev.code === KEY_LEFTCTRL ||
+        ev.code === KEY_RIGHTCTRL ||
+        ev.code === KEY_LEFTSHIFT ||
+        ev.code === KEY_RIGHTSHIFT ||
+        ev.code === 56 ||
+        ev.code === 100;
       if (ev.code === KEY_LEFTCTRL || ev.code === KEY_RIGHTCTRL) {
         ctrlHeld = ev.value !== 0;
       }
       if (ev.code === KEY_LEFTSHIFT || ev.code === KEY_RIGHTSHIFT) {
         shiftHeld = ev.value !== 0;
       }
+      if (ev.code === 56 || ev.code === 100) altHeld = ev.value !== 0;
+      // If the client received a modifier-down before a flyout opened, it
+      // must also receive the corresponding release while that flyout is open.
+      if (clientModifier && ev.value === 0 && forwardedModifiers.delete(ev.code)) return false;
+      if (clientModifier && ev.value === 1 && !open && !popupOpen() && !desktopMenu)
+        forwardedModifiers.add(ev.code);
       if (desktopMenu) {
         if (ev.value !== 1 && ev.value !== 2) return true;
         if (ev.code === KEY_ESC) {
@@ -1586,14 +2820,104 @@ export function createShell(
       if (ev.code === KEY_LEFTMETA || ev.code === KEY_RIGHTMETA) {
         metaHeld = ev.value !== 0;
         if (ev.value === 1) {
-          open = !open;
-          if (!open) {
-            query = "";
-            selected = 0;
+          dismissControls();
+          if (open) dismissLauncher();
+          else {
+            open = true;
+            dirty = true;
           }
-          dirty = true;
           return true;
         }
+        return true;
+      }
+      if (metaHeld && ev.code === 49 && ev.value === 1) {
+        toggleNotifications();
+        return true;
+      }
+      if (metaHeld && ev.code === 16 && ev.value === 1) {
+        toggleControls();
+        return true;
+      }
+      if (popupOpen()) {
+        if (ev.code === KEY_ESC && ev.value === 1) {
+          const trust = trustObservation();
+          if (
+            popup === "controls" &&
+            controlsView === "bluetooth" &&
+            trust &&
+            bluetoothTrustFlow &&
+            trust.owner === bluetoothTrustFlow.owner &&
+            trust.operation.challengeId === bluetoothTrustFlow.challengeId &&
+            controls?.cancelBluetoothTrust
+          ) {
+            cancelTrust(trust.operation.challengeId);
+            return true;
+          }
+          const current = pairingObservation(),
+            flow = bluetoothFlow;
+          if (
+            popup === "controls" &&
+            controlsView === "bluetooth" &&
+            current &&
+            flow &&
+            current.owner === flow.owner &&
+            current.pairing.lease?.id === flow.leaseId &&
+            current.pairing.prompt &&
+            current.pairing.attempt.kind === "pending" &&
+            controls?.cancelBluetoothPair
+          ) {
+            const attemptId = current.pairing.attempt.id;
+            bluetoothAction(
+              `cancel:${attemptId}`,
+              () =>
+                controls.cancelBluetoothPair!({ ...flow, revision: current.revision, attemptId }),
+              () => popup === "controls" && controlsView === "bluetooth",
+            );
+            return true;
+          }
+          dismissControls();
+          return true;
+        }
+        ensureOverlayHits();
+        const focusable = hits.filter((hit) => hit.focusable && hit.focusScopeId === popupScope());
+        if (ev.code === 15 && ev.value !== 0) {
+          const index = focusable.findIndex((hit) => hit.focusId === controlsFocusId);
+          const step = shiftHeld ? -1 : 1;
+          const nextIndex =
+            index < 0
+              ? shiftHeld
+                ? focusable.length - 1
+                : 0
+              : (index + step + focusable.length) % focusable.length;
+          const next = focusable[nextIndex];
+          if (next) controlsScrollY = scrollQuickControlIntoView(controlsScrollY, next);
+          (
+            hits.find(
+              (hit) => hit.focusScopeId === popupScope() && hit.focusId === controlsFocusId,
+            ) ?? controlsFocusedHit
+          )?.onFocusChange?.(false);
+          controlsFocusId = next?.focusId ?? null;
+          controlsFocusedHit = next ?? null;
+          next?.onFocusChange?.(true);
+        } else {
+          const focused = focusable.find((hit) => hit.focusId === controlsFocusId);
+          const callback = ev.value === 0 ? focused?.onKeyUp : focused?.onKeyDown;
+          callback?.({
+            code: ev.code,
+            ...keyFromEvdev(ev.code, {
+              shift: shiftHeld,
+              ctrl: ctrlHeld,
+              alt: altHeld,
+              meta: metaHeld,
+            }),
+            repeat: ev.value === 2,
+            shiftKey: shiftHeld,
+            ctrlKey: ctrlHeld,
+            altKey: altHeld,
+            metaKey: metaHeld,
+          });
+        }
+        dirty = true;
         return true;
       }
 
@@ -1649,118 +2973,147 @@ export function createShell(
       if (!open) return false;
       if (ev.value !== 1 && ev.value !== 2) return true;
 
-      if (ev.code === KEY_ESC) {
-        open = false;
-        query = "";
-        selected = 0;
-        dirty = true;
-        return true;
-      }
-      if (ev.code === KEY_BACKSPACE) {
-        query = query.slice(0, -1);
-        selected = 0;
-        dirty = true;
-        return true;
-      }
-      if (ev.code === KEY_ENTER) {
-        const list = filterApplications(apps, query);
-        const app = list[selected];
-        if (app) launch(app);
-        return true;
-      }
-      if (ev.code === 103 || ev.code === 108) {
+      if (ev.code === KEY_UP || ev.code === KEY_DOWN) {
         const list = filterApplications(apps, query);
         if (list.length === 0) return true;
-        if (ev.code === 103) selected = (selected - 1 + list.length) % list.length;
+        if (ev.code === KEY_UP) selected = (selected - 1 + list.length) % list.length;
         else selected = (selected + 1) % list.length;
         dirty = true;
         return true;
       }
+      ensureOverlayHits();
+      const search = hits.find((hit) => hit.autoFocus && hit.onKeyDown);
       const ch = US_MAP[ev.code];
-      if (ch && !metaHeld && !ctrlHeld) {
-        query += ch;
-        selected = 0;
-        dirty = true;
-        return true;
-      }
+      const text = shiftHeld ? (US_SHIFT_MAP[ev.code] ?? ch?.toUpperCase()) : ch;
+      search?.onKeyDown?.({
+        code: ev.code,
+        key: text,
+        text,
+        repeat: ev.value === 2,
+        shiftKey: shiftHeld,
+        ctrlKey: ctrlHeld,
+        altKey: altHeld,
+        metaKey: metaHeld,
+      });
+      dirty = true;
       return true;
     },
 
     onPointerButton(ev) {
+      const left = ev.button === PANEL_BTN_LEFT;
+      const right = ev.button === PANEL_BTN_RIGHT;
+      if (!left && !right) return open || popupOpen() || desktopMenu != null;
       if (ev.value === 1) desktopKeyboardActive = false;
-      if (ev.value === 0 && overlayPointerGrab) {
-        const hit = overlayDownHit;
-        if (hit) {
+      if (ev.value === 0 && overlayGrab?.button === ev.button) {
+        ensureOverlayHits();
+        const activation = overlayGrab.activation;
+        const captured = overlayGrab.hit;
+        const hit = captured?.focusId
+          ? hits.find(
+              (candidate) =>
+                candidate.focusId === captured.focusId &&
+                candidate.focusScopeId === captured.focusScopeId,
+            )
+          : captured;
+        overlayGrab = null;
+        if (left && hit) {
           const args = {
             x: ev.x,
             y: ev.y,
             localX: ev.x - hit.x,
             localY: ev.y - hit.y,
-            button:
-              ev.button === PANEL_BTN_RIGHT || ev.button === 273
-                ? ("right" as const)
-                : ("left" as const),
+            button: "left" as const,
+            shiftKey: shiftHeld,
+            ctrlKey: ctrlHeld,
+            altKey: altHeld,
+            metaKey: metaHeld,
           };
           hit.onPointerUp?.(args);
-          if (
-            ev.x >= hit.x &&
-            ev.y >= hit.y &&
-            ev.x < hit.x + hit.width &&
-            ev.y < hit.y + hit.height
-          ) {
-            hit.onPress?.(args);
+          if (hitRegionContains(hit, ev.x, ev.y)) {
+            // Rebind drag geometry, but preserve the semantic action captured
+            // on press. A status update must not retarget a notification batch.
+            activation?.onPress?.(args);
           }
         }
-        overlayDownHit = null;
-        overlayPointerGrab = false;
         dirty = true;
         return true;
       }
-      if (ev.value !== 1) {
-        return open || desktopMenu != null;
-      }
+      if (ev.value !== 1) return open || popupOpen() || desktopMenu != null || overlayGrab != null;
+      // A second button must not replace an in-flight left-button gesture.
+      if (overlayGrab) return true;
+      ensureOverlayHits();
       for (let i = hits.length - 1; i >= 0; i--) {
-        const h = hits[i]!;
-        if (!h.onPointerDown && !h.onPress && !h.onContextMenu && !h.focusable) {
-          continue;
-        }
-        if (ev.x >= h.x && ev.y >= h.y && ev.x < h.x + h.width && ev.y < h.y + h.height) {
-          overlayDownHit = h;
-          h.onPointerDown?.({
+        const hit = hits[i]!;
+        if (!hit.onPointerDown && !hit.onPress && !hit.onContextMenu && !hit.focusable) continue;
+        if (hitRegionContains(hit, ev.x, ev.y)) {
+          if (popupOpen() && hit.focusable && hit.focusScopeId === popupScope()) {
+            (
+              hits.find((item) => item.focusId === controlsFocusId) ?? controlsFocusedHit
+            )?.onFocusChange?.(false);
+            controlsFocusId = hit.focusId ?? null;
+            controlsFocusedHit = hit;
+            hit.onFocusChange?.(true);
+          }
+          const args = {
             x: ev.x,
             y: ev.y,
-            localX: ev.x - h.x,
-            localY: ev.y - h.y,
-            button:
-              ev.button === PANEL_BTN_RIGHT || ev.button === 273
-                ? ("right" as const)
-                : ("left" as const),
-          });
-          overlayPointerGrab = true;
+            localX: ev.x - hit.x,
+            localY: ev.y - hit.y,
+            button: right ? ("right" as const) : ("left" as const),
+            shiftKey: shiftHeld,
+            ctrlKey: ctrlHeld,
+            altKey: altHeld,
+            metaKey: metaHeld,
+          };
+          overlayGrab = {
+            button: ev.button,
+            hit: left ? hit : null,
+            activation: left ? hit : null,
+          };
+          if (right) hit.onContextMenu?.(args);
+          else hit.onPointerDown?.(args);
           dirty = true;
           return true;
         }
       }
       if (open) {
-        open = false;
-        query = "";
-        selected = 0;
-        overlayPointerGrab = true;
-        dirty = true;
+        dismissLauncher();
+        overlayGrab = { button: ev.button, hit: null, activation: null };
         return true;
       }
-      return false;
+      return desktopMenu != null;
     },
 
     onPointerMotion(ev) {
+      if (overlayGrab?.hit) {
+        ensureOverlayHits();
+        // Shell React commits replace HitRegion objects. Rebind the grab by
+        // the retained host id so scroll thumbs keep receiving motion even
+        // after the thumb itself moves and rerenders.
+        const original = overlayGrab.hit;
+        const captured = original.focusId
+          ? hits.find(
+              (hit) =>
+                hit.focusId === original.focusId && hit.focusScopeId === original.focusScopeId,
+            )
+          : original;
+        overlayGrab.hit = captured ?? null;
+        if (captured)
+          captured.onPointerMove?.({
+            x: ev.x,
+            y: ev.y,
+            localX: ev.x - captured.x,
+            localY: ev.y - captured.y,
+          });
+        dirty = true;
+        return true;
+      }
+
       let next: HitRegion | null = null;
       for (let i = hits.length - 1; i >= 0; i--) {
         const hit = hits[i]!;
         if (
-          ev.x >= hit.x &&
-          ev.y >= hit.y &&
-          ev.x < hit.x + hit.width &&
-          ev.y < hit.y + hit.height &&
+          hitRegionContains(hit, ev.x, ev.y) &&
           (hit.onPointerEnter || hit.onPointerLeave || hit.onPointerMove)
         ) {
           next = hit;
@@ -1768,7 +3121,7 @@ export function createShell(
         }
       }
 
-      if (next !== shellHover) {
+      if (next?.focusId !== shellHover?.focusId) {
         shellHover?.onPointerLeave?.({
           x: ev.x,
           y: ev.y,
@@ -1784,6 +3137,9 @@ export function createShell(
         });
         dirty = true;
       } else if (next?.onPointerMove) {
+        // Refresh callbacks/geometry after a retained React commit without
+        // manufacturing another leave/enter transition.
+        shellHover = next;
         next.onPointerMove({
           x: ev.x,
           y: ev.y,
@@ -1793,7 +3149,7 @@ export function createShell(
         dirty = true;
       }
 
-      return open || desktopMenu != null || next != null;
+      return open || popupOpen() || desktopMenu != null || next != null;
     },
 
     onSsdPointerMotion(ev) {
@@ -1802,10 +3158,7 @@ export function createShell(
         for (let i = ssdHits.length - 1; i >= 0; i--) {
           const hit = ssdHits[i]!;
           if (
-            ev.x >= hit.x &&
-            ev.y >= hit.y &&
-            ev.x < hit.x + hit.width &&
-            ev.y < hit.y + hit.height &&
+            hitRegionContains(hit, ev.x, ev.y) &&
             (hit.onPointerEnter || hit.onPointerLeave || hit.onPointerMove)
           ) {
             next = hit;
@@ -1853,15 +3206,11 @@ export function createShell(
     },
 
     onPointerAxis(ev) {
+      ensureOverlayHits();
+      const before = controlsScrollY;
       for (let i = hits.length - 1; i >= 0; i--) {
         const hit = hits[i]!;
-        if (
-          hit.onWheel &&
-          ev.x >= hit.x &&
-          ev.y >= hit.y &&
-          ev.x < hit.x + hit.width &&
-          ev.y < hit.y + hit.height
-        ) {
+        if (hit.onWheel && hitRegionContains(hit, ev.x, ev.y)) {
           hit.onWheel({
             x: ev.x,
             y: ev.y,
@@ -1872,11 +3221,37 @@ export function createShell(
             // launcher row per notch so wheel input is visibly responsive.
             deltaY: -ev.deltaY * 44,
           });
+          if (observeScroll && (observeScroll.active?.() ?? true))
+            observeScroll({
+              stage: "hit",
+              popup,
+              view: popup === "notifications" ? notificationView : controlsView,
+              x: ev.x,
+              y: ev.y,
+              deltaY: -ev.deltaY * 44,
+              before,
+              after: controlsScrollY,
+              bounds: { x: hit.x, y: hit.y, width: hit.width, height: hit.height },
+              clip: hit.pointerClip ?? null,
+            });
           dirty = true;
           return true;
         }
       }
-      return open || desktopMenu != null;
+      if (observeScroll && (observeScroll.active?.() ?? true))
+        observeScroll({
+          stage: "hit",
+          popup,
+          view: popup === "notifications" ? notificationView : controlsView,
+          x: ev.x,
+          y: ev.y,
+          deltaY: -ev.deltaY * 44,
+          before,
+          after: controlsScrollY,
+          bounds: null,
+          clip: null,
+        });
+      return open || popupOpen() || desktopMenu != null;
     },
 
     onDesktopPointerButton(ev) {
@@ -1889,13 +3264,7 @@ export function createShell(
       const findHit = (pred: (h: HitRegion) => boolean): HitRegion | null => {
         for (let i = desktopHits.length - 1; i >= 0; i--) {
           const h = desktopHits[i]!;
-          if (
-            ev.x >= h.x &&
-            ev.y >= h.y &&
-            ev.x < h.x + h.width &&
-            ev.y < h.y + h.height &&
-            pred(h)
-          ) {
+          if (hitRegionContains(h, ev.x, ev.y) && pred(h)) {
             return h;
           }
         }
@@ -2050,10 +3419,7 @@ export function createShell(
       for (let i = desktopHits.length - 1; i >= 0; i--) {
         const h = desktopHits[i]!;
         if (
-          ev.x >= h.x &&
-          ev.y >= h.y &&
-          ev.x < h.x + h.width &&
-          ev.y < h.y + h.height &&
+          hitRegionContains(h, ev.x, ev.y) &&
           (h.onPointerEnter || h.onPointerLeave || h.onPointerMove)
         ) {
           next = h;
@@ -2099,7 +3465,9 @@ export function createShell(
       const motionsMoving = tickAllMotions(dt);
       if (motionsMoving || wasSsdAnimating) {
         dirty = true;
-        desktopDirty = true;
+        // Shell UI motion currently belongs to chrome/menus or SSD controls;
+        // the desktop icon root has no animated values. Re-rasterizing its
+        // full-screen backing store here only steals frame budget from scroll.
         for (const strip of ssdStripCache.values()) strip.dirty = true;
       }
       ssdAnimationActive = motionsMoving;

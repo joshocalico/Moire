@@ -1,15 +1,22 @@
 /** Recipe-driven Button with replaceable leading and trailing artwork slots. */
 import React, { useId, useState, type ReactNode } from "react";
-import { Group, Rect, type HitKeyEvent, type HitPointerEvent } from "@moire/react-host";
+import {
+  Group,
+  Rect,
+  measureTextBounds,
+  type HitKeyEvent,
+  type HitPointerEvent,
+} from "@moire/react-host";
 import {
   resolveStatefulStyle,
   useWidgetTheme,
   type ButtonSize,
   type ButtonVariant,
   type WidgetIconStyle,
+  type WidgetTheme,
 } from "#ui/widget-theme";
 import { Pressable } from "./pressable";
-import { Box, Horizontal, Inset, registerIntrinsicSize } from "./layout";
+import { Box, Horizontal, Inset, registerIntrinsicSize, useLayoutMetrics } from "./layout";
 import { TextBlock } from "./primitives";
 
 export type { ButtonSize, ButtonVariant } from "#ui/widget-theme";
@@ -19,7 +26,9 @@ export type ButtonSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 export type ButtonProps = {
   x?: number;
   y?: number;
-  width: number;
+  /** Omit for recipe-owned sizing to fit the label and icon slots. */
+  width?: number;
+  minWidth?: number;
   /** Uses the selected recipe's control height when omitted. */
   height?: number;
   label: string;
@@ -43,8 +52,25 @@ function renderSlot(slot: ButtonSlot, style: WidgetIconStyle): ReactNode {
   return typeof slot === "function" ? slot(style) : slot;
 }
 
+function naturalButtonWidth(props: ButtonProps, theme: WidgetTheme): number {
+  const recipe = theme.recipes.button[props.variant ?? "secondary"][props.size ?? "medium"];
+  const label = resolveStatefulStyle(recipe.label, props.disabled ? "disabled" : "rest");
+  const textWidth = measureTextBounds(props.label, {
+    fontSize: props.fontSize ?? label.fontSize,
+    fontWeight: label.fontWeight,
+  }).width;
+  const leading = props.leadingIcon ? recipe.leadingIcon.base.size + recipe.metrics.gap : 0;
+  const trailing = props.trailingIcon ? recipe.trailingIcon.base.size + recipe.metrics.gap : 0;
+  return Math.max(
+    props.minWidth ?? 0,
+    Math.ceil(textWidth) + recipe.metrics.paddingX * 2 + leading + trailing + 2,
+  );
+}
+
 export function Button(props: ButtonProps): ReactNode {
   const theme = useWidgetTheme();
+  const allocated = useLayoutMetrics();
+  const width = props.width ?? allocated?.width ?? naturalButtonWidth(props, theme);
   const generatedId = useId();
   const [focused, setFocused] = useState(false);
   const variant = props.variant ?? "secondary";
@@ -102,11 +128,11 @@ export function Button(props: ButtonProps): ReactNode {
   };
 
   return (
-    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={height}>
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={width} height={height}>
       <Pressable
         x={0}
         y={0}
-        width={props.width}
+        width={width}
         height={height}
         fill={baseFill}
         hoverFill={explicitFill ? undefined : hoveredRoot.fill}
@@ -130,12 +156,12 @@ export function Button(props: ButtonProps): ReactNode {
         <Rect
           x={radius}
           y={0}
-          width={Math.max(0, props.width - radius * 2)}
+          width={Math.max(0, width - radius * 2)}
           height={recipe.rim.width}
           fill={recipe.rim.color}
         />
       ) : null}
-      <Inset width={props.width} height={height} padding={{ horizontal: recipe.metrics.paddingX }}>
+      <Inset width={width} height={height} padding={{ horizontal: recipe.metrics.paddingX }}>
         <Horizontal gap={recipe.metrics.gap} justify="center" align="center">
           {props.leadingIcon ? (
             <Box width={leadingIcon.size} height={leadingIcon.size}>
@@ -163,7 +189,7 @@ export function Button(props: ButtonProps): ReactNode {
 }
 
 registerIntrinsicSize(Button, (props, theme) => ({
-  width: props.width,
+  width: props.width ?? naturalButtonWidth(props, theme),
   height:
     props.height ??
     theme.recipes.button[props.variant ?? "secondary"][props.size ?? "medium"].metrics.height,

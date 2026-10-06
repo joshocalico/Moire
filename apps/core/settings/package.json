@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Moire Settings — out-of-process @moire/ui app",
+  "description": "Moire Settings \u2014 out-of-process @moire/ui app",
   "bin": {
     "moire-settings": "./src/main.ts"
   },
@@ -15,7 +15,8 @@
     "@moire/dbus": "workspace:*",
     "@moire/prefs": "workspace:*",
     "@moire/ui": "workspace:*",
-    "react": "^19.0.0"
+    "react": "^19.0.0",
+    "@moire/theme": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

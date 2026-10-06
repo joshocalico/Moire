@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Colors
+Comment=Color editor and saved palettes
+Exec=moire-colors
+TryExec=moire-colors
+Icon=moire-colors
+Terminal=false
+Type=Application
+Categories=Graphics;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Colors

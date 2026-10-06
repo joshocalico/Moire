@@ -6,6 +6,42 @@
  */
 /* ---------- Re-exports from split modules ---------- */
 
+export { WindowHeader, WindowFrame } from "./window-frame";
+export type { WindowHeaderProps, WindowFrameProps } from "./window-frame";
+
+export { AdaptivePanes } from "./adaptive-panes";
+export type { AdaptivePane, AdaptivePanesProps } from "./adaptive-panes";
+export { CollectionList, CollectionRow } from "./collection-list";
+export type { CollectionListProps, CollectionRowProps } from "./collection-list";
+export { PlaybackBar, playbackBarHeight, formatPlaybackTime } from "./playback-bar";
+export type { PlaybackBarProps } from "./playback-bar";
+
+export { DocumentEditor } from "./document-editor";
+export type { DocumentEditorProps, DocumentSelectionGeometry } from "./document-editor";
+export {
+  SelectionToolbar,
+  placeSelectionToolbar,
+  layoutSelectionToolbar,
+} from "./selection-toolbar";
+export type { SelectionToolbarProps, SelectionToolbarAction } from "./selection-toolbar";
+export {
+  plainDocument,
+  parseDocument,
+  toggleDocumentMark,
+  replaceDocumentRange,
+  documentFragments,
+  equalDocuments,
+  selectionHasDocumentMark,
+  documentBoundary,
+} from "./document-model";
+export type {
+  DocumentValue,
+  DocumentRun,
+  DocumentMarks,
+  DocumentMark,
+  DocumentSelection,
+} from "./document-model";
+
 export { Pressable } from "./pressable";
 export type { PressableProps } from "./pressable";
 
@@ -17,6 +53,7 @@ export type { IconButtonProps, IconButtonSlot, IconButtonVariant } from "./icon-
 
 export {
   WidgetThemeProvider,
+  createPersonalizedWidgetTheme,
   createWidgetTheme,
   getWidgetTheme,
   resolveStatefulStyle,
@@ -51,7 +88,7 @@ export type {
 } from "#ui/widget-theme";
 
 export { ScrollArea } from "./scroll";
-export type { ScrollAreaProps } from "./scroll";
+export type { ScrollAreaProps, ScrollMetrics } from "./scroll";
 
 export { List, ListItem } from "./list";
 export type { ListProps, ListItemProps, ListItemSlot } from "./list";
@@ -71,7 +108,7 @@ export type { GridProps, GridItemProps } from "./grid";
 export { ImageWidget } from "./image-widget";
 export type { ImageWidgetProps, ImageFit } from "./image-widget";
 
-export { Icon } from "./icon";
+export { Icon, applicationIcon, ICON_NAMES } from "./icon";
 export type { IconProps, IconName } from "./icon";
 
 export { Draggable, DropTarget, DropZone, DndFeedback, setDndBridge } from "./dnd";
@@ -141,6 +178,8 @@ export {
   Spacer,
   Measure,
   useLayoutMetrics,
+  registerIntrinsicSize,
+  measureColumnContent,
 } from "./layout";
 export type {
   BoxProps,
@@ -161,6 +200,7 @@ export type {
 export {
   Label,
   TextBlock,
+  measureWrappedText,
   Surface,
   Panel,
   FocusRing,
@@ -170,6 +210,7 @@ export {
 } from "./primitives";
 export type {
   LabelProps,
+  WrappedTextStyle,
   SurfaceProps,
   PanelProps,
   FocusRingProps,
@@ -286,3 +327,8 @@ export type {
   HeatmapCell,
   HeatmapChartProps,
 } from "./chart";
+
+export { TextArea, type TextAreaProps } from "./text-area";
+
+export { ContentCard, ScrollColumn } from "./content-flow";
+export type { ContentCardProps, ScrollColumnProps } from "./content-flow";

@@ -1,0 +1,8 @@
+{
+  "extends": "../packages/tsconfig/base.json",
+  "compilerOptions": { "rootDir": "..", "types": ["node"] },
+  "include": [
+    "../packages/core/test/files-interaction.native.smoke.tsx",
+    "../packages/sys/test/keyboard-state.native.smoke.ts"
+  ]
+}

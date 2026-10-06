@@ -5,6 +5,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
+import { parseThemeFamily, type ThemeFamily } from "./families";
+export {
+  windowControlLayout,
+  applyThemeFamily,
+  parseThemeFamily,
+  THEME_FAMILIES,
+  THEME_FAMILY_LABELS,
+} from "./families";
+export type { ThemeFamily } from "./families";
+export { windowChrome } from "./window-chrome";
 
 export type MoireTokens = {
   bg: string;
@@ -62,6 +72,7 @@ export type WallpaperSpec =
 
 export type MoireTheme = {
   name: string;
+  family?: ThemeFamily;
   version: string;
   gtkTheme: string;
   tokens: MoireTokens;
@@ -77,6 +88,22 @@ export const TYPE_ROLES = {
 };
 
 export const SPACE = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 } as const;
+
+/** Shared bounds for the painted panel and its compositor backdrop material. */
+export function panelGeometry(screenW: number, screenH: number, theme = getTheme()) {
+  const floating = theme.family === "cupertino" || theme.family === "moire" || !theme.family;
+  const height = Math.max(theme.tokens.panelHeight, 46) - (floating ? 6 : 0);
+  const width = floating
+    ? Math.max(1, Math.min(screenW - 24, theme.family === "cupertino" ? 820 : screenW))
+    : screenW;
+  return {
+    x: Math.floor((screenW - width) / 2),
+    y: screenH - height - (floating ? 6 : 0),
+    width,
+    height,
+    radius: floating ? 14 : 0,
+  };
+}
 
 const DEFAULT_TOKENS: MoireTokens = {
   bg: "#14181c",
@@ -494,10 +521,14 @@ export function loadTheme(themePath?: string): MoireTheme {
   const tokens: MoireTokens = { ...DEFAULT_TOKENS, ...tok };
   let wallpaper: WallpaperSpec = DEFAULT_WALLPAPER;
   const wp = raw.wallpaper as WallpaperSpec | undefined;
-  if (wp && typeof wp === "object" && "mode" in wp) wallpaper = wp;
+  if (wp && typeof wp === "object" && "mode" in wp) {
+    wallpaper =
+      wp.mode === "image" ? { ...wp, path: path.resolve(path.dirname(file), wp.path) } : wp;
+  }
   invalidateWallpaperCache();
   return {
     name: String(raw.name ?? "moire-default"),
+    family: parseThemeFamily(raw.family),
     version: String(raw.version ?? "0.0.0"),
     gtkTheme: String(raw.gtkTheme ?? "Moire"),
     tokens,
@@ -565,7 +596,7 @@ export function themePalette(theme: MoireTheme = getTheme()): ThemePalette {
   const t = theme.tokens;
   return {
     bg: hexToArgb(t.bg),
-    panel: hexToArgb(t.panel, 0xee),
+    panel: hexToArgb(t.panel),
     titlebar: hexToArgb(t.titlebar),
     titlebarInactive: hexToArgb(t.titlebarInactive),
     accent: hexToArgb(t.accent),

@@ -1,0 +1,10 @@
+{
+  "extends": "../packages/tsconfig/base.json",
+  "compilerOptions": { "rootDir": "..", "types": ["node"], "jsx": "react" },
+  "include": [
+    "../apps/system/compositor/src/local-users.ts",
+    "../apps/system/compositor/src/local-users.smoke.ts",
+    "../apps/system/greeter/src/native/user-picker.smoke.tsx",
+    "../apps/system/greeter/src/native/wave.smoke.tsx"
+  ]
+}

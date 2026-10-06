@@ -26,7 +26,7 @@ import {
   Vertical,
   Window,
   setUiScaleFactor,
-  themePalette,
+  usePalette,
   useOscillation,
   type PlatformDiagnostics,
   type WindowPerformanceSnapshot,
@@ -174,7 +174,7 @@ function MetricCard(props: {
   detail: string;
   accent?: boolean;
 }): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   return (
     <Surface
       width={props.width}
@@ -212,7 +212,7 @@ function MetricCard(props: {
 }
 
 function StressScene(props: { width: number; height: number; animating: boolean }): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   const itemWidth = Math.max(48, Math.floor((props.width - 72) / 12));
   const focusWidth = itemWidth * 2 + 18;
   const focusHeight = 58;
@@ -327,7 +327,7 @@ function Overview(props: {
   mode: UiPresentationMode;
   onModeChange: (mode: UiPresentationMode) => void;
 }): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   const [running, setRunning] = useState(process.env.MOIRE_BENCH_AUTORUN === "1");
   const [animating, setAnimating] = useState(process.env.MOIRE_BENCH_ANIMATE !== "0");
   const [progress, setProgress] = useState(0);
@@ -724,7 +724,7 @@ function Timeline(props: {
   height: number;
   history: readonly HistorySample[];
 }): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   const contentWidth = props.width - 48;
   const cardWidth = Math.floor((contentWidth - 12) / 2);
   const cardHeight = 240;
@@ -896,7 +896,7 @@ function Protocols(props: { width: number; height: number; metrics: LiveMetrics 
 }
 
 function BenchmarkApp(props: WindowSize & { win: Window }): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   const [tab, setTab] = useState(0);
   const [presentationMode, setPresentationMode] = useState<UiPresentationMode>(
     process.env.MOIRE_UI_ACCELERATION === "software" ? "shm" : "auto",

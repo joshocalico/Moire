@@ -1,5 +1,21 @@
 # Known issues (follow-ups)
 
+## Modifier state across application focus (2026-10-04)
+
+Releasing Shift in a second application could leave the first application's
+historic pressed-key set unchanged. Returning to that application restored
+Shift through `wl_keyboard.enter`, so `/` became `?` after the physical release.
+The compositor now owns one pressed-key set for the seat. Focus snapshots,
+shortcut modifiers and input diagnostics all use that state, including both
+left and right modifiers. Keys held while changing focus remain held.
+
+The real server, two-client Wayland wire and application keyboard decoder
+regression covers 31 cases, including the first key that activates an
+application. Automatic focus uses the pre-event enter snapshot so that key
+arrives once as a press. This fixes stale state after a release received by
+the compositor; input missing before the compositor and physical tearing still
+need separate native verification. Candidate 40 remains a preserved fallback.
+
 ## Launcher “works” but apps never appear (2026-07-12)
 
 **Cause:** Session used `XDG_RUNTIME_DIR=/run/user/1000` via `runuser` with no logind session. systemd deleted `/run/user/1000`, removing the Wayland socket path while the compositor kept running (in-process launcher still painted). Spawned apps could not connect.

@@ -7,6 +7,7 @@ export {
   Button,
   ListItem,
   Icon,
+  applicationIcon,
   ScrollArea,
   TextField,
   SearchField,

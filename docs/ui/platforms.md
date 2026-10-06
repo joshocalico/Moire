@@ -18,6 +18,11 @@ resolvePlatformKind();
 `PlatformWindow`: `present(ARGB pixels)`, optional `presentScene(retainedFrame)`,
 configure/close/pointer/key callbacks, `setTitle` / `setSize` / `destroy`.
 
+Optional native window actions are `beginMove`, `setMaximized`, `isMaximized`
+and `minimize`. Wayland uses xdg-toplevel requests and confirms maximize state
+from configure events. Headless records minimize requests and emits configure
+events for maximize/restore so the same application chrome can be exercised.
+
 The pixel argument remains the portable fallback. Accelerated windows first
 offer a renderer-neutral retained frame: solid and rounded rectangles plus
 shadows become GPU geometry, images are cached texture layers, and text is
@@ -44,9 +49,15 @@ Path: `packages/ui/src/platforms/wayland/index.ts`.
   back to `wl_shm` rather than stalling the application loop.
 - `wl_shm` ARGB8888 remains the deterministic fallback.
 - Every native commit requests `wl_surface.frame`; `wp_presentation` feedback
-  supplies the authoritative scanout timestamp and DRM sequence. SHM
+  reports compositor timestamps and DRM sequences. Hardware-clock and vsync
+  flags remain false when the presentation path cannot establish them. SHM
   `wl_buffer.release` is measured as reuse latency, never misreported as FPS.
 - Seat pointer (incl. axis → wheel) and keyboard.
+- Keyboard input follows `wl_keyboard.enter` and `leave`, independently of
+  pointer focus. Native popups receive keys when the seat enters their surface.
+  Enter restores the compositor's held-key array; leave or window destruction
+  clears stale modifiers and repeat state. The latest pointer or keyboard
+  serial supplies popup grabs triggered from either input device.
 - `wl_data_device_manager`: drag sources with labeled icon surfaces; drop receive into `DropTarget` sinks.
 - Fixed-size windows set min=max size so the compositor does not force a large default slot.
 
@@ -57,6 +68,21 @@ the default: it probes retained EGL/dmabuf and quietly falls back through a
 full software frame to `wl_shm`. `dmabuf` uses the same fallback but reports a
 failed EGL probe. `software`/`shm` bypasses EGL entirely.
 `MOIRE_RENDER_NODE` can select a non-default render node.
+
+`Window.getVisibility()` returns `visible`, `hidden` or `unknown`.
+`Window.onVisibilityChange(callback)` subscribes to changes and returns an
+unsubscribe function. The private `moire_surface_state_manager_v1` protocol
+publishes compositor coverage independently of client commits, so an idle
+window can receive occlusion and reveal updates. Focus, fullscreen state and
+frame callbacks do not establish visibility.
+
+Unsupported compositors, headless windows, disconnected transports, closed
+windows and unresolved coverage return `unknown`. The server evaluates actual
+paint order after presentation without reading GPU pixels. Alpha, transforms,
+scaled crop ambiguity, output recovery and work-budget exhaustion fail closed.
+Decorative motion must pause for `hidden` and `unknown`. This protocol establishes
+no hardware-rendering capability, and production backdrop motion remains static
+pending positive hardware evidence and native integration checks.
 
 Regenerate the checked-in bindings on a Linux development system with the
 Wayland protocol XML packages installed:

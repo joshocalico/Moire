@@ -35,9 +35,9 @@ mkdir -p \
   "$XDG_DATA_HOME/dbus-1/services" \
   "$XDG_DATA_HOME/xdg-desktop-portal/portals" \
   "$XDG_DATA_HOME/xdg-desktop-portal"
-cp "$ROOT/apps/system/portal/moire.portal" \
+install -m 644 "$ROOT/apps/system/portal/moire.portal" \
   "$XDG_DATA_HOME/xdg-desktop-portal/portals/moire.portal"
-cp "$ROOT/apps/system/portal/moire-portals.conf" \
+install -m 644 "$ROOT/apps/system/portal/moire-portals.conf" \
   "$XDG_DATA_HOME/xdg-desktop-portal/moire-portals.conf"
 cat >"$XDG_DATA_HOME/dbus-1/services/org.freedesktop.impl.portal.desktop.moire.service" <<EOF
 [D-BUS Service]
@@ -65,41 +65,9 @@ session_inner() {
   # Apply theme inside the D-Bus session so gsettings hits this bus.
   moire_apply_gtk_theme
 
-  # Register the native Files app as Moire's directory handler. xdg-open
-  # resolves a directory to the inode/directory default in mimeapps.list,
-  # then launches this desktop entry with the directory URI.
-  local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
-  mkdir -p "$HOME/.local/bin" "$data_home/applications"
-  ln -sfn "$ROOT/apps/bundled/files/moire-files" "$HOME/.local/bin/moire-files"
-  cp "$ROOT/apps/bundled/files/moire-files.desktop" \
-    "$data_home/applications/moire-files.desktop"
-  ln -sfn "$ROOT/apps/developer/showcase/moire-showcase" "$HOME/.local/bin/moire-showcase"
-  cp "$ROOT/apps/developer/showcase/moire-showcase.desktop" \
-    "$data_home/applications/moire-showcase.desktop"
-  ln -sfn "$ROOT/apps/developer/benchmark/moire-benchmark" "$HOME/.local/bin/moire-benchmark"
-  cp "$ROOT/apps/developer/benchmark/moire-benchmark.desktop" \
-    "$data_home/applications/moire-benchmark.desktop"
-  ln -sfn "$ROOT/apps/bundled/terminal/moire-terminal" "$HOME/.local/bin/moire-terminal"
-  cp "$ROOT/apps/bundled/terminal/moire-terminal.desktop" \
-    "$data_home/applications/moire-terminal.desktop"
-  ln -sfn "$ROOT/apps/core/settings/moire-settings" "$HOME/.local/bin/moire-settings"
-  cp "$ROOT/apps/core/settings/moire-settings.desktop" \
-    "$data_home/applications/moire-settings.desktop"
-  ln -sfn "$ROOT/apps/core/process-manager/moire-process-manager" \
-    "$HOME/.local/bin/moire-process-manager"
-  cp "$ROOT/apps/core/process-manager/moire-process-manager.desktop" \
-    "$data_home/applications/moire-process-manager.desktop"
-  ln -sfn "$ROOT/apps/core/memory-pressure/moire-memory-pressure" \
-    "$HOME/.local/bin/moire-memory-pressure"
-  if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "$data_home/applications" >/dev/null 2>&1 || true
-  fi
-  if command -v xdg-mime >/dev/null 2>&1; then
-    xdg-mime default moire-files.desktop inode/directory
-    echo "Moire session: default inode/directory=$(xdg-mime query default inode/directory)"
-  else
-    echo "moire-session: xdg-mime not found; Files default not registered" >&2
-  fi
+  # Register available apps without replacing the user's existing defaults.
+  source "$ROOT/apps/system/session/register-apps.sh"
+  register_moire_apps "$ROOT"
 
   rm -f "$SOCKET" "$SOCKET.lock"
 
@@ -161,6 +129,19 @@ session_inner() {
     echo "Moire session: Xwayland DISPLAY not ready (X11 apps need DISPLAY)" >&2
   fi
 
+  if [[ "$MOIRE_GREETER" == 1 ]]; then
+    if ! (
+      cd "$ROOT"
+      MOIRE_UI_PLATFORM=wayland pnpm --filter @moire/session welcome
+    ); then
+      echo "Moire session: welcome closed or failed; continuing existing desktop"
+    fi
+    (
+      cd "$ROOT"
+      pnpm --filter @moire/session start-desktop
+    ) || echo "Moire session: desktop handoff not confirmed; continuing existing apps"
+  fi
+
   (
     cd "$ROOT" && \
     MOIRE_UI_PLATFORM=wayland \
@@ -183,5 +164,6 @@ session_inner() {
 export -f session_inner
 export -f moire_apply_gtk_theme
 export MOIRE_COMPOSITOR SOCKET ROOT XDG_DATA_HOME XDG_CONFIG_HOME
+export MOIRE_GREETER="${MOIRE_GREETER:-0}"
 # Run inside one D-Bus session so GTK apps share the bus with the compositor.
 exec dbus-run-session -- bash -c 'session_inner'

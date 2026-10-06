@@ -4,14 +4,18 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./input-fixture": "./src/input-fixture-trace.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
     "probe:drm": "tsx src/probe-drm.ts",
     "smoke:egl": "tsx src/egl-output.smoke.ts",
+    "benchmark:egl": "tsx src/egl-benchmark.ts",
+    "smoke:egl-publication": "tsx src/egl-publication.smoke.ts",
     "smoke:libc": "tsx src/libc.smoke.ts",
+    "smoke:keyboard": "tsx src/keyboard-events.smoke.ts",
     "clear-color": "tsx src/clear-color.ts"
   },
   "dependencies": {

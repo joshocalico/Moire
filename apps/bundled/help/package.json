@@ -1,0 +1,28 @@
+{
+  "name": "@moire/help",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Search desktop help and keyboard shortcuts",
+  "scripts": {
+    "start": "tsx src/main.tsx",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx src/smoke.tsx"
+  },
+  "dependencies": {
+    "@moire/ui": "workspace:*",
+    "@moire/prefs": "workspace:*",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@moire/react-host": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/main.tsx",
+    "./catalog": "./src/catalog.ts"
+  }
+}

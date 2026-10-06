@@ -218,6 +218,8 @@ export type HitRegion = {
   width: number;
   height: number;
   radius?: number;
+  /** Visible pointer area after ancestor clips; keyboard focus keeps full geometry. */
+  pointerClip?: RetainedClip;
   onPress?: HitHandler;
   onPointerEnter?: HitHandler;
   onPointerLeave?: HitHandler;
@@ -479,8 +481,7 @@ const hostConfig = {
     return makeNode(kind, props);
   },
   appendInitialChild(parent: SceneNode, child: SceneNode): void {
-    child.parent = parent;
-    parent.children.push(child);
+    appendChild(parent, child);
   },
   finalizeInitialChildren(node: SceneNode): boolean {
     if (node.kind === "text" && node.text) {
@@ -510,26 +511,19 @@ const hostConfig = {
     return instance;
   },
   appendChild(parent: SceneNode, child: SceneNode): void {
-    child.parent = parent;
-    parent.children.push(child);
+    appendChild(parent, child);
   },
   appendChildToContainer(container: SceneNode, child: SceneNode): void {
-    child.parent = container;
-    container.children.push(child);
+    appendChild(container, child);
   },
   insertBefore(parent: SceneNode, child: SceneNode, before: SceneNode): void {
-    child.parent = parent;
-    const i = parent.children.indexOf(before);
-    if (i < 0) parent.children.push(child);
-    else parent.children.splice(i, 0, child);
+    insertBefore(parent, child, before);
   },
   insertInContainerBefore(container: SceneNode, child: SceneNode, before: SceneNode): void {
     insertBefore(container, child, before);
   },
   removeChild(parent: SceneNode, child: SceneNode): void {
-    const i = parent.children.indexOf(child);
-    if (i >= 0) parent.children.splice(i, 1);
-    child.parent = null;
+    removeChild(parent, child);
   },
   removeChildFromContainer(container: SceneNode, child: SceneNode): void {
     removeChild(container, child);
@@ -560,6 +554,7 @@ const hostConfig = {
   unhideInstance(): void {},
   unhideTextInstance(): void {},
   clearContainer(container: SceneNode): void {
+    for (const child of container.children) child.parent = null;
     container.children = [];
   },
   maySuspendCommit(): boolean {
@@ -575,8 +570,18 @@ const hostConfig = {
   },
 };
 
-function insertBefore(parent: SceneNode, child: SceneNode, before: SceneNode): void {
+/** React placement moves existing keyed children, just as DOM appendChild does. */
+function appendChild(parent: SceneNode, child: SceneNode): void {
+  if (child.parent) removeChild(child.parent, child);
   child.parent = parent;
+  parent.children.push(child);
+}
+
+function insertBefore(parent: SceneNode, child: SceneNode, before: SceneNode): void {
+  if (child === before) return;
+  if (child.parent) removeChild(child.parent, child);
+  child.parent = parent;
+  // Detach first: moving a sibling changes the insertion index.
   const i = parent.children.indexOf(before);
   if (i < 0) parent.children.push(child);
   else parent.children.splice(i, 0, child);
@@ -585,7 +590,7 @@ function insertBefore(parent: SceneNode, child: SceneNode, before: SceneNode): v
 function removeChild(parent: SceneNode, child: SceneNode): void {
   const i = parent.children.indexOf(child);
   if (i >= 0) parent.children.splice(i, 1);
-  child.parent = null;
+  if (child.parent === parent) child.parent = null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -662,13 +667,18 @@ export function collectHits(
   node: SceneNode,
   out: HitRegion[] = [],
   inheritedScope?: CollectedFocusScope,
+  inheritedClip?: RetainedClip,
 ): HitRegion[] {
   const { x, y } = absPos(node);
+  const pointerClip =
+    node.kind === "group" && node.clip
+      ? intersectClip(inheritedClip, { x, y, width: node.width, height: node.height })
+      : inheritedClip;
   const scope = node.focusScopeId
     ? {
         id: node.focusScopeId,
         trap: node.focusScopeTrap !== false,
-        active: node.focusScopeActive !== false,
+        active: node.focusScopeActive !== false && inheritedScope?.active !== false,
       }
     : inheritedScope;
   if (
@@ -694,6 +704,7 @@ export function collectHits(
       width: node.width,
       height: node.height,
       radius: node.radius,
+      pointerClip,
       onPress: node.onPress,
       onPointerEnter: node.onPointerEnter,
       onPointerLeave: node.onPointerLeave,
@@ -717,12 +728,15 @@ export function collectHits(
       onDropHoverChange: node.onDropHoverChange,
     });
   }
-  for (const c of node.children) collectHits(c, out, scope);
+  for (const c of node.children) collectHits(c, out, scope, pointerClip);
   return out;
 }
 
 /** Geometry-aware hit test shared by input dispatchers and renderer backends. */
 export function hitRegionContains(hit: HitRegion, x: number, y: number): boolean {
+  const clip = hit.pointerClip;
+  if (clip && (x < clip.x || y < clip.y || x >= clip.x + clip.width || y >= clip.y + clip.height))
+    return false;
   return insideRoundedRect(x, y, hit.x, hit.y, hit.width, hit.height, hit.radius ?? 0);
 }
 
@@ -974,6 +988,11 @@ export class RetainedSoftwareRenderer {
   readonly id = "retained-software";
   private pixels: Uint8Array | undefined;
 
+  /** Scene damage cannot update this cache when a platform skips CPU rasterization. */
+  invalidate(): void {
+    this.pixels = undefined;
+  }
+
   render(scene: RetainedSceneFrame): SoftwareFrame {
     const requiredBytes = scene.width * scene.height * 4;
     const reusable = this.pixels?.byteLength === requiredBytes;
@@ -983,7 +1002,7 @@ export class RetainedSoftwareRenderer {
       ? (scene.damage ?? [{ x: 0, y: 0, width: scene.width, height: scene.height }])
       : [{ x: 0, y: 0, width: scene.width, height: scene.height }];
     for (const rect of damage) {
-      fillRect(
+      clearRect(
         target,
         scene.width,
         scene.width,
@@ -1707,7 +1726,11 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
   }
 }
 
-const defaultSoftwareRenderer = new SoftwareRenderer();
+// A raster surface must retain its own backing pixels between frames. Sharing
+// one renderer globally lets two equally sized roots alias the same Uint8Array:
+// the shell chrome raster could overwrite the desktop raster (or vice versa)
+// before the compositor consumed either layer.
+const softwareRendererByRoot = new WeakMap<SceneNode, SoftwareRenderer>();
 
 /**
  * Backward-compatible convenience used by the compositor shell. Hit testing
@@ -1718,7 +1741,12 @@ export function rasterize(
   fbW: number,
   fbH: number,
 ): { pixels: Uint8Array; hits: HitRegion[] } {
-  const frame = defaultSoftwareRenderer.render(root, {
+  let renderer = softwareRendererByRoot.get(root);
+  if (!renderer) {
+    renderer = new SoftwareRenderer();
+    softwareRendererByRoot.set(root, renderer);
+  }
+  const frame = renderer.render(root, {
     width: fbW,
     height: fbH,
   });
@@ -1860,6 +1888,31 @@ function blendPremultiplied(
   const outG = sg + Math.round((dg * inv) / 255);
   const outB = sb + Math.round((db * inv) / 255);
   fb[index] = ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
+}
+
+/** Clear replaces damaged pixels, including alpha; ordinary paint blends over them. */
+function clearRect(
+  fb: Uint32Array,
+  pitchPx: number,
+  fbW: number,
+  fbH: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  color: number,
+): void {
+  const x0 = Math.max(0, x | 0);
+  const y0 = Math.max(0, y | 0);
+  const x1 = Math.min(fbW, (x | 0) + (w | 0));
+  const y1 = Math.min(fbH, (y | 0) + (h | 0));
+  if (x1 <= x0 || y1 <= y0) return;
+  const alpha = (color >>> 24) & 0xff;
+  const red = Math.round((((color >>> 16) & 0xff) * alpha) / 255);
+  const green = Math.round((((color >>> 8) & 0xff) * alpha) / 255);
+  const blue = Math.round(((color & 0xff) * alpha) / 255);
+  const pixel = ((alpha << 24) | (red << 16) | (green << 8) | blue) >>> 0;
+  for (let py = y0; py < y1; py++) fb.fill(pixel, py * pitchPx + x0, py * pitchPx + x1);
 }
 
 function fillRect(

@@ -9,7 +9,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/smoke.ts",
+    "smoke:launcher": "tsx src/launcher-smoke.ts"
   },
   "dependencies": {
     "@moire/app-discovery": "workspace:*",
@@ -17,7 +18,8 @@
     "@moire/react-host": "workspace:*",
     "@moire/theme": "workspace:*",
     "@moire/ui": "workspace:*",
-    "react": "^19.0.0"
+    "react": "^19.0.0",
+    "@moire/system-management": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

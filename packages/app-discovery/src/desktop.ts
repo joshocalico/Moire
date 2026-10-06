@@ -72,10 +72,7 @@ export function parseDesktopFile(
   }
 
   // Strip field codes for bare launch.
-  const cleanedExec = exec
-    .replace(/%[fFuUdDnNickvm]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const cleanedExec = exec.replace(/%[fFuUdDnNickvm]/g, "").trim();
 
   return {
     id: fileName,

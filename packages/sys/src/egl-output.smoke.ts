@@ -384,6 +384,88 @@ try {
     blurredDark > 10 && blurredLight < 245,
     "backdrop blur did not reduce contrast inside its layer bounds",
   );
+  // Partial redraw must sample only the stack below the material. An unchanged
+  // top overlay in the kernel padding must never feed back into the next blur.
+  const retainedWidth = 64,
+    retainedHeight = 48;
+  const backdropPixel = new Uint8Array([40, 20, 10, 255]);
+  const changingPixel = new Uint8Array([10, 80, 180, 255]);
+  const overlayPixel = new Uint8Array([255, 255, 255, 255]);
+  const effectPixel = new Uint8Array(4);
+  const makeScene = (revision: number, full = false) => ({
+    width: retainedWidth,
+    height: retainedHeight,
+    clearColor: 0xff000000,
+    layers: [
+      {
+        id: "floor",
+        pixels: backdropPixel,
+        sourceWidth: 1,
+        sourceHeight: 1,
+        sourceStride: 4,
+        revision: full ? revision + 1000 : 1,
+        destination: { x: 0, y: 0, width: retainedWidth, height: retainedHeight },
+      },
+      {
+        id: "moving-window",
+        pixels: changingPixel,
+        sourceWidth: 1,
+        sourceHeight: 1,
+        sourceStride: 4,
+        revision,
+        destination: { x: 24 + (revision % 6), y: 31, width: 12, height: 8 },
+      },
+      {
+        id: "live-panel",
+        pixels: effectPixel,
+        sourceWidth: 1,
+        sourceHeight: 1,
+        sourceStride: 4,
+        revision: 1,
+        destination: { x: 8, y: 28, width: 48, height: 16 },
+        cornerRadius: 5,
+        backdropBlur: { radius: 8 },
+      },
+      {
+        id: "top-menu",
+        pixels: overlayPixel,
+        sourceWidth: 1,
+        sourceHeight: 1,
+        sourceStride: 4,
+        revision: 1,
+        destination: { x: 8, y: 20, width: 48, height: 7 },
+      },
+    ],
+  });
+  const drawRetained = (renderer: EglOutputScaler, revision: number, full = false) => {
+    renderer.beginComposition(makeScene(revision, full));
+    const target = new Uint8Array(retainedWidth * retainedHeight * 4);
+    renderer.renderOutput({
+      id: "live-material-regression",
+      x: 0,
+      y: 0,
+      width: retainedWidth,
+      height: retainedHeight,
+      targetWidth: retainedWidth,
+      targetHeight: retainedHeight,
+      targetPitch: retainedWidth * 4,
+      target,
+    });
+    return target;
+  };
+  drawRetained(scaler, 1);
+  for (let revision = 2; revision <= 12; revision++) {
+    drawRetained(scaler, revision - 1);
+    const partial = drawRetained(scaler, revision);
+    assert.deepEqual(
+      partial,
+      drawRetained(scaler, revision, true),
+      `retained backdrop differs from a full composition after movement ${revision}`,
+    );
+  }
+  console.log(
+    "[sys/egl-output-smoke] changing backdrop and top-overlay feedback checked against fresh frames",
+  );
   scaler.beginComposition({
     width: 1,
     height: 1,

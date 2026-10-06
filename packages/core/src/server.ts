@@ -1,3 +1,4 @@
+import { desktopWorkArea, fitWindowToWorkArea } from "./window-work-area";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -9,9 +10,14 @@ import {
   WL_HEADER_SIZE,
 } from "@moire/protocol";
 import {
+  type SeatDeviceAccess,
+  nativeKeyboardDeviceIo,
+  nativePointerDeviceIo,
   fillKmsColor,
   presentKms,
   presentKmsFramebuffer,
+  presentKmsPixels,
+  isKmsPresentationReady,
   setKmsCursor,
   moveKmsCursor,
   disableKmsCursor,
@@ -33,16 +39,22 @@ import {
   type WaylandChunk,
   createXkbKeymapMemfd,
   type KeymapMemfd,
+  XkbKeyboardState,
+  type KeyboardModifierMask,
   EvdevKeyboard,
   type EvdevKeyEvent,
   EvdevPointer,
+  createScrollTrace,
+  createInputFixtureTrace,
+  type InputFixtureTrace,
+  type InputFixtureObservation,
+  type ScrollTraceEvent,
   type EvdevPointerMotion,
   type EvdevPointerAbsolute,
   type EvdevPointerButton,
   type EvdevPointerAxis,
   closeFd,
   createPipe,
-  flushMmap,
   GbmDevice,
   LinuxReadinessDispatcher,
 } from "@moire/sys";
@@ -57,8 +69,52 @@ import {
   outputMembershipDelta,
   replacementOwner,
 } from "./display-layout";
-import { createCompositorOutputRenderer, type CompositorOutputRenderer } from "./output-renderer";
-import type { CompositionLayer, CompositionRect, CompositionScene } from "./composition";
+import {
+  createCompositorOutputRenderer,
+  type CompositorOutputRenderer,
+  type OutputRenderingFacts,
+} from "./output-renderer";
+import type {
+  CompositionLayer,
+  CompositionRect,
+  CompositionScene,
+  OwnedPixelSurface,
+  WindowContentShape,
+} from "./composition";
+import { blurBackdrop } from "./backdrop";
+import { WindowBorderPainter } from "./window-border";
+import {
+  contentShapeCoverage,
+  paintShapedHeader,
+  windowContentShape,
+} from "./window-content-shape";
+import { moireSurfaceStateManagerV1, moireSurfaceStateV1 } from "@moire/protocol/surface-state";
+import {
+  evaluateSurfaceVisibility,
+  compositionVisibilityLayer,
+  type SurfaceVisibilityOutput,
+  type SurfaceVisibilityResult,
+} from "./surface-visibility";
+type SurfaceVisibility = SurfaceVisibilityResult["visibility"];
+type KeyboardInput = {
+  on(event: "key", listener: (event: EvdevKeyEvent) => void): void;
+  on(event: "exclusiveFailure", listener: (error: Error) => void): void;
+  start: EvdevKeyboard["start"];
+  stop(): void;
+  setInputFixtureTrace?(trace: InputFixtureTrace): void;
+};
+type SurfaceRendering = "unknown" | "software" | "virtual" | "retainedUnknown";
+type SurfaceObservation = {
+  surfaceId: number;
+  visibility: SurfaceVisibility;
+  rendering: SurfaceRendering;
+  token: number;
+  pendingToken: number;
+  commitGeneration: number;
+  revision: number;
+};
+import { SurfaceTransferCollector } from "./surface-transfer";
+import { traceOutputPipeline } from "./output-pipeline-trace";
 import {
   closeDmabufPlanes,
   copyFromDmabuf,
@@ -73,6 +129,10 @@ import {
 } from "./dmabuf-feedback";
 import { X11Wm, type XwmWindow } from "./xwm";
 import {
+  getTheme,
+  panelGeometry,
+  windowControlLayout,
+  windowChrome,
   paintWallpaper,
   hexToArgb,
   loadPngFile,
@@ -484,11 +544,26 @@ const XDG_DECORATION_MODE_SERVER = 2;
 const DRAG_WATCHDOG_TIMEOUT_MS = 15_000;
 
 /** SSD titlebar height — keep in sync with @moire/shell TitleBar. */
-const SSD_TITLEBAR_H = 34;
+function updateWallpaperImage(theme: MoireTheme): void {
+  if (theme.wallpaper.mode !== "image") {
+    setWallpaperImagePixels(null);
+    return;
+  }
+  try {
+    setWallpaperImagePixels(loadPngFile(theme.wallpaper.path));
+  } catch (error) {
+    console.warn("[compositor] wallpaper image load failed:", error);
+    setWallpaperImagePixels(null);
+  }
+}
+
+function ssdTitlebarHeight(): number {
+  return getTheme().tokens.titlebarHeight;
+}
 const SSD_TITLEBAR_BTN = 28;
-const SSD_TITLEBAR_BTN_GAP = 4;
-const SSD_TITLEBAR_BTN_PAD = 6;
-const SSD_PANEL_H = 42;
+function ssdPanelHeight(): number {
+  return getTheme().tokens.panelHeight;
+}
 
 const WL_SHM_FORMAT_ARGB8888 = 0;
 const WL_SHM_FORMAT_XRGB8888 = 1;
@@ -528,10 +603,14 @@ type WlObject = {
 };
 
 type SurfaceState = {
+  /** Last-good display can survive failure; rendering authority needs a successful latest attach. */
+  renderingSourceAccepted: boolean;
   bufferId: number | null;
   /** Offset supplied with the most recent wl_surface.attach. */
   bufferOffsetX: number;
   bufferOffsetY: number;
+  /** Frame requests become active only with the following surface commit. */
+  pendingFrameCallbacks: number[];
   frameCallbacks: number[];
   /** Buffer-space damage accumulated for the next commit. */
   pendingDamage: CompositionRect[];
@@ -560,11 +639,13 @@ type SurfaceState = {
   bufferWidth: number;
   bufferHeight: number;
   bufferScale: number;
+  /** Non-normal buffer transforms are unsupported by the current paint paths. */
+  requestedBufferTransform: number;
   stride: number;
   title: string;
   appId: string;
-  /** CPU snapshot of the last committed buffer (ARGB/XRGB). */
-  pixels: Uint8Array | null;
+  /** Immutable CPU or GPU contents, independent of the producer buffer. */
+  content: OwnedPixelSurface | null;
   /** Monotonic content generation for retained renderer texture caches. */
   revision: number;
   /** True when the committed buffer format guarantees every pixel is opaque. */
@@ -684,6 +765,7 @@ export type SsdWindowInfo = {
   contentW: number;
   contentH: number;
   title: string;
+  appId?: string;
   focused: boolean;
   maximized: boolean;
 };
@@ -715,6 +797,7 @@ type ShellRasterSurface = {
 };
 
 export type CompositorShell = {
+  onClientFocus?(): void;
   setPrimaryOutput?(output: { x: number; y: number; width: number; height: number }): void;
   paint(fb: Uint32Array, pitchPx: number, width: number, height: number): void;
   chromeRaster?(width: number, height: number): ShellRasterSurface | null;
@@ -968,6 +1051,19 @@ export type DisplayLayoutRequest = {
   scale120: number;
 };
 
+/** Internal output-owner boundary; neither focus nor transport supplies availability. */
+export type VisibilityPresentationOutput = {
+  connectorId: number;
+  bounds: SurfaceVisibilityOutput["bounds"];
+  presentationReady: boolean;
+};
+export type VisibilityPresentation = Readonly<{
+  owner: CompositorServer;
+  epoch: string;
+  rendererGeneration: object | null;
+  submissions: ReadonlyMap<ClientSession, ReadonlyMap<number, number>>;
+}>;
+
 function outputLogicalWidth(output: DisplayOutput): number {
   return Math.max(1, Math.round((output.kms.width * 120) / output.scale120));
 }
@@ -984,18 +1080,115 @@ export class CompositorServer {
   private outputStages = new Map<number, Buffer>();
   /** Output crop/scale backend; scene construction remains renderer-neutral. */
   private outputRenderer: CompositorOutputRenderer | null = null;
+  readonly surfaceTransfers = new SurfaceTransferCollector(process.env.MOIRE_GPU_METRICS === "1");
   private clients = new Set<ClientSession>();
+  private readonly surfaceObservations = new Map<ClientSession, Map<number, SurfaceObservation>>();
+  private visibilityOutputRevision = 0;
+  private readonly observedOutputAvailability = new Map<number, KmsOutput["availability"]>();
   private running = false;
   private nextGlobalName = 1;
   private globals: { name: number; iface: string; version: number }[] = [];
   private outputGlobalNames: number[] = [];
   private keymap: KeymapMemfd | null = null;
-  private evdev: EvdevKeyboard | null = null;
+  private xkbKeyboardState: XkbKeyboardState | null = null;
+  private evdev: KeyboardInput | null = null;
+  private fatalError: Error | null = null;
+  private readonly fatalErrorListeners = new Set<(error: Error) => void>();
   private pointerDev: EvdevPointer | null = null;
+  private scrollTrace = createScrollTrace();
+  protected inputFixtureTrace = createInputFixtureTrace("compositor", {
+    focus: () => ({
+      peerPid: this.focused?.peerPid ?? null,
+      appId:
+        this.focusedToplevel?.session === this.focused
+          ? (this.focusedToplevel?.session.surfaceById(this.focusedToplevel.surfaceId)?.appId ??
+            null)
+          : null,
+    }),
+  });
+
+  private inputTraceFailed = false;
+  private observeInput(callback: (trace: InputFixtureTrace) => void): void {
+    if (this.inputTraceFailed) return;
+    try {
+      if (this.inputFixtureTrace.active()) callback(this.inputFixtureTrace);
+    } catch {
+      this.inputTraceFailed = true;
+      try {
+        this.inputFixtureTrace.stop("io-error");
+      } catch {
+        /* Observer failure never changes routing. */
+      }
+    }
+  }
+
+  private observeKeyRoute(
+    ev: EvdevKeyEvent,
+    phase: Extract<InputFixtureObservation, { layer: "key-route" }>["phase"],
+  ): void {
+    this.observeInput((trace) =>
+      trace.write(
+        {
+          layer: "key-route",
+          phase,
+          ...ev,
+          clientId: this.focused?.clientId ?? null,
+          surfaceId: this.focusedToplevel?.surfaceId ?? null,
+          modifiers: this.keyboardModifiers(),
+        },
+        trace.sourceOf(ev),
+      ),
+    );
+  }
+
+  private observePointerRoute(
+    ev: EvdevPointerMotion | EvdevPointerAbsolute | EvdevPointerButton | EvdevPointerAxis,
+    event: Extract<InputFixtureObservation, { layer: "pointer-route" }>["event"],
+    phase: Extract<InputFixtureObservation, { layer: "pointer-route" }>["phase"],
+  ): void {
+    this.observeInput((trace) => {
+      const target = phase === "client" || phase === "popup" ? this.pointerFocus : null;
+      if (
+        target &&
+        (target.session !== this.focusedToplevel?.session ||
+          target.session.toplevelFor(target.surfaceId)?.id !== this.focusedToplevel.surfaceId)
+      ) {
+        trace.stop("focus");
+        return;
+      }
+      const surface = target?.session.surfaceById(target.surfaceId);
+      const ssdY = surface?.role === "toplevel" && this.usesSsd(surface) ? ssdTitlebarHeight() : 0;
+      trace.write(
+        {
+          layer: "pointer-route",
+          phase,
+          event,
+          x: this.cursorX,
+          y: this.cursorY,
+          localX: surface ? this.cursorX - surface.x : null,
+          localY: surface ? this.cursorY - surface.y - ssdY : null,
+          code: "code" in ev ? ev.code : null,
+          value: "value" in ev ? ev.value : null,
+          timeMs: ev.timeMs,
+          clientId: target?.session.clientId ?? null,
+          surfaceId: target?.surfaceId ?? null,
+        },
+        trace.sourceOf(ev),
+      );
+    });
+  }
+  /** Diagnostic observer passed to the shell only when explicitly enabled. */
+  get scrollObserver():
+    | (((event: ScrollTraceEvent) => void) & { active: () => boolean })
+    | undefined {
+    return this.scrollTrace.enabled ? this.scrollTrace.write : undefined;
+  }
   /** One native readiness worker shared by transport, input, and DRM events. */
   private readiness: LinuxReadinessDispatcher | null = null;
   private focused: ClientSession | null = null;
   private pointerFocus: { session: ClientSession; surfaceId: number } | null = null;
+  /** Buttons currently held on the physical pointer. */
+  private readonly pointerButtonsDown = new Set<number>();
   /** Last forwarded button press, used to recover the exact drag start point. */
   private lastPointerPress: {
     session: ClientSession;
@@ -1039,9 +1232,13 @@ export class CompositorServer {
   private nextTaskOrder = 1;
   /** Bottom → top mapped xdg_popups (painted/hit above toplevels). */
   private popupStack: { session: ClientSession; surfaceId: number }[] = [];
-  private focusedToplevel: { session: ClientSession; surfaceId: number } | null = null;
-  private altHeld = false;
-  private shiftHeld = false;
+  private focusedToplevel: {
+    session: ClientSession;
+    surfaceId: number;
+  } | null = null;
+  private readonly windowBorders = new WindowBorderPainter();
+  /** Accepted seat input survives client focus changes and shell consumption. */
+  private readonly pressedKeys = new Set<number>();
   /** CPU staging buffer — paint here, then flushMmap + presentKms. */
   private stage: Buffer | null = null;
   private retainedWallpaper: Buffer | null = null;
@@ -1111,8 +1308,31 @@ export class CompositorServer {
   constructor(
     private readonly runtimeDir: string,
     private readonly displayName = "wayland-1",
+    private readonly managedSeat?:
+      | { mode: "greeter"; devices: SeatDeviceAccess; clientPid: number }
+      | { mode: "desktop"; devices: SeatDeviceAccess },
   ) {
     for (const [iface, version] of Object.entries(CORE_GLOBALS)) {
+      if (
+        managedSeat?.mode === "greeter" &&
+        !new Set([
+          "wl_compositor",
+          "wl_subcompositor",
+          "wl_shm",
+          "wl_output",
+          "wl_seat",
+          "xdg_wm_base",
+          "zxdg_decoration_manager_v1",
+          "wp_viewporter",
+          "wp_fractional_scale_manager_v1",
+          "zxdg_output_manager_v1",
+          "wp_cursor_shape_manager_v1",
+        ]).has(iface)
+      )
+        continue;
+      // This managed single-output checkpoint uses SHM clients; no independent render-node grants.
+      if (managedSeat && ["wl_drm", "zwp_linux_dmabuf_v1", "xwayland_shell_v1"].includes(iface))
+        continue;
       const name = this.nextGlobalName++;
       this.globals.push({
         name,
@@ -1121,6 +1341,306 @@ export class CompositorServer {
       });
       if (iface === "wl_output") this.outputGlobalNames.push(name);
     }
+    this.globals.push({
+      name: this.nextGlobalName++,
+      iface: moireSurfaceStateManagerV1.name,
+      version: moireSurfaceStateManagerV1.version,
+    });
+  }
+
+  /** Subscription state contains IDs only; it never retains buffer storage. */
+  observeSurface(session: ClientSession, objectId: number, surfaceId: number): boolean {
+    let observations = this.surfaceObservations.get(session);
+    if ((observations?.size ?? 0) >= 256) return false;
+    if (!observations) {
+      observations = new Map();
+      this.surfaceObservations.set(session, observations);
+    }
+    observations.set(objectId, {
+      surfaceId,
+      visibility: "unknown",
+      rendering: "unknown",
+      token: 0,
+      pendingToken: 0,
+      commitGeneration: 0,
+      revision: -1,
+    });
+    session.sendSurfaceVisibility(objectId, "unknown");
+    session.sendSurfaceRendering(objectId, 0, "unknown");
+    this.markDirty();
+    return true;
+  }
+
+  /** Token carries correlation only; the actual commit and source determine authority. */
+  noteSurfaceSubmission(session: ClientSession, id: number, token: number): void {
+    const observation = this.surfaceObservations.get(session)?.get(id);
+    if (observation) observation.pendingToken = token;
+  }
+
+  surfaceCommitted(session: ClientSession, surfaceId: number, sourceAccepted: boolean): void {
+    const surface = session.surfaceById(surfaceId);
+    if (surface)
+      traceOutputPipeline({
+        stage: "commit",
+        client: session.clientId,
+        surface: surfaceId,
+        revision: surface.revision,
+        sourceAccepted,
+        damageRects: surface.damage.length,
+        callbacks: surface.frameCallbacks.length,
+      });
+    for (const [id, observation] of this.surfaceObservations.get(session) ?? []) {
+      if (observation.surfaceId !== surfaceId) continue;
+      observation.commitGeneration++;
+      observation.token = sourceAccepted ? observation.pendingToken : 0;
+      observation.pendingToken = 0;
+      observation.revision = surface?.revision ?? -1;
+      // Send even if state is already unknown: the token now denotes a new commit.
+      observation.rendering = "unknown";
+      session.sendSurfaceRendering(id, observation.token, "unknown");
+    }
+  }
+
+  private publishSurfaceRendering(
+    session: ClientSession,
+    id: number,
+    observation: SurfaceObservation,
+    rendering: SurfaceRendering,
+  ): void {
+    if (observation.rendering === rendering) return;
+    observation.rendering = rendering;
+    session.sendSurfaceRendering(id, observation.token, rendering);
+  }
+
+  unobserveSurface(session: ClientSession, objectId: number): void {
+    const observations = this.surfaceObservations.get(session);
+    observations?.delete(objectId);
+    if (observations?.size === 0) this.surfaceObservations.delete(session);
+  }
+
+  retireSurfaceObservations(session: ClientSession, surfaceId: number): void {
+    const observations = this.surfaceObservations.get(session);
+    if (!observations) return;
+    for (const [id, observation] of observations) {
+      if (observation.surfaceId !== surfaceId) continue;
+      this.publishSurfaceState(session, id, observation, "hidden");
+      this.publishSurfaceRendering(session, id, observation, "unknown");
+      observations.delete(id);
+    }
+    if (observations.size === 0) this.surfaceObservations.delete(session);
+  }
+
+  retireClientObservations(session: ClientSession): void {
+    this.surfaceObservations.delete(session);
+  }
+
+  private publishSurfaceState(
+    session: ClientSession,
+    id: number,
+    observation: SurfaceObservation,
+    visibility: SurfaceVisibility,
+  ): void {
+    if (observation.visibility === visibility) return;
+    observation.visibility = visibility;
+    session.sendSurfaceVisibility(id, visibility);
+  }
+
+  private surfaceIsHidden(session: ClientSession, surfaceId: number): boolean {
+    const surface = session.surfaceById(surfaceId);
+    return !surface?.mapped || !surface.content || session.isHidden(surface);
+  }
+
+  /** Called with the actual paint scene after output presentation, not client commits. */
+  publishSurfaceVisibilityScene(
+    scene: CompositionScene,
+    outputs: readonly SurfaceVisibilityOutput[],
+    rendering: readonly (OutputRenderingFacts | undefined)[] = [],
+    submissions: VisibilityPresentation["submissions"] = new Map(),
+  ): void {
+    if (this.surfaceObservations.size === 0) return;
+    if (
+      scene.layers.length > 4096 ||
+      outputs.length > 4096 ||
+      this.stack.length + this.popupStack.length > 4096
+    ) {
+      this.invalidateSurfaceVisibility();
+      return;
+    }
+    const owners = new Map<number, ClientSession>();
+    for (const session of this.surfaceObservations.keys()) owners.set(session.clientId, session);
+    for (const entry of [...this.stack, ...this.popupStack])
+      owners.set(entry.session.clientId, entry.session);
+    const ordered = scene.layers
+      .filter((layer) => !layer.id.startsWith("cursor:"))
+      .slice()
+      .sort((a, b) => a.z - b.z);
+    const coverage = ordered.map((layer) => {
+      const match = /^(?:surface|popup):(\d+):(\d+)$/.exec(layer.id);
+      const surface = match ? owners.get(Number(match[1]))?.surfaceById(Number(match[2])) : null;
+      if (surface && surface.requestedBufferTransform !== 0) return { kind: "unknown" as const };
+      // Require both format proof and exact committed-source identity.
+      return compositionVisibilityLayer(
+        layer,
+        surface?.opaque === true && surface.content === layer.source,
+      );
+    });
+    for (const [session, observations] of this.surfaceObservations) {
+      for (const [id, observation] of observations) {
+        if (this.surfaceIsHidden(session, observation.surfaceId)) {
+          this.publishSurfaceState(session, id, observation, "hidden");
+          this.publishSurfaceRendering(session, id, observation, "unknown");
+          continue;
+        }
+        const index = ordered.findIndex(
+          (layer) =>
+            layer.id === `surface:${session.clientId}:${observation.surfaceId}` ||
+            layer.id === `popup:${session.clientId}:${observation.surfaceId}`,
+        );
+        // A mapped surface absent from a complete paint list contributes no pixels.
+        const subject = index < 0 ? { kind: "hidden" as const } : coverage[index];
+        const result = evaluateSurfaceVisibility({
+          subject: subject ?? { kind: "unknown" },
+          outputs,
+          above: index < 0 ? [] : coverage.slice(index + 1),
+        });
+        this.publishSurfaceState(session, id, observation, result.visibility);
+        const surface = session.surfaceById(observation.surfaceId);
+        const layer = index < 0 ? undefined : ordered[index];
+        const facts = result.visibility === "visible" ? rendering[result.outputIndex] : undefined;
+        let accepted: SurfaceRendering = "unknown";
+        if (
+          facts &&
+          observation.token !== 0 &&
+          submissions.get(session)?.get(id) === observation.commitGeneration &&
+          surface?.revision === observation.revision &&
+          layer?.source === surface?.content
+        ) {
+          if (facts.execution === "software" || facts.path === "software") accepted = "software";
+          else if (
+            facts.execution === "virtual" &&
+            (facts.path === "retained-direct" || facts.path === "flat-direct")
+          )
+            // Execution identifies the presented output, including uploaded SHM pixels.
+            // It makes no claim that this surface is resident or rendered without copies.
+            accepted = "virtual";
+          else if (facts.path === "retained-direct" && facts.residentSources.has(layer.source))
+            accepted = "retainedUnknown";
+        }
+        this.publishSurfaceRendering(session, id, observation, accepted);
+      }
+    }
+  }
+
+  private invalidateSurfaceVisibility(): void {
+    for (const [session, observations] of this.surfaceObservations) {
+      for (const [id, observation] of observations) {
+        this.publishSurfaceRendering(session, id, observation, "unknown");
+        this.publishSurfaceState(
+          session,
+          id,
+          observation,
+          this.surfaceIsHidden(session, observation.surfaceId) ? "hidden" : "unknown",
+        );
+      }
+    }
+  }
+
+  /** Internal: called only by the separately owned output observer, never a client request. */
+  observeOutputAvailability(connectorId: number, availability: KmsOutput["availability"]): void {
+    if (this.observedOutputAvailability.get(connectorId) === availability) return;
+    this.observedOutputAvailability.set(connectorId, availability);
+    this.visibilityOutputRevision = (this.visibilityOutputRevision + 1) >>> 0;
+    this.invalidateSurfaceVisibility();
+    this.markDirty();
+  }
+
+  beginVisibilityPresentation(): VisibilityPresentation {
+    const submissions = new Map<ClientSession, ReadonlyMap<number, number>>();
+    let count = 0;
+    for (const [session, observations] of this.surfaceObservations) {
+      count += observations.size;
+      if (count > 4096) {
+        submissions.clear();
+        break;
+      }
+      submissions.set(
+        session,
+        new Map([...observations].map(([id, observation]) => [id, observation.commitGeneration])),
+      );
+    }
+    return Object.freeze({
+      owner: this,
+      epoch: this.visibilityOutputEpoch(),
+      rendererGeneration: this.outputRenderer?.renderingGeneration ?? null,
+      submissions,
+    });
+  }
+
+  /** Same completion boundary for KMS and privately owned device-free presentation fixtures. */
+  completeVisibilityPresentation(
+    presentation: VisibilityPresentation,
+    scene: CompositionScene,
+    outputs: readonly VisibilityPresentationOutput[],
+    presented: readonly {
+      connectorId: number;
+      success: boolean;
+      rendering?: OutputRenderingFacts;
+    }[],
+  ): void {
+    if (
+      presentation.owner !== this ||
+      presentation.epoch !== this.visibilityOutputEpoch() ||
+      presentation.rendererGeneration !== (this.outputRenderer?.renderingGeneration ?? null)
+    ) {
+      this.invalidateSurfaceVisibility();
+      return;
+    }
+    this.publishSurfaceVisibilityScene(
+      scene,
+      outputs.map((output) => ({
+        bounds: output.bounds,
+        state:
+          this.observedOutputAvailability.get(output.connectorId) === "available" &&
+          output.presentationReady &&
+          presented.some((result) => result.connectorId === output.connectorId && result.success)
+            ? "usable"
+            : "unresolved",
+      })),
+      outputs.map((output) => {
+        const result = presented.find(
+          (item) => item.connectorId === output.connectorId && item.success,
+        );
+        return result?.rendering?.generation === presentation.rendererGeneration
+          ? result.rendering
+          : undefined;
+      }),
+      presentation.submissions,
+    );
+  }
+
+  private visibilityOutputEpoch(): string {
+    return (
+      `${this.visibilityOutputRevision}|` +
+      this.outputs
+        .map(
+          (output) =>
+            `${output.kms.connectorId}:${output.kms.currentModeId}:${output.kms.width}:${output.kms.height}:${output.x}:${output.y}:${output.scale120}`,
+        )
+        .join(";")
+    );
+  }
+
+  private visibilityOutputs(): VisibilityPresentationOutput[] {
+    return this.outputs.map((output) => ({
+      connectorId: output.kms.connectorId,
+      bounds: {
+        x: output.x,
+        y: output.y,
+        width: outputLogicalWidth(output),
+        height: outputLogicalHeight(output),
+      },
+      presentationReady: isKmsPresentationReady(output.kms),
+    }));
   }
 
   get socketPath(): string {
@@ -1128,18 +1648,21 @@ export class CompositorServer {
   }
 
   async start(cardPath?: string): Promise<void> {
+    if (this.fatalError) throw this.fatalError;
     fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
     const displaySettings = loadSettings();
     const requestedMode = process.env.MOIRE_MODE ?? displaySettings.displayMode ?? undefined;
-    this.kms = openKmsOutput(cardPath, requestedMode);
+    this.kms = openKmsOutput(cardPath, requestedMode, undefined, this.managedSeat?.devices);
     this.readiness = new LinuxReadinessDispatcher("compositor");
     this.outputs = [{ kms: this.kms, x: 0, y: 0, scale120: 120, primary: true }];
-    const connected = listDrmConnectors().filter(
-      (connector) =>
-        connector.cardPath === this.kms!.cardPath &&
-        connector.connection === "connected" &&
-        connector.connectorId !== this.kms!.connectorId,
-    );
+    const connected = this.managedSeat
+      ? []
+      : listDrmConnectors().filter(
+          (connector) =>
+            connector.cardPath === this.kms!.cardPath &&
+            connector.connection === "connected" &&
+            connector.connectorId !== this.kms!.connectorId,
+        );
     const usedCrtcs = new Set([this.kms.crtcId]);
     for (const connector of connected) {
       try {
@@ -1150,7 +1673,13 @@ export class CompositorServer {
           usedCrtcs,
         );
         usedCrtcs.add(output.crtcId);
-        this.outputs.push({ kms: output, x: 0, y: 0, scale120: 120, primary: false });
+        this.outputs.push({
+          kms: output,
+          x: 0,
+          y: 0,
+          scale120: 120,
+          primary: false,
+        });
       } catch (error) {
         console.warn(`[output] could not activate connector ${connector.connectorId}:`, error);
       }
@@ -1173,71 +1702,69 @@ export class CompositorServer {
       });
     }
     this.outputRenderer = createCompositorOutputRenderer(this.kms.fd);
+    for (const output of this.outputs)
+      this.observeOutputAvailability(output.kms.connectorId, output.kms.availability);
     console.log(
       `[renderer] ${this.outputRenderer.id}: ${this.outputRenderer.detail} capabilities=${JSON.stringify(this.outputRenderer.capabilities)}`,
     );
     const bootBg = hexToArgb(this.theme.tokens.bg);
     for (const output of this.outputs) {
-      fillKmsColor(output.kms, {
-        r: (bootBg >>> 16) & 0xff,
-        g: (bootBg >>> 8) & 0xff,
-        b: bootBg & 0xff,
-      });
+      await fillKmsColor(
+        output.kms,
+        {
+          r: (bootBg >>> 16) & 0xff,
+          g: (bootBg >>> 8) & 0xff,
+          b: bootBg & 0xff,
+        },
+        this.readiness,
+      );
     }
+    updateWallpaperImage(this.theme);
     console.log(`[theme] ${this.theme.name} wallpaper=${this.theme.wallpaper.mode}`);
     console.log(
       `[output] layout ${this.outputs.map(({ kms, x, y }) => `${kms.connectorName}:${kms.currentModeId}@${x},${y}`).join(" ")}`,
     );
     try {
-      this.drmHotplugMonitor = watchDrmHotplug((event) => {
-        if (this.scheduleDisplayRefresh(150)) {
-          console.log(`[output] DRM ${event.action}${event.sysname ? ` ${event.sysname}` : ""}`);
-        }
-      });
-      console.log("[output] DRM hotplug monitor ready");
+      if (!this.managedSeat) {
+        this.drmHotplugMonitor = watchDrmHotplug((event) => {
+          if (this.scheduleDisplayRefresh(150)) {
+            console.log(`[output] DRM ${event.action}${event.sysname ? ` ${event.sysname}` : ""}`);
+          }
+        });
+        console.log("[output] DRM hotplug monitor ready");
+      }
     } catch (error) {
       console.warn("[output] DRM hotplug monitor unavailable:", error);
     }
-    this.displayProbeTimer = setInterval(() => this.scheduleDisplayRefresh(0), 2_000);
-    this.displayProbeTimer.unref?.();
+    if (!this.managedSeat) {
+      this.displayProbeTimer = setInterval(() => this.scheduleDisplayRefresh(0), 2_000);
+      this.displayProbeTimer.unref?.();
+    }
     this.prefsWatcher = createPrefsWatcher((theme) => {
       this.theme = theme;
-      if (theme.wallpaper.mode === "image") {
-        const wp = theme.wallpaper as { mode: "image"; path?: string };
-        if (wp.path) {
-          try {
-            const img = loadPngFile(wp.path);
-            setWallpaperImagePixels(img);
-          } catch (err) {
-            console.warn("[compositor] wallpaper image load failed:", err);
-            setWallpaperImagePixels(null);
-          }
-        } else {
-          setWallpaperImagePixels(null);
-        }
-      } else {
-        setWallpaperImagePixels(null);
-      }
+      updateWallpaperImage(theme);
       this.shell?.invalidateChrome?.();
       this.markDirty();
     });
-    try {
-      this.gbm = GbmDevice.openForImport(this.kms.fd);
-      console.log("[dmabuf] GBM device ready");
-    } catch (err) {
-      console.warn("[dmabuf] GBM unavailable (mmap-only import):", err);
-      this.gbm = null;
-    }
-    try {
-      this.drmFeedback = resolveDrmFeedbackDevice(this.kms.cardPath);
-      this.dmabufFormatTable = createDmabufFormatTableMemfd();
-      console.log(
-        `[dmabuf] feedback device=${this.drmFeedback.path} rdev=0x${this.drmFeedback.deviceBytes.readBigUInt64LE(0).toString(16)} formats=${DMABUF_FEEDBACK_FORMAT_COUNT}`,
-      );
-    } catch (err) {
-      console.warn("[dmabuf] feedback setup failed:", err);
-      this.drmFeedback = null;
-      this.dmabufFormatTable = null;
+    if (!this.managedSeat) {
+      try {
+        this.gbm = GbmDevice.openForImport(this.kms.fd);
+        console.log("[dmabuf] GBM device ready");
+      } catch (err) {
+        console.warn("[dmabuf] GBM unavailable (mmap-only import):", err);
+        this.gbm = null;
+      }
+      try {
+        this.drmFeedback = resolveDrmFeedbackDevice(this.kms.cardPath);
+        this.dmabufFormatTable = createDmabufFormatTableMemfd();
+        console.log(
+          `[dmabuf] feedback device=${this.drmFeedback.path} rdev=0x${this.drmFeedback.deviceBytes.readBigUInt64LE(0).toString(16)} formats=${DMABUF_FEEDBACK_FORMAT_COUNT}`,
+        );
+      } catch (err) {
+        console.warn("[dmabuf] feedback setup failed:", err);
+        this.drmFeedback = null;
+        this.dmabufFormatTable = null;
+      }
     }
 
     try {
@@ -1247,11 +1774,19 @@ export class CompositorServer {
       console.warn("[seat] keymap unavailable:", err);
     }
 
-    this.evdev = new EvdevKeyboard(this.readiness);
-    this.evdev.on("key", (ev: EvdevKeyEvent) => this.onKey(ev));
-    this.evdev.start();
+    this.startKeyboardInput(
+      new EvdevKeyboard(
+        this.readiness,
+        this.managedSeat ? nativeKeyboardDeviceIo(this.managedSeat.devices) : undefined,
+      ),
+    );
 
-    this.pointerDev = new EvdevPointer(this.readiness);
+    this.pointerDev = new EvdevPointer(
+      this.readiness,
+      this.managedSeat ? nativePointerDeviceIo(this.managedSeat.devices) : undefined,
+    );
+    this.pointerDev.setInputFixtureTrace(this.inputFixtureTrace);
+    if (this.scrollTrace.enabled) this.pointerDev.on("rawPointer", this.scrollTrace.write);
     this.pointerDev.on("motion", (ev: EvdevPointerMotion) => this.onPointerMotion(ev));
     this.pointerDev.on("absolute", (ev: EvdevPointerAbsolute) => this.onPointerAbsolute(ev));
     this.pointerDev.on("button", (ev: EvdevPointerButton) => this.onPointerButton(ev));
@@ -1265,6 +1800,10 @@ export class CompositorServer {
     }
     this.socket = new WaylandSocketServer(this.socketPath, this.readiness);
     this.socket.on("connection", (conn: WaylandClientConn) => {
+      if (this.managedSeat?.mode === "greeter" && conn.peerPid !== this.managedSeat.clientPid) {
+        conn.close();
+        return;
+      }
       const session = new ClientSession(this, conn, this.nextClientId++);
       this.clients.add(session);
       conn.on("error", (err: Error) => {
@@ -1332,8 +1871,61 @@ export class CompositorServer {
     this.loop();
   }
 
+  /** Main owns outer D-Bus/Xwayland shutdown and the nonzero process exit. */
+  onFatalError(listener: (error: Error) => void): () => void {
+    this.fatalErrorListeners.add(listener);
+    return () => {
+      this.fatalErrorListeners.delete(listener);
+    };
+  }
+
+  protected startKeyboardInput(keyboard: KeyboardInput): void {
+    if (this.fatalError) throw this.fatalError;
+    const keymap = this.getKeymap();
+    if (keymap) this.xkbKeyboardState = new XkbKeyboardState(keymap);
+    this.evdev = keyboard;
+    keyboard.setInputFixtureTrace?.(this.inputFixtureTrace);
+    keyboard.on("key", (ev: EvdevKeyEvent) => {
+      if (this.evdev === keyboard) this.onKey(ev);
+    });
+    keyboard.on("exclusiveFailure", (error: Error) => {
+      if (this.evdev !== keyboard || this.fatalError) return;
+      this.fatalError = error;
+      console.error("[seat] exclusive keyboard ownership lost:", error);
+      try {
+        this.stop();
+      } catch (cleanupError) {
+        console.error("[seat] failure teardown:", cleanupError);
+      }
+      for (const listener of this.fatalErrorListeners) {
+        try {
+          listener(error);
+        } catch (listenerError) {
+          console.error("[seat] fatal-error listener failed:", listenerError);
+        }
+      }
+    });
+    try {
+      keyboard.start(undefined, { exclusive: true });
+    } catch (error) {
+      this.fatalError = error instanceof Error ? error : new Error(String(error));
+      try {
+        this.stop();
+      } catch (cleanupError) {
+        console.error("[seat] startup teardown:", cleanupError);
+      }
+      throw error;
+    }
+  }
+
   stop(): void {
+    try {
+      this.inputFixtureTrace.stop("closed");
+    } catch {
+      /* Diagnostic teardown is isolated. */
+    }
     this.running = false;
+    this.pressedKeys.clear();
     this.compositeWakeResolver?.();
     this.compositeWakeResolver = null;
     this.drmHotplugMonitor?.stop();
@@ -1367,7 +1959,11 @@ export class CompositorServer {
     this.pointerFocus = null;
     for (const c of this.clients) c.destroy();
     this.clients.clear();
+    this.observedOutputAvailability.clear();
     this.socket?.stop();
+    this.socket = null;
+    this.xkbKeyboardState?.close();
+    this.xkbKeyboardState = null;
     if (this.keymap) {
       try {
         closeFd(this.keymap.fd);
@@ -1424,6 +2020,8 @@ export class CompositorServer {
 
   /** Attach in-process shell chrome (panel + launcher). */
   setShell(shell: CompositorShell | null): void {
+    if (this.managedSeat?.mode === "greeter" && shell)
+      throw new Error("Greeter cannot attach a desktop shell");
     this.shell = shell;
   }
 
@@ -1559,19 +2157,19 @@ export class CompositorServer {
       const parentFrame = this.frameBox(parentSurf);
       const childW = win.width > 0 ? win.width : Math.max(1, surf.width);
       const childH = win.height > 0 ? win.height : Math.max(1, surf.height);
-      const frameH = childH + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
+      const frameH = childH + (this.usesSsd(surf) ? ssdTitlebarHeight() : 0);
       const kms = this.getKmsSize();
       let x = parentFrame.x + Math.floor((parentFrame.w - childW) / 2);
       let y = parentFrame.y + Math.floor((parentFrame.h - frameH) / 2);
       if (kms) {
         x = Math.max(0, Math.min(x, Math.max(0, kms.width - childW)));
-        y = Math.max(0, Math.min(y, Math.max(0, kms.height - frameH - SSD_PANEL_H)));
+        y = Math.max(0, Math.min(y, Math.max(0, kms.height - frameH - ssdPanelHeight())));
       }
       surf.x = x;
       surf.y = y;
       // Push geometry to X so the client matches the centered position.
       win.x = x;
-      win.y = y + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
+      win.y = y + (this.usesSsd(surf) ? ssdTitlebarHeight() : 0);
     } else if (surf.x === 0 && surf.y === 0 && win.x === 0 && win.y === 0) {
       const slot = this.allocToplevelSlot();
       surf.x = slot.x;
@@ -1580,7 +2178,7 @@ export class CompositorServer {
 
     this.applyXwaylandGeometry(pending.session, pending.surfaceId, win);
     // Align X11 window with the Wayland content box so XQueryPointer matches.
-    const contentY = surf.y + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
+    const contentY = surf.y + (this.usesSsd(surf) ? ssdTitlebarHeight() : 0);
     this.xwm?.configureWindow(
       win.wid,
       surf.x,
@@ -1588,7 +2186,7 @@ export class CompositorServer {
       win.width > 0 ? win.width : surf.width,
       win.height > 0 ? win.height : surf.height,
     );
-    if (surf.mapped && surf.pixels) {
+    if (surf.mapped && surf.content) {
       const firstMap = !this.isStacked(pending.session, surf.id);
       this.registerToplevel(pending.session, surf.id);
       if (parentPair) {
@@ -1608,7 +2206,7 @@ export class CompositorServer {
     // Keep compositor slot placement when X still reports 0,0.
     if (win.x !== 0 || win.y !== 0) {
       surf.x = win.x;
-      surf.y = Math.max(0, win.y - (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0));
+      surf.y = Math.max(0, win.y - (this.usesSsd(surf) ? ssdTitlebarHeight() : 0));
     }
     if (win.width > 0) {
       surf.geomW = win.width;
@@ -1622,9 +2220,55 @@ export class CompositorServer {
     return this.xwm;
   }
 
+  capturePrimaryOutput(): {
+    width: number;
+    height: number;
+    pixels: Uint8Array;
+  } {
+    const output = this.outputs.find((entry) => entry.primary) ?? this.outputs[0];
+    if (!output || !this.outputRenderer) throw new Error("Display capture unavailable");
+    const physical = output.kms;
+    if (physical.width * physical.height > 16_777_216)
+      throw new Error("Display exceeds capture size limit");
+    const pixels = this.outputRenderer.captureOutput({
+      geometry: {
+        id: physical.connectorName,
+        x: output.x,
+        y: output.y,
+        width: outputLogicalWidth(output),
+        height: outputLogicalHeight(output),
+      },
+      physicalWidth: physical.width,
+      physicalHeight: physical.height,
+    });
+    return { width: physical.width, height: physical.height, pixels };
+  }
+
   getKms(): KmsOutput {
     if (!this.kms) throw new Error("KMS not started");
     return this.kms;
+  }
+
+  snapshotDmabuf(
+    buffer: DmabufBuffer,
+    clientId: number,
+    surfaceId: number,
+  ): OwnedPixelSurface | null {
+    return (
+      this.outputRenderer?.snapshotDmabuf?.(buffer, (bytes) => {
+        this.surfaceTransfers.record({
+          clientId,
+          surfaceId,
+          operation: "readback",
+          bytes,
+          cpuMs: null,
+        });
+      }) ?? null
+    );
+  }
+
+  rendererDetail(): string {
+    return this.outputRenderer?.detail ?? "unavailable";
   }
 
   getGbm(): GbmDevice | null {
@@ -1645,8 +2289,15 @@ export class CompositorServer {
       (right, current) => Math.max(right, current.x + current.kms.width),
       0,
     );
-    const layout = { kms: output, x, y: 0, scale120: 120, primary: this.outputs.length === 0 };
+    const layout = {
+      kms: output,
+      x,
+      y: 0,
+      scale120: 120,
+      primary: this.outputs.length === 0,
+    };
     this.outputs.push(layout);
+    this.observeOutputAvailability(output.connectorId, output.availability);
     const name = this.nextGlobalName++;
     this.outputGlobalNames.push(name);
     const global = {
@@ -1668,6 +2319,7 @@ export class CompositorServer {
       for (const client of this.clients) client.globalRemoved(globalName);
     }
     this.outputStages.delete(removed.kms.connectorId);
+    this.observedOutputAvailability.delete(removed.kms.connectorId);
     closeKmsOutput(removed.kms);
   }
 
@@ -1872,10 +2524,19 @@ export class CompositorServer {
       (connector) => connector.cardPath === owner.cardPath && connector.connection === "connected",
     );
     let changed = false;
+    let availabilityChanged = false;
 
     for (let index = this.outputs.length - 1; index >= 0; index--) {
       const entry = this.outputs[index]!;
-      const refresh = refreshKmsOutputModes(entry.kms);
+      const previousAvailability = entry.kms.availability;
+      let refresh: ReturnType<typeof refreshKmsOutputModes>;
+      try {
+        refresh = refreshKmsOutputModes(entry.kms);
+      } finally {
+        // Revoke an idle witness even when connector lookup throws or no replacement exists.
+        this.observeOutputAvailability(entry.kms.connectorId, entry.kms.availability);
+        if (previousAvailability !== entry.kms.availability) availabilityChanged = true;
+      }
       if (!refresh.connected) {
         if (this.outputs.length > 1) {
           if (entry.kms === this.kms) {
@@ -1895,7 +2556,10 @@ export class CompositorServer {
         );
         if (replacement) {
           const previousName = entry.kms.connectorName;
+          const previousConnectorId = entry.kms.connectorId;
           switchKmsConnector(entry.kms, replacement.connectorId, configured ?? undefined);
+          this.observedOutputAvailability.delete(previousConnectorId);
+          this.observeOutputAvailability(entry.kms.connectorId, entry.kms.availability);
           console.log(`[output] connector ${previousName} → ${entry.kms.connectorName}`);
           changed = true;
         } else {
@@ -1952,7 +2616,8 @@ export class CompositorServer {
       }
     }
 
-    if (!changed) return false;
+    // Availability-only changes need a new accepted frame, not duplicate xdg geometry/commits.
+    if (!changed) return availabilityChanged;
     if (this.pendingDisplayMode) {
       clearTimeout(this.pendingDisplayMode.timer);
       this.pendingDisplayMode = null;
@@ -1984,6 +2649,8 @@ export class CompositorServer {
   }
 
   private notifyDisplayChanged(): void {
+    this.visibilityOutputRevision = (this.visibilityOutputRevision + 1) >>> 0;
+    this.invalidateSurfaceVisibility();
     for (const listener of this.displayChangeListeners) {
       try {
         listener();
@@ -2016,6 +2683,7 @@ export class CompositorServer {
       if (!surf || surf.role !== "toplevel") continue;
       if (surf.fullscreen) {
         const output = this.outputForSurface(surf);
+        if (!output) continue;
         surf.x = output.x;
         surf.y = output.y;
         entry.session.configureToplevel(
@@ -2030,43 +2698,8 @@ export class CompositorServer {
               : []),
           ],
         );
-      } else if (surf.maximized) {
-        const output = this.outputForSurface(surf);
-        surf.x = output.x;
-        surf.y = output.y;
-        const contentH = this.usesSsd(surf)
-          ? Math.max(
-              100,
-              outputLogicalHeight(output) - (output.primary ? SSD_PANEL_H : 0) - SSD_TITLEBAR_H,
-            )
-          : outputLogicalHeight(output);
-        entry.session.configureToplevel(surf, outputLogicalWidth(output), contentH, [
-          XDG_TOPLEVEL_STATE_MAXIMIZED,
-          ...(this.focusedToplevel?.session === entry.session &&
-          this.focusedToplevel.surfaceId === surf.id
-            ? [XDG_TOPLEVEL_STATE_ACTIVATED]
-            : []),
-        ]);
       } else {
-        const w = surf.geomW > 0 ? surf.geomW : surf.width;
-        const h = surf.geomH > 0 ? surf.geomH : surf.height;
-        const maxContentH = this.usesSsd(surf)
-          ? Math.max(100, kms.height - SSD_PANEL_H - SSD_TITLEBAR_H)
-          : Math.max(100, kms.height - SSD_PANEL_H);
-        const nextW = Math.min(w, kms.width);
-        const nextH = Math.min(h, maxContentH);
-        if (nextW !== w || nextH !== h) {
-          const states =
-            this.focusedToplevel?.session === entry.session &&
-            this.focusedToplevel.surfaceId === surf.id
-              ? [XDG_TOPLEVEL_STATE_ACTIVATED]
-              : [];
-          entry.session.configureToplevel(surf, nextW, nextH, states);
-        }
-        const chromeH = this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
-        const maxY = Math.max(0, kms.height - SSD_PANEL_H - chromeH - nextH);
-        surf.x = Math.max(0, Math.min(Math.max(0, kms.width - nextW), surf.x));
-        surf.y = Math.max(0, Math.min(maxY, surf.y));
+        this.fitToplevelToOutput(entry.session, surf.id);
       }
     }
     this.shell?.invalidateChrome?.();
@@ -2379,9 +3012,9 @@ export class CompositorServer {
   private beginDragReturn(drag: DragSession, cursorX: number, cursorY: number): void {
     if (drag.iconId == null) return;
     const surf = drag.sourceSession.surfaceById(drag.iconId);
-    if (!surf?.pixels || surf.width <= 0 || surf.height <= 0) return;
+    if (!surf?.content || surf.width <= 0 || surf.height <= 0) return;
     this.dragReturn = {
-      pixels: new Uint8Array(surf.pixels),
+      pixels: new Uint8Array(surf.content.pixels),
       width: surf.width,
       height: surf.height,
       stride: surf.stride,
@@ -2409,7 +3042,7 @@ export class CompositorServer {
 
     if (sameTarget && hit && prev) {
       const ssdY =
-        hit.surface.role === "toplevel" && this.usesSsd(hit.surface) ? SSD_TITLEBAR_H : 0;
+        hit.surface.role === "toplevel" && this.usesSsd(hit.surface) ? ssdTitlebarHeight() : 0;
       const localX = this.cursorX - hit.surface.x;
       const localY = this.cursorY - hit.surface.y - ssdY;
       prev.session.sendDndMotion(prev.deviceId, timeMs, localX, localY);
@@ -2441,7 +3074,7 @@ export class CompositorServer {
       );
       if (offerId != null) {
         const ssdY =
-          hit.surface.role === "toplevel" && this.usesSsd(hit.surface) ? SSD_TITLEBAR_H : 0;
+          hit.surface.role === "toplevel" && this.usesSsd(hit.surface) ? ssdTitlebarHeight() : 0;
         const localX = this.cursorX - hit.surface.x;
         const localY = this.cursorY - hit.surface.y - ssdY;
         const serial = hit.session.nextSerial();
@@ -2615,28 +3248,74 @@ export class CompositorServer {
     this.markDirty();
   }
 
-  /** Keep a newly mapped native toplevel reachable on the current output. */
+  /** Logical desktop bounds from the same panel geometry used to paint the shell. */
+  workAreaForSurface(surf: SurfaceState) {
+    const output = this.outputForSurface(surf);
+    if (!output) return null;
+    const bounds = {
+      x: output.x,
+      y: output.y,
+      width: outputLogicalWidth(output),
+      height: outputLogicalHeight(output),
+    };
+    const panelTop =
+      output.primary && this.shell
+        ? output.y + panelGeometry(bounds.width, bounds.height, this.theme).y
+        : null;
+    return desktopWorkArea(bounds, panelTop);
+  }
+
+  private fitToplevelGeometry(
+    surf: SurfaceState,
+    preferred: { width: number; height: number },
+    position: { x: number; y: number },
+  ) {
+    const area = this.workAreaForSurface(surf);
+    if (!area) return { ...position, ...preferred };
+    return fitWindowToWorkArea({
+      area,
+      preferred: surf.maximized ? { width: area.width, height: area.height } : preferred,
+      position: surf.maximized ? { x: area.x, y: area.y } : position,
+      chromeHeight: this.usesSsd(surf) ? ssdTitlebarHeight() : 0,
+      minimum: {
+        width: Math.max(1, surf.minW),
+        height: Math.max(1, surf.minH),
+      },
+      maximum: { width: surf.maxW, height: surf.maxH },
+    });
+  }
+
+  /** Fit the interactive frame, excluding client shadow padding and including SSD chrome. */
   fitToplevelToOutput(session: ClientSession, surfaceId: number): void {
     const surf = session.surfaceById(surfaceId);
-    if (!surf || surf.role !== "toplevel") return;
-    const output = this.outputForSurface(surf);
-    const width = outputLogicalWidth(output);
-    const height = outputLogicalHeight(output);
-    const panelH = output.primary ? SSD_PANEL_H : 0;
-    const w = surf.geomW > 0 ? surf.geomW : surf.width;
-    const h = surf.geomH > 0 ? surf.geomH : surf.height;
-    const chromeH = this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
-    const maxContentH = Math.max(100, height - panelH - chromeH);
-    const nextW = Math.min(w, width);
-    const nextH = Math.min(h, maxContentH);
-    if (nextW !== w || nextH !== h) {
-      session.configureToplevel(surf, nextW, nextH, [XDG_TOPLEVEL_STATE_ACTIVATED]);
-    }
-    surf.x = Math.max(output.x, Math.min(output.x + width - nextW, surf.x));
-    surf.y = Math.max(
-      0,
-      Math.min(Math.max(output.y, output.y + height - panelH - chromeH - nextH), surf.y),
+    if (!surf || surf.role !== "toplevel" || surf.fullscreen || !this.outputForSurface(surf))
+      return;
+    const size = this.contentSize(surf);
+    const placement = this.fitToplevelGeometry(
+      surf,
+      { width: size.w, height: size.h },
+      this.frameBox(surf),
     );
+    if (surf.maximized || placement.width !== size.w || placement.height !== size.h) {
+      const states: number[] = [];
+      if (surf.maximized) states.push(XDG_TOPLEVEL_STATE_MAXIMIZED);
+      if (this.focusedToplevel?.session === session && this.focusedToplevel.surfaceId === surfaceId)
+        states.push(XDG_TOPLEVEL_STATE_ACTIVATED);
+      session.configureToplevel(surf, placement.width, placement.height, states);
+    }
+    this.setGeometryPosition(surf, placement.x, placement.y);
+  }
+
+  private restoreToplevelGeometry(session: ClientSession, surf: SurfaceState): void {
+    const placement = this.fitToplevelGeometry(
+      surf,
+      { width: surf.savedW, height: surf.savedH },
+      { x: surf.savedX, y: surf.savedY },
+    );
+    this.setGeometryPosition(surf, placement.x, placement.y);
+    session.configureToplevel(surf, placement.width, placement.height, [
+      XDG_TOPLEVEL_STATE_ACTIVATED,
+    ]);
   }
 
   unregisterToplevel(session: ClientSession, surfaceId: number): void {
@@ -2653,6 +3332,7 @@ export class CompositorServer {
       return;
     }
     this.popupStack.push({ session, surfaceId });
+    this.markDirty();
   }
 
   /** Move a popup to the top of the popup stack (nested menus). */
@@ -2661,12 +3341,14 @@ export class CompositorServer {
       (e) => !(e.session === session && e.surfaceId === surfaceId),
     );
     this.popupStack.push({ session, surfaceId });
+    this.markDirty();
   }
 
   unregisterPopup(session: ClientSession, surfaceId: number): void {
     this.popupStack = this.popupStack.filter(
       (e) => !(e.session === session && e.surfaceId === surfaceId),
     );
+    this.markDirty();
   }
 
   /** Read-only access for seat focus checks. */
@@ -2677,7 +3359,7 @@ export class CompositorServer {
   /** Screen coords of a surface's xdg window-geometry top-left. */
   windowGeomOrigin(surf: SurfaceState): { x: number; y: number } {
     if (surf.role === "toplevel" && this.usesSsd(surf)) {
-      return { x: surf.x, y: surf.y + SSD_TITLEBAR_H };
+      return { x: surf.x, y: surf.y + ssdTitlebarHeight() };
     }
     return {
       x: surf.x + (surf.geomW > 0 ? surf.geomX : 0),
@@ -2730,7 +3412,8 @@ export class CompositorServer {
     surf.popupGrabbed = false;
     surf.xdgPopupId = null;
     if (surf.role === "popup") surf.role = "none";
-    surf.pixels = null;
+    surf.content?.destroy();
+    surf.content = null;
     this.unregisterPopup(session, surfaceId);
   }
 
@@ -2773,7 +3456,7 @@ export class CompositorServer {
     this.markDirty();
   }
 
-  focusClient(session: ClientSession, surfaceId: number): void {
+  focusClient(session: ClientSession, surfaceId: number, keyboardKeys?: readonly number[]): void {
     const top = session.toplevelFor(surfaceId);
     const topId = top?.id ?? surfaceId;
 
@@ -2806,7 +3489,8 @@ export class CompositorServer {
     }
     this.focused = session;
     this.focusedToplevel = { session, surfaceId: topId };
-    session.keyboardEnter(surfaceId);
+    this.shell?.onClientFocus?.();
+    session.keyboardEnter(surfaceId, keyboardKeys);
 
     if (top?.role === "toplevel") {
       top.minimized = false;
@@ -2820,14 +3504,20 @@ export class CompositorServer {
   }
 
   private sendToplevelStates(session: ClientSession, surf: SurfaceState, activated: boolean): void {
-    const w = surf.geomW > 0 ? surf.geomW : surf.width;
-    const h = surf.geomH > 0 ? surf.geomH : surf.height;
-    if (w <= 0 || h <= 0) return;
+    const size = this.contentSize(surf);
+    if (size.w <= 0 || size.h <= 0) return;
+    const output = surf.fullscreen ? this.outputForSurface(surf) : null;
+    const allocation = surf.fullscreen
+      ? {
+          width: output ? outputLogicalWidth(output) : size.w,
+          height: output ? outputLogicalHeight(output) : size.h,
+        }
+      : this.fitToplevelGeometry(surf, { width: size.w, height: size.h }, this.frameBox(surf));
     const states: number[] = [];
     if (surf.maximized) states.push(XDG_TOPLEVEL_STATE_MAXIMIZED);
     if (surf.fullscreen) states.push(XDG_TOPLEVEL_STATE_FULLSCREEN);
     if (activated) states.push(XDG_TOPLEVEL_STATE_ACTIVATED);
-    session.configureToplevel(surf, w, h, states);
+    session.configureToplevel(surf, allocation.width, allocation.height, states);
   }
 
   setMinimized(session: ClientSession, surfaceId: number): void {
@@ -2930,21 +3620,54 @@ export class CompositorServer {
     }
   }
 
-  private onKey(ev: EvdevKeyEvent): void {
-    const KEY_LEFTALT = 56;
-    const KEY_RIGHTALT = 100;
-    const KEY_TAB = 15;
-    const KEY_LEFTSHIFT = 42;
-    const KEY_RIGHTSHIFT = 54;
+  /** Snapshot for wl_keyboard.enter; clients never own a historical seat state. */
+  keyboardPressedKeys(): readonly number[] {
+    return [...this.pressedKeys];
+  }
 
-    if (ev.code === KEY_LEFTALT || ev.code === KEY_RIGHTALT) {
-      this.altHeld = ev.value !== 0;
+  private keyboardModifiers() {
+    return {
+      ctrl: this.pressedKeys.has(29) || this.pressedKeys.has(97),
+      alt: this.pressedKeys.has(56) || this.pressedKeys.has(100),
+      shift: this.pressedKeys.has(42) || this.pressedKeys.has(54),
+      meta: this.pressedKeys.has(125) || this.pressedKeys.has(126),
+    };
+  }
+
+  keyboardModifierMask(): KeyboardModifierMask {
+    return (
+      this.xkbKeyboardState?.snapshot() ?? {
+        depressed: 0,
+        latched: 0,
+        locked: 0,
+        group: 0,
+      }
+    );
+  }
+
+  private onKey(ev: EvdevKeyEvent): void {
+    try {
+      this.routeKey(ev);
+    } finally {
+      // Wayland orders the key before its resulting masks. Track even shell-
+      // consumed edges so client modifiers cannot remain stuck after release.
+      const modifiers = this.xkbKeyboardState?.update(ev);
+      if (modifiers) this.focused?.keyboardModifiers(modifiers);
     }
-    if (ev.code === KEY_LEFTSHIFT || ev.code === KEY_RIGHTSHIFT) {
-      this.shiftHeld = ev.value !== 0;
-    }
-    if (this.altHeld && ev.code === KEY_TAB && ev.value === 1) {
-      this.cycleToplevel(this.shiftHeld);
+  }
+
+  private routeKey(ev: EvdevKeyEvent): void {
+    // Automatic focus sends enter before this key. Keep its wire snapshot at
+    // that point in event order without rolling back the authoritative seat.
+    const keysBeforeEvent = this.keyboardPressedKeys();
+    if (ev.value === 0) this.pressedKeys.delete(ev.code);
+    else this.pressedKeys.add(ev.code);
+    this.observeKeyRoute(ev, "translated");
+    const KEY_TAB = 15;
+    const modifiers = this.keyboardModifiers();
+    if (modifiers.alt && ev.code === KEY_TAB && ev.value === 1) {
+      this.cycleToplevel(modifiers.shift);
+      this.observeKeyRoute(ev, "alt-tab");
       return;
     }
 
@@ -2957,12 +3680,14 @@ export class CompositorServer {
       // A local desktop reposition has no compositor DragSession. This is
       // also harmless after cancelDrag() cleared an escalated desktop drag.
       this.shell?.cancelDesktopDrag?.();
+      this.observeKeyRoute(ev, "drag");
       return;
     }
 
     // Escape dismisses grabbing popups (context menus).
     if (ev.code === KEY_ESC && ev.value === 1 && this.hasGrabbedPopup()) {
       this.dismissGrabbedPopups();
+      this.observeKeyRoute(ev, "popup");
       return;
     }
 
@@ -2971,6 +3696,7 @@ export class CompositorServer {
       // global shortcut opens shell chrome, close the client popup first so
       // two competing modal layers can never coexist.
       if (this.hasGrabbedPopup()) this.dismissGrabbedPopups();
+      this.observeKeyRoute(ev, "shell");
       return;
     }
 
@@ -2978,12 +3704,13 @@ export class CompositorServer {
       for (const c of this.clients) {
         const id = c.primaryToplevelSurfaceId();
         if (id != null) {
-          this.focusClient(c, id);
+          this.focusClient(c, id, keysBeforeEvent);
           break;
         }
       }
     }
     this.focused?.keyboardKey(ev);
+    this.observeKeyRoute(ev, this.focused ? "client" : "no-focus");
   }
 
   private onPointerMotion(ev: EvdevPointerMotion): void {
@@ -2993,22 +3720,30 @@ export class CompositorServer {
     const moved = nx !== this.cursorX || ny !== this.cursorY;
     this.cursorX = nx;
     this.cursorY = ny;
+    this.observePointerRoute(ev, "motion", "translated");
     if (moved) {
       const cursorPlaneActive = this.syncHardwareCursor();
       // A hardware cursor can move without repainting the scene, but drag
       // previews remain compositor layers and must track every motion.
-      if (!cursorPlaneActive || this.drag || this.shell?.desktopDragLabel?.()) {
+      if (
+        !cursorPlaneActive ||
+        this.pointerButtonsDown.size > 0 ||
+        this.drag ||
+        this.shell?.desktopDragLabel?.()
+      ) {
         this.markDirty();
       }
     }
     if (this.drag) {
       this.updateSsdPointerHover(false);
       this.updateDragFocus(ev.timeMs);
+      this.observePointerRoute(ev, "motion", "grab");
       return;
     }
     if (this.applyGrab()) {
       this.updateSsdPointerHover(false);
       this.markDirty();
+      this.observePointerRoute(ev, "motion", "grab");
       return;
     }
     // Check before updatePointerFocus so a client the pointer just entered
@@ -3016,12 +3751,14 @@ export class CompositorServer {
     // (startDesktopDrag already runs updateDragFocus once for this position.)
     if (this.maybeEscalateDesktopDrag()) {
       this.updateSsdPointerHover(false);
+      this.observePointerRoute(ev, "motion", "grab");
       return;
     }
     const popupHit = this.hitTestPopup(this.cursorX, this.cursorY);
     if (popupHit || this.hasGrabbedPopup()) {
       this.updateSsdPointerHover(false);
       this.updatePointerFocus(ev.timeMs, true, popupHit);
+      this.observePointerRoute(ev, "motion", "popup");
       return;
     }
     const shellHandled = this.shell?.onPointerMotion?.({
@@ -3029,12 +3766,18 @@ export class CompositorServer {
       y: this.cursorY,
     });
     if (shellHandled) {
+      // Hardware cursor motion normally avoids a scene repaint. Shell-owned
+      // drags (scroll thumbs, splitters, sliders) still mutate retained chrome
+      // and must present on this input frame rather than the idle timeout.
+      this.markDirty();
       this.updateSsdPointerHover(false);
       this.clearPointerFocusForShellOverlay();
+      this.observePointerRoute(ev, "motion", "shell");
       return;
     }
     if (this.updateSsdPointerHover(true)) {
       this.clearPointerFocusForShellOverlay();
+      this.observePointerRoute(ev, "motion", "ssd");
       return;
     }
     this.updatePointerFocus(ev.timeMs, true);
@@ -3046,6 +3789,7 @@ export class CompositorServer {
         y: this.cursorY,
       });
     }
+    this.observePointerRoute(ev, "motion", this.pointerFocus ? "client" : "no-focus");
   }
 
   private onPointerAbsolute(ev: EvdevPointerAbsolute): void {
@@ -3055,20 +3799,28 @@ export class CompositorServer {
     const moved = nx !== this.cursorX || ny !== this.cursorY;
     this.cursorX = nx;
     this.cursorY = ny;
+    this.observePointerRoute(ev, "absolute", "translated");
     if (moved) {
       const cursorPlaneActive = this.syncHardwareCursor();
-      if (!cursorPlaneActive || this.drag || this.shell?.desktopDragLabel?.()) {
+      if (
+        !cursorPlaneActive ||
+        this.pointerButtonsDown.size > 0 ||
+        this.drag ||
+        this.shell?.desktopDragLabel?.()
+      ) {
         this.markDirty();
       }
     }
     if (this.drag) {
       this.updateSsdPointerHover(false);
       this.updateDragFocus(ev.timeMs);
+      this.observePointerRoute(ev, "absolute", "grab");
       return;
     }
     if (this.applyGrab()) {
       this.updateSsdPointerHover(false);
       this.markDirty();
+      this.observePointerRoute(ev, "absolute", "grab");
       return;
     }
     // Check before updatePointerFocus so a client the pointer just entered
@@ -3076,12 +3828,14 @@ export class CompositorServer {
     // (startDesktopDrag already runs updateDragFocus once for this position.)
     if (this.maybeEscalateDesktopDrag()) {
       this.updateSsdPointerHover(false);
+      this.observePointerRoute(ev, "absolute", "grab");
       return;
     }
     const popupHit = this.hitTestPopup(this.cursorX, this.cursorY);
     if (popupHit || this.hasGrabbedPopup()) {
       this.updateSsdPointerHover(false);
       this.updatePointerFocus(ev.timeMs, true, popupHit);
+      this.observePointerRoute(ev, "absolute", "popup");
       return;
     }
     const shellHandled = this.shell?.onPointerMotion?.({
@@ -3089,12 +3843,15 @@ export class CompositorServer {
       y: this.cursorY,
     });
     if (shellHandled) {
+      this.markDirty();
       this.updateSsdPointerHover(false);
       this.clearPointerFocusForShellOverlay();
+      this.observePointerRoute(ev, "absolute", "shell");
       return;
     }
     if (this.updateSsdPointerHover(true)) {
       this.clearPointerFocusForShellOverlay();
+      this.observePointerRoute(ev, "absolute", "ssd");
       return;
     }
     this.updatePointerFocus(ev.timeMs, true);
@@ -3106,9 +3863,11 @@ export class CompositorServer {
         y: this.cursorY,
       });
     }
+    this.observePointerRoute(ev, "absolute", this.pointerFocus ? "client" : "no-focus");
   }
 
   /** Update SSD hover only after compositor z-order says the chrome is visible. */
+
   private updateSsdPointerHover(allowHit: boolean): boolean {
     if (!this.shell?.onSsdPointerMotion) return false;
     const inside = allowHit && this.hitVisibleSsd(this.cursorX, this.cursorY) != null;
@@ -3134,7 +3893,7 @@ export class CompositorServer {
     ) {
       return; // real hit-test path already delivers events
     }
-    const ssdY = this.usesSsd(target.surface) ? SSD_TITLEBAR_H : 0;
+    const ssdY = this.usesSsd(target.surface) ? ssdTitlebarHeight() : 0;
     const localX = this.cursorX - target.surface.x;
     const localY = this.cursorY - target.surface.y - ssdY;
     target.session.pointerEnter(target.surface.id, localX, localY);
@@ -3162,6 +3921,9 @@ export class CompositorServer {
   }
 
   private onPointerButton(ev: EvdevPointerButton): void {
+    this.observePointerRoute(ev, "button", "translated");
+    if (ev.value === 0) this.pointerButtonsDown.delete(ev.code);
+    else this.pointerButtonsDown.add(ev.code);
     this.markDirty();
     if (this.drag) {
       console.log(
@@ -3170,6 +3932,7 @@ export class CompositorServer {
     }
     if (ev.value === 0 && this.drag) {
       this.endDrag(ev.timeMs);
+      this.observePointerRoute(ev, "button", "grab");
       return;
     }
     if (ev.value === 0 && this.grab) {
@@ -3183,6 +3946,7 @@ export class CompositorServer {
     if (ev.value === 1 && popupGrabbed && !popupHit) {
       this.updatePointerFocus(ev.timeMs, false, null);
       this.dismissGrabbedPopups();
+      this.observePointerRoute(ev, "button", "popup");
       return;
     }
 
@@ -3197,6 +3961,7 @@ export class CompositorServer {
         y: this.cursorY,
       })
     ) {
+      this.observePointerRoute(ev, "button", "shell");
       return;
     }
 
@@ -3209,6 +3974,7 @@ export class CompositorServer {
       if (action) {
         if (this.hasGrabbedPopup()) this.dismissGrabbedPopups();
         this.handleSsdAction(action);
+        this.observePointerRoute(ev, "button", "ssd");
         return;
       }
     }
@@ -3228,6 +3994,7 @@ export class CompositorServer {
           y: this.cursorY,
         })
       ) {
+        this.observePointerRoute(ev, "button", "shell");
         return;
       }
     }
@@ -3268,6 +4035,7 @@ export class CompositorServer {
       }
     }
     const serial = hit?.session.pointerButton(ev) ?? null;
+    this.observePointerRoute(ev, "button", hit ? "client" : "no-focus");
     if (ev.value === 1 && hit && serial != null) {
       this.lastPointerPress = {
         session: hit.session,
@@ -3309,25 +4077,39 @@ export class CompositorServer {
   private hitSsd(x: number, y: number): SsdAction | null {
     for (let i = this.ssdWindows.length - 1; i >= 0; i--) {
       const w = this.ssdWindows[i]!;
-      if (x < w.x || y < w.y || x >= w.x + w.contentW || y >= w.y + SSD_TITLEBAR_H) {
+      if (x < w.x || y < w.y || x >= w.x + w.contentW || y >= w.y + ssdTitlebarHeight()) {
         continue;
       }
       const localX = x - w.x;
-      const btnY0 = Math.floor((SSD_TITLEBAR_H - SSD_TITLEBAR_BTN) / 2);
+      const btnY0 = Math.floor((ssdTitlebarHeight() - SSD_TITLEBAR_BTN) / 2);
       const btnY1 = btnY0 + SSD_TITLEBAR_BTN;
       const inBtnRow = y >= w.y + btnY0 && y < w.y + btnY1;
-      const closeX0 = w.contentW - SSD_TITLEBAR_BTN_PAD - SSD_TITLEBAR_BTN;
-      const maxX0 = closeX0 - SSD_TITLEBAR_BTN_GAP - SSD_TITLEBAR_BTN;
-      const minX0 = maxX0 - SSD_TITLEBAR_BTN_GAP - SSD_TITLEBAR_BTN;
+      const {
+        closeX: closeX0,
+        maxX: maxX0,
+        minX: minX0,
+      } = windowControlLayout(w.contentW, this.theme.family);
       if (inBtnRow) {
         if (localX >= closeX0 && localX < closeX0 + SSD_TITLEBAR_BTN) {
-          return { kind: "close", surfaceId: w.surfaceId, clientId: w.clientId };
+          return {
+            kind: "close",
+            surfaceId: w.surfaceId,
+            clientId: w.clientId,
+          };
         }
         if (localX >= maxX0 && localX < maxX0 + SSD_TITLEBAR_BTN) {
-          return { kind: "maximize", surfaceId: w.surfaceId, clientId: w.clientId };
+          return {
+            kind: "maximize",
+            surfaceId: w.surfaceId,
+            clientId: w.clientId,
+          };
         }
         if (localX >= minX0 && localX < minX0 + SSD_TITLEBAR_BTN) {
-          return { kind: "minimize", surfaceId: w.surfaceId, clientId: w.clientId };
+          return {
+            kind: "minimize",
+            surfaceId: w.surfaceId,
+            clientId: w.clientId,
+          };
         }
       }
       return { kind: "drag", surfaceId: w.surfaceId, clientId: w.clientId };
@@ -3337,11 +4119,11 @@ export class CompositorServer {
 
   /**
    * Resolve SSD input in the same interleaved order used by composite():
-   * each window's client buffers, then its titlebar, bottom → top. A client
-   * surface only occludes titlebars in lower stack slots; content underneath
-   * the candidate titlebar must never veto it.
+   * each parent buffer and chrome, then its children, bottom → top.
+   * Above-parent children and higher windows can cover chrome; the parent's
+   * content beneath its own titlebar must never veto it.
    */
-  private hitVisibleSsd(x: number, y: number): SsdAction | null {
+  hitVisibleSsd(x: number, y: number): SsdAction | null {
     this.ssdWindows = this.collectSsdWindows();
     const action = this.hitSsd(x, y);
     if (!action) return null;
@@ -3349,6 +4131,12 @@ export class CompositorServer {
       (entry) => entry.surfaceId === action.surfaceId && entry.session.clientId === action.clientId,
     );
     if (candidateIndex < 0) return null;
+    const candidate = this.stack[candidateIndex];
+    if (!candidate) return null;
+    // Chrome belongs to the parent surface. An above-parent subsurface
+    // painted across its header must receive the same visible input priority.
+    const childHit = this.hitTestStackEntry(candidate, x, y);
+    if (childHit && childHit.surface.id !== candidate.surfaceId) return null;
     for (let i = this.stack.length - 1; i > candidateIndex; i--) {
       if (this.hitTestStackEntry(this.stack[i]!, x, y)) return null;
     }
@@ -3374,6 +4162,7 @@ export class CompositorServer {
         contentW: size.w,
         contentH: size.h,
         title: surf.title || "Window",
+        appId: surf.appId,
         focused,
         maximized: surf.maximized,
       });
@@ -3382,18 +4171,41 @@ export class CompositorServer {
   }
 
   private onPointerAxis(ev: EvdevPointerAxis): void {
-    if (
-      !this.hitTestPopup(this.cursorX, this.cursorY) &&
-      this.shell?.onPointerAxis?.({
+    this.observePointerRoute(ev, "axis", "translated");
+    this.scrollTrace.write({
+      stage: "axis",
+      value: ev.value,
+      timeMs: ev.timeMs,
+      x: this.cursorX,
+      y: this.cursorY,
+    });
+    // Wheel input can mutate compositor-owned shell state without producing a
+    // client surface commit. Wake the retained compositor now instead of
+    // leaving launcher/menu scrolling queued until the idle liveness timeout.
+    this.markDirty();
+    const popupBlocksShell = !!this.hitTestPopup(this.cursorX, this.cursorY);
+    const consumed =
+      !popupBlocksShell &&
+      (this.shell?.onPointerAxis?.({
         x: this.cursorX,
         y: this.cursorY,
         deltaY: ev.value,
-      })
-    ) {
+      }) ??
+        false);
+    this.scrollTrace.write({
+      stage: "route",
+      popupBlocksShell,
+      consumed,
+      x: this.cursorX,
+      y: this.cursorY,
+    });
+    if (consumed) {
+      this.observePointerRoute(ev, "axis", "shell");
       return;
     }
     this.updatePointerFocus(ev.timeMs, false);
     this.pointerFocus?.session.pointerAxis(ev);
+    this.observePointerRoute(ev, "axis", this.pointerFocus ? "client" : "no-focus");
   }
 
   beginMove(session: ClientSession, surfaceId: number): void {
@@ -3438,20 +4250,29 @@ export class CompositorServer {
 
   /** Outer geometry border (incl. corners) used for compositor-initiated resize. */
   private resizeEdgesAt(surf: SurfaceState, x: number, y: number): number {
-    const border = 6;
+    // Keep the generous target outside the window, but steal only the final
+    // two content pixels. Scrollbars and other edge-aligned client controls
+    // commonly sit 3–6 px from the edge and must win input inside the surface.
+    const outerBorder = 6;
+    const innerBorder = 2;
     const frame = this.frameBox(surf);
     const gx = frame.x;
     const gy = frame.y;
     const gw = frame.w;
     const gh = frame.h;
-    if (gw < border * 2 || gh < border * 2) return 0;
-    if (x < gx - border || y < gy - border || x >= gx + gw + border || y >= gy + gh + border) {
+    if (gw < outerBorder * 2 || gh < outerBorder * 2) return 0;
+    if (
+      x < gx - outerBorder ||
+      y < gy - outerBorder ||
+      x >= gx + gw + outerBorder ||
+      y >= gy + gh + outerBorder
+    ) {
       return 0;
     }
-    const onLeft = x < gx + border;
-    const onRight = x >= gx + gw - border;
-    const onTop = y < gy + border;
-    const onBottom = y >= gy + gh - border;
+    const onLeft = x < gx + innerBorder;
+    const onRight = x >= gx + gw - innerBorder;
+    const onTop = y < gy + innerBorder;
+    const onBottom = y >= gy + gh - innerBorder;
     if (!onLeft && !onRight && !onTop && !onBottom) return 0;
     // Titlebar drag owns the top edge for SSD windows.
     if (this.usesSsd(surf) && onTop && !onLeft && !onRight) return 0;
@@ -3505,7 +4326,7 @@ export class CompositorServer {
       surf.y = gy - surf.geomY;
     }
     if (surf.x11Wid != null) {
-      const contentY = surf.y + (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0);
+      const contentY = surf.y + (this.usesSsd(surf) ? ssdTitlebarHeight() : 0);
       const size = this.contentSize(surf);
       this.xwm?.configureWindow(surf.x11Wid, surf.x, contentY, size.w, size.h);
     }
@@ -3524,7 +4345,7 @@ export class CompositorServer {
         x: surf.x,
         y: surf.y,
         w: cw,
-        h: ch + SSD_TITLEBAR_H,
+        h: ch + ssdTitlebarHeight(),
       };
     }
     return {
@@ -3609,8 +4430,8 @@ export class CompositorServer {
     return true;
   }
 
-  /** Align a maximized/fullscreen toplevel so window geometry fills the output. */
-  outputForSurface(surf: SurfaceState): DisplayOutput {
+  /** Select an actual output for this surface; no output leaves geometry unconstrained. */
+  outputForSurface(surf: SurfaceState): DisplayOutput | null {
     const frame = this.frameBox(surf);
     const centerX = frame.x + frame.w / 2;
     const centerY = frame.y + frame.h / 2;
@@ -3628,12 +4449,14 @@ export class CompositorServer {
         centerY,
       )?.output ??
       this.outputs.find((output) => output.primary) ??
-      this.outputs[0]!
+      this.outputs[0] ??
+      null
     );
   }
 
-  placeMaximized(surf: SurfaceState): DisplayOutput {
+  placeMaximized(surf: SurfaceState): DisplayOutput | null {
     const output = this.outputForSurface(surf);
+    if (!output) return null;
     this.setGeometryPosition(surf, output.x, output.y);
     return output;
   }
@@ -3642,6 +4465,8 @@ export class CompositorServer {
     const surf = session.surfaceById(surfaceId);
     if (!surf || surf.role !== "toplevel") return;
     if (want && !surf.maximized) {
+      const output = this.outputForSurface(surf);
+      if (!output) return;
       const frame = this.frameBox(surf);
       const size = this.contentSize(surf);
       surf.savedX = frame.x;
@@ -3650,20 +4475,11 @@ export class CompositorServer {
       surf.savedH = size.h;
       surf.maximized = true;
       surf.fullscreen = false;
-      const output = this.placeMaximized(surf);
-      const width = outputLogicalWidth(output);
-      const height = outputLogicalHeight(output);
-      const contentH = this.usesSsd(surf)
-        ? Math.max(100, height - (output.primary ? SSD_PANEL_H : 0) - SSD_TITLEBAR_H)
-        : height;
-      session.configureToplevel(surf, width, contentH, [
-        XDG_TOPLEVEL_STATE_MAXIMIZED,
-        XDG_TOPLEVEL_STATE_ACTIVATED,
-      ]);
+      this.setGeometryPosition(surf, output.x, output.y);
+      this.fitToplevelToOutput(session, surfaceId);
     } else if (!want && surf.maximized) {
       surf.maximized = false;
-      this.setGeometryPosition(surf, surf.savedX, surf.savedY);
-      session.configureToplevel(surf, surf.savedW, surf.savedH, [XDG_TOPLEVEL_STATE_ACTIVATED]);
+      this.restoreToplevelGeometry(session, surf);
     }
   }
 
@@ -3671,14 +4487,17 @@ export class CompositorServer {
     const surf = session.surfaceById(surfaceId);
     if (!surf || surf.role !== "toplevel") return;
     if (want && !surf.fullscreen) {
+      const output = this.outputForSurface(surf);
+      if (!output) return;
       if (!surf.maximized) {
-        surf.savedX = surf.x + surf.geomX;
-        surf.savedY = surf.y + surf.geomY;
+        const frame = this.frameBox(surf);
+        surf.savedX = frame.x;
+        surf.savedY = frame.y;
         surf.savedW = surf.geomW > 0 ? surf.geomW : surf.width;
         surf.savedH = surf.geomH > 0 ? surf.geomH : surf.height;
       }
       surf.fullscreen = true;
-      const output = this.placeMaximized(surf);
+      this.setGeometryPosition(surf, output.x, output.y);
       session.configureToplevel(surf, outputLogicalWidth(output), outputLogicalHeight(output), [
         XDG_TOPLEVEL_STATE_FULLSCREEN,
         XDG_TOPLEVEL_STATE_ACTIVATED,
@@ -3687,20 +4506,13 @@ export class CompositorServer {
       surf.fullscreen = false;
       if (surf.maximized) {
         const output = this.placeMaximized(surf);
-        session.configureToplevel(
-          surf,
-          outputLogicalWidth(output),
-          Math.max(
-            100,
-            outputLogicalHeight(output) -
-              (output.primary ? SSD_PANEL_H : 0) -
-              (this.usesSsd(surf) ? SSD_TITLEBAR_H : 0),
-          ),
-          [XDG_TOPLEVEL_STATE_MAXIMIZED, XDG_TOPLEVEL_STATE_ACTIVATED],
-        );
+        if (!output) {
+          this.sendToplevelStates(session, surf, true);
+          return;
+        }
+        this.fitToplevelToOutput(session, surfaceId);
       } else {
-        this.setGeometryPosition(surf, surf.savedX, surf.savedY);
-        session.configureToplevel(surf, surf.savedW, surf.savedH, [XDG_TOPLEVEL_STATE_ACTIVATED]);
+        this.restoreToplevelGeometry(session, surf);
       }
     }
   }
@@ -3730,14 +4542,14 @@ export class CompositorServer {
     const tree = entry.session.paintTree(entry.surfaceId);
     for (let j = tree.length - 1; j >= 0; j--) {
       const surf = tree[j]!;
-      if (!surf.mapped || !surf.pixels) continue;
+      if (!surf.mapped || !surf.content) continue;
       if (surf.role === "cursor") continue;
       if (entry.session.isHidden(surf)) continue;
       if (surf.role === "toplevel") {
         if (this.usesSsd(surf)) {
           const size = this.contentSize(surf);
           const cx = surf.x;
-          const cy = surf.y + SSD_TITLEBAR_H;
+          const cy = surf.y + ssdTitlebarHeight();
           if (x >= cx && y >= cy && x < cx + size.w && y < cy + size.h) {
             return { session: entry.session, surface: surf };
           }
@@ -3771,7 +4583,7 @@ export class CompositorServer {
       const entry = this.popupStack[i]!;
       entry.session.layout();
       const surf = entry.session.surfaceById(entry.surfaceId);
-      if (!surf || !surf.mapped || !surf.pixels) continue;
+      if (!surf || !surf.mapped || !surf.content) continue;
       if (entry.session.isHidden(surf)) continue;
       this.layoutPopup(entry.session, surf);
       const gw = surf.geomW > 0 ? surf.geomW : surf.width;
@@ -3807,7 +4619,7 @@ export class CompositorServer {
 
     if (hit) {
       const ssdY =
-        hit.surface.role === "toplevel" && this.usesSsd(hit.surface) ? SSD_TITLEBAR_H : 0;
+        hit.surface.role === "toplevel" && this.usesSsd(hit.surface) ? ssdTitlebarHeight() : 0;
       const localX = this.cursorX - hit.surface.x;
       const localY = this.cursorY - hit.surface.y - ssdY;
       if (this.pointerFocus?.surfaceId !== hit.surface.id) {
@@ -3905,6 +4717,7 @@ export class CompositorServer {
     geom?: { x: number; y: number; w: number; h: number },
     destination?: { width: number; height: number },
     opaque = false,
+    contentShape?: WindowContentShape,
   ): void {
     // Wayland wl_shm / linux-dmabuf ARGB8888 is premultiplied.
     const srcWords = new Uint32Array(src.buffer, src.byteOffset, src.byteLength >>> 2);
@@ -3919,7 +4732,7 @@ export class CompositorServer {
     // The overwhelmingly common XRGB, unscaled window case can be copied a
     // row at a time. Avoiding the JS per-pixel alpha loop is a substantial
     // software-reference win and mirrors the retained EGL `copy` path.
-    if (opaque && destW === srcW && destH === srcH) {
+    if (opaque && !contentShape && destW === srcW && destH === srcH) {
       const sx0 = Math.max(0, -dx, geom ? gx0 : 0);
       const sy0 = Math.max(0, -dy, geom ? gy0 : 0);
       const sx1 = Math.min(srcW, fbW - dx, geom ? gx1 : srcW);
@@ -3938,17 +4751,66 @@ export class CompositorServer {
       const py = dy + row;
       if (py < 0 || py >= fbH) continue;
       const sourceRow = Math.min(srcH - 1, Math.floor((row * srcH) / destH));
-      for (let col = 0; col < destW; col++) {
+      let colStart = 0,
+        colEnd = destW,
+        copiedStart = 0,
+        copiedEnd = 0;
+      if (opaque && contentShape && destW === srcW && destH === srcH) {
+        const { bounds, radii } = contentShape;
+        const localY = py + 0.5 - bounds.y;
+        if (localY < 0 || localY >= bounds.height) continue;
+        colStart = Math.max(0, -dx, Math.ceil(bounds.x - dx - 0.5));
+        colEnd = Math.min(destW, fbW - dx, Math.ceil(bounds.x + bounds.width - dx - 0.5));
+        const top = localY < bounds.height / 2;
+        const leftRadius = radii[top ? 0 : 3],
+          rightRadius = radii[top ? 1 : 2];
+        const inset = (r: number) => ((top ? localY < r : localY > bounds.height - r) ? r : 0);
+        copiedStart = Math.max(colStart, Math.ceil(bounds.x + inset(leftRadius) - dx - 0.5));
+        copiedEnd = Math.min(
+          colEnd,
+          Math.ceil(bounds.x + bounds.width - inset(rightRadius) - dx - 0.5),
+        );
+        if (copiedEnd > copiedStart) {
+          const sourceStart = sourceRow * stridePx + copiedStart;
+          fb.set(
+            srcWords.subarray(sourceStart, sourceStart + copiedEnd - copiedStart),
+            py * pitchPx + dx + copiedStart,
+          );
+        }
+      }
+      for (let col = colStart; col < colEnd; col++) {
+        if (col === copiedStart && copiedEnd > copiedStart) {
+          col = copiedEnd - 1;
+          continue;
+        }
         const px = dx + col;
         if (px < 0 || px >= fbW) continue;
         const sourceCol = Math.min(srcW - 1, Math.floor((col * srcW) / destW));
         const si = sourceRow * stridePx + sourceCol;
-        const pixel = srcWords[si]!;
-        const inGeom =
-          !geom || (sourceCol >= gx0 && sourceCol < gx1 && sourceRow >= gy0 && sourceRow < gy1);
-        if (opaque) {
+        let pixel = srcWords[si]!;
+        const shapeBounds = contentShape?.bounds;
+        const inGeom = shapeBounds
+          ? px + 0.5 >= shapeBounds.x &&
+            px + 0.5 < shapeBounds.x + shapeBounds.width &&
+            py + 0.5 >= shapeBounds.y &&
+            py + 0.5 < shapeBounds.y + shapeBounds.height
+          : !geom || (sourceCol >= gx0 && sourceCol < gx1 && sourceRow >= gy0 && sourceRow < gy1);
+        const coverage = contentShape ? contentShapeCoverage(contentShape, px + 0.5, py + 0.5) : 1;
+        if (coverage <= 0) continue;
+        if (opaque && coverage === 1) {
           if (inGeom) fb[py * pitchPx + px] = pixel;
           continue;
+        }
+        if (opaque) pixel = (pixel | 0xff000000) >>> 0;
+        const originalAlpha = (pixel >>> 24) & 0xff;
+        if (!inGeom && originalAlpha === 255) continue;
+        if (coverage < 1) {
+          pixel =
+            ((Math.round(originalAlpha * coverage) << 24) |
+              (Math.round(((pixel >>> 16) & 255) * coverage) << 16) |
+              (Math.round(((pixel >>> 8) & 255) * coverage) << 8) |
+              Math.round((pixel & 255) * coverage)) >>>
+            0;
         }
         const a = (pixel >>> 24) & 0xff;
         if (a === 0) continue;
@@ -3976,7 +4838,7 @@ export class CompositorServer {
     // Prefer client-provided drag icon surface when it has pixels.
     if (drag?.iconId != null) {
       const surf = drag.sourceSession.surfaceById(drag.iconId);
-      if (surf?.pixels && surf.width > 0 && surf.height > 0) {
+      if (surf?.content && surf.width > 0 && surf.height > 0) {
         const dx = (this.cursorX | 0) + surf.bufferOffsetX;
         const dy = (this.cursorY | 0) + surf.bufferOffsetY;
         try {
@@ -3987,7 +4849,7 @@ export class CompositorServer {
             height,
             dx,
             dy,
-            surf.pixels,
+            surf.content.pixels,
             surf.bufferWidth,
             surf.bufferHeight,
             surf.stride,
@@ -4065,7 +4927,11 @@ export class CompositorServer {
     }
   }
 
-  private fallbackCursorShape(): { shape: string[]; hotX: number; hotY: number } {
+  private fallbackCursorShape(): {
+    shape: string[];
+    hotX: number;
+    hotY: number;
+  } {
     const g = this.grab;
     const semanticShape = this.clientCursorShape?.shape ?? 0;
     if (semanticShape === 9 || semanticShape === 10) {
@@ -4249,13 +5115,13 @@ export class CompositorServer {
     const clientCursor = this.clientCursor;
     if (clientCursor) {
       const surface = clientCursor.session.surfaceById(clientCursor.surfaceId);
-      if (surface?.pixels && surface.bufferWidth > 0 && surface.bufferHeight > 0) {
+      if (surface?.content && surface.bufferWidth > 0 && surface.bufferHeight > 0) {
         const scaleX = surface.bufferWidth / Math.max(1, surface.width);
         const scaleY = surface.bufferHeight / Math.max(1, surface.height);
         return {
           key: `client:${clientCursor.session.clientId}:${surface.id}:${surface.revision}:${clientCursor.hotspotX}:${clientCursor.hotspotY}`,
           image: {
-            pixels: surface.pixels,
+            pixels: surface.content.pixels,
             width: surface.bufferWidth,
             height: surface.bufferHeight,
             stride: surface.stride,
@@ -4355,7 +5221,7 @@ export class CompositorServer {
     const cc = this.clientCursor;
     if (cc) {
       const surf = cc.session.surfaceById(cc.surfaceId);
-      if (surf?.pixels && surf.width > 0 && surf.height > 0) {
+      if (surf?.content && surf.width > 0 && surf.height > 0) {
         this.blitArgb(
           fb,
           pitchPx,
@@ -4363,7 +5229,7 @@ export class CompositorServer {
           height,
           (this.cursorX | 0) - cc.hotspotX,
           (this.cursorY | 0) - cc.hotspotY,
-          surf.pixels,
+          surf.content.pixels,
           surf.bufferWidth,
           surf.bufferHeight,
           surf.stride,
@@ -4382,6 +5248,18 @@ export class CompositorServer {
 
   /** Request a composite + present on the next loop tick. */
   markDirty(): void {
+    if (
+      this.surfaceObservations.size > 0 &&
+      this.outputs.some((output) => !isKmsPresentationReady(output.kms))
+    )
+      this.invalidateSurfaceVisibility();
+    // Lifecycle negatives do not depend on successful scanout or a later commit.
+    for (const [session, observations] of this.surfaceObservations) {
+      for (const [id, observation] of observations) {
+        if (this.surfaceIsHidden(session, observation.surfaceId))
+          this.publishSurfaceState(session, id, observation, "hidden");
+      }
+    }
     this.needsComposite = true;
     const wake = this.compositeWakeResolver;
     this.compositeWakeResolver = null;
@@ -4411,6 +5289,7 @@ export class CompositorServer {
         try {
           await this.composite();
         } catch (err) {
+          this.invalidateSurfaceVisibility();
           console.error("[composite]", err);
           this.markDirty();
         }
@@ -4445,13 +5324,136 @@ export class CompositorServer {
     });
   }
 
+  /** Same source/geometry record used by both production paint paths. */
+  surfacePaintLayer(
+    client: ClientSession,
+    surface: SurfaceState,
+    popup: boolean,
+    z: number,
+  ): CompositionLayer {
+    const ssd = !popup && surface.role === "toplevel" && this.usesSsd(surface);
+    const useGeometry =
+      (popup || surface.role === "toplevel") && surface.geomW > 0 && surface.geomH > 0 && !ssd;
+    if (!surface.content) throw new Error("Paint layer requires committed contents");
+    return {
+      id: `${popup ? "popup" : "surface"}:${client.clientId}:${surface.id}`,
+      z,
+      source: surface.content,
+      destination: {
+        x: surface.x,
+        y: surface.y + (ssd ? ssdTitlebarHeight() : 0),
+        width: surface.width,
+        height: surface.height,
+      },
+      surfaceGeometry: useGeometry
+        ? {
+            x: surface.geomX,
+            y: surface.geomY,
+            width: surface.geomW,
+            height: surface.geomH,
+          }
+        : undefined,
+      sampling: "nearest",
+      damage: surface.damage,
+      contentShape: !popup ? this.surfaceContentShape(surface) : undefined,
+    };
+  }
+
+  private surfaceContentShape(surface: SurfaceState): WindowContentShape | undefined {
+    if (surface.role !== "toplevel" || surface.fullscreen) return undefined;
+    const frame = this.frameBox(surface);
+    if (frame.w <= 0 || frame.h <= 0) return undefined;
+    return windowContentShape(
+      { x: frame.x, y: frame.y, width: frame.w, height: frame.h },
+      surface.maximized ? 0 : this.theme.tokens.radiusWindow,
+      this.usesSsd(surface) ? "discard" : "translucent-shadow",
+    );
+  }
+
+  /** One outer paint owner for both CSD and SSD, in each window's stack slot. */
+  windowBorderLayers(client: ClientSession, surface: SurfaceState, z: number): CompositionLayer[] {
+    if (
+      surface.role !== "toplevel" ||
+      !surface.mapped ||
+      !surface.content ||
+      client.isHidden(surface) ||
+      surface.fullscreen
+    )
+      return [];
+    const frame = this.frameBox(surface);
+    const focused =
+      this.focusedToplevel?.session === client && this.focusedToplevel.surfaceId === surface.id;
+    return this.windowBorders.layers(
+      `window:${client.clientId}:${surface.id}`,
+      z,
+      { x: frame.x, y: frame.y, width: frame.w, height: frame.h },
+      {
+        ...windowChrome(this.theme, focused),
+        radius: surface.maximized ? 0 : this.theme.tokens.radiusWindow,
+      },
+    );
+  }
+
+  /** Same immutable border patches as the retained scene, through the CPU blitter. */
+  paintWindowBorder(
+    fb: Uint32Array,
+    pitch: number,
+    width: number,
+    height: number,
+    layers: readonly CompositionLayer[],
+  ): void {
+    for (const layer of layers) {
+      this.blitArgb(
+        fb,
+        pitch,
+        width,
+        height,
+        layer.destination.x,
+        layer.destination.y,
+        layer.source.pixels,
+        layer.source.width,
+        layer.source.height,
+        layer.source.stride,
+        undefined,
+        layer.destination,
+      );
+    }
+  }
+
+  /** CPU painters expose no alpha regions, so their possible coverage is the viewport. */
+  private flatVisibilityOverlay(
+    layers: CompositionLayer[],
+    id: string,
+    width: number,
+    height: number,
+  ): void {
+    if (this.surfaceObservations.size === 0) return;
+    layers.push({
+      id,
+      z: layers.length,
+      source: {
+        pixels: this.retainedEffectPixel,
+        width: 1,
+        height: 1,
+        stride: 4,
+      },
+      destination: { x: 0, y: 0, width, height },
+    });
+  }
+
   /** Paint mapped xdg_popup surfaces above chrome and release their buffers. */
-  private paintPopups(fb: Uint32Array, pitchPx: number, width: number, height: number): number {
+  private paintPopups(
+    fb: Uint32Array,
+    pitchPx: number,
+    width: number,
+    height: number,
+    visibilityLayers?: CompositionLayer[],
+  ): number {
     let painted = 0;
     for (const entry of this.popupStack) {
       const client = entry.session;
       const surf = client.surfaceById(entry.surfaceId);
-      if (!surf || !surf.mapped || !surf.pixels) continue;
+      if (!surf || !surf.mapped || !surf.content) continue;
       this.layoutPopup(client, surf);
       client.updateSurfaceOutputs(surf);
       const hidden = client.isHidden(surf);
@@ -4473,7 +5475,7 @@ export class CompositorServer {
             height,
             surf.x,
             surf.y,
-            surf.pixels,
+            surf.content.pixels,
             surf.bufferWidth,
             surf.bufferHeight,
             surf.stride,
@@ -4488,8 +5490,19 @@ export class CompositorServer {
             { width: surf.width, height: surf.height },
             surf.opaque,
           );
+          if (visibilityLayers)
+            visibilityLayers.push(
+              this.surfacePaintLayer(client, surf, true, visibilityLayers.length),
+            );
           painted++;
         } catch (err) {
+          if (visibilityLayers)
+            this.flatVisibilityOverlay(
+              visibilityLayers,
+              `failed-popup:${client.clientId}:${surf.id}`,
+              width,
+              height,
+            );
           console.error(`[composite] popup blit failed ${surf.width}x${surf.height}:`, err);
         }
       }
@@ -4514,15 +5527,6 @@ export class CompositorServer {
   }
 
   private finishPresentationFeedback(feedback?: KmsPresentationFeedback): void {
-    const now = process.hrtime.bigint();
-    const resolved = feedback ?? {
-      sequence: 0,
-      seconds: Number(now / 1_000_000_000n),
-      nanoseconds: Number(now % 1_000_000_000n),
-      vsync: false,
-      hardwareClock: false,
-      hardwareCompletion: false,
-    };
     const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0];
     const mode = primary?.kms.modes.find((candidate) => candidate.id === primary.kms.currentModeId);
     const refreshNs = mode?.refreshMilliHz
@@ -4535,7 +5539,8 @@ export class CompositorServer {
         const feedbackIds = surface.readyPresentationFeedbacks;
         surface.readyPresentationFeedbacks = [];
         for (const feedbackId of feedbackIds) {
-          client.sendPresentationPresented(feedbackId, resolved, refreshNs);
+          if (feedback) client.sendPresentationPresented(feedbackId, feedback, refreshNs);
+          else client.sendPresentationDiscarded(feedbackId);
         }
       }
     }
@@ -4546,18 +5551,12 @@ export class CompositorServer {
     const clientCursor = this.clientCursor;
     if (clientCursor) {
       const surface = clientCursor.session.surfaceById(clientCursor.surfaceId);
-      if (surface?.pixels && surface.width > 0 && surface.height > 0) {
+      if (surface?.content && surface.width > 0 && surface.height > 0) {
         clientCursor.session.finishSurfaceFrame(surface);
         return {
           id: `cursor:${clientCursor.session.clientId}:${surface.id}`,
           z,
-          source: {
-            pixels: surface.pixels,
-            width: surface.bufferWidth,
-            height: surface.bufferHeight,
-            stride: surface.stride,
-            revision: surface.revision,
-          },
+          source: surface.content,
           destination: {
             x: (this.cursorX | 0) - clientCursor.hotspotX,
             y: (this.cursorY | 0) - clientCursor.hotspotY,
@@ -4593,17 +5592,11 @@ export class CompositorServer {
     const drag = this.drag;
     if (drag?.iconId != null) {
       const surface = drag.sourceSession.surfaceById(drag.iconId);
-      if (surface?.pixels && surface.width > 0 && surface.height > 0) {
+      if (surface?.content && surface.width > 0 && surface.height > 0) {
         const layer: CompositionLayer = {
           id: `drag:${drag.sourceSession instanceof ClientSession ? drag.sourceSession.clientId : "shell"}:${surface.id}`,
           z,
-          source: {
-            pixels: surface.pixels,
-            width: surface.bufferWidth,
-            height: surface.bufferHeight,
-            stride: surface.stride,
-            revision: surface.revision,
-          },
+          source: surface.content,
           destination: {
             x: (this.cursorX | 0) + surface.bufferOffsetX,
             y: (this.cursorY | 0) + surface.bufferOffsetY,
@@ -4679,12 +5672,14 @@ export class CompositorServer {
     return null;
   }
 
+  private outputPipelineFrame = 0;
   private async compositeRetained(
     renderer: CompositorOutputRenderer,
     frameStartedMs: number,
     width: number,
     height: number,
   ): Promise<void> {
+    const pipelineFrame = ++this.outputPipelineFrame;
     const layers: CompositionLayer[] = [];
     let z = 0;
     const wallPhase = (Date.now() / 60000) % 1;
@@ -4775,7 +5770,7 @@ export class CompositorServer {
               x: top.x,
               y: top.y,
               width: size.w,
-              height: size.h + SSD_TITLEBAR_H,
+              height: size.h + ssdTitlebarHeight(),
             },
             cornerRadius: this.theme.tokens.radiusWindow,
             effects: [
@@ -4793,66 +5788,57 @@ export class CompositorServer {
       }
       for (const surface of client.paintTree(entry.surfaceId)) {
         client.updateSurfaceOutputs(surface);
-        if (surface.mapped && surface.pixels && !client.isHidden(surface)) {
-          const ssdY = surface.role === "toplevel" && this.usesSsd(surface) ? SSD_TITLEBAR_H : 0;
-          const useGeometry =
-            surface.role === "toplevel" &&
-            surface.geomW > 0 &&
-            surface.geomH > 0 &&
-            !this.usesSsd(surface);
-          layers.push({
-            id: `surface:${client.clientId}:${surface.id}`,
-            z: z++,
-            source: {
-              pixels: surface.pixels,
-              width: surface.bufferWidth,
-              height: surface.bufferHeight,
-              stride: surface.stride,
-              revision: surface.revision,
-            },
-            destination: {
-              x: surface.x,
-              y: surface.y + ssdY,
-              width: surface.width,
-              height: surface.height,
-            },
-            surfaceGeometry: useGeometry
-              ? {
-                  x: surface.geomX,
-                  y: surface.geomY,
-                  width: surface.geomW,
-                  height: surface.geomH,
-                }
-              : undefined,
-            sampling: "nearest",
-            damage: surface.damage,
+        if (surface.mapped && surface.content && !client.isHidden(surface)) {
+          layers.push(this.surfacePaintLayer(client, surface, false, z++));
+          traceOutputPipeline({
+            stage: "scene",
+            frame: pipelineFrame,
+            client: client.clientId,
+            surface: surface.id,
+            revision: surface.revision,
+            damageRects: surface.damage.length,
+            callbacks: surface.frameCallbacks.length,
           });
           painted++;
         }
         client.finishSurfaceFrame(surface);
-      }
-
-      if (top?.mapped && !client.isHidden(top) && this.usesSsd(top) && this.shell?.ssdRaster) {
-        const size = this.contentSize(top);
-        if (size.w > 0 && size.h > 0) {
-          const ssd = this.shell.ssdRaster({
-            clientId: client.clientId,
-            surfaceId: top.id,
-            x: top.x,
-            y: top.y,
-            contentW: size.w,
-            contentH: size.h,
-            title: top.title || "Window",
-            focused:
-              this.focusedToplevel?.session === client && this.focusedToplevel.surfaceId === top.id,
-            maximized: top.maximized,
-          });
-          layers.push({
-            id: ssd.id,
-            z: z++,
-            source: ssd,
-            destination: { x: ssd.x, y: ssd.y, width: ssd.width, height: ssd.height },
-          });
+        if (surface === top) {
+          if (top?.mapped && !client.isHidden(top) && this.usesSsd(top) && this.shell?.ssdRaster) {
+            const size = this.contentSize(top);
+            if (size.w > 0 && size.h > 0) {
+              const ssd = this.shell.ssdRaster({
+                clientId: client.clientId,
+                surfaceId: top.id,
+                x: top.x,
+                y: top.y,
+                contentW: size.w,
+                contentH: size.h,
+                title: top.title || "Window",
+                appId: top.appId,
+                focused:
+                  this.focusedToplevel?.session === client &&
+                  this.focusedToplevel.surfaceId === top.id,
+                maximized: top.maximized,
+              });
+              layers.push({
+                id: ssd.id,
+                z: z++,
+                source: ssd,
+                destination: {
+                  x: ssd.x,
+                  y: ssd.y,
+                  width: ssd.width,
+                  height: ssd.height,
+                },
+                contentShape: this.surfaceContentShape(top),
+              });
+            }
+          }
+          if (top) {
+            const border = this.windowBorderLayers(client, top, z);
+            layers.push(...border);
+            z += border.length;
+          }
         }
       }
     }
@@ -4862,7 +5848,11 @@ export class CompositorServer {
     const chrome = this.shell?.chromeRaster?.(width, height);
     if (chrome) {
       if (renderer.capabilities.backdropBlur) {
-        const panelHeight = Math.max(this.theme.tokens.panelHeight, 46);
+        const panel = panelGeometry(
+          outputLogicalWidth(primary),
+          outputLogicalHeight(primary),
+          this.theme,
+        );
         layers.push({
           id: "shell:panel-material",
           z: z++,
@@ -4874,17 +5864,17 @@ export class CompositorServer {
             revision: 1,
           },
           destination: {
-            x: primary.x,
-            y: primary.y + outputLogicalHeight(primary) - panelHeight,
-            width: outputLogicalWidth(primary),
-            height: panelHeight,
+            x: primary.x + panel.x,
+            y: primary.y + panel.y,
+            width: panel.width,
+            height: panel.height,
           },
+          cornerRadius: panel.radius,
           effects: [
             {
               kind: "backdrop-blur",
               radius: 18,
               saturation: 1.08,
-              tint: hexToArgb(this.theme.tokens.panel, 0x24),
             },
           ],
         });
@@ -4893,7 +5883,12 @@ export class CompositorServer {
         id: chrome.id,
         z: z++,
         source: chrome,
-        destination: { x: chrome.x, y: chrome.y, width: chrome.width, height: chrome.height },
+        destination: {
+          x: chrome.x,
+          y: chrome.y,
+          width: chrome.width,
+          height: chrome.height,
+        },
       });
     }
     const chromeFinishedMs = monotonicMs();
@@ -4901,37 +5896,10 @@ export class CompositorServer {
     for (const entry of this.popupStack) {
       const client = entry.session;
       const surface = client.surfaceById(entry.surfaceId);
-      if (!surface?.mapped || !surface.pixels || client.isHidden(surface)) continue;
+      if (!surface?.mapped || !surface.content || client.isHidden(surface)) continue;
       this.layoutPopup(client, surface);
       client.updateSurfaceOutputs(surface);
-      layers.push({
-        id: `popup:${client.clientId}:${surface.id}`,
-        z: z++,
-        source: {
-          pixels: surface.pixels,
-          width: surface.bufferWidth,
-          height: surface.bufferHeight,
-          stride: surface.stride,
-          revision: surface.revision,
-        },
-        destination: {
-          x: surface.x,
-          y: surface.y,
-          width: surface.width,
-          height: surface.height,
-        },
-        surfaceGeometry:
-          surface.geomW > 0 && surface.geomH > 0
-            ? {
-                x: surface.geomX,
-                y: surface.geomY,
-                width: surface.geomW,
-                height: surface.geomH,
-              }
-            : undefined,
-        sampling: "nearest",
-        damage: surface.damage,
-      });
+      layers.push(this.surfacePaintLayer(client, surface, true, z++));
       client.finishSurfaceFrame(surface);
       painted++;
     }
@@ -4947,6 +5915,7 @@ export class CompositorServer {
       clearColor: hexToArgb(this.theme.tokens.bg),
       layers,
     };
+    const outputEpoch = this.beginVisibilityPresentation();
     const outputPhaseStartedMs = monotonicMs();
     renderer.beginComposition!(scene);
     let frameRenderMs = monotonicMs() - outputPhaseStartedMs;
@@ -4955,10 +5924,14 @@ export class CompositorServer {
       duration: number;
       feedback?: KmsPresentationFeedback;
       primary: boolean;
+      connectorId: number;
+      success: boolean;
+      rendering?: OutputRenderingFacts;
     }>[] = [];
     for (const output of this.outputs) {
       const outputStartedMs = monotonicMs();
       const physical = output.kms;
+      if (!isKmsPresentationReady(physical)) continue;
       let target = this.outputStages.get(physical.connectorId);
       if (!target || target.byteLength !== physical.size) {
         target = Buffer.alloc(physical.size);
@@ -4978,44 +5951,56 @@ export class CompositorServer {
         pitch: physical.pitch,
       });
       const renderedMs = monotonicMs();
-      try {
-        if (rendered.framebufferId != null) {
-          const presentStartedMs = monotonicMs();
-          pendingPresents.push(
-            presentKmsFramebuffer(
+      traceOutputPipeline({
+        stage: "submitted",
+        frame: pipelineFrame,
+        output: physical.connectorId,
+        framebuffer: rendered.framebufferId ?? 0,
+      });
+      const presentStartedMs = monotonicMs();
+      const presentation =
+        rendered.framebufferId != null
+          ? presentKmsFramebuffer(
               physical,
               rendered.framebufferId,
               this.readiness ?? undefined,
-            ).then(
-              (feedback) => ({
-                duration: monotonicMs() - presentStartedMs,
-                feedback,
-                primary: output.primary,
-              }),
-              (error) => {
-                console.error(`[composite] retained present ${physical.connectorName}:`, error);
-                return {
-                  duration: monotonicMs() - presentStartedMs,
-                  primary: output.primary,
-                };
-              },
-            ),
-          );
-        } else {
-          flushMmap(physical.map, target, physical.size);
-          presentKms(physical);
-          framePresentMs += monotonicMs() - renderedMs;
-        }
-      } catch (error) {
-        console.error(`[composite] retained present ${physical.connectorName}:`, error);
-      }
+              () => this.markDirty(),
+            )
+          : presentKmsPixels(physical, target, this.readiness ?? undefined, () => this.markDirty());
+      pendingPresents.push(
+        presentation.then(
+          (feedback) => ({
+            duration: monotonicMs() - presentStartedMs,
+            feedback,
+            primary: output.primary,
+            connectorId: physical.connectorId,
+            success: true,
+            rendering: rendered.rendering,
+          }),
+          (error) => {
+            console.error(`[composite] quarantined presentation ${physical.connectorName}:`, error);
+            return {
+              duration: monotonicMs() - presentStartedMs,
+              primary: output.primary,
+              connectorId: physical.connectorId,
+              success: false,
+            };
+          },
+        ),
+      );
       frameRenderMs += renderedMs - outputStartedMs;
     }
     const presented = await Promise.all(pendingPresents);
+    for (const result of presented)
+      traceOutputPipeline({
+        stage: "scanout",
+        frame: pipelineFrame,
+        output: result.connectorId,
+        accepted: result.success,
+      });
+    this.completeVisibilityPresentation(outputEpoch, scene, this.visibilityOutputs(), presented);
     framePresentMs += presented.reduce((total, result) => total + result.duration, 0);
-    this.finishPresentationFeedback(
-      presented.find((result) => result.primary)?.feedback ?? presented[0]?.feedback,
-    );
+    this.finishPresentationFeedback(presented.find((result) => result.primary)?.feedback);
     this.profileFrames++;
     this.profileSceneMs += sceneFinishedMs - frameStartedMs;
     this.profileWallpaperMs += wallpaperFinishedMs - frameStartedMs;
@@ -5034,7 +6019,10 @@ export class CompositorServer {
 
   /** Paint wallpaper + all mapped surfaces into the KMS dumb buffer. */
   async composite(): Promise<void> {
-    if (this.outputs.length === 0) return;
+    if (this.outputs.length === 0) {
+      this.invalidateSurfaceVisibility();
+      return;
+    }
     const frameStartedMs = monotonicMs();
     const kms = this.getKmsSize();
     const renderer = this.outputRenderer;
@@ -5048,6 +6036,10 @@ export class CompositorServer {
         console.error("[renderer] retained scene failed; rebuilding flat frame:", error);
       }
     }
+    const trackVisibility = this.surfaceObservations.size > 0;
+    const pipelineFrame = ++this.outputPipelineFrame;
+    const visibilityLayers: CompositionLayer[] = [];
+    let visibilityComplete = true;
     const stageSize = kms.width * kms.height * 4;
 
     if (!this.stage || this.stage.byteLength !== stageSize) {
@@ -5094,9 +6086,10 @@ export class CompositorServer {
       for (const entry of this.stack) {
         const client = entry.session;
         client.layout();
+        const top = client.surfaceById(entry.surfaceId);
         for (const surf of client.paintTree(entry.surfaceId)) {
           client.updateSurfaceOutputs(surf);
-          if (!surf.mapped || !surf.pixels) continue;
+          if (!surf.mapped || !surf.content) continue;
           // Minimized windows still need frame callbacks + buffer releases,
           // otherwise arrays grow without bound and clients stall.
           const hidden = client.isHidden(surf);
@@ -5114,7 +6107,16 @@ export class CompositorServer {
             try {
               // Paint from the committed pixel buffer directly — do not
               // Buffer.from() every frame (see docs/known-issues.md).
-              const ssdY = surf.role === "toplevel" && this.usesSsd(surf) ? SSD_TITLEBAR_H : 0;
+              traceOutputPipeline({
+                stage: "scene",
+                frame: pipelineFrame,
+                client: client.clientId,
+                surface: surf.id,
+                revision: surf.revision,
+                damageRects: surf.damage.length,
+                callbacks: surf.frameCallbacks.length,
+              });
+              const ssdY = surf.role === "toplevel" && this.usesSsd(surf) ? ssdTitlebarHeight() : 0;
               const useGeom =
                 surf.role === "toplevel" && surf.geomW > 0 && surf.geomH > 0 && !this.usesSsd(surf);
               this.blitArgb(
@@ -5124,7 +6126,7 @@ export class CompositorServer {
                 kms.height,
                 surf.x,
                 surf.y + ssdY,
-                surf.pixels,
+                surf.content.pixels,
                 surf.bufferWidth,
                 surf.bufferHeight,
                 surf.stride,
@@ -5138,9 +6140,15 @@ export class CompositorServer {
                   : undefined,
                 { width: surf.width, height: surf.height },
                 surf.opaque,
+                this.surfaceContentShape(surf),
               );
+              if (trackVisibility)
+                visibilityLayers.push(
+                  this.surfacePaintLayer(client, surf, false, visibilityLayers.length),
+                );
               painted++;
             } catch (err) {
+              visibilityComplete = false;
               console.error(
                 `[composite] blit failed role=${surf.role} ${surf.width}x${surf.height}:`,
                 err,
@@ -5149,33 +6157,73 @@ export class CompositorServer {
           }
 
           client.finishSurfaceFrame(surf);
-        }
-
-        // SSD chrome in the same stack slot as the window (not a global overlay).
-        const top = client.surfaceById(entry.surfaceId);
-        if (
-          top &&
-          top.mapped &&
-          !client.isHidden(top) &&
-          this.usesSsd(top) &&
-          this.shell?.paintSsdWindow
-        ) {
-          const size = this.contentSize(top);
-          if (size.w > 0 && size.h > 0) {
-            const focused =
-              this.focusedToplevel?.session === entry.session &&
-              this.focusedToplevel.surfaceId === top.id;
-            this.shell.paintSsdWindow(fb, pitchPx, kms.width, kms.height, {
-              clientId: entry.session.clientId,
-              surfaceId: top.id,
-              x: top.x,
-              y: top.y,
-              contentW: size.w,
-              contentH: size.h,
-              title: top.title || "Window",
-              focused,
-              maximized: top.maximized,
-            });
+          if (surf === top) {
+            // SSD chrome in the same stack slot as the window (not a global overlay).
+            if (
+              top &&
+              top.mapped &&
+              !client.isHidden(top) &&
+              this.usesSsd(top) &&
+              (this.shell?.paintSsdWindow || this.shell?.paintSsd)
+            ) {
+              const size = this.contentSize(top);
+              if (size.w > 0 && size.h > 0) {
+                const focused =
+                  this.focusedToplevel?.session === entry.session &&
+                  this.focusedToplevel.surfaceId === top.id;
+                this.flatVisibilityOverlay(
+                  visibilityLayers,
+                  `flat-ssd:${client.clientId}:${top.id}`,
+                  kms.width,
+                  kms.height,
+                );
+                const window: SsdWindowInfo = {
+                  clientId: entry.session.clientId,
+                  surfaceId: top.id,
+                  x: top.x,
+                  y: top.y,
+                  contentW: size.w,
+                  contentH: size.h,
+                  title: top.title || "Window",
+                  appId: top.appId,
+                  focused,
+                  maximized: top.maximized,
+                };
+                const shape = this.surfaceContentShape(top);
+                if (this.shell.ssdRaster) {
+                  const raster = this.shell.ssdRaster(window);
+                  this.blitArgb(
+                    fb,
+                    pitchPx,
+                    kms.width,
+                    kms.height,
+                    raster.x,
+                    raster.y,
+                    raster.pixels,
+                    raster.width,
+                    raster.height,
+                    raster.stride,
+                    undefined,
+                    undefined,
+                    false,
+                    shape,
+                  );
+                } else {
+                  const paint = () => {
+                    if (this.shell?.paintSsdWindow)
+                      this.shell.paintSsdWindow(fb, pitchPx, kms.width, kms.height, window);
+                    else this.shell?.paintSsd?.(fb, pitchPx, kms.width, kms.height, [window]);
+                  };
+                  if (shape) paintShapedHeader(fb, pitchPx, kms.width, kms.height, shape, paint);
+                  else paint();
+                }
+              }
+            }
+            if (top) {
+              const border = this.windowBorderLayers(client, top, visibilityLayers.length);
+              this.paintWindowBorder(fb, pitchPx, kms.width, kms.height, border);
+              if (trackVisibility) visibilityLayers.push(...border);
+            }
           }
         }
       }
@@ -5183,27 +6231,40 @@ export class CompositorServer {
     } finally {
       try {
         this.ssdWindows = this.collectSsdWindows();
-        // Fallback if shell only implements the bulk paintSsd API.
-        if (!this.shell?.paintSsdWindow && this.shell?.paintSsd) {
-          this.shell.paintSsd(fb, pitchPx, kms.width, kms.height, this.ssdWindows);
+        if (this.shell) {
+          // Software composition has the same live material, sampled after
+          // windows and before shell chrome. Never blur the panel's own tint.
+          const panel = panelGeometry(kms.width, kms.height, this.theme);
+          blurBackdrop(fb, pitchPx, kms.width, kms.height, panel, 18);
+          this.flatVisibilityOverlay(visibilityLayers, "flat-shell", kms.width, kms.height);
+          this.shell.paint(fb, pitchPx, kms.width, kms.height);
         }
-        this.shell?.paint(fb, pitchPx, kms.width, kms.height);
       } catch (err) {
+        visibilityComplete = false;
         console.error("[shell] paint:", err);
       }
       const chromeFinishedMs = monotonicMs();
       // Native menus/flyouts are the top interactive layer. They must remain
       // visible and clickable even when their bounds cross the bottom panel.
       try {
-        painted += this.paintPopups(fb, pitchPx, kms.width, kms.height);
+        painted += this.paintPopups(
+          fb,
+          pitchPx,
+          kms.width,
+          kms.height,
+          trackVisibility ? visibilityLayers : undefined,
+        );
       } catch (err) {
         console.error("[composite] paintPopups:", err);
       }
+      if (this.drag || this.dragReturn || this.shell?.desktopDragLabel?.())
+        this.flatVisibilityOverlay(visibilityLayers, "flat-drag", kms.width, kms.height);
       this.paintDragPreview(fb, pitchPx, kms.width, kms.height);
       this.drawCursor(fb, pitchPx, kms.width, kms.height);
       const sceneFinishedMs = monotonicMs();
       const renderer = this.outputRenderer;
       if (!renderer) throw new Error("Compositor output renderer is unavailable");
+      const outputEpoch = this.beginVisibilityPresentation();
       const outputPhaseStartedMs = monotonicMs();
       renderer.beginFrame({
         pixels: stage,
@@ -5220,13 +6281,16 @@ export class CompositorServer {
         duration: number;
         feedback?: KmsPresentationFeedback;
         primary: boolean;
+        connectorId: number;
+        success: boolean;
+        rendering?: OutputRenderingFacts;
       }>[] = [];
-      // Crop/scale the logical desktop into each physical output through the
-      // selected backend. EGL currently reads into the stable dumb scanout;
-      // direct GBM scanout is the next presentation step, not a scene change.
+      // Crop/scale into idle GBM or CPU/readback scanout storage. Neither
+      // backend may write the active/queued framebuffer.
       for (const output of this.outputs) {
         const outputStartedMs = monotonicMs();
         const physical = output.kms;
+        if (!isKmsPresentationReady(physical)) continue;
         let target = this.outputStages.get(physical.connectorId);
         if (!target || target.byteLength !== physical.size) {
           target = Buffer.alloc(physical.size);
@@ -5246,46 +6310,73 @@ export class CompositorServer {
           pitch: physical.pitch,
         });
         const renderedMs = monotonicMs();
-        // Parallels VIRTUAL DRM does not pick up dumb-buffer dirties until
-        // SetCrtc is re-applied (or a page flip).
-        try {
-          if (rendered.framebufferId != null) {
-            const presentStartedMs = monotonicMs();
-            pendingPresents.push(
-              presentKmsFramebuffer(
+        traceOutputPipeline({
+          stage: "submitted",
+          frame: pipelineFrame,
+          output: physical.connectorId,
+          framebuffer: rendered.framebufferId ?? 0,
+        });
+        const presentStartedMs = monotonicMs();
+        const presentation =
+          rendered.framebufferId != null
+            ? presentKmsFramebuffer(
                 physical,
                 rendered.framebufferId,
                 this.readiness ?? undefined,
-              ).then(
-                (feedback) => ({
-                  duration: monotonicMs() - presentStartedMs,
-                  feedback,
-                  primary: output.primary,
-                }),
-                (error) => {
-                  console.error(`[composite] presentKms ${physical.connectorName}:`, error);
-                  return {
-                    duration: monotonicMs() - presentStartedMs,
-                    primary: output.primary,
-                  };
-                },
-              ),
-            );
-          } else {
-            flushMmap(physical.map, target, physical.size);
-            presentKms(physical);
-            framePresentMs += monotonicMs() - renderedMs;
-          }
-        } catch (err) {
-          console.error(`[composite] presentKms ${physical.connectorName}:`, err);
-        }
+                () => this.markDirty(),
+              )
+            : presentKmsPixels(physical, target, this.readiness ?? undefined, () =>
+                this.markDirty(),
+              );
+        pendingPresents.push(
+          presentation.then(
+            (feedback) => ({
+              duration: monotonicMs() - presentStartedMs,
+              feedback,
+              primary: output.primary,
+              connectorId: physical.connectorId,
+              success: true,
+              rendering: rendered.rendering,
+            }),
+            (error) => {
+              console.error(
+                `[composite] quarantined presentation ${physical.connectorName}:`,
+                error,
+              );
+              return {
+                duration: monotonicMs() - presentStartedMs,
+                primary: output.primary,
+                connectorId: physical.connectorId,
+                success: false,
+              };
+            },
+          ),
+        );
         frameRenderMs += renderedMs - outputStartedMs;
       }
       const presented = await Promise.all(pendingPresents);
+      for (const result of presented)
+        traceOutputPipeline({
+          stage: "scanout",
+          frame: pipelineFrame,
+          output: result.connectorId,
+          accepted: result.success,
+        });
+      if (trackVisibility && visibilityComplete)
+        this.completeVisibilityPresentation(
+          outputEpoch,
+          {
+            width: kms.width,
+            height: kms.height,
+            clearColor: 0,
+            layers: visibilityLayers,
+          },
+          this.visibilityOutputs(),
+          presented,
+        );
+      else this.invalidateSurfaceVisibility();
       framePresentMs += presented.reduce((total, result) => total + result.duration, 0);
-      this.finishPresentationFeedback(
-        presented.find((result) => result.primary)?.feedback ?? presented[0]?.feedback,
-      );
+      this.finishPresentationFeedback(presented.find((result) => result.primary)?.feedback);
       this.profileFrames++;
       this.profileSceneMs += sceneFinishedMs - frameStartedMs;
       this.profileWallpaperMs += wallpaperFinishedMs - frameStartedMs;
@@ -5330,7 +6421,12 @@ function monotonicMs(): number {
   return s * 1000 + Math.floor(ns / 1e6);
 }
 
-class ClientSession {
+type ClientTransport = Pick<WaylandClientConn, "peerPid" | "send" | "close"> & {
+  on(event: "message", listener: (chunk: WaylandChunk) => void): unknown;
+  on(event: "close", listener: () => void): unknown;
+};
+
+export class ClientSession {
   private objects = new Map<number, WlObject>();
   private buf = Buffer.alloc(0);
   private pendingFds: number[] = [];
@@ -5341,7 +6437,6 @@ class ClientSession {
   private pointerId: number | null = null;
   private focusedSurfaceId: number | null = null;
   private pointerSurfaceId: number | null = null;
-  private pressedKeys = new Set<number>();
   /** Last serial from pointer enter/button (for xdg_popup.grab). */
   private lastInputSerial = 0;
   /** Bound wl_data_device object ids for this client. */
@@ -5351,9 +6446,13 @@ class ClientSession {
   /** True when peer looks like Xwayland (SO_PEERCRED + /proc/exe). */
   readonly isXwayland: boolean;
 
+  get peerPid(): number | null {
+    return this.conn.peerPid ?? null;
+  }
+
   constructor(
     private readonly server: CompositorServer,
-    private readonly conn: WaylandClientConn,
+    private readonly conn: ClientTransport,
     readonly clientId: number,
   ) {
     this.objects.set(WL_DISPLAY_ID, {
@@ -5366,6 +6465,7 @@ class ClientSession {
       `[client] connected id=${clientId} pid=${conn.peerPid ?? "?"} xwayland=${this.isXwayland ? 1 : 0}`,
     );
     conn.on("message", (chunk: WaylandChunk) => this.onChunk(chunk));
+    conn.on("close", () => this.server.retireClientObservations(this));
   }
 
   surfaces(): SurfaceState[] {
@@ -5512,7 +6612,11 @@ class ClientSession {
       const parent = byId.get(s.parentId);
       if (!parent) return { x: s.subX, y: s.subY };
       const p = abs(parent);
-      return { x: p.x + s.subX, y: p.y + s.subY };
+      // Child coordinates are relative to the actual parent buffer origin,
+      // not the compositor-owned SSD header above a toplevel's content.
+      const contentY =
+        parent.role === "toplevel" && this.server.usesSsd(parent) ? ssdTitlebarHeight() : 0;
+      return { x: p.x + s.subX, y: p.y + contentY + s.subY };
     };
 
     for (const s of this.surfaces()) {
@@ -5583,7 +6687,22 @@ class ClientSession {
   }
 
   destroy(): void {
+    this.server.retireClientObservations(this);
+    if (this.server.surfaceTransfers.enabled) {
+      console.log(
+        "[surface-transfers]",
+        JSON.stringify(
+          this.server.surfaceTransfers.snapshot().filter((row) => row.clientId === this.clientId),
+        ),
+      );
+    }
+    this.server.surfaceTransfers.removeClient(this.clientId);
     for (const obj of this.objects.values()) {
+      if (obj.iface === "wl_surface") {
+        const surface = obj.data?.surface as SurfaceState | undefined;
+        surface?.content?.destroy();
+        if (surface) surface.content = null;
+      }
       if (obj.iface === "wl_shm_pool" && obj.data?.pool) {
         const pool = obj.data.pool as PoolState;
         this.releasePool(pool, true);
@@ -5607,10 +6726,11 @@ class ClientSession {
     }
     this.pendingFds = [];
     this.objects.clear();
+    this.server.markDirty();
     this.conn.close();
   }
 
-  keyboardEnter(surfaceId: number): void {
+  keyboardEnter(surfaceId: number, pressedKeys = this.server.keyboardPressedKeys()): void {
     if (this.keyboardId == null) return;
     // Never leave keyboard on a grabbing popup without popup_done — if focus
     // is moving to a normal surface, end this client's grabs first.
@@ -5640,9 +6760,9 @@ class ClientSession {
       });
     }
     this.focusedSurfaceId = surfaceId;
-    const keys = Buffer.alloc(this.pressedKeys.size * 4);
+    const keys = Buffer.alloc(pressedKeys.length * 4);
     let i = 0;
-    for (const k of this.pressedKeys) {
+    for (const k of pressedKeys) {
       keys.writeUInt32LE(k, i);
       i += 4;
     }
@@ -5650,9 +6770,7 @@ class ClientSession {
     this.send(this.keyboardId, EV.keyboard_enter, (b) => {
       b.uint(serial).object(surfaceId).array(keys);
     });
-    this.send(this.keyboardId, EV.keyboard_modifiers, (b) => {
-      b.uint(serial).uint(0).uint(0).uint(0).uint(0);
-    });
+    this.keyboardModifiers(this.server.keyboardModifierMask());
     console.log(`[seat] keyboard enter surface=${surfaceId}`);
   }
 
@@ -5665,10 +6783,19 @@ class ClientSession {
     this.focusedSurfaceId = null;
   }
 
+  keyboardModifiers(mask: KeyboardModifierMask): void {
+    if (this.keyboardId == null || this.focusedSurfaceId == null) return;
+    this.send(this.keyboardId, EV.keyboard_modifiers, (b) => {
+      b.uint(this.serial++)
+        .uint(mask.depressed)
+        .uint(mask.latched)
+        .uint(mask.locked)
+        .uint(mask.group);
+    });
+  }
+
   keyboardKey(ev: EvdevKeyEvent): void {
     if (this.keyboardId == null || this.focusedSurfaceId == null) return;
-    if (ev.value === 1) this.pressedKeys.add(ev.code);
-    else if (ev.value === 0) this.pressedKeys.delete(ev.code);
     // value 2 = repeat — still send as pressed
     const state = ev.value === 0 ? WL_KEYBOARD_KEY_STATE_RELEASED : WL_KEYBOARD_KEY_STATE_PRESSED;
     const serial = this.serial++;
@@ -5823,6 +6950,17 @@ class ClientSession {
       case "wl_compositor":
         this.handleCompositor(opcode, r);
         break;
+      case moireSurfaceStateManagerV1.name:
+        this.handleSurfaceStateManager(obj, opcode, r);
+        break;
+      case moireSurfaceStateV1.name:
+        if (opcode === moireSurfaceStateV1.requests.submission.opcode && obj.version >= 2) {
+          this.server.noteSurfaceSubmission(this, obj.id, r.uint());
+        } else if (opcode === moireSurfaceStateV1.requests.destroy.opcode) {
+          this.server.unobserveSurface(this, objectId);
+          this.deleteId(objectId);
+        }
+        break;
       case "wl_shm":
         this.handleShm(opcode, r);
         break;
@@ -5965,6 +7103,59 @@ class ClientSession {
     }
   }
 
+  sendSurfaceVisibility(id: number, visibility: SurfaceVisibility): void {
+    this.send(id, moireSurfaceStateV1.events.state.opcode, (b) =>
+      b.uint(this.serial++ >>> 0).uint(moireSurfaceStateV1.enums.visibility[visibility]),
+    );
+  }
+
+  sendSurfaceRendering(id: number, token: number, rendering: SurfaceRendering): void {
+    if ((this.objects.get(id)?.version ?? 0) < 2) return;
+    this.send(id, moireSurfaceStateV1.events.rendering.opcode, (b) =>
+      b
+        .uint(this.serial++ >>> 0)
+        .uint(token)
+        .uint(moireSurfaceStateV1.enums.rendering[rendering]),
+    );
+  }
+
+  private handleSurfaceStateManager(obj: WlObject, opcode: number, r: MessageReader): void {
+    if (opcode === moireSurfaceStateManagerV1.requests.destroy.opcode) {
+      this.deleteId(obj.id);
+      return;
+    }
+    if (opcode !== moireSurfaceStateManagerV1.requests.getSurfaceState.opcode) return;
+    const id = r.newId();
+    const surfaceId = r.object();
+    if (
+      !surfaceId ||
+      this.objects.get(surfaceId)?.iface !== "wl_surface" ||
+      this.objects.has(id) ||
+      id <= WL_DISPLAY_ID ||
+      id >= 0xff000000
+    ) {
+      this.sendError(
+        obj.id,
+        moireSurfaceStateManagerV1.enums.error.invalidSurface,
+        "Expected an owned wl_surface and unused client object ID",
+      );
+      return;
+    }
+    this.objects.set(id, {
+      id,
+      iface: moireSurfaceStateV1.name,
+      version: Math.min(obj.version, 2),
+    });
+    if (!this.server.observeSurface(this, id, surfaceId)) {
+      this.objects.delete(id);
+      this.sendError(
+        obj.id,
+        moireSurfaceStateManagerV1.enums.error.resourceLimit,
+        "Too many surface observations",
+      );
+    }
+  }
+
   private handleDisplay(opcode: number, r: MessageReader): void {
     if (opcode === OP.display_sync) {
       const cbId = r.newId();
@@ -6008,6 +7199,24 @@ class ClientSession {
     const iface = r.string()!;
     const version = r.uint();
     const id = r.newId();
+    if (
+      iface === moireSurfaceStateManagerV1.name &&
+      (!this.server
+        .getGlobalsForClient(this)
+        .some(
+          (global) =>
+            global.name === name &&
+            global.iface === iface &&
+            version >= 1 &&
+            version <= global.version,
+        ) ||
+        this.objects.has(id) ||
+        id <= WL_DISPLAY_ID ||
+        id >= 0xff000000)
+    ) {
+      this.sendError(WL_DISPLAY_ID, 0, "Invalid surface-state manager binding");
+      return;
+    }
     const output = iface === "wl_output" ? this.server.displayOutputForGlobal(name) : null;
     this.objects.set(id, {
       id,
@@ -6226,13 +7435,15 @@ class ClientSession {
           : [];
       });
     const desired =
-      surface.mapped && surface.pixels && !this.isHidden(surface)
+      surface.mapped && surface.content && !this.isHidden(surface)
         ? new Set(
             outputsIntersectingRect(available, {
               x: surface.x,
               y:
                 surface.y +
-                (surface.role === "toplevel" && this.server.usesSsd(surface) ? SSD_TITLEBAR_H : 0),
+                (surface.role === "toplevel" && this.server.usesSsd(surface)
+                  ? ssdTitlebarHeight()
+                  : 0),
               width: surface.width,
               height: surface.height,
             }).map((output) => output.objectId),
@@ -6450,7 +7661,8 @@ class ClientSession {
     const object = this.objects.get(objectId);
     const surface = this.surfaceById(surfaceId);
     if (!object || !surface) return;
-    const scale120 = this.server.outputForSurface(surface).scale120;
+    // No output supplies no scale preference; 120 is the protocol's neutral 1× scale.
+    const scale120 = this.server.outputForSurface(surface)?.scale120 ?? 120;
     if (object.data?.preferredScale === scale120) return;
     object.data = { ...object.data, preferredScale: scale120 };
     this.send(objectId, EV.fractional_scale_preferred_scale, (b) => b.uint(scale120));
@@ -6657,7 +7869,9 @@ class ClientSession {
         id,
         iface: "wl_data_source",
         version: 3,
-        data: { source: { mimeTypes: [], dndActions: 0 } satisfies DataSourceState },
+        data: {
+          source: { mimeTypes: [], dndActions: 0 } satisfies DataSourceState,
+        },
       });
     } else if (opcode === OP.data_device_manager_get_data_device) {
       const id = r.newId();
@@ -7050,10 +8264,12 @@ class ClientSession {
     if (opcode === OP.compositor_create_surface) {
       const id = r.newId();
       const surface: SurfaceState = {
+        renderingSourceAccepted: false,
         id,
         bufferId: null,
         bufferOffsetX: 0,
         bufferOffsetY: 0,
+        pendingFrameCallbacks: [],
         frameCallbacks: [],
         pendingDamage: [],
         damage: [],
@@ -7072,10 +8288,11 @@ class ClientSession {
         bufferWidth: 0,
         bufferHeight: 0,
         bufferScale: 1,
+        requestedBufferTransform: 0,
         stride: 0,
         title: "",
         appId: "",
-        pixels: null,
+        content: null,
         revision: 0,
         opaque: false,
         releaseBuffers: [],
@@ -7135,7 +8352,13 @@ class ClientSession {
       iface: "wl_shm_pool",
       version: 1,
       data: {
-        pool: { fd, size, map, refCount: 0, destroyed: false } satisfies PoolState,
+        pool: {
+          fd,
+          size,
+          map,
+          refCount: 0,
+          destroyed: false,
+        } satisfies PoolState,
       },
     });
   }
@@ -7274,15 +8497,9 @@ class ClientSession {
       // New attach starts a release cycle; empty re-commits must not
       // wl_buffer.release again (GDK SHM asserts / aborts on double release).
       surface.bufferAttached = true;
-      if (bufId) {
-        const buf = this.getBuffer(bufId);
-        if (buf) {
-          surface.bufferWidth = buf.width;
-          surface.bufferHeight = buf.height;
-          surface.width = Math.max(1, Math.round(buf.width / surface.bufferScale));
-          surface.height = Math.max(1, Math.round(buf.height / surface.bufferScale));
-        }
-      }
+      // Attachment is pending until commit accepts its source. Committed
+      // dimensions are updated alongside a successful snapshot below, so a
+      // rejected differently-sized buffer cannot resize the last-good scene.
     } else if (opcode === OP.surface_damage || opcode === OP.surface_damage_buffer) {
       const x = r.int();
       const y = r.int();
@@ -7300,14 +8517,18 @@ class ClientSession {
     } else if (opcode === OP.surface_set_opaque_region || opcode === OP.surface_set_input_region) {
       r.object();
     } else if (opcode === OP.surface_set_buffer_transform) {
-      r.int();
+      surface.requestedBufferTransform = r.int();
     } else if (opcode === OP.surface_set_buffer_scale) {
       surface.bufferScale = Math.max(1, r.int());
     } else if (opcode === OP.surface_frame) {
       const cbId = r.newId();
       this.objects.set(cbId, { id: cbId, iface: "wl_callback", version: 1 });
-      surface.frameCallbacks.push(cbId);
+      surface.pendingFrameCallbacks.push(cbId);
     } else if (opcode === OP.surface_commit) {
+      const attachedOnCommit = surface.bufferAttached;
+      let sourceAccepted = !attachedOnCommit && surface.renderingSourceAccepted;
+      surface.frameCallbacks.push(...surface.pendingFrameCallbacks);
+      surface.pendingFrameCallbacks = [];
       surface.damage.push(...surface.pendingDamage);
       surface.pendingDamage = [];
       // A new commit supersedes only a previous commit which has not yet been
@@ -7339,30 +8560,69 @@ class ClientSession {
           surface.bufferAttached = false;
         } else {
           try {
-            if (buf.kind === "shm") {
-              const pool = buf.pool;
-              if (!pool.map) {
-                throw new Error(`shm pool gone poolId=${buf.poolId} buf=${surface.bufferId}`);
-              }
-              const byteLen = buf.stride * buf.height;
-              surface.pixels = copyFromPool(pool, buf.offset, byteLen, surface.pixels);
-              surface.stride = buf.stride;
-              // wl_shm XRGB8888 leaves A=0 — blit skips those pixels.
-              if (buf.format === WL_SHM_FORMAT_XRGB8888) {
-                forceOpaqueAlpha(surface.pixels);
-              }
-              surface.opaque = buf.format === WL_SHM_FORMAT_XRGB8888;
-            } else {
-              const snapped = copyFromDmabuf(buf, this.server.getGbm(), surface.pixels);
-              surface.pixels = snapped.pixels;
-              surface.stride = snapped.stride;
-              // DRM XRGB8888 (Xwayland Glamor) same issue — A unused/zero.
-              if (buf.format === DRM_FORMAT_XRGB8888) {
-                forceOpaqueAlpha(surface.pixels);
-              }
-              surface.opaque = buf.format === DRM_FORMAT_XRGB8888;
+            const previous = surface.content;
+            const reusable = previous?.storage === "cpu" ? previous.pixels : null;
+            let content: OwnedPixelSurface | null = null;
+            if (buf.kind === "dmabuf") {
+              content = this.server.snapshotDmabuf(buf, this.clientId, surface.id);
             }
-            surface.revision++;
+            if (!content) {
+              let pixels: Uint8Array;
+              let stride: number;
+              if (buf.kind === "shm") {
+                if (!buf.pool.map) throw new Error(`shm pool gone buf=${surface.bufferId}`);
+                pixels = copyFromPool(buf.pool, buf.offset, buf.stride * buf.height, reusable);
+                stride = buf.stride;
+              } else {
+                const snapped = copyFromDmabuf(buf, this.server.getGbm(), reusable);
+                pixels = snapped.pixels;
+                stride = snapped.stride;
+              }
+              const opaque =
+                buf.kind === "shm"
+                  ? buf.format === WL_SHM_FORMAT_XRGB8888
+                  : buf.format === DRM_FORMAT_XRGB8888;
+              if (opaque) forceOpaqueAlpha(pixels);
+              content = {
+                storage: "cpu",
+                pixels,
+                width: buf.width,
+                height: buf.height,
+                stride,
+                destroy() {},
+              };
+            }
+            surface.content = content;
+            sourceAccepted = true;
+            previous?.destroy();
+            surface.stride = content.stride;
+            surface.opaque =
+              buf.kind === "shm"
+                ? buf.format === WL_SHM_FORMAT_XRGB8888
+                : buf.format === DRM_FORMAT_XRGB8888;
+            content.revision = ++surface.revision;
+            this.server.surfaceTransfers.commit({
+              clientId: this.clientId,
+              surfaceId: surface.id,
+              renderer: this.server.rendererDetail(),
+              bufferKind: buf.kind,
+              storage: content.storage,
+              width: buf.width,
+              height: buf.height,
+              stride: content.stride,
+              updated: true,
+              updatedAreaPixels: buf.width * buf.height,
+            });
+            this.server.surfaceTransfers.record({
+              clientId: this.clientId,
+              surfaceId: surface.id,
+              operation: content.storage === "gpu" ? "import" : "copy",
+              bytes:
+                content.storage === "gpu" && buf.kind === "dmabuf"
+                  ? buf.planes[0]!.stride * buf.height
+                  : content.stride * content.height,
+              cpuMs: null,
+            });
             surface.bufferWidth = buf.width;
             surface.bufferHeight = buf.height;
             const viewport = [...this.objects.values()].find(
@@ -7410,7 +8670,23 @@ class ClientSession {
               );
             }
           } catch (err) {
+            sourceAccepted = false;
             console.error(`[surface] snapshot failed`, err);
+            // This commit's pixels were rejected. Last-good content may still
+            // be painted, but cannot present feedback for the failed source.
+            for (const feedbackId of surface.presentationFeedbacks)
+              this.sendPresentationDiscarded(feedbackId);
+            surface.presentationFeedbacks = [];
+            // A rejected first buffer has no mapped paint pass to release it.
+            // Release its storage without fabricating a frame/presentation tick;
+            // pending callbacks can survive until a later valid attachment.
+            if (!surface.mapped || !surface.content) {
+              surface.releaseBuffers = surface.releaseBuffers.filter(
+                (id) => id !== surface.bufferId,
+              );
+              this.sendBufferRelease(surface.bufferId);
+            } else if (!surface.releaseBuffers.includes(surface.bufferId))
+              surface.releaseBuffers.push(surface.bufferId);
             surface.bufferAttached = false;
           }
         }
@@ -7418,12 +8694,17 @@ class ClientSession {
         // Explicit attach(null) unmaps the surface and leaves every output.
         surface.bufferAttached = false;
         surface.mapped = false;
-        surface.pixels = null;
+        surface.content?.destroy();
+        surface.content = null;
         surface.opaque = false;
         surface.revision++;
         this.clearSurfaceOutputs(surface);
       }
+      surface.renderingSourceAccepted = sourceAccepted;
+      this.server.surfaceCommitted(this, surface.id, sourceAccepted);
       this.updateSurfaceOutputs(surface);
+      if (!attachedOnCommit && surface.content)
+        this.server.surfaceTransfers.idleCommit(this.clientId, surface.id);
       // Commits (buffer, frame callback, or xwayland serial) need a composite pass.
       this.server.markDirty();
     } else if (opcode === OP.surface_destroy) {
@@ -7444,10 +8725,15 @@ class ClientSession {
       surface.readyPresentationFeedbacks = [];
       surface.pendingDamage = [];
       surface.damage = [];
+      for (const callback of surface.pendingFrameCallbacks) this.deleteId(callback);
+      surface.pendingFrameCallbacks = [];
       this.finishSurfaceFrame(surface);
       surface.presentationReady = false;
       this.clearSurfaceOutputs(surface);
-      surface.pixels = null;
+      surface.content?.destroy();
+      surface.content = null;
+      this.server.retireSurfaceObservations(this, surface.id);
+      this.server.surfaceTransfers.removeSurface(this.clientId, surface.id);
       this.destroyObject(obj.id);
     }
   }
@@ -7661,6 +8947,7 @@ class ClientSession {
       surface.popupConfW = placed.w;
       surface.popupConfH = placed.h;
       this.server.layoutPopup(this, surface);
+      this.server.markDirty();
       this.send(obj.id, EV.xdg_popup_repositioned, (b) => b.uint(token));
       this.configurePopup(surface, placed.x, placed.y, placed.w, placed.h);
     }

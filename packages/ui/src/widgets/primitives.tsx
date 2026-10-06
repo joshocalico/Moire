@@ -19,7 +19,7 @@ export type LabelProps = FlexItemProps & {
   scale?: number;
   fontSize?: number;
   fontWeight?: "regular" | "medium" | "bold";
-  fontFamily?: "sans" | "mono";
+  fontFamily?: "sans" | "mono" | "serif";
   horizontalAlign?: "start" | "center" | "end";
   verticalAlign?: "start" | "center" | "end";
   wrap?: boolean;
@@ -87,6 +87,35 @@ function wrapParagraph(text: string, width: number, style: TextMeasureStyle): st
   return lines;
 }
 
+export type WrappedTextStyle = TextMeasureStyle & { lineGap?: number };
+
+/** Measure exactly the paragraph wrapping used by TextBlock, including empty lines. */
+export function measureWrappedText(
+  text: string,
+  width: number,
+  options: WrappedTextStyle = {},
+): {
+  width: number;
+  height: number;
+  lines: string[];
+  lineHeight: number;
+} {
+  const scale = options.scale ?? 1;
+  const style = {
+    ...options,
+    scale,
+    fontSize: options.fontSize ?? (scale > 1 ? DEFAULT_FONT * scale : undefined),
+  };
+  const lines = text.split("\n").flatMap((paragraph) => wrapParagraph(paragraph, width, style));
+  const lineHeight = measureTextBounds("Mg", style).height;
+  return {
+    width: Math.max(0, ...lines.map((line) => lineWidth(line, style))),
+    height: lines.length * lineHeight + Math.max(0, lines.length - 1) * (options.lineGap ?? 0),
+    lines,
+    lineHeight,
+  };
+}
+
 function intrinsicTextSize(props: LabelProps): { width: number; height: number } {
   const scale = props.scale ?? 1;
   const fontSize = props.fontSize ?? (scale > 1 ? DEFAULT_FONT * scale : undefined);
@@ -96,6 +125,13 @@ function intrinsicTextSize(props: LabelProps): { width: number; height: number }
     fontWeight: props.fontWeight,
     fontFamily: props.fontFamily,
   };
+  if (props.wrap && props.width != null) {
+    const measured = measureWrappedText(props.text, props.width, {
+      ...style,
+      lineGap: props.lineGap,
+    });
+    return { width: props.width, height: measured.height };
+  }
   const lines = props.text.split("\n");
   const lineHeight = measureTextBounds("Mg", style).height;
   return {
@@ -122,7 +158,7 @@ export function TextBlock(props: LabelProps): ReactNode {
   const lineHeight = measureTextBounds("Mg", style).height;
   const lineGap = props.lineGap ?? 0;
   let lines = props.wrap
-    ? props.text.split("\n").flatMap((line) => wrapParagraph(line, width, style))
+    ? measureWrappedText(props.text, width, { ...style, lineGap }).lines
     : props.text.split("\n");
   const naturalHeight =
     Math.max(1, lines.length) * lineHeight + Math.max(0, lines.length - 1) * lineGap;
@@ -136,7 +172,7 @@ export function TextBlock(props: LabelProps): ReactNode {
   lines = lines.slice(0, lineLimit);
   if (props.overflow === "ellipsis") {
     lines = lines.map((line, index) =>
-      fitLine(line, width, style, truncated && index === lines.length - 1),
+      fitLine(truncated && index === lines.length - 1 ? `${line}…` : line, width, style, true),
     );
   }
   const contentHeight = lines.length * lineHeight + Math.max(0, lines.length - 1) * lineGap;

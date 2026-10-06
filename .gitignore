@@ -11,9 +11,13 @@ coverage/
 *.node
 .pnpm-store/
 .cursor/
+result
+result-*
 # Secrets / local credentials
 **/CREDENTIALS.txt
 # Local Parallels / cloud images (multi‑GB) + screen captures
 vm/
 !vm/.gitkeep
 !scripts/
+
+__pycache__/

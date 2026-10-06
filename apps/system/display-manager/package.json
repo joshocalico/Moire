@@ -1,0 +1,10 @@
+{
+  "name": "@moire/display-manager",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Device-free selected-session login/logout source fixtures; no production authentication entry",
+  "scripts": {
+    "typecheck": "node ../compositor/node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+  }
+}

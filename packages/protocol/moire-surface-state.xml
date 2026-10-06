@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="moire_surface_state_v1">
+  <copyright>Copyright 2026 Moire contributors.</copyright>
+  <interface name="moire_surface_state_manager_v1" version="2">
+    <description summary="Private per-surface scene visibility">Visibility is independent of focus, frame callbacks, and rendering hardware. Unknown must pause optional decorative motion.</description>
+    <enum name="error"><entry name="invalid_surface" value="0"/><entry name="resource_limit" value="1"/></enum>
+    <request name="destroy" type="destructor"/>
+    <request name="get_surface_state"><arg name="id" type="new_id" interface="moire_surface_state_v1"/><arg name="surface" type="object" interface="wl_surface"/></request>
+  </interface>
+  <interface name="moire_surface_state_v1" version="2">
+    <description summary="Observe one surface owned by this connection">Initial state is unknown. Changed states arrive independently of client commits. Surface destruction retires observation; the object remains inert until destroyed. Version 1 establishes visibility only. Version 2 additionally observes actual accepted rendering; absence of that event means unknown.</description>
+    <enum name="visibility"><entry name="unknown" value="0"/><entry name="hidden" value="1"/><entry name="visible" value="2"/></enum>
+    <request name="destroy" type="destructor"/>
+    <enum name="rendering">
+      <entry name="unknown" value="0"/>
+      <entry name="software" value="1"/>
+      <entry name="virtual" value="2"/>
+      <entry name="retained_unknown" value="3"/>
+      <entry name="hardware_retained" value="4"/>
+    </enum>
+    <request name="submission" since="2">
+      <description summary="correlate the next surface commit">
+        A nonzero client token is latched only by the next wl_surface.commit.
+        This token asserts no rendering capability. Every commit revokes the
+        previous accepted-rendering observation, including reused buffer IDs.
+      </description>
+      <arg name="token" type="uint"/>
+    </request>
+    <event name="state"><arg name="serial" type="uint"/><arg name="visibility" type="uint" enum="visibility"/></event>
+    <event name="rendering" since="2">
+      <description summary="accepted rendering for the exact committed source">
+        State is derived from actual resident source and accepted output facts.
+        Hardware-retained requires established execution on both paths. Unknown
+        is published on commit, loss, teardown or missing authority. A token
+        must match the client's last actual submission; older events are stale.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="token" type="uint"/>
+      <arg name="rendering" type="uint" enum="rendering"/>
+    </event>
+  </interface>
+</protocol>

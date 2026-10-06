@@ -6,6 +6,7 @@ import {
   Toolbar,
   Label,
   Button,
+  Pressable,
   IconButton,
   TextField,
   SearchField,
@@ -65,10 +66,21 @@ import {
   Column,
   Separator,
   ScrollArea,
-  themePalette,
+  WidgetThemeProvider,
+  createPersonalizedWidgetTheme,
+  discoverPersonalization,
+  DISCOVERABLE_ACCENTS,
+  IMPLEMENTED_WIDGET_THEME_FAMILIES,
+  THEME_FAMILIES,
+  hexToArgb,
+  usePalette,
+  useWidgetTheme,
   setUiScaleFactor,
+  type ColorScheme,
   type NavigationSidebarSection,
+  type PersonalizationProfile,
   type TableSort,
+  type ThemeFamily,
   type ToastItem,
   type WindowSize,
 } from "@moire/ui";
@@ -83,6 +95,22 @@ type Sample = {
 };
 
 const SAMPLES: Sample[] = [
+  {
+    id: "theme-lab",
+    title: "Theme Lab",
+    description: "System personalization, application overrides, and live widget recipes",
+    section: "Foundations",
+    code: `const profile = discoverPersonalization(process.platform, {
+  themeFamily: "cupertino",
+  colorScheme: "dark",
+  accent: "#0a84ff",
+});
+const theme = createPersonalizedWidgetTheme(profile);
+
+<WidgetThemeProvider theme={theme}>
+  <ApplicationSurface />
+</WidgetThemeProvider>`,
+  },
   {
     id: "buttons",
     title: "Buttons",
@@ -459,6 +487,11 @@ const SAMPLES: Sample[] = [
 type SampleGuidance = { about: string; when: string };
 
 const GUIDANCE: Record<string, SampleGuidance> = {
+  "theme-lab": {
+    about:
+      "A normalized personalization profile separates platform discovery from renderer-neutral widget recipes and app-local overrides.",
+    when: "Use the system profile by default, then override a whole application or one provider subtree when its identity needs to differ.",
+  },
   buttons: {
     about: "Buttons express action hierarchy through consistent size, focus, and feedback recipes.",
     when: "Use for explicit commands; reserve Primary for the clearest next action on a surface.",
@@ -586,7 +619,7 @@ function ChartCard(props: {
   subtitle: string;
   children: ReactNode;
 }): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   return (
     <Surface
       width={props.width}
@@ -626,6 +659,102 @@ function ChartCard(props: {
   );
 }
 
+function ThemePreview(props: { profile: PersonalizationProfile; width: number }): ReactNode {
+  const theme = useWidgetTheme();
+  const pal = theme.foundations.palette;
+  const [section, setSection] = useState("general");
+  const [name, setName] = useState("Cupertino preview");
+  const [notifications, setNotifications] = useState(true);
+  const [updates, setUpdates] = useState(true);
+  const [level, setLevel] = useState(0.68);
+  const recipeFamily = IMPLEMENTED_WIDGET_THEME_FAMILIES.includes(props.profile.themeFamily);
+  const innerWidth = Math.max(1, props.width - 40);
+  const fieldWidth = Math.max(1, Math.floor((innerWidth - 14) * 0.56));
+  const checkboxWidth = Math.max(1, innerWidth - fieldWidth - 14);
+  const toggleWidth = Math.max(1, Math.min(180, Math.floor((innerWidth - 16) * 0.48)));
+  const sliderWidth = Math.max(1, innerWidth - toggleWidth - 16);
+  const actionWidth = Math.max(70, Math.min(106, Math.floor((innerWidth - 20) * 0.25)));
+  const progressWidth = Math.max(1, innerWidth - actionWidth * 2 - 20);
+  return (
+    <Surface
+      width={props.width}
+      height={320}
+      fill={pal.bg}
+      radius={pal.radiusLg}
+      stroke={pal.border}
+      strokeWidth={1}
+      clip
+    >
+      <Inset width={props.width} height={320} padding={20}>
+        <Vertical gap={10}>
+          <Horizontal height={30} align="center" gap={10}>
+            <Surface width={18} height={18} fill={pal.accent} radius={9} />
+            <TextBlock
+              flexGrow={1}
+              height={24}
+              text={`${props.profile.themeFamily} · ${props.profile.colorScheme}`}
+              fontSize={15}
+              fontWeight="medium"
+              verticalAlign="center"
+            />
+            <Badge text={recipeFamily ? "RECIPE FAMILY" : "FOUNDATIONS"} tone="accent" />
+          </Horizontal>
+          <Surface width={innerWidth} height={60} fill={pal.panel} elevation="low">
+            <Inset width={innerWidth} height={60} padding={12}>
+              <Vertical gap={5}>
+                <TextBlock
+                  height={36}
+                  text={
+                    recipeFamily
+                      ? "This family overrides foundations and core widget recipes while preserving shared interaction behavior."
+                      : "This planned family currently demonstrates its palette and shape foundations."
+                  }
+                  color={pal.muted}
+                  fontSize={10}
+                  wrap
+                  lineGap={2}
+                />
+              </Vertical>
+            </Inset>
+          </Surface>
+          <SegmentedControl
+            width={Math.min(320, innerWidth)}
+            options={[
+              { id: "general", label: "General" },
+              { id: "advanced", label: "Advanced" },
+            ]}
+            value={section}
+            onChange={setSection}
+          />
+          <Horizontal height={34} gap={14}>
+            <TextField width={fieldWidth} value={name} onChange={setName} />
+            <Checkbox
+              width={checkboxWidth}
+              checked={notifications}
+              onChange={setNotifications}
+              label="Notifications"
+            />
+          </Horizontal>
+          <Horizontal height={34} gap={16} align="center">
+            <Toggle
+              width={toggleWidth}
+              on={updates}
+              onChange={setUpdates}
+              label="Automatic updates"
+            />
+            <Slider width={sliderWidth} value={level} onChange={setLevel} />
+          </Horizontal>
+          <Horizontal height={34} gap={10} align="center">
+            <Button width={actionWidth} label="Continue" variant="primary" />
+            <Button width={actionWidth} label="Cancel" variant="secondary" />
+            <ProgressBar width={progressWidth} value={level} />
+          </Horizontal>
+        </Vertical>
+      </Inset>
+    </Surface>
+  );
+}
+
 function Preview(props: {
   sample: Sample;
   width: number;
@@ -633,7 +762,7 @@ function Preview(props: {
   viewportWidth: number;
   viewportHeight: number;
 }): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   const [text, setText] = useState("Taste is a feature");
   const [query, setQuery] = useState("");
   const [checked, setChecked] = useState(true);
@@ -661,6 +790,28 @@ function Preview(props: {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [themeFamily, setThemeFamily] = useState<ThemeFamily>("moire");
+  const [themeScheme, setThemeScheme] = useState<ColorScheme>("dark");
+  const [themeAccent, setThemeAccent] = useState<string>(DISCOVERABLE_ACCENTS[0]);
+  const [themeReducedMotion, setThemeReducedMotion] = useState(false);
+  const [themeReducedTransparency, setThemeReducedTransparency] = useState(false);
+  const previewProfile = useMemo(
+    () =>
+      discoverPersonalization("showcase", {
+        source: "application",
+        platform: "showcase",
+        themeFamily,
+        colorScheme: themeScheme,
+        accent: themeAccent,
+        reducedMotion: themeReducedMotion,
+        reducedTransparency: themeReducedTransparency,
+      }),
+    [themeAccent, themeFamily, themeReducedMotion, themeReducedTransparency, themeScheme],
+  );
+  const previewTheme = useMemo(
+    () => createPersonalizedWidgetTheme(previewProfile),
+    [previewProfile],
+  );
   const virtualRows = useMemo(
     () =>
       Array.from({ length: 10_000 }, (_, index) => ({
@@ -672,7 +823,73 @@ function Preview(props: {
   const contentW = Math.max(280, props.width - 64);
 
   let content: ReactNode;
-  if (props.sample.id === "buttons") {
+  if (props.sample.id === "theme-lab") {
+    const previewWidth = Math.min(720, contentW);
+    content = (
+      <Column width={previewWidth} gap={18}>
+        <SegmentedControl
+          width={previewWidth}
+          options={THEME_FAMILIES.map((family) => ({
+            id: family,
+            label: family[0]!.toUpperCase() + family.slice(1),
+          }))}
+          value={themeFamily}
+          onChange={(value) => setThemeFamily(value as ThemeFamily)}
+        />
+        <Row width={previewWidth} height={36} gap={12}>
+          <SegmentedControl
+            width={220}
+            height={36}
+            options={[
+              { id: "dark", label: "Dark" },
+              { id: "light", label: "Light" },
+            ]}
+            value={themeScheme}
+            onChange={(value) => setThemeScheme(value as ColorScheme)}
+          />
+          {DISCOVERABLE_ACCENTS.slice(0, 7).map((accent) => (
+            <Stack key={accent} width={36} height={36} alignX="center" alignY="center">
+              <Surface
+                width={themeAccent === accent ? 30 : 26}
+                height={themeAccent === accent ? 30 : 26}
+                fill={hexToArgb(accent)}
+                radius={15}
+                stroke={themeAccent === accent ? pal.text : pal.border}
+                strokeWidth={themeAccent === accent ? 2 : 1}
+              />
+              <Pressable
+                width={36}
+                height={36}
+                radius={18}
+                hoverFill={pal.hover}
+                pressedFill={pal.pressed}
+                focusable
+                focusId={`theme-accent:${accent}`}
+                onPress={() => setThemeAccent(accent)}
+              />
+            </Stack>
+          ))}
+        </Row>
+        <Row width={previewWidth} height={34} gap={22}>
+          <Toggle
+            width={220}
+            on={themeReducedMotion}
+            onChange={setThemeReducedMotion}
+            label="Reduce motion"
+          />
+          <Toggle
+            width={240}
+            on={themeReducedTransparency}
+            onChange={setThemeReducedTransparency}
+            label="Reduce transparency"
+          />
+        </Row>
+        <WidgetThemeProvider theme={previewTheme}>
+          <ThemePreview profile={previewProfile} width={previewWidth} />
+        </WidgetThemeProvider>
+      </Column>
+    );
+  } else if (props.sample.id === "buttons") {
     content = (
       <Column width={contentW} gap={16}>
         <Row width={contentW} height={40} gap={12}>
@@ -1686,12 +1903,17 @@ function Preview(props: {
     about: props.sample.description,
     when: "Use when its interaction contract matches the task rather than only its appearance.",
   };
+  const scrollContentHeight = Math.max(
+    props.height,
+    props.sample.id === "charts" ? 1240 : props.sample.id === "theme-lab" ? 900 : 820,
+  );
 
   return (
     <ScrollArea
+      key={props.sample.id}
       width={props.width}
       height={props.height}
-      contentHeight={Math.max(props.height, props.sample.id === "charts" ? 1240 : 820)}
+      contentHeight={scrollContentHeight}
     >
       <Column x={32} y={28} width={contentW} gap={18}>
         <Label
@@ -1776,7 +1998,7 @@ function Preview(props: {
 }
 
 function ShowcaseApp(props: WindowSize & { initialSampleId?: string }): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   const [selectedId, setSelectedId] = useState(() =>
     SAMPLES.some((sample) => sample.id === props.initialSampleId)
       ? props.initialSampleId!

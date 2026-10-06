@@ -6,16 +6,27 @@ import type {
   PlatformWindow,
   PlatformWindowOpts,
   PlatformDiagnostics,
+  PersonalizationProfile,
   UiFrameEvent,
   UiPresentationMode,
+  UiSurfaceVisibility,
+  UiRenderingState,
   UiKeyEvent,
   UiPointerEvent,
 } from "#ui/platform";
+import { platformPersonalization } from "#ui/platform";
 import type { RetainedClip } from "@moire/react-host";
 
 export class HeadlessPlatform implements PlatformBackend {
   readonly name = "headless";
   private windows: HeadlessWindow[] = [];
+  private clipboardText = "";
+  async writeClipboardText(text: string): Promise<void> {
+    this.clipboardText = text;
+  }
+  async readClipboardText(): Promise<string> {
+    return this.clipboardText;
+  }
 
   async connect(): Promise<void> {
     // no-op
@@ -43,6 +54,13 @@ export class HeadlessPlatform implements PlatformBackend {
       dmabufFrames: 0,
       shmFrames: 0,
     };
+  }
+
+  getPersonalization(): PersonalizationProfile {
+    return platformPersonalization(process.platform, {
+      platform: "headless",
+      source: "fallback",
+    });
   }
 
   pump(): void {
@@ -75,12 +93,32 @@ export class HeadlessWindow implements PlatformWindow {
   private nextCommitId = 1;
   /** Number of synthetic interactive move requests, exposed for tests. */
   moveRequests = 0;
+  private maximized = false;
+  private fullscreen = false;
+  minimizeRequests = 0;
   presentedFrames = 0;
 
   constructor(opts: PlatformWindowOpts) {
     this.title = opts.title;
     this.width = opts.width;
     this.height = opts.height;
+    this.fullscreen = opts.fullscreen === true;
+  }
+
+  getRenderingState(): UiRenderingState {
+    return { kind: "static", reason: this.alive ? "software" : "destroyed" };
+  }
+  onRenderingChange(_cb: (state: UiRenderingState) => void): () => void {
+    return () => {};
+  }
+
+  getVisibility(): UiSurfaceVisibility {
+    return "unknown";
+  }
+
+  onVisibilityChange(_cb: (visibility: UiSurfaceVisibility) => void): () => void {
+    // An in-memory framebuffer provides no authoritative display visibility.
+    return () => {};
   }
 
   setTitle(title: string): void {
@@ -95,6 +133,30 @@ export class HeadlessWindow implements PlatformWindow {
 
   beginMove(): void {
     if (this.alive) this.moveRequests++;
+  }
+
+  setMaximized(maximized: boolean): void {
+    if (!this.alive) return;
+    this.maximized = maximized;
+    this.emitConfigure(this.width, this.height);
+  }
+
+  isMaximized(): boolean {
+    return this.maximized;
+  }
+
+  setFullscreen(fullscreen: boolean): void {
+    if (!this.alive) return;
+    this.fullscreen = fullscreen;
+    this.emitConfigure(this.width, this.height);
+  }
+
+  isFullscreen(): boolean {
+    return this.fullscreen;
+  }
+
+  minimize(): void {
+    if (this.alive) this.minimizeRequests++;
   }
 
   setPresentationMode(_mode: UiPresentationMode): void {
@@ -171,6 +233,8 @@ export class HeadlessWindow implements PlatformWindow {
   }
 
   emitConfigure(w: number, h: number): void {
+    if (w > 0) this.width = w;
+    if (h > 0) this.height = h;
     for (const cb of this.configureCbs) cb(w, h);
   }
 

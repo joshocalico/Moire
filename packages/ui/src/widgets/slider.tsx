@@ -1,5 +1,5 @@
 /** Controlled slider with pointer capture, focus, and keyboard adjustment. */
-import React, { useId, useState, type ReactNode } from "react";
+import React, { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Group, Rect, type HitKeyEvent } from "@moire/react-host";
 import {
   resolveStatefulStyle,
@@ -15,11 +15,16 @@ export type SliderProps = {
   width: number;
   value: number;
   onChange?: (value: number) => void;
+  /** Draft updates remain synchronous; expensive writes can wait for release. */
+  onInteractionStart?: () => void;
+  onCommit?: (value: number) => void;
+  onCancel?: () => void;
   height?: number;
   size?: ButtonSize;
   step?: number;
   disabled?: boolean;
   autoFocus?: boolean;
+  focusId?: string;
 };
 
 function clamp(value: number): number {
@@ -32,6 +37,28 @@ export function Slider(props: SliderProps): ReactNode {
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
   const [focused, setFocused] = useState(false);
+  const gesture = useRef<{ kind: "pointer" } | { kind: "keyboard"; keys: Set<number> } | null>(
+    null,
+  );
+  const cancelCallback = useRef(props.onCancel);
+  cancelCallback.current = props.onCancel;
+  const logicalValue = useRef(clamp(props.value));
+  if (!gesture.current) logicalValue.current = clamp(props.value);
+  const cancel = () => {
+    if (!gesture.current) return;
+    gesture.current = null;
+    setPressed(false);
+    props.onCancel?.();
+  };
+  useEffect(() => {
+    if (props.disabled) cancel();
+  }, [props.disabled]);
+  useEffect(
+    () => () => {
+      if (gesture.current) cancelCallback.current?.();
+    },
+    [],
+  );
   const states: WidgetState[] = [];
   if (hovered) states.push("hover");
   if (pressed) states.push("pressed");
@@ -52,6 +79,7 @@ export function Slider(props: SliderProps): ReactNode {
   const commit = (raw: number) => {
     if (props.disabled) return;
     const next = clamp(Math.round(clamp(raw) / step) * step);
+    logicalValue.current = next;
     props.onChange?.(next);
   };
   const setFromX = (localX: number) => {
@@ -59,6 +87,16 @@ export function Slider(props: SliderProps): ReactNode {
   };
   const handleKey = (event: HitKeyEvent) => {
     if (event.repeat || props.disabled) return;
+    const adjustment =
+      [105, 108, 106, 103, 102, 107].includes(event.code) ||
+      ["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp", "Home", "End"].includes(event.key ?? "");
+    if (!adjustment) return;
+    if (gesture.current?.kind === "pointer") return;
+    if (!gesture.current) {
+      props.onInteractionStart?.();
+      gesture.current = { kind: "keyboard", keys: new Set() };
+    }
+    gesture.current.keys.add(event.code);
     const increment = step * (event.shiftKey ? 10 : 1);
     if (
       event.code === 105 ||
@@ -66,14 +104,14 @@ export function Slider(props: SliderProps): ReactNode {
       event.key === "ArrowLeft" ||
       event.key === "ArrowDown"
     ) {
-      commit(value - increment);
+      commit(logicalValue.current - increment);
     } else if (
       event.code === 106 ||
       event.code === 103 ||
       event.key === "ArrowRight" ||
       event.key === "ArrowUp"
     ) {
-      commit(value + increment);
+      commit(logicalValue.current + increment);
     } else if (event.code === 102 || event.key === "Home") {
       commit(0);
     } else if (event.code === 107 || event.key === "End") {
@@ -117,26 +155,55 @@ export function Slider(props: SliderProps): ReactNode {
         fill={0x00000000}
         focusable={!props.disabled}
         autoFocus={props.autoFocus}
-        focusId={`slider:${generatedId}`}
-        onFocusChange={setFocused}
+        focusId={props.focusId ?? `slider:${generatedId}`}
+        onFocusChange={(next) => {
+          setFocused(next);
+          if (!next) cancel();
+        }}
         onKeyDown={handleKey}
+        onKeyUp={(event) => {
+          if (
+            props.disabled ||
+            gesture.current?.kind !== "keyboard" ||
+            !gesture.current.keys.delete(event.code)
+          )
+            return;
+          if (gesture.current.keys.size > 0) return;
+          const finalValue = logicalValue.current;
+          gesture.current = null;
+          props.onCommit?.(finalValue);
+        }}
         onPointerEnter={props.disabled ? undefined : () => setHovered(true)}
         onPointerLeave={props.disabled ? undefined : () => setHovered(false)}
         onPointerDown={
           props.disabled
             ? undefined
             : (event) => {
+                if (gesture.current?.kind === "pointer") return;
+                if (gesture.current) cancel();
+                props.onInteractionStart?.();
+                gesture.current = { kind: "pointer" };
                 setPressed(true);
                 setFromX(event.localX);
               }
         }
-        onPointerMove={props.disabled || !pressed ? undefined : (event) => setFromX(event.localX)}
+        onPointerMove={
+          props.disabled
+            ? undefined
+            : (event) => {
+                if (gesture.current?.kind === "pointer") setFromX(event.localX);
+              }
+        }
         onPointerUp={
           props.disabled
             ? undefined
             : (event) => {
+                if (gesture.current?.kind !== "pointer") return;
                 setFromX(event.localX);
+                const finalValue = logicalValue.current;
+                gesture.current = null;
                 setPressed(false);
+                props.onCommit?.(finalValue);
               }
         }
       />

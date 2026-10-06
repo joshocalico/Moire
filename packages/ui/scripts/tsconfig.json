@@ -1,0 +1,5 @@
+{
+  "extends": "@moire/tsconfig/base.json",
+  "compilerOptions": { "jsx": "react", "noEmit": true },
+  "include": ["desktop-polish.smoke.tsx", "files-workflow.smoke.tsx"]
+}

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Disk Usage
+Comment=Explore allocated storage without following symlinks
+Exec=moire-disk-usage %f
+Icon=moire-disk-usage
+Terminal=false
+Categories=System;Filesystem;
+OnlyShowIn=Moire;
+StartupWMClass=org.moire.DiskUsage

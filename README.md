@@ -12,13 +12,15 @@ Application authority and placement boundaries: **[apps/README.md](apps/README.m
 
 Sidebar / SUMMARY for MD renderers: [docs/SUMMARY.md](docs/SUMMARY.md).
 
+The [app suite](docs/apps/suite.md) documents supported workflows, backend requirements and unfinished acceptance checks.
+
 ## Monorepo
 
 ```
 apps/
   core/            # OS management UI: Settings, processes, recovery
   system/          # compositor, session and broker services
-  bundled/         # ordinary first-party apps: Files, Terminal
+  bundled/         # Files, Terminal and the first-party app suite
   developer/       # Showcase and renderer diagnostics
 packages/
   dbus/           # pure-TypeScript session D-Bus wire/client/server
@@ -39,25 +41,64 @@ docs/             # full documentation tree (start at docs/README.md)
 
 ## Requirements
 
-- **Linux** with DRM (`/dev/dri`), for real runs (develop in a Parallels/UTM Ubuntu VM from macOS)
+- **Linux** with DRM (`/dev/dri`) and input devices for real runs. On Apple Silicon,
+  use the NixOS QEMU/HVF workflow below.
 - Node.js **≥ 22**, pnpm **9**
 - System libs: see [docs/dev-vm.md](docs/dev-vm.md)
 
-## Quick start (Linux VM)
+## Reproducible ARM64 VM
+
+The current Apple Silicon image uses a dedicated NixOS builder and Moire's native
+greeter. The C63 R6 image from 2026-10-05 boots the current shell and Files under
+HVF, with an AccountsService user picker, password flow, moving software greeter
+backdrop and a local Reduce motion control. Two real authenticated
+desktop/login/logout/fresh-picker cycles passed. Files navigation has separate
+proof on the preserved R3 image. Wider app workflows, graphics performance and tearing remain
+unqualified. Old Parallels images do not represent this checkpoint. The greeter
+shows `Moire desktop · C63 R6` to identify the current image.
+
+Follow the prerequisites and VM coordination instructions in
+[Authenticated native desktop](docs/native-desktop-vm.md). Choose a fresh output
+filename, then build and boot that exact image:
 
 ```bash
-# On the Mac — create/start the Parallels Ubuntu VM via prlctl:
-./scripts/parallels-create-moire-vm.sh
+python3 scripts/build-native-login-probe.py --desktop --output moire-aarch64-native-desktop-local.iso
+scripts/run-native-login-probe.sh vm/nixos/moire-aarch64-native-desktop-local.iso
+```
 
-# Inside the guest (after Ubuntu install + Parallels Tools):
-cd /Media/psf/moire   # shared folder
+To boot the tested C63 R6 snapshot from the repository root:
+
+```bash
+scripts/run-native-login-probe.sh vm/nixos/moire-aarch64-native-desktop-c63-r6.iso
+```
+
+The launcher checks the explicitly selected ISO's build receipt and checksum.
+The base ISO is read-only; candidate changes live in RAM. The graphical candidate
+is offline, with no host shares or writable data disk. Host Nix is not required.
+Preserve earlier images as fallbacks, including the accepted
+[native login/PAM probe](docs/native-login-probe-vm.md).
+
+The [user-picker/password greeter](docs/native-user-picker.md) has live account
+discovery, correct/incorrect PAM password, cancellation, logout and Reduce motion
+evidence. Wrong and blank passwords return to the picker with an inline error in the
+same greeter process; a correct retry succeeds. The centred greeter uses initials
+and a transparent, single-session flyout. AccountsService is enabled only
+in the isolated desktop configuration. The preserved R3 ISO is unchanged.
+
+## Development on an existing Linux machine
+
+```bash
+# In your existing Linux checkout:
 pnpm install
 pnpm probe:drm          # list DRM connectors via koffi
 pnpm dev:compositor     # compositor (WIP)
 ./apps/system/session/moire-session
 ```
 
-macOS can edit and typecheck; DRM/FFI probes need the Linux guest. See [docs/dev-vm.md](docs/dev-vm.md).
+macOS can edit and typecheck; DRM/FFI probes need Linux. Earlier VM experiments
+remain documented in [docs/nixos-vm.md](docs/nixos-vm.md) and
+[docs/dev-vm.md](docs/dev-vm.md); their images and commands do not establish
+acceptance of the current login checkpoint.
 
 ## License
 

@@ -6,7 +6,8 @@
   "description": "Moire process and resource management",
   "scripts": {
     "start": "tsx src/main.tsx",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx src/smoke.tsx"
   },
   "dependencies": {
     "@moire/prefs": "workspace:*",
@@ -18,6 +19,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "@moire/react-host": "workspace:*"
   }
 }

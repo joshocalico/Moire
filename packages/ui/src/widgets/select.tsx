@@ -1,5 +1,5 @@
 /** Overlay-backed select and editable combo-box controls. */
-import React, { useMemo, useState, type ReactNode } from "react";
+import React, { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { Group } from "@moire/react-host";
 import { useWidgetTheme, type ButtonSize } from "#ui/widget-theme";
 import { Button } from "./button";
@@ -9,6 +9,7 @@ import { Vertical, registerIntrinsicSize } from "./layout";
 import { MenuItem } from "./menu";
 import { Popover } from "./overlay";
 import { ScrollArea } from "./scroll";
+import { ShortcutManager } from "./focus";
 import { TextField } from "./text-field";
 
 export type SelectOption = {
@@ -38,7 +39,7 @@ export type SelectProps = {
   onOpenChange?: (open: boolean) => void;
 };
 
-function OptionsPopover(props: {
+type OptionsPopoverProps = {
   open: boolean;
   trapFocus: boolean;
   viewportWidth: number;
@@ -50,9 +51,94 @@ function OptionsPopover(props: {
   maxHeight: number;
   onSelect: (id: string) => void;
   onDismiss: () => void;
-}): ReactNode {
-  const theme = useWidgetTheme();
-  const rowHeight = theme.recipes.menu.medium.metrics.rowHeight;
+};
+
+/** Option focus lives inside the portal so each key updates its painted tree. */
+function OptionsList(
+  props: OptionsPopoverProps & { height: number; rowHeight: number },
+): ReactNode {
+  const { rowHeight, height } = props;
+  const contentHeight = Math.max(1, props.options.length * rowHeight);
+  const selectedIndex = props.options.findIndex(
+    (option) => option.id === props.value && !option.disabled,
+  );
+  const firstEnabled = props.options.findIndex((option) => !option.disabled);
+  const [activeIndex, setActiveIndex] = useState(selectedIndex >= 0 ? selectedIndex : firstEnabled);
+  const [scrollY, setScrollY] = useState(0);
+  useLayoutEffect(() => {
+    if (props.open) setActiveIndex(selectedIndex >= 0 ? selectedIndex : firstEnabled);
+  }, [props.open, props.value]);
+  useLayoutEffect(() => {
+    if (!props.open || !props.trapFocus || activeIndex < 0) return;
+    const top = activeIndex * rowHeight;
+    const bottom = top + rowHeight;
+    const viewportHeight = height - 8;
+    setScrollY((current) =>
+      top < current ? top : bottom > current + viewportHeight ? bottom - viewportHeight : current,
+    );
+  }, [props.open, props.trapFocus, activeIndex, rowHeight, height]);
+  const move = (offset: -1 | 1) => {
+    const enabled = props.options.flatMap((option, index) => (option.disabled ? [] : [index]));
+    if (!enabled.length) return;
+    const current = enabled.indexOf(activeIndex);
+    const next = (current + offset + enabled.length) % enabled.length;
+    setActiveIndex(enabled[next] ?? firstEnabled);
+  };
+  return (
+    <ShortcutManager
+      width={props.width}
+      height={height}
+      enabled={props.trapFocus}
+      shortcuts={[
+        { id: "next-option", key: "ArrowDown", allowRepeat: true, onInvoke: () => move(1) },
+        { id: "previous-option", key: "ArrowUp", allowRepeat: true, onInvoke: () => move(-1) },
+        { id: "first-option", key: "Home", onInvoke: () => setActiveIndex(firstEnabled) },
+        {
+          id: "last-option",
+          key: "End",
+          onInvoke: () =>
+            setActiveIndex(
+              props.options.reduce((last, option, index) => (option.disabled ? last : index), -1),
+            ),
+        },
+      ]}
+    >
+      <ScrollArea
+        x={4}
+        y={4}
+        width={props.width - 8}
+        height={height - 8}
+        contentHeight={contentHeight}
+        scrollY={props.trapFocus ? scrollY : undefined}
+        onScroll={setScrollY}
+        smooth={!props.trapFocus}
+      >
+        <Vertical width={props.width - 8} height={contentHeight} gap={0}>
+          {props.options.map((option, index) => (
+            <MenuItem
+              key={option.id}
+              width={props.width - 8}
+              height={rowHeight}
+              label={option.label}
+              description={option.description}
+              selected={option.id === props.value}
+              disabled={option.disabled}
+              autoFocus={
+                props.trapFocus
+                  ? index === activeIndex
+                  : option.id === props.value || (!props.value && index === 0)
+              }
+              onPress={() => props.onSelect(option.id)}
+            />
+          ))}
+        </Vertical>
+      </ScrollArea>
+    </ShortcutManager>
+  );
+}
+
+function OptionsPopover(props: OptionsPopoverProps): ReactNode {
+  const rowHeight = useWidgetTheme().recipes.menu.medium.metrics.rowHeight;
   const contentHeight = Math.max(1, props.options.length * rowHeight);
   const height = Math.min(props.maxHeight, contentHeight + 8);
   return (
@@ -66,29 +152,7 @@ function OptionsPopover(props: {
       trapFocus={props.trapFocus}
       onDismiss={props.onDismiss}
     >
-      <ScrollArea
-        x={4}
-        y={4}
-        width={props.width - 8}
-        height={height - 8}
-        contentHeight={contentHeight}
-      >
-        <Vertical width={props.width - 8} height={contentHeight} gap={0}>
-          {props.options.map((option, index) => (
-            <MenuItem
-              key={option.id}
-              width={props.width - 8}
-              height={rowHeight}
-              label={option.label}
-              description={option.description}
-              selected={option.id === props.value}
-              disabled={option.disabled}
-              autoFocus={option.id === props.value || (!props.value && index === 0)}
-              onPress={() => props.onSelect(option.id)}
-            />
-          ))}
-        </Vertical>
-      </ScrollArea>
+      <OptionsList {...props} height={height} rowHeight={rowHeight} />
     </Popover>
   );
 }

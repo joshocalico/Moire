@@ -6,12 +6,14 @@
   "description": "Privileged session service for Moire core management applications",
   "scripts": {
     "start": "tsx src/main.ts",
-    "smoke": "tsx src/smoke.ts",
+    "smoke": "tsx src/identity.smoke.ts && tsx src/smoke.ts",
+    "smoke:identity": "tsx src/identity.smoke.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@moire/dbus": "workspace:*",
-    "@moire/system-management": "workspace:*"
+    "@moire/system-management": "workspace:*",
+    "@moire/prefs": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

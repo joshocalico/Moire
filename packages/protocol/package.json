@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./generated": "./src/generated.ts"
+    "./generated": "./src/generated.ts",
+    "./surface-state": "./src/surface-state.generated.ts"
   },
   "scripts": {
     "generate": "pnpm --workspace-root exec tsx scripts/generate-wayland-protocol.ts --output packages/protocol/src/generated.ts",

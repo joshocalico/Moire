@@ -4,7 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./desktop-status": "./src/desktop-status.ts",
+    "./network-status": "./src/network-status.ts",
+    "./battery-status": "./src/battery-status.ts",
+    "./bluetooth-status": "./src/bluetooth-status.ts",
+    "./storage-status": "./src/storage-status.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",

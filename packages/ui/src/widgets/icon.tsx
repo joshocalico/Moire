@@ -1,4 +1,4 @@
-/** Bundled bitmap icons with renderer-neutral geometric fallbacks. */
+/** A tintable vector family with explicit artwork and geometric fallbacks. */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,40 +8,9 @@ import { useWidgetTheme } from "#ui/widget-theme";
 import { loadImageSync, type ImageData } from "#ui/image/load";
 import { loadSvgIconSync } from "#ui/image/svg-icon";
 
-export type IconName =
-  | "folder"
-  | "file"
-  | "image"
-  | "app"
-  | "trash"
-  | "home"
-  | "desktop"
-  | "downloads"
-  | "up"
-  | "grid"
-  | "list"
-  | "search"
-  | "close"
-  | "chevron-up"
-  | "chevron-down"
-  | "chevron-left"
-  | "chevron-right"
-  | "remove";
-
-export type IconProps = {
-  x?: number;
-  y?: number;
-  name: IconName | (string & {});
-  size?: number;
-  /** Tint hint for geometric fallback only; PNGs ship their own colors. */
-  color?: number;
-  path?: string;
-  /** Prefer tintable renderer-native artwork over the bundled bitmap. */
-  symbolic?: boolean;
-};
-
-const KNOWN: ReadonlySet<string> = new Set([
+export const ICON_NAMES = [
   "folder",
+  "folder-filled",
   "file",
   "image",
   "app",
@@ -50,16 +19,119 @@ const KNOWN: ReadonlySet<string> = new Set([
   "desktop",
   "downloads",
   "up",
+  "back",
+  "forward",
+  "terminal",
+  "settings",
   "grid",
   "list",
   "search",
   "close",
+  "plus",
+  "more",
+  "music",
   "chevron-up",
   "chevron-down",
   "chevron-left",
   "chevron-right",
   "remove",
-]);
+  "editor",
+  "notes",
+  "calculator",
+  "archive",
+  "monitor",
+  "calendar",
+  "clock",
+  "screenshot",
+  "document",
+  "video",
+  "disk-usage",
+  "font",
+  "characters",
+  "colors",
+  "recorder",
+  "weather",
+  "dictionary",
+  "help",
+  "benchmark",
+  "showcase",
+  "minimize",
+  "maximize",
+  "restore",
+  "check-circle",
+  "network",
+  "ethernet",
+  "network-globe",
+  "volume",
+  "volume-muted",
+  "headphones",
+  "brightness",
+  "bluetooth",
+  "battery",
+  "power",
+  "moon",
+  "bell",
+  "bell-check",
+  "history",
+  "lock",
+  "logout",
+  "restart",
+] as const;
+export type IconName = (typeof ICON_NAMES)[number];
+
+export type IconProps = {
+  x?: number;
+  y?: number;
+  name: IconName | (string & {});
+  size?: number;
+  /** Tint for symbolic vectors and geometric fallbacks; explicit rasters keep their colours. */
+  color?: number;
+  path?: string;
+  /** Keep a missing bundled vector symbolic instead of using a legacy bitmap. */
+  symbolic?: boolean;
+};
+
+export function applicationIcon(appId: string): IconName {
+  const key = appId
+    .toLowerCase()
+    .replace(/\.desktop$/, "")
+    .replace(/^org\.moire\./, "")
+    .replace(/^moire-/, "")
+    .replace(/[-._ ]/g, "");
+  const identities: Readonly<Record<string, IconName>> = {
+    files: "folder",
+    filemanager: "folder",
+    terminal: "terminal",
+    settings: "settings",
+    editor: "editor",
+    texteditor: "editor",
+    notes: "notes",
+    imageviewer: "image",
+    calculator: "calculator",
+    music: "music",
+    archivemanager: "archive",
+    systemmonitor: "monitor",
+    processmanager: "monitor",
+    calendar: "calendar",
+    clock: "clock",
+    screenshot: "screenshot",
+    documentviewer: "document",
+    videoplayer: "video",
+    diskusage: "disk-usage",
+    fontviewer: "font",
+    characters: "characters",
+    colors: "colors",
+    soundrecorder: "recorder",
+    weather: "weather",
+    dictionary: "dictionary",
+    help: "help",
+    benchmark: "benchmark",
+    showcase: "showcase",
+  };
+  return identities[key] ?? "app";
+}
+
+const KNOWN: ReadonlySet<string> = new Set(ICON_NAMES);
 
 function iconsDir(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../icons");
@@ -106,6 +178,46 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
   const pixel = Math.max(1, Math.round(size / 16));
   const dim = (color & 0x00ffffff) | 0x66000000;
   const stroke = Math.max(1, pixel);
+  if (name === "check-circle") {
+    const points: ReactNode[] = [];
+    for (const [startX, startY, endX, endY] of [
+      [0.31, 0.5, 0.44, 0.63],
+      [0.44, 0.63, 0.69, 0.38],
+    ]) {
+      const steps = Math.max(
+        2,
+        Math.ceil(Math.max(Math.abs(endX - startX), Math.abs(endY - startY)) * size),
+      );
+      for (let index = 0; index <= steps; index++) {
+        points.push(
+          <Rect
+            key={points.length}
+            x={(startX + ((endX - startX) * index) / steps) * size - stroke / 2}
+            y={(startY + ((endY - startY) * index) / steps) * size - stroke / 2}
+            width={stroke}
+            height={stroke}
+            radius={stroke / 2}
+            fill={color}
+          />,
+        );
+      }
+    }
+    return (
+      <>
+        <Rect
+          x={size / 8}
+          y={size / 8}
+          width={size * 0.75}
+          height={size * 0.75}
+          radius={size * 0.375}
+          fill={0x00000000}
+          stroke={color}
+          strokeWidth={stroke}
+        />
+        {points}
+      </>
+    );
+  }
   if (name === "folder") {
     const bodyY = Math.max(4, Math.round(size * 0.3));
     return (
@@ -488,6 +600,59 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
       </>
     );
   }
+  if (name === "more") {
+    const dot = Math.max(2, Math.round(size / 8));
+    return [0.2, 0.5, 0.8].map((position) => (
+      <Rect
+        key={position}
+        x={(size - dot) / 2}
+        y={size * position - dot / 2}
+        width={dot}
+        height={dot}
+        radius={dot / 2}
+        fill={color}
+      />
+    ));
+  }
+  if (name === "music") {
+    const left = Math.round(size / 3),
+      right = Math.round(size * 0.83);
+    const head = Math.max(3, Math.round(size / 4));
+    return (
+      <>
+        <Rect x={left} y={size * 0.2} width={stroke} height={size * 0.57} fill={color} />
+        <Rect x={right} y={size * 0.13} width={stroke} height={size * 0.57} fill={color} />
+        <Rect x={left} y={size * 0.2} width={right - left + stroke} height={stroke} fill={color} />
+        <Rect
+          x={left - head + stroke}
+          y={size * 0.7}
+          width={head}
+          height={head}
+          radius={head / 2}
+          fill={color}
+        />
+        <Rect
+          x={right - head + stroke}
+          y={size * 0.63}
+          width={head}
+          height={head}
+          radius={head / 2}
+          fill={color}
+        />
+      </>
+    );
+  }
+  if (name === "plus") {
+    const inset = Math.round(size / 5);
+    const extent = Math.max(1, size - inset * 2);
+    const center = Math.floor((size - pixel) / 2);
+    return (
+      <>
+        <Rect x={inset} y={center} width={extent} height={pixel} fill={color} />
+        <Rect x={center} y={inset} width={pixel} height={extent} fill={color} />
+      </>
+    );
+  }
   if (name === "close") {
     const steps = Math.max(4, Math.floor(size / Math.max(2, pixel * 2)));
     const step = (size - pixel) / Math.max(1, steps - 1);
@@ -595,7 +760,7 @@ function drawFallback(name: string, size: number, color: number): ReactNode {
       />
     );
   }
-  return <Rect x={0} y={0} width={size} height={size} fill={color} />;
+  return drawFallback("app", size, color);
 }
 
 export function Icon(props: IconProps): ReactNode {
@@ -603,11 +768,13 @@ export function Icon(props: IconProps): ReactNode {
   const size = props.size ?? 16;
   const color = props.color ?? palette.text;
   const name = String(props.name);
+  // Explicit artwork is authoritative. Otherwise every bundled icon uses the
+  // same tintable vector family, including application identities and file actions.
   const vector =
-    props.symbolic || props.path?.toLowerCase().endsWith(".svg")
+    !props.path || props.path.toLowerCase().endsWith(".svg")
       ? tryLoadSvg(name, size, color, props.path)
       : null;
-  const bitmap = vector ?? (props.symbolic ? null : tryLoad(name, props.path));
+  const bitmap = vector ?? (props.symbolic && !props.path ? null : tryLoad(name, props.path));
 
   if (bitmap) {
     return (

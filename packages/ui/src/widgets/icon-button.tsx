@@ -16,6 +16,7 @@ import {
 } from "#ui/widget-theme";
 import { Pressable } from "./pressable";
 import { registerIntrinsicSize } from "./layout";
+import { Tooltip, type TooltipPlacement } from "./tooltip";
 
 export type { IconButtonVariant } from "#ui/widget-theme";
 
@@ -32,6 +33,9 @@ export type IconButtonProps = {
   fill?: number;
   color?: number;
   disabled?: boolean;
+  selected?: boolean;
+  tooltip?: string;
+  tooltipPlacement?: TooltipPlacement;
   autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
@@ -43,9 +47,11 @@ export function IconButton(props: IconButtonProps): ReactNode {
   const theme = useWidgetTheme();
   const generatedId = useId();
   const [focused, setFocused] = useState(false);
+  const [hoveredControl, setHoveredControl] = useState(false);
   const recipe = theme.recipes.iconButton[props.variant ?? "standard"][props.size ?? "medium"];
   const root = resolveStatefulStyle(
     recipe.root,
+    props.selected ? "selected" : "rest",
     focused ? "focused" : "rest",
     props.disabled ? "disabled" : "rest",
   );
@@ -78,7 +84,16 @@ export function IconButton(props: IconButtonProps): ReactNode {
   };
 
   if (typeof props.icon === "function") {
-    artwork = props.icon({ ...iconStyle, color });
+    artwork = (
+      <Group
+        x={Math.floor((width - iconStyle.size) / 2)}
+        y={Math.floor((height - iconStyle.size) / 2)}
+        width={iconStyle.size}
+        height={iconStyle.size}
+      >
+        {props.icon({ ...iconStyle, color })}
+      </Group>
+    );
   } else if (typeof props.icon === "string") {
     const bounds = measureTextBounds(props.icon, {
       fontSize: iconStyle.size,
@@ -132,8 +147,19 @@ export function IconButton(props: IconButtonProps): ReactNode {
         onKeyDown={handleKey}
         onPress={props.onPress}
         onContextMenu={props.onContextMenu}
+        onHoverChange={props.tooltip ? setHoveredControl : undefined}
       />
       {artwork}
+      {props.tooltip ? (
+        <Tooltip
+          width={width}
+          height={height}
+          label={props.tooltip}
+          placement={props.tooltipPlacement ?? "bottom"}
+          open={hoveredControl || focused}
+          disabled={props.disabled}
+        />
+      ) : null}
     </Group>
   );
 }

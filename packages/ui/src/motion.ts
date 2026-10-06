@@ -3,7 +3,9 @@
  * presentation values can instead be attached directly to scene transforms so
  * the renderer advances them without reconciling the component tree.
  */
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import type { RetainedMotionAdmission } from "./retained-motion-admission";
+export type { RetainedMotionAdmission } from "./retained-motion-admission";
 
 export type MotionValue = {
   get(): number;
@@ -34,6 +36,15 @@ class MotionValueImpl implements MotionValue {
   private _value: number;
   target: number;
   _speed: number;
+  private readonly listeners = new Set<() => void>();
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+  snapshot = (): number => this._value;
+  private publish(previous: number): void {
+    if (previous !== this._value) for (const listener of this.listeners) listener();
+  }
 
   constructor(initial: number, speed?: number) {
     this._value = initial;
@@ -46,18 +57,30 @@ class MotionValueImpl implements MotionValue {
   }
 
   set(v: number): void {
+    const previous = this._value;
     this._value = v;
     this.target = v;
+    this.publish(previous);
   }
 
   tick(dt: number): boolean {
+    const previous = this._value;
     const diff = this.target - this._value;
     if (Math.abs(diff) < SETTLE_PX) {
       this._value = this.target;
+      this.publish(previous);
       return false;
     }
     this._value += diff * (1 - Math.exp(-this._speed * dt));
-    return Math.abs(this.target - this._value) >= SETTLE_PX;
+    if (Math.abs(this.target - this._value) < SETTLE_PX) {
+      // The scheduler stops ticking inactive values. Publish the exact final
+      // value now, including zero opacity, rather than waiting for another tick.
+      this._value = this.target;
+      this.publish(previous);
+      return false;
+    }
+    this.publish(previous);
+    return true;
   }
 
   isActive(): boolean {
@@ -86,6 +109,9 @@ export function useMotionValue(initial: number): MotionValue {
     registry.add(ref.current);
   }
   const value = ref.current;
+  // Numeric-read consumers must rerender even when Window content is static JSX.
+  // Presentation-only motion keeps its separate renderer path below.
+  useSyncExternalStore(value.subscribe, value.snapshot, value.snapshot);
   useEffect(
     () => () => {
       registry.delete(value);
@@ -138,6 +164,15 @@ class TweenValueImpl implements TweenValue {
   private duration = 0.22;
   private easing: TweenEasing = "ease-in-out";
   target: number;
+  private readonly listeners = new Set<() => void>();
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+  snapshot = (): number => this.value;
+  private publish(previous: number): void {
+    if (previous !== this.value) for (const listener of this.listeners) listener();
+  }
 
   constructor(initial: number) {
     this.value = initial;
@@ -150,10 +185,12 @@ class TweenValueImpl implements TweenValue {
   }
 
   set(value: number): void {
+    const previous = this.value;
     this.value = value;
     this.from = value;
     this.target = value;
     this.elapsed = this.duration;
+    this.publish(previous);
   }
 
   animateTo(value: number, options?: TweenOptions): void {
@@ -167,13 +204,16 @@ class TweenValueImpl implements TweenValue {
 
   tick(dt: number): boolean {
     if (this.value === this.target || this.duration === 0) return false;
+    const previous = this.value;
     this.elapsed = Math.min(this.duration, this.elapsed + Math.max(0, dt));
     const progress = this.elapsed / this.duration;
     this.value = this.from + (this.target - this.from) * applyEasing(progress, this.easing);
     if (this.elapsed >= this.duration) {
       this.value = this.target;
+      this.publish(previous);
       return false;
     }
+    this.publish(previous);
     return true;
   }
 
@@ -195,6 +235,7 @@ export function useTweenValue(initial: number): TweenValue {
     registry.add(ref.current);
   }
   const value = ref.current;
+  useSyncExternalStore(value.subscribe, value.snapshot, value.snapshot);
   useEffect(
     () => () => {
       registry.delete(value);
@@ -261,6 +302,16 @@ export type AnimatedValueOptions = TweenOptions & {
   initialValue?: number;
 };
 
+export type DampedValueOptions = {
+  /** Exponential convergence rate in inverse seconds. Higher values settle sooner. */
+  speed?: number;
+  /** Distance at which the value snaps to its target. */
+  settleThreshold?: number;
+  /** Bypass interpolation for direct manipulation. */
+  immediate?: boolean;
+  initialValue?: number;
+};
+
 class AnimatedValueImpl implements OwnedAnimationValue, TickableMotion {
   readonly presentationOnly = true;
   private value: number;
@@ -282,7 +333,16 @@ class AnimatedValueImpl implements OwnedAnimationValue, TickableMotion {
   configure(target: number, options?: AnimatedValueOptions): void {
     this.duration = Math.max(0, (options?.duration ?? 220) / 1_000);
     this.easing = options?.easing ?? "ease-in-out";
-    if (target === this.target) return;
+    if (target === this.target) {
+      // Direct manipulation must be able to take ownership from an in-flight
+      // animation without waiting for the target to change again.
+      if (this.duration === 0 && this.value !== target) {
+        this.value = target;
+        this.from = target;
+        this.elapsed = 0;
+      }
+      return;
+    }
     this.from = this.value;
     this.target = target;
     this.elapsed = 0;
@@ -330,6 +390,70 @@ export function useAnimatedValue(target: number, options?: AnimatedValueOptions)
   return value;
 }
 
+class DampedValueImpl implements OwnedAnimationValue, TickableMotion {
+  readonly presentationOnly = true;
+  private value: number;
+  private target: number;
+  private speed = 18;
+  private settleThreshold = 0.2;
+
+  constructor(target: number, options?: DampedValueOptions) {
+    this.value = options?.initialValue ?? target;
+    this.target = target;
+    this.configure(target, options);
+  }
+
+  configure(target: number, options?: DampedValueOptions): void {
+    this.speed = Math.max(0.01, options?.speed ?? 18);
+    this.settleThreshold = Math.max(0.001, options?.settleThreshold ?? 0.2);
+    this.target = target;
+    if (options?.immediate) this.value = target;
+  }
+
+  get(): number {
+    return this.value;
+  }
+
+  dispose(): void {
+    registry.delete(this);
+  }
+
+  isActive(): boolean {
+    return Math.abs(this.target - this.value) > this.settleThreshold;
+  }
+
+  tick(dt: number): boolean {
+    if (!this.isActive()) {
+      this.value = this.target;
+      return false;
+    }
+    const frameSeconds = Math.max(0, dt);
+    this.value += (this.target - this.value) * (1 - Math.exp(-this.speed * frameSeconds));
+    if (!this.isActive()) {
+      this.value = this.target;
+      return false;
+    }
+    return true;
+  }
+}
+
+/**
+ * Declaratively approach a presentation target without restarting a timed
+ * easing curve when that target changes. This is suited to streams of small
+ * input deltas such as wheel scrolling.
+ */
+export function useDampedValue(target: number, options?: DampedValueOptions): AnimationValue {
+  const ref = useRef<DampedValueImpl | null>(null);
+  if (!ref.current) {
+    ref.current = new DampedValueImpl(target, options);
+    registry.add(ref.current);
+  }
+  const value = ref.current;
+  value.configure(target, options);
+  useEffect(() => () => value.dispose(), [value]);
+  return value;
+}
+
 export type OscillationOptions = {
   from: number;
   to: number;
@@ -338,6 +462,8 @@ export type OscillationOptions = {
   /** Starting phase in radians. */
   phase?: number;
   playing?: boolean;
+  /** Window-owned, qualified presentation pacing; excluded from the legacy registry. */
+  admission?: RetainedMotionAdmission;
 };
 
 class OscillationValueImpl implements OwnedAnimationValue, TickableMotion {
@@ -349,17 +475,27 @@ class OscillationValueImpl implements OwnedAnimationValue, TickableMotion {
   private period = 1;
   private phase = 0;
   private playing = true;
+  private admission: RetainedMotionAdmission | undefined;
+  private unregister: (() => void) | null = null;
 
   constructor(options: OscillationOptions) {
     this.configure(options);
   }
 
   configure(options: OscillationOptions): void {
+    if (this.admission !== options.admission) {
+      this.unregister?.();
+      registry.delete(this);
+      this.admission = options.admission;
+      this.unregister = this.admission?.register(this) ?? null;
+      if (!this.admission) registry.add(this);
+    }
     this.from = options.from;
     this.to = options.to;
     this.period = Math.max(0.001, (options.period ?? 2_000) / 1_000);
     this.phase = options.phase ?? 0;
     this.playing = options.playing !== false;
+    if (this.admission && !this.playing) this.elapsed = 0;
     this.updateValue();
   }
 
@@ -376,11 +512,20 @@ class OscillationValueImpl implements OwnedAnimationValue, TickableMotion {
 
   dispose(): void {
     this.playing = false;
+    this.unregister?.();
+    this.unregister = null;
     registry.delete(this);
   }
 
   isActive(): boolean {
     return this.playing && this.from !== this.to;
+  }
+
+  reset(): boolean {
+    const previous = this.value;
+    this.elapsed = 0;
+    this.updateValue();
+    return this.value !== previous;
   }
 
   tick(dt: number): boolean {
@@ -396,7 +541,7 @@ export function useOscillation(options: OscillationOptions): AnimationValue {
   const ref = useRef<OscillationValueImpl | null>(null);
   if (!ref.current) {
     ref.current = new OscillationValueImpl(options);
-    registry.add(ref.current);
+    if (!options.admission) registry.add(ref.current);
   }
   const value = ref.current;
   value.configure(options);

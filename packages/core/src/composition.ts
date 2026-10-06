@@ -16,6 +16,13 @@ export type PixelSurface = {
   revision?: number;
 };
 
+/** Immutable committed contents, independent of the producer's wl_buffer. */
+export type OwnedPixelSurface = PixelSurface & {
+  storage: "cpu" | "gpu";
+  /** GPU contents expose a lazy CPU readback through pixels for fallback only. */
+  destroy(): void;
+};
+
 /** Column-major 4×4 matrix, matching GLES and WebGL conventions. */
 export type CompositionMatrix4 = readonly [
   number,
@@ -96,6 +103,14 @@ export type CompositionEffect =
   | ColorMatrixEffect
   | ExtensionEffect;
 
+export type WindowContentShape = {
+  /** Actual window frame in scene coordinates; client shadow padding is separate. */
+  bounds: CompositionRect;
+  /** Top-left, top-right, bottom-right, bottom-left, in logical pixels. */
+  radii: readonly [number, number, number, number];
+  outside: "discard" | "translucent-shadow";
+};
+
 export type CompositionLayer = {
   id: string;
   z: number;
@@ -116,6 +131,7 @@ export type CompositionLayer = {
    * available as client-rendered shadows.
    */
   surfaceGeometry?: CompositionRect;
+  contentShape?: WindowContentShape;
   /** Source-space damage. Omit when the whole source may have changed. */
   damage?: readonly CompositionRect[];
   effects?: readonly CompositionEffect[];
@@ -178,6 +194,16 @@ export function validateCompositionScene(scene: CompositionScene): void {
       typeof layer.cornerRadius === "number" ? [layer.cornerRadius] : (layer.cornerRadius ?? []);
     if (radii.some((radius) => radius < 0)) {
       throw new RangeError(`Composition layer ${layer.id} has negative corner radius`);
+    }
+    if (layer.contentShape) {
+      const { bounds, radii } = layer.contentShape;
+      if (
+        ![bounds.x, bounds.y, bounds.width, bounds.height, ...radii].every(Number.isFinite) ||
+        bounds.width <= 0 ||
+        bounds.height <= 0 ||
+        radii.some((radius) => radius < 0 || radius > Math.min(bounds.width, bounds.height) / 2)
+      )
+        throw new RangeError(`Composition layer ${layer.id} has invalid content shape`);
     }
     if (layer.transform && layer.transform.matrix.length !== 16) {
       throw new RangeError(`Composition layer ${layer.id} transform must be 4×4`);

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Dictionary
+Comment=Look up words
+Exec=moire-dictionary
+TryExec=moire-dictionary
+Icon=moire-dictionary
+Terminal=false
+Categories=Office;Dictionary;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Dictionary

@@ -35,6 +35,8 @@ export type PropertyListProps = {
   striped?: boolean;
   scrollbar?: boolean;
   emptyState?: ReactNode;
+  /** Stack labels above values in narrow inspectors and settings windows. */
+  stacked?: boolean;
 };
 
 const SECTION_HEIGHT = 30;
@@ -52,11 +54,61 @@ type PropertyRowProps = {
   striped: boolean;
   interactive: boolean;
   onActivate: (item: PropertyListItem) => void;
+  stacked: boolean;
 };
 
 function PropertyRow(props: PropertyRowProps): ReactNode {
   const pal = useWidgetTheme().foundations.palette;
   const pad = 12;
+  const label = (
+    <Vertical
+      width={props.stacked ? props.width - pad * 2 : props.labelWidth}
+      height={props.stacked ? (props.item.description ? 36 : 18) : undefined}
+      justify="center"
+      gap={2}
+    >
+      <TextBlock
+        height={18}
+        text={props.item.label}
+        color={props.item.disabled ? pal.muted : pal.text}
+        fontSize={13}
+        fontWeight="medium"
+        verticalAlign="center"
+        overflow="ellipsis"
+        maxLines={1}
+      />
+      {props.item.description ? (
+        <TextBlock
+          height={16}
+          text={props.item.description}
+          color={pal.muted}
+          fontSize={11}
+          verticalAlign="center"
+          overflow="ellipsis"
+          maxLines={1}
+        />
+      ) : null}
+    </Vertical>
+  );
+  const value = isTextValue(props.item.value) ? (
+    <TextBlock
+      height={18}
+      text={
+        typeof props.item.value === "boolean"
+          ? props.item.value
+            ? "Yes"
+            : "No"
+          : String(props.item.value)
+      }
+      color={props.item.disabled ? pal.muted : pal.text}
+      fontSize={13}
+      verticalAlign="center"
+      overflow="ellipsis"
+      maxLines={1}
+    />
+  ) : (
+    props.item.value
+  );
   const handleKey = (event: HitKeyEvent) => {
     if (event.repeat) return;
     if (event.key === "Enter" || event.key === " " || event.code === 28 || event.code === 57) {
@@ -85,59 +137,26 @@ function PropertyRow(props: PropertyRowProps): ReactNode {
         />
       ) : null}
       <Inset width={props.width} height={props.height} padding={{ horizontal: pad }}>
-        <Horizontal gap={pad} align="stretch">
-          <Vertical width={props.labelWidth} justify="center" gap={2}>
-            <TextBlock
-              height={16}
-              text={props.item.label}
-              color={props.item.disabled ? pal.muted : pal.text}
-              fontSize={12}
-              fontWeight="medium"
-              verticalAlign="center"
-              overflow="ellipsis"
-              maxLines={1}
-            />
-            {props.item.description ? (
-              <TextBlock
-                height={14}
-                text={props.item.description}
-                color={pal.muted}
-                fontSize={10}
-                verticalAlign="center"
-                overflow="ellipsis"
-                maxLines={1}
-              />
-            ) : null}
+        {props.stacked ? (
+          <Vertical gap={6} justify="center" align="stretch">
+            {label}
+            {value}
           </Vertical>
-          <Align flexGrow={1} alignX="stretch" alignY="center">
-            {isTextValue(props.item.value) ? (
-              <TextBlock
-                height={16}
-                text={
-                  typeof props.item.value === "boolean"
-                    ? props.item.value
-                      ? "Yes"
-                      : "No"
-                    : String(props.item.value)
-                }
-                color={props.item.disabled ? pal.muted : pal.text}
-                fontSize={12}
-                verticalAlign="center"
-                overflow="ellipsis"
-                maxLines={1}
-              />
-            ) : (
-              props.item.value
-            )}
-          </Align>
-        </Horizontal>
+        ) : (
+          <Horizontal gap={pad} align="stretch">
+            {label}
+            <Align flexGrow={1} alignX="stretch" alignY="center">
+              {value}
+            </Align>
+          </Horizontal>
+        )}
       </Inset>
       <Rect
         x={pad}
         y={props.height - 1}
         width={props.width - pad * 2}
         height={1}
-        fill={pal.border}
+        fill={pal.borderSubtle}
       />
     </Group>
   );
@@ -146,12 +165,13 @@ function PropertyRow(props: PropertyRowProps): ReactNode {
 /** Sectioned key-value presentation for inspectors, metadata, and settings. */
 export function PropertyList(props: PropertyListProps): ReactNode {
   const pal = useWidgetTheme().foundations.palette;
+  const stacked = props.stacked ?? props.width < 420;
   const labelWidth = Math.max(
     72,
     Math.min(props.width - 96, props.labelWidth ?? Math.round(props.width * 0.38)),
   );
-  const rowHeight = Math.max(30, props.rowHeight ?? 42);
-  const descriptionRowHeight = Math.max(rowHeight, props.descriptionRowHeight ?? 58);
+  const rowHeight = Math.max(stacked ? 66 : 30, props.rowHeight ?? 42);
+  const descriptionRowHeight = Math.max(stacked ? 88 : rowHeight, props.descriptionRowHeight ?? 58);
   const hasItems = props.sections.some((section) => section.items.length > 0);
   const contentHeight = props.sections.reduce(
     (height, section) =>
@@ -194,9 +214,9 @@ export function PropertyList(props: PropertyListProps): ReactNode {
                   {section.label ? (
                     <Inset height={SECTION_HEIGHT} padding={{ horizontal: 12 }}>
                       <TextBlock
-                        text={section.label.toUpperCase()}
-                        color={pal.accent}
-                        fontSize={10}
+                        text={section.label}
+                        color={pal.muted}
+                        fontSize={12}
                         fontWeight="medium"
                         verticalAlign="center"
                         overflow="ellipsis"
@@ -214,6 +234,7 @@ export function PropertyList(props: PropertyListProps): ReactNode {
                       selected={item.id === props.selectedId}
                       striped={Boolean(props.striped && (rowsBefore + itemIndex) % 2 === 1)}
                       interactive={Boolean(item.onPress || props.onSelect)}
+                      stacked={stacked}
                       onActivate={activate}
                     />
                   ))}

@@ -10,7 +10,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "smoke:display": "tsx src/display-layout.smoke.ts",
     "smoke:composition": "tsx src/composition.smoke.ts",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "smoke:spawn": "tsx src/spawn.smoke.ts",
+    "smoke:capture": "tsx src/capture.smoke.ts"
   },
   "dependencies": {
     "@moire/prefs": "workspace:*",
@@ -20,7 +22,13 @@
     "x11": "^2.3.0"
   },
   "devDependencies": {
+    "@moire/react-host": "workspace:*",
     "@types/node": "^22.10.0",
-    "typescript": "^5.7.2"
+    "@types/pngjs": "^6.0.5",
+    "pngjs": "^7.0.0",
+    "typescript": "^5.7.2",
+    "@moire/ui": "workspace:*",
+    "react": "^19.0.0",
+    "@types/react": "^19.0.0"
   }
 }

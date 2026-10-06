@@ -1,0 +1,77 @@
+{
+  "Backend": "QEMU",
+  "ConfigurationVersion": 4,
+  "Display": [
+    {
+      "DownscalingFilter": "Linear",
+      "DynamicResolution": false,
+      "Hardware": "virtio-gpu-gl-pci",
+      "NativeResolution": false,
+      "UpscalingFilter": "Nearest"
+    }
+  ],
+  "Drive": [
+    {
+      "Identifier": "3AC3BE90-E626-4F71-BB2C-0274B7FC6A2B",
+      "ImageType": "CD",
+      "Interface": "USB",
+      "InterfaceVersion": 1,
+      "ReadOnly": true,
+      "ImageName": "moire.iso"
+    }
+  ],
+  "Information": {
+    "Icon": "linux",
+    "IconCustom": false,
+    "Name": "Moire VirGL"
+  },
+  "Input": {
+    "MaximumUsbShare": 3,
+    "UsbBusSupport": "3.0",
+    "UsbSharing": false
+  },
+  "Network": [
+    {
+      "Hardware": "virtio-net-pci",
+      "IsolateFromHost": false,
+      "MacAddress": "72:A0:15:E7:D9:E2",
+      "Mode": "Shared",
+      "PortForward": []
+    }
+  ],
+  "QEMU": {
+    "AdditionalArguments": [],
+    "BalloonDevice": false,
+    "DebugLog": false,
+    "Hypervisor": true,
+    "PS2Controller": false,
+    "RNGDevice": true,
+    "RTCLocalTime": false,
+    "TPMDevice": false,
+    "TSO": false,
+    "UEFIBoot": true
+  },
+  "Serial": [
+    {
+      "Mode": "Ptty",
+      "Target": "Auto"
+    }
+  ],
+  "Sharing": {
+    "ClipboardSharing": false,
+    "DirectoryShareMode": "VirtFS",
+    "DirectoryShareReadOnly": false
+  },
+  "Sound": [],
+  "System": {
+    "Architecture": "aarch64",
+    "CPU": "default",
+    "CPUCount": 4,
+    "CPUFlagsAdd": [],
+    "CPUFlagsRemove": [],
+    "ForceMulticore": false,
+    "JITCacheSize": 0,
+    "MemorySize": 4096,
+    "Target": "virt"
+  }
+}

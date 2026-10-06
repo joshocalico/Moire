@@ -39,7 +39,7 @@ function freePtr(ptr: unknown): void {
 }
 
 /** One architecture-aware Linux readiness queue backed by epoll + eventfd. */
-export class LinuxReadinessDispatcher {
+class LinuxReadinessPump {
   private readonly epollFd: number;
   private readonly wakeFd: number;
   private readonly events = koffi.alloc(EpollEvents, 1);
@@ -84,6 +84,7 @@ export class LinuxReadinessDispatcher {
 
   add(fd: number, handler: () => void): void {
     if (this.stopped) throw new Error(`${this.label} dispatcher is stopped`);
+    if (this.handlers.has(fd)) throw new Error(`Readiness fd=${fd} is already registered`);
     this.handlers.set(fd, handler);
     try {
       this.control(EPOLL_CTL_ADD, fd);
@@ -187,5 +188,46 @@ export class LinuxReadinessDispatcher {
     freePtr(this.events);
     closeFd(this.wakeFd);
     closeFd(this.epollFd);
+  }
+}
+
+type SharedReadiness = { pump: LinuxReadinessPump; owners: number };
+let sharedReadiness: SharedReadiness | undefined;
+
+/**
+ * Independent registrations over one process-wide native wait. Koffi async calls
+ * use libuv workers: one indefinite epoll_wait per owner would starve unrelated
+ * native work once the compositor, seat and clients exhaust that worker pool.
+ */
+export class LinuxReadinessDispatcher {
+  private readonly shared: SharedReadiness;
+  private readonly fds = new Set<number>();
+  private stopped = false;
+
+  constructor(private readonly label = "readiness") {
+    sharedReadiness ??= { pump: new LinuxReadinessPump("shared-readiness"), owners: 0 };
+    this.shared = sharedReadiness;
+    this.shared.owners++;
+  }
+
+  add(fd: number, handler: () => void): void {
+    if (this.stopped) throw new Error(`${this.label} dispatcher is stopped`);
+    this.shared.pump.add(fd, handler);
+    this.fds.add(fd);
+  }
+
+  remove(fd: number): void {
+    if (this.fds.delete(fd)) this.shared.pump.remove(fd);
+  }
+
+  stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    for (const fd of this.fds) this.shared.pump.remove(fd);
+    this.fds.clear();
+    if (--this.shared.owners === 0) {
+      sharedReadiness = undefined;
+      this.shared.pump.stop();
+    }
   }
 }

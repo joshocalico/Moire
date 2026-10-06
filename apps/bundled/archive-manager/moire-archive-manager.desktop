@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Archive Manager
+Exec=moire-archive-manager %U
+TryExec=moire-archive-manager
+Icon=moire-archive
+Terminal=false
+Type=Application
+Categories=Utility;Archiving;
+MimeType=application/zip;application/x-tar;application/gzip;application/x-xz;application/x-bzip2;application/x-7z-compressed;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.ArchiveManager

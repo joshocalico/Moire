@@ -8,6 +8,14 @@ import { Panel } from "./Panel";
 import { Launcher } from "./Launcher";
 import { createShell } from "./controller";
 import { loadDesktopLayout } from "./DesktopIcons";
+import { TitleBar } from "./TitleBar";
+import {
+  getTheme,
+  setTheme,
+  applyThemeFamily,
+  THEME_FAMILIES,
+  windowControlLayout,
+} from "@moire/theme";
 
 const width = 1024;
 const height = 768;
@@ -134,8 +142,58 @@ try {
   shell.setPrimaryOutput({ x: 0, y: 0, width, height });
   framebuffer.fill(0);
   shell.paintDesktop(framebuffer, width, width, height);
+  const desktopBeforeBackgroundClick = shell.desktopRaster(width, height);
+  const chromeBeforeBackgroundClick = shell.chromeRaster(width, height);
+  assert.ok(desktopBeforeBackgroundClick, "desktop retained layer was not created");
+  assert.ok(chromeBeforeBackgroundClick, "chrome retained layer was not created");
+  assert.notEqual(
+    desktopBeforeBackgroundClick.pixels,
+    chromeBeforeBackgroundClick.pixels,
+    "desktop and chrome roots aliased the same raster backing store",
+  );
+  const desktopPixelsBeforeBackgroundClick = desktopBeforeBackgroundClick.pixels.slice();
+  const chromePixelsBeforeBackgroundClick = chromeBeforeBackgroundClick.pixels.slice();
+  assert.equal(
+    shell.onDesktopPointerButton?.({
+      timeMs: 0,
+      button: 272,
+      value: 1,
+      x: 700,
+      y: 300,
+    }),
+    true,
+    "empty desktop left-click was not captured by its background surface",
+  );
+  assert.equal(
+    shell.onDesktopPointerButton?.({
+      timeMs: 1,
+      button: 272,
+      value: 0,
+      x: 700,
+      y: 300,
+    }),
+    true,
+    "empty desktop left-click release was not captured",
+  );
+  const desktopAfterBackgroundClick = shell.desktopRaster(width, height);
+  const chromeAfterBackgroundClick = shell.chromeRaster(width, height);
+  assert.ok(
+    desktopAfterBackgroundClick,
+    "desktop retained layer vanished after a background click",
+  );
+  assert.ok(chromeAfterBackgroundClick, "chrome retained layer vanished after a background click");
+  assert.deepEqual(
+    desktopAfterBackgroundClick.pixels,
+    desktopPixelsBeforeBackgroundClick,
+    "background click changed an unselected desktop raster",
+  );
+  assert.deepEqual(
+    chromeAfterBackgroundClick.pixels,
+    chromePixelsBeforeBackgroundClick,
+    "background click changed unrelated panel chrome",
+  );
   const opened = shell.onDesktopPointerButton?.({
-    timeMs: 1,
+    timeMs: 2,
     button: 273,
     value: 1,
     x: 700,
@@ -258,6 +316,45 @@ try {
   assert.equal(fs.existsSync(path.join(smokeHome, "Desktop", "New Folder", "Alpha.txt")), true);
   assert.equal(fs.existsSync(path.join(smokeHome, "Desktop", "New Folder", "Beta.txt")), true);
 
+  const applicationsDir = path.join(smokeHome, ".local", "share", "applications");
+  fs.mkdirSync(applicationsDir, { recursive: true });
+  for (let index = 0; index < 30; index++) {
+    fs.writeFileSync(
+      path.join(applicationsDir, `scroll-smoke-${index}.desktop`),
+      `[Desktop Entry]\nType=Application\nName=Scroll Smoke ${index}\nExec=true\n`,
+    );
+  }
+  const originalDataHome = process.env.XDG_DATA_HOME;
+  const originalStartOpen = process.env.MOIRE_SHELL_START_OPEN;
+  process.env.XDG_DATA_HOME = path.join(smokeHome, ".local", "share");
+  process.env.MOIRE_SHELL_START_OPEN = "1";
+  const launcherShell = createShell(() => ({ unref() {} }));
+  launcherShell.setPrimaryOutput({ x: 0, y: 0, width, height });
+  const launcherBefore = new Uint32Array(width * height);
+  launcherShell.paint(launcherBefore, width, width, height);
+  assert.equal(
+    launcherShell.onPointerButton({ timeMs: 30, button: 272, value: 1, x: 410, y: 230 }),
+    true,
+    "launcher scroll thumb did not begin a pointer grab",
+  );
+  assert.equal(
+    launcherShell.onPointerMotion?.({ x: 410, y: 490 }),
+    true,
+    "launcher scroll thumb did not retain its pointer grab",
+  );
+  const launcherDuringDrag = new Uint32Array(width * height);
+  launcherShell.paint(launcherDuringDrag, width, width, height);
+  assert.notDeepEqual(
+    launcherDuringDrag,
+    launcherBefore,
+    "launcher content did not scroll until pointer release",
+  );
+  launcherShell.onPointerButton({ timeMs: 31, button: 272, value: 0, x: 410, y: 490 });
+  if (originalDataHome == null) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = originalDataHome;
+  if (originalStartOpen == null) delete process.env.MOIRE_SHELL_START_OPEN;
+  else process.env.MOIRE_SHELL_START_OPEN = originalStartOpen;
+
   const ssdWindow = {
     clientId: 9,
     surfaceId: 12,
@@ -314,10 +411,86 @@ try {
     false,
     "SSD hover remained active after leaving chrome",
   );
+  const otherWindow = { ...ssdWindow, clientId: 10, surfaceId: 12, x: 540, title: "Second window" };
+  const otherCloseX = otherWindow.x + otherWindow.contentW - 6 - 28;
+  shell.beginSsdFrame();
+  shell.paintSsd(framebuffer, width, width, height, [ssdWindow]);
+  shell.paintSsd(framebuffer, width, width, height, [otherWindow]);
+  assert.deepEqual(
+    shell.hitSsd(closeX + 14, ssdWindow.y + 17),
+    { kind: "close", clientId: 9, surfaceId: 12 },
+    "bulk stack-slot calls retain first window hits",
+  );
+  assert.deepEqual(
+    shell.hitSsd(otherCloseX + 14, otherWindow.y + 17),
+    { kind: "close", clientId: 10, surfaceId: 12 },
+    "bulk stack-slot calls retain second window hits",
+  );
+  shell.beginSsdFrame();
+  shell.paintSsd(framebuffer, width, width, height, [otherWindow]);
+  assert.equal(
+    shell.hitSsd(closeX + 14, ssdWindow.y + 17),
+    null,
+    "next frame clears stale bulk hits",
+  );
 } finally {
   if (originalHome == null) delete process.env.HOME;
   else process.env.HOME = originalHome;
   delete process.env.XDG_CONFIG_HOME;
   fs.rmSync(smokeHome, { recursive: true, force: true });
+}
+const originalTheme = getTheme();
+try {
+  for (const family of THEME_FAMILIES) {
+    const theme = applyThemeFamily(originalTheme, family, true);
+    setTheme(theme);
+    let closed = false;
+    const chrome = createShellRoot();
+    renderShell(
+      chrome,
+      React.createElement(TitleBar, {
+        x: 0,
+        y: 0,
+        width: 460,
+        title: "Files",
+        onClose: () => {
+          closed = true;
+        },
+      }),
+    );
+    const frame = rasterize(chrome.container, 460, theme.tokens.titlebarHeight);
+    const controls = windowControlLayout(460, family);
+    const x = controls.closeX + 14;
+    const y = Math.floor(theme.tokens.titlebarHeight / 2);
+    const hit = frame.hits
+      .filter(
+        (item) =>
+          item.onPress &&
+          x >= item.x &&
+          x < item.x + item.width &&
+          y >= item.y &&
+          y < item.y + item.height,
+      )
+      .at(-1);
+    assert.ok(hit?.onPress, `${family} close control must have a hit region`);
+    hit.onPress({ x, y, localX: 14, localY: 14 });
+    assert.ok(closed, `${family} close control must emit its action`);
+    if (family === "cupertino") {
+      const pixels = new Uint32Array(frame.pixels.buffer);
+      assert.equal(pixels[y * 460 + x], 0xffff6059, "Cupertino close light must be red");
+      assert.equal(
+        pixels[y * 460 + controls.minX + 14],
+        0xffffbd2e,
+        "Cupertino minimize light must be amber",
+      );
+      assert.equal(
+        pixels[y * 460 + controls.maxX + 14],
+        0xff28c840,
+        "Cupertino maximize light must be green",
+      );
+    }
+  }
+} finally {
+  setTheme(originalTheme);
 }
 console.log("[shell/smoke] ok");

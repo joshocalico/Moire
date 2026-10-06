@@ -3,6 +3,7 @@
  * Only platforms/wayland may import protocol / sys / OS APIs.
  */
 import fs from "node:fs";
+import { WindowRenderingTracker, type ClientSubmission } from "./rendering";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -41,12 +42,14 @@ import {
   zxdgDecorationManagerV1,
   zxdgToplevelDecorationV1,
 } from "@moire/protocol/generated";
+import { moireSurfaceStateManagerV1, moireSurfaceStateV1 } from "@moire/protocol/surface-state";
 import {
   EglOutputScaler,
   WaylandClientConn,
   assertLinux,
   closeFd,
   createMemfd,
+  createInputFixtureTrace,
   createPipe,
   flushMmap,
   mmap,
@@ -58,6 +61,7 @@ import {
   PROT_READ,
   PROT_WRITE,
   truncateFd,
+  type InputFixtureTrace,
   type EglClientPresent,
   type WaylandChunk,
 } from "@moire/sys";
@@ -74,18 +78,20 @@ import {
 } from "@moire/react-host";
 import { themePalette } from "#ui/theme";
 import {
-  keyFromEvdev,
-  modifiersFromPressed,
   type DndCapable,
   type PlatformBackend,
   type PlatformDiagnostics,
+  type PersonalizationProfile,
   type PlatformPopupOpts,
   type PlatformWindow,
   type PlatformWindowOpts,
   type UiKeyEvent,
   type UiFrameEvent,
   type UiPresentationMode,
+  type UiSurfaceVisibility,
+  type UiRenderingState,
   type UiPointerEvent,
+  platformPersonalization,
   type PointerButton,
 } from "#ui/platform";
 import {
@@ -100,13 +106,15 @@ import { updateActiveWindowDropHover, clearActiveWindowDropHover } from "#ui/win
 import { Icon } from "#ui/widgets/icon";
 import { GridItem } from "#ui/widgets/grid";
 import { ListItem } from "#ui/widgets/list";
+import { WaylandKeyboard } from "./keyboard";
+import type { KeymapAvailability } from "./keymap-types";
+import { classifyShmFrame, validateShmFrame, type ShmFrame } from "./shm-format";
 
 const WL_DISPLAY_ID = 1;
 const WL_SHM_FORMAT_ARGB8888 = wlShm.enums.format.argb8888;
 const BTN_LEFT = 0x110;
 const BTN_RIGHT = 0x111;
 const BTN_MIDDLE = 0x112;
-const KEY_PRESSED = wlKeyboard.enums.keyState.pressed;
 const XDG_DECORATION_MODE_CLIENT = zxdgToplevelDecorationV1.enums.mode.clientSide;
 const XDG_DECORATION_MODE_SERVER = zxdgToplevelDecorationV1.enums.mode.serverSide;
 const XDG_ANCHOR_TOP_LEFT = xdgPositioner.enums.anchor.topLeft;
@@ -127,8 +135,6 @@ const EV = {
   pointer_motion: wlPointer.events.motion.opcode,
   pointer_button: wlPointer.events.button.opcode,
   pointer_axis: wlPointer.events.axis.opcode,
-  keyboard_keymap: wlKeyboard.events.keymap.opcode,
-  keyboard_key: wlKeyboard.events.key.opcode,
   xdg_wm_base_ping: xdgWmBase.events.ping.opcode,
   xdg_surface_configure: xdgSurface.events.configure.opcode,
   xdg_toplevel_configure: xdgToplevel.events.configure.opcode,
@@ -168,9 +174,8 @@ type ShmSlot = {
   size: number;
   map: unknown;
   poolId: number;
-  bufferId: number;
-  width: number;
-  height: number;
+  /** Geometry and format belong to this immutable wl_buffer object. */
+  buffer: Readonly<{ id: number; frame: ShmFrame }>;
   busy: boolean;
   commitId: number;
   submittedAtMs: number;
@@ -208,6 +213,22 @@ function buttonName(code: number): PointerButton | undefined {
   return undefined;
 }
 
+type ClientCompositionPresent =
+  | { kind: "dmabuf"; frame: EglClientPresent }
+  | {
+      kind: "shm";
+      frame: ReturnType<EglOutputScaler["renderClientCompositionReadback"]>;
+    };
+
+const inputFixtureTrace = createInputFixtureTrace("app");
+function stopUnexpectedInputFocus(): void {
+  try {
+    if (inputFixtureTrace.active()) inputFixtureTrace.stop("focus");
+  } catch {
+    // Diagnostic policy/IO failure cannot suppress a production focus/input event.
+  }
+}
+
 export class WaylandPlatform implements PlatformBackend, DndCapable {
   readonly name = "wayland";
   private conn: WaylandClientConn | null = null;
@@ -222,9 +243,11 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private shmId = 0;
   private dmabufId = 0;
   private presentationId = 0;
+  private surfaceStateManagerId = 0;
+  private surfaceStateVersion = 0;
   private eglPresenter: EglOutputScaler | null = null;
   private eglFd = -1;
-  private eglPresentationFailed = false;
+  private eglTransport: "dmabuf" | "readback" | "software" = "software";
   private renderNode: string | undefined;
   private fallbackReason: string | undefined;
   private retainedFrames = 0;
@@ -234,13 +257,18 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private wmBaseId = 0;
   private decoManagerId = 0;
   private seatId = 0;
+  private seatVersion = 0;
   private pointerId = 0;
   private keyboardId = 0;
+  private readonly retiredKeyboardIds = new Set<number>();
   private pressedKeys = new Set<number>();
   /** wl_data_device_manager object id. */
   private dataDeviceManagerId = 0;
   /** wl_data_device for the seat. */
   private dataDeviceId = 0;
+  private clipboardSource: { sourceId: number; text: string } | null = null;
+  private clipboardOfferId: number | null = null;
+  private readonly dataOfferMimes = new Map<number, string[]>();
   /** Active drag: data source and payload resolver. */
   private activeDrag: {
     sourceId: number;
@@ -256,7 +284,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     x: number;
     y: number;
   } | null = null;
-  /** Last pointer-button event serial from compositor. */
+  /** Latest seat input serial, usable for pointer and keyboard popup grabs. */
   private lastPointerSerial = 0;
   /** Surface id of the currently focused window for DnD origin. */
   private pointerSurfaceId = 0;
@@ -265,6 +293,19 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private pointerFocus: WaylandWindow | null = null;
   private pointerX = 0;
   private pointerY = 0;
+  private keyboard = new WaylandKeyboard({
+    pressedKeys: this.pressedKeys,
+    resolveSurface: (surfaceId) => this.surfaceToWindow.get(surfaceId) ?? null,
+    emitKey: (window, event) => window.emitKey(event),
+    onFocus: (type, surfaceId, window) => {
+      if (window) window.observeInputFocus("keyboard", type, surfaceId);
+      else stopUnexpectedInputFocus();
+    },
+    // Popup grabs accept the serial from either a pointer or keyboard action.
+    onSerial: (serial) => {
+      this.lastPointerSerial = serial;
+    },
+  });
 
   allocId(): number {
     return this.nextId++;
@@ -282,6 +323,13 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     this.conn.on("message", (chunk: WaylandChunk) => this.onChunk(chunk));
     this.conn.on("close", () => {
       this.conn = null;
+      if (this.keyboardId) this.handlers.delete(this.keyboardId);
+      for (const id of this.retiredKeyboardIds) this.handlers.delete(id);
+      this.retiredKeyboardIds.clear();
+      this.keyboardId = 0;
+      this.keyboard.disconnect();
+      this.releasePendingInputFds();
+      this.retireVisibilityObservations();
     });
 
     this.handlers.set(WL_DISPLAY_ID, (opcode, r) => {
@@ -289,7 +337,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         const event = wlDisplay.events.error.decodeReader(r);
         console.error(`[ui/wayland] display.error code=${event.code} ${event.message}`);
       } else if (opcode === EV.display_delete_id) {
-        wlDisplay.events.deleteId.decodeReader(r);
+        const { id } = wlDisplay.events.deleteId.decodeReader(r);
+        if (this.retiredKeyboardIds.delete(id)) this.handlers.delete(id);
       }
     });
 
@@ -308,6 +357,16 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     this.compositorId = this.bindGlobal("wl_compositor", 4);
     this.shmId = this.bindGlobal("wl_shm", 1);
     this.handlers.set(this.shmId, () => {});
+    if (this.globals.has(moireSurfaceStateManagerV1.name)) {
+      this.surfaceStateVersion = Math.min(
+        this.globals.get(moireSurfaceStateManagerV1.name)?.version ?? 1,
+        2,
+      );
+      this.surfaceStateManagerId = this.bindGlobal(
+        moireSurfaceStateManagerV1.name,
+        this.surfaceStateVersion,
+      );
+    }
     if (this.globals.has("wp_presentation")) {
       this.presentationId = this.bindGlobal("wp_presentation", 1);
       this.handlers.set(this.presentationId, (opcode, r) => {
@@ -338,21 +397,9 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     }
 
     if (this.globals.has("wl_seat")) {
+      this.seatVersion = Math.min(this.globals.get("wl_seat")?.version ?? 0, 5);
       this.seatId = this.bindGlobal("wl_seat", 5);
-      this.handlers.set(this.seatId, (opcode, r) => {
-        if (opcode !== EV.seat_capabilities) return;
-        const { capabilities: caps } = wlSeat.events.capabilities.decodeReader(r);
-        if ((caps & 1) !== 0 && !this.pointerId) {
-          this.pointerId = this.allocId();
-          this.sendMessage(wlSeat.requests.getPointer.encode(this.seatId, this.pointerId));
-          this.handlers.set(this.pointerId, (op, rr) => this.handlePointer(op, rr));
-        }
-        if ((caps & 2) !== 0 && !this.keyboardId) {
-          this.keyboardId = this.allocId();
-          this.sendMessage(wlSeat.requests.getKeyboard.encode(this.seatId, this.keyboardId));
-          this.handlers.set(this.keyboardId, (op, rr) => this.handleKeyboard(op, rr));
-        }
-      });
+      this.handlers.set(this.seatId, (opcode, r) => this.handleSeatCapabilities(opcode, r));
     }
 
     // Bind wl_data_device_manager and get a wl_data_device for the seat.
@@ -622,6 +669,57 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     }
   }
 
+  async writeClipboardText(text: string): Promise<void> {
+    if (!this.conn || !this.dataDeviceManagerId || !this.dataDeviceId)
+      throw new Error("Wayland seat clipboard unavailable");
+    if (Buffer.byteLength(text, "utf8") > 8 * 1024 * 1024)
+      throw new Error("Clipboard text exceeds 8 MiB");
+    const sourceId = this.allocId();
+    this.sendMessage(
+      wlDataDeviceManager.requests.createDataSource.encode(this.dataDeviceManagerId, sourceId),
+    );
+    this.handlers.set(sourceId, (opcode, reader) => {
+      if (opcode === EV.data_source_send) {
+        const event = wlDataSource.events.send.decodeReader(reader);
+        // The receiver may cancel while we send. Stream writes avoid blocking
+        // the protocol dispatcher and contain EPIPE without killing the app.
+        const transfer = fs.createWriteStream("", {
+          fd: event.fd,
+          autoClose: true,
+        });
+        transfer.on("error", () => {
+          /* cancelled clipboard transfer */
+        });
+        transfer.end(Buffer.from(text, "utf8"));
+      } else if (opcode === EV.data_source_cancelled) {
+        if (this.clipboardSource?.sourceId === sourceId) this.clipboardSource = null;
+        this.handlers.delete(sourceId);
+        this.sendMessage(wlDataSource.requests.destroy.encode(sourceId));
+      }
+    });
+    for (const mime of ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"])
+      this.sendMessage(wlDataSource.requests.offer.encode(sourceId, mime));
+    this.clipboardSource = { sourceId, text };
+    this.sendMessage(
+      wlDataDevice.requests.setSelection.encode(
+        this.dataDeviceId,
+        sourceId,
+        this.lastPointerSerial,
+      ),
+    );
+  }
+
+  async readClipboardText(): Promise<string> {
+    if (this.clipboardSource) return this.clipboardSource.text;
+    if (!this.clipboardOfferId) return "";
+    const mimes = this.dataOfferMimes.get(this.clipboardOfferId) ?? [];
+    const mime = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"].find((item) =>
+      mimes.includes(item),
+    );
+    if (!mime) throw new Error("Clipboard selection does not contain text");
+    return (await this.receiveOfferData(this.clipboardOfferId, mime)).toString("utf8");
+  }
+
   private handleDataSource(opcode: number, r: MessageReader, sourceId: number): void {
     if (opcode === EV.data_source_send) {
       const event = wlDataSource.events.send.decodeReader(r);
@@ -687,7 +785,9 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private handleDataDevice(opcode: number, r: MessageReader): void {
     if (opcode === EV.data_device_data_offer) {
       const { id: offerId } = wlDataDevice.events.dataOffer.decodeReader(r);
-      this.incomingOffer = { offerId, mimes: [], serial: 0, x: 0, y: 0 };
+      const mimes: string[] = [];
+      this.dataOfferMimes.set(offerId, mimes);
+      this.incomingOffer = { offerId, mimes, serial: 0, x: 0, y: 0 };
       this.handlers.set(offerId, (op, rr) => this.handleIncomingOffer(op, rr, offerId));
     } else if (opcode === EV.data_device_enter) {
       const event = wlDataDevice.events.enter.decodeReader(r);
@@ -786,16 +886,25 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           this.incomingOffer = null;
         });
     } else if (opcode === EV.data_device_selection) {
-      wlDataDevice.events.selection.decodeReader(r);
+      const event = wlDataDevice.events.selection.decodeReader(r);
+      const previous = this.clipboardOfferId;
+      this.clipboardOfferId = event.id ?? null;
+      if (
+        previous &&
+        previous !== this.clipboardOfferId &&
+        previous !== this.incomingOffer?.offerId
+      ) {
+        this.handlers.delete(previous);
+        this.dataOfferMimes.delete(previous);
+        this.sendMessage(wlDataOffer.requests.destroy.encode(previous));
+      }
     }
   }
 
   private handleIncomingOffer(opcode: number, r: MessageReader, offerId: number): void {
     if (opcode === EV.data_offer_offer) {
       const { mimeType: mime = "" } = wlDataOffer.events.offer.decodeReader(r);
-      if (this.incomingOffer?.offerId === offerId && mime) {
-        this.incomingOffer.mimes.push(mime);
-      }
+      if (mime) this.dataOfferMimes.get(offerId)?.push(mime);
     } else if (opcode === EV.data_offer_source_actions || opcode === EV.data_offer_action) {
       if (opcode === EV.data_offer_source_actions) {
         wlDataOffer.events.sourceActions.decodeReader(r);
@@ -821,9 +930,19 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
           autoClose: true,
         });
         const chunks: Buffer[] = [];
+        let total = 0;
+        const timeout = setTimeout(
+          () => readable.destroy(new Error("Clipboard/data offer timed out")),
+          10_000,
+        );
         readable.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          total += bytes.length;
+          if (total > 8 * 1024 * 1024)
+            readable.destroy(new Error("Clipboard/data offer exceeds 8 MiB"));
+          else chunks.push(bytes);
         });
+        readable.on("close", () => clearTimeout(timeout));
         readable.on("end", () => resolve(Buffer.concat(chunks)));
         readable.on("error", (err) => reject(err));
       } catch (err) {
@@ -867,16 +986,19 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
   getDiagnostics(): PlatformDiagnostics {
     const info = this.eglPresenter?.info;
-    const accelerated = Boolean(this.eglPresenter && !this.eglPresentationFailed);
+    const accelerated = this.clientAccelerationAvailable();
     return {
       platform: "linux",
       displayServer: "wayland",
       transport: "moire-typescript-wire",
-      presentation: accelerated
-        ? this.retainedFrames > 0 || this.softwareFrames === 0
-          ? "retained-egl-dmabuf"
-          : "software-egl-dmabuf"
-        : "software-shm",
+      presentation:
+        this.eglTransport === "readback"
+          ? "retained-egl-shm"
+          : accelerated
+            ? this.retainedFrames > 0 || this.softwareFrames === 0
+              ? "retained-egl-dmabuf"
+              : "software-egl-dmabuf"
+            : "software-shm",
       requestedAcceleration: process.env.MOIRE_UI_ACCELERATION ?? "auto",
       accelerated,
       display: process.env.WAYLAND_DISPLAY ?? "wayland-0",
@@ -895,9 +1017,20 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     };
   }
 
+  getPersonalization(): PersonalizationProfile {
+    return platformPersonalization("linux", {
+      platform: "wayland",
+    });
+  }
+
   noteRetainedDmabufFrame(): void {
     this.retainedFrames++;
     this.dmabufFrames++;
+  }
+
+  noteRetainedShmFrame(): void {
+    this.retainedFrames++;
+    this.shmFrames++;
   }
 
   noteSoftwareDmabufFrame(): void {
@@ -911,10 +1044,22 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   }
 
   disconnect(): void {
+    this.clipboardSource = null;
+    this.clipboardOfferId = null;
+    this.dataOfferMimes.clear();
     for (const w of [...this.windows]) w.destroy();
     this.windows.clear();
+    if (this.surfaceStateManagerId) {
+      this.sendMessage(
+        moireSurfaceStateManagerV1.requests.destroy.encode(this.surfaceStateManagerId),
+      );
+      this.surfaceStateManagerId = 0;
+    }
+    this.retireKeyboard();
+    this.releasePendingInputFds();
     this.eglPresenter?.destroy();
     this.eglPresenter = null;
+    this.eglTransport = "software";
     if (this.eglFd >= 0) {
       closeFd(this.eglFd);
       this.eglFd = -1;
@@ -938,6 +1083,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         const fd = openPath(candidate, O_RDWR | O_CLOEXEC);
         try {
           this.eglPresenter = new EglOutputScaler(fd);
+          this.eglTransport = "dmabuf";
           this.eglFd = fd;
           this.renderNode = candidate;
           this.fallbackReason = undefined;
@@ -968,7 +1114,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     width: number,
     height: number,
   ): EglClientPresent | null {
-    if (this.eglPresentationFailed) return null;
+    if (this.eglTransport !== "dmabuf") return null;
     try {
       return this.eglPresenter?.renderClientFrame(channel, pixels, width, height) ?? null;
     } catch (error) {
@@ -976,26 +1122,45 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       // A format/driver failure is not expected to heal during this session.
       // Keep the presenter alive so already-exported targets can receive their
       // wl_buffer.release events, but avoid retry/log storms on every tick.
-      this.eglPresentationFailed = true;
+      this.eglTransport = "readback";
+      this.retireClientRendering();
       this.fallbackReason = error instanceof Error ? error.message : String(error);
       return null;
     }
   }
 
-  renderClientComposition(channel: string, scene: RetainedSceneFrame): EglClientPresent | null {
-    if (this.eglPresentationFailed) return null;
+  renderClientComposition(
+    channel: string,
+    scene: RetainedSceneFrame,
+  ): ClientCompositionPresent | null {
+    if (!this.eglPresenter || this.eglTransport === "software") return null;
+    if (this.eglTransport === "dmabuf") {
+      try {
+        const frame = this.eglPresenter.renderClientComposition(channel, scene);
+        return frame ? { kind: "dmabuf", frame } : null;
+      } catch (error) {
+        console.warn("[ui/wayland] dmabuf allocation failed; retaining EGL through wl_shm:", error);
+        this.eglTransport = "readback";
+        this.retireClientRendering();
+        this.fallbackReason = error instanceof Error ? error.message : String(error);
+      }
+    }
     try {
-      return this.eglPresenter?.renderClientComposition(channel, scene) ?? null;
+      return {
+        kind: "shm",
+        frame: this.eglPresenter.renderClientCompositionReadback(scene),
+      };
     } catch (error) {
-      console.warn("[ui/wayland] retained EGL scene failed; using software/wl_shm:", error);
-      this.eglPresentationFailed = true;
+      console.warn("[ui/wayland] EGL readback failed; using software/wl_shm:", error);
+      this.eglTransport = "software";
+      this.retireClientRendering();
       this.fallbackReason = error instanceof Error ? error.message : String(error);
       return null;
     }
   }
 
   clientAccelerationAvailable(): boolean {
-    return Boolean(this.eglPresenter && !this.eglPresentationFailed);
+    return this.eglTransport !== "software";
   }
 
   createDmabufBuffer(frame: EglClientPresent, onRelease: () => void): number {
@@ -1035,6 +1200,10 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     return bufferId;
   }
 
+  hasClientFrame(id: string): boolean {
+    return this.eglPresenter?.hasClientFrame(id) ?? false;
+  }
+
   releaseClientFrame(id: string): void {
     this.eglPresenter?.releaseClientFrame(id);
   }
@@ -1053,6 +1222,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       if (w === win) this.surfaceToWindow.delete(sid);
     }
     if (this.pointerFocus === win) this.pointerFocus = null;
+    this.keyboard.forget(win);
   }
 
   getCompositorId(): number {
@@ -1065,6 +1235,25 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
   getPresentationId(): number {
     return this.presentationId;
+  }
+
+  getSurfaceStateVersion(): number {
+    return this.surfaceStateVersion;
+  }
+  getClientExecution(): ClientSubmission["execution"] {
+    return this.eglPresenter?.execution ?? "unknown";
+  }
+  retireClientRendering(): void {
+    for (const window of this.surfaceToWindow.values()) window.demoteRendering();
+  }
+
+  getSurfaceStateManagerId(): number {
+    return this.surfaceStateManagerId;
+  }
+
+  /** Transport loss removes the authority even if application teardown runs later. */
+  retireVisibilityObservations(): void {
+    for (const window of this.surfaceToWindow.values()) window.retireVisibilityObservation();
   }
 
   getWmBaseId(): number {
@@ -1131,23 +1320,22 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       const msg = Buffer.from(this.buf.subarray(0, header.size));
       this.buf = this.buf.subarray(header.size);
 
-      let consumed = 0;
-      const r = new MessageReader(msg, this.pendingFds);
+      const r = new MessageReader(msg, this.pendingFds.slice());
       const origFd = r.fd.bind(r);
       r.fd = () => {
         const fd = origFd();
-        consumed++;
+        // Transfer ownership before dispatch, so teardown cannot close it twice.
+        this.pendingFds.shift();
         return fd;
       };
       const handler = this.handlers.get(header.objectId);
       handler?.(header.opcode, r);
-      if (consumed > 0) this.pendingFds.splice(0, consumed);
     }
   }
 
   private handlePointer(opcode: number, r: MessageReader): void {
     const now = Date.now();
-    const modifiers = modifiersFromPressed(this.pressedKeys);
+    const modifiers = this.keyboard.modifiers();
     if (opcode === EV.pointer_enter) {
       const event = wlPointer.events.enter.decodeReader(r);
       const serial = event.serial;
@@ -1157,6 +1345,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       this.pointerX = event.surfaceX;
       this.pointerY = event.surfaceY;
       this.pointerFocus = this.surfaceToWindow.get(surfaceId) ?? null;
+      if (this.pointerFocus) this.pointerFocus.observeInputFocus("pointer", "enter", surfaceId);
+      else stopUnexpectedInputFocus();
       this.pointerFocus?.emitPointer({
         type: "move",
         x: this.pointerX,
@@ -1165,7 +1355,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         timeMs: now,
       });
     } else if (opcode === EV.pointer_leave) {
-      wlPointer.events.leave.decodeReader(r);
+      const event = wlPointer.events.leave.decodeReader(r);
+      this.surfaceToWindow.get(event.surface)?.observeInputFocus("pointer", "leave", event.surface);
       this.pointerFocus = null;
     } else if (opcode === EV.pointer_motion) {
       const event = wlPointer.events.motion.decodeReader(r);
@@ -1207,36 +1398,67 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   }
 
   private handleKeyboard(opcode: number, r: MessageReader): void {
-    if (opcode === EV.keyboard_keymap) {
-      const { fd } = wlKeyboard.events.keymap.decodeReader(r);
-      try {
-        closeFd(fd);
-      } catch {
-        // ok
-      }
-      return;
+    this.keyboard.handle(opcode, r);
+  }
+
+  private handleSeatCapabilities(opcode: number, reader: MessageReader): void {
+    if (opcode !== EV.seat_capabilities) return;
+    const { capabilities: caps } = wlSeat.events.capabilities.decodeReader(reader);
+    if ((caps & 1) !== 0 && !this.pointerId) {
+      this.pointerId = this.allocId();
+      this.sendMessage(wlSeat.requests.getPointer.encode(this.seatId, this.pointerId));
+      this.handlers.set(this.pointerId, (op, rr) => this.handlePointer(op, rr));
     }
-    if (opcode === EV.keyboard_key) {
-      const { key, state } = wlKeyboard.events.key.decodeReader(r);
-      const repeat = state === KEY_PRESSED && this.pressedKeys.has(key);
-      if (state === KEY_PRESSED) this.pressedKeys.add(key);
-      else this.pressedKeys.delete(key);
-      const modifiers = modifiersFromPressed(this.pressedKeys);
-      const logical = keyFromEvdev(key, modifiers);
-      const win = this.pointerFocus ?? [...this.windows][0] ?? null;
-      win?.emitKey({
-        type: repeat ? "repeat" : state === KEY_PRESSED ? "down" : "up",
-        code: key,
-        key: logical.key,
-        text: logical.text,
-        modifiers,
-        timeMs: Date.now(),
+    if ((caps & 2) !== 0 && !this.keyboardId) {
+      const keyboardId = this.allocId();
+      this.keyboardId = keyboardId;
+      this.sendMessage(wlSeat.requests.getKeyboard.encode(this.seatId, keyboardId));
+      this.handlers.set(keyboardId, (op, rr) => {
+        if (this.keyboardId === keyboardId) this.handleKeyboard(op, rr);
+        else if (op === wlKeyboard.events.keymap.opcode) {
+          // Queued maps keep FD ownership after seat removal but cannot replace the new map.
+          try {
+            const fd = rr.fd();
+            fs.closeSync(fd);
+          } catch {
+            // Missing or already closed stale FDs cannot interrupt the active keyboard.
+          }
+        }
       });
+    } else if ((caps & 2) === 0 && this.keyboardId) {
+      this.retireKeyboard();
+    }
+  }
+
+  getKeyboardMapping(): KeymapAvailability {
+    return this.keyboard.keymapState();
+  }
+
+  private retireKeyboard(): void {
+    const id = this.keyboardId;
+    this.keyboardId = 0;
+    this.keyboard.disconnect();
+    if (id) {
+      this.retiredKeyboardIds.add(id);
+      if (this.seatVersion >= wlKeyboard.requests.release.since)
+        this.sendMessage(wlKeyboard.requests.release.encode(id));
+    }
+  }
+
+  private releasePendingInputFds(): void {
+    const pending = this.pendingFds.splice(0);
+    this.buf = Buffer.alloc(0);
+    for (const fd of pending) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // A failed close must not retain ownership or prevent the other closes.
+      }
     }
   }
 }
 
-class WaylandWindow implements PlatformWindow {
+export class WaylandWindow implements PlatformWindow {
   private platform: WaylandPlatform;
   private title: string;
   private appId: string;
@@ -1248,10 +1470,18 @@ class WaylandWindow implements PlatformWindow {
   private surfaceId = 0;
   private xdgSurfaceId = 0;
   private toplevelId = 0;
+  private decorationId = 0;
   private popupId = 0;
   private positionerId = 0;
+  private surfaceStateId = 0;
+  private readonly rendering = new WindowRenderingTracker();
+  private visibility: UiSurfaceVisibility = "unknown";
+  private readonly visibilityCbs = new Set<(visibility: UiSurfaceVisibility) => void>();
   private readonly popupOpts: PlatformPopupOpts | null;
   private configured = false;
+  private maximized = false;
+  private fullscreen = false;
+  private readonly initialFullscreen: boolean;
   private slots: ShmSlot[] = [];
   private dmabufSlots = new Map<string, DmabufSlot>();
   private configureCbs: Array<(w: number, h: number) => void> = [];
@@ -1265,6 +1495,10 @@ class WaylandWindow implements PlatformWindow {
   private framePending = false;
   /** A draw requested while gated; retry once the compositor grants a frame. */
   private retryAfterFrame = false;
+  /** Scene reconciliation advances damage even when submission is gated.
+   * Carry those regions until a later commit actually transfers the pixels. */
+  private deferredDamage: RetainedClip | undefined;
+  private deferredFullDamage = false;
   private nextCommitId = 1;
   private presentationMode: UiPresentationMode = "auto";
   private retainedBackpressured = false;
@@ -1275,6 +1509,7 @@ class WaylandWindow implements PlatformWindow {
     platform: WaylandPlatform,
     opts: PlatformWindowOpts,
     popupOpts: PlatformPopupOpts | null = null,
+    private readonly diagnosticTrace: InputFixtureTrace = inputFixtureTrace,
   ) {
     this.platform = platform;
     this.title = opts.title;
@@ -1285,6 +1520,7 @@ class WaylandWindow implements PlatformWindow {
     this.height = opts.height;
     this.resizable = opts.resizable !== false;
     this.decorated = opts.decorated !== false;
+    this.initialFullscreen = opts.fullscreen === true;
     this.popupOpts = popupOpts;
   }
 
@@ -1293,6 +1529,57 @@ class WaylandWindow implements PlatformWindow {
     this.surfaceId = p.allocId();
     p.sendMessage(wlCompositor.requests.createSurface.encode(p.getCompositorId(), this.surfaceId));
     p.registerSurface(this.surfaceId, this);
+    const stateManager = p.getSurfaceStateManagerId();
+    if (stateManager) {
+      this.surfaceStateId = p.allocId();
+      p.setHandler(this.surfaceStateId, (opcode, reader) => {
+        if (!this.alive || !this.surfaceStateId) return;
+        if (
+          opcode === moireSurfaceStateV1.events.rendering.opcode &&
+          p.getSurfaceStateVersion() >= 2
+        ) {
+          const event = moireSurfaceStateV1.events.rendering.decodeReader(reader);
+          const states = moireSurfaceStateV1.enums.rendering;
+          const accepted =
+            event.rendering === states.hardwareRetained
+              ? "hardwareRetained"
+              : event.rendering === states.software
+                ? "software"
+                : event.rendering === states.virtual
+                  ? "virtual"
+                  : event.rendering === states.retainedUnknown
+                    ? "retainedUnknown"
+                    : "unknown";
+          if (this.rendering.observe(event.token, accepted)) {
+            this.emitFrame(
+              accepted === "software" || accepted === "virtual"
+                ? { type: "output-accepted", commitId: event.token, execution: accepted }
+                : { type: "output-revoked", commitId: event.token },
+            );
+          }
+          return;
+        }
+        if (opcode !== moireSurfaceStateV1.events.state.opcode) return;
+        const event = moireSurfaceStateV1.events.state.decodeReader(reader);
+        const states = moireSurfaceStateV1.enums.visibility;
+        const visibility =
+          event.visibility === states.visible
+            ? "visible"
+            : event.visibility === states.hidden
+              ? "hidden"
+              : "unknown";
+        if (visibility === this.visibility) return;
+        this.visibility = visibility;
+        for (const cb of this.visibilityCbs) cb(visibility);
+      });
+      p.sendMessage(
+        moireSurfaceStateManagerV1.requests.getSurfaceState.encode(
+          stateManager,
+          this.surfaceStateId,
+          this.surfaceId,
+        ),
+      );
+    }
 
     this.xdgSurfaceId = p.allocId();
     p.sendMessage(
@@ -1317,8 +1604,21 @@ class WaylandWindow implements PlatformWindow {
     p.sendMessage(xdgSurface.requests.getToplevel.encode(this.xdgSurfaceId, this.toplevelId));
     p.setHandler(this.toplevelId, (opcode, r) => {
       if (opcode === EV.xdg_toplevel_configure) {
-        const { width: w, height: h } = xdgToplevel.events.configure.decodeReader(r);
-        if (!this.resizable) {
+        const { width: w, height: h, states } = xdgToplevel.events.configure.decodeReader(r);
+        this.maximized = false;
+        this.fullscreen = false;
+        for (let offset = 0; offset + 4 <= states.length; offset += 4) {
+          if (states.readUInt32LE(offset) === xdgToplevel.enums.state.maximized)
+            this.maximized = true;
+          if (states.readUInt32LE(offset) === xdgToplevel.enums.state.fullscreen)
+            this.fullscreen = true;
+        }
+        if (this.fullscreen || this.maximized) {
+          // Output geometry governs fullscreen/maximized surfaces even when
+          // the ordinary window has a fixed preferred allocation.
+          if (w > 0) this.width = w;
+          if (h > 0) this.height = h;
+        } else if (!this.resizable) {
           // Moire initially configures new toplevels to 800×600; min==max then
           // reconfigures to our preferred size. Ignore mismatched interim hints.
           if (w === this.preferredW && h === this.preferredH) {
@@ -1346,10 +1646,15 @@ class WaylandWindow implements PlatformWindow {
 
     p.sendMessage(xdgToplevel.requests.setTitle.encode(this.toplevelId, this.title));
     p.sendMessage(xdgToplevel.requests.setAppId.encode(this.toplevelId, this.appId));
-    // Ask for our preferred size. Fixed windows use min==max so Moire
-    // reconfigures away from its default 800×600 slot hint.
+    // The initial 0×0 configure lets the client choose its preferred size.
+    // Resizable windows must not advertise that preference as their minimum.
+    // Fixed windows use min==max to keep their requested allocation.
     p.sendMessage(
-      xdgToplevel.requests.setMinSize.encode(this.toplevelId, this.preferredW, this.preferredH),
+      xdgToplevel.requests.setMinSize.encode(
+        this.toplevelId,
+        this.resizable ? 0 : this.preferredW,
+        this.resizable ? 0 : this.preferredH,
+      ),
     );
     if (this.resizable) {
       p.sendMessage(xdgToplevel.requests.setMaxSize.encode(this.toplevelId, 0, 0));
@@ -1361,6 +1666,7 @@ class WaylandWindow implements PlatformWindow {
     const decoMgr = p.getDecoManagerId();
     if (decoMgr) {
       const decoId = p.allocId();
+      this.decorationId = decoId;
       p.sendMessage(
         zxdgDecorationManagerV1.requests.getToplevelDecoration.encode(
           decoMgr,
@@ -1378,6 +1684,7 @@ class WaylandWindow implements PlatformWindow {
         // configure — mode already requested
       });
     }
+    if (this.initialFullscreen) this.setFullscreen(true);
     p.sendMessage(wlSurface.requests.commit.encode(this.surfaceId));
   }
 
@@ -1456,6 +1763,44 @@ class WaylandWindow implements PlatformWindow {
 
   setPresentationMode(mode: UiPresentationMode): void {
     this.presentationMode = mode;
+    if (mode === "shm") this.demoteRendering();
+  }
+
+  getRenderingState(): UiRenderingState {
+    return this.rendering.get();
+  }
+  onRenderingChange(cb: (state: UiRenderingState) => void): () => void {
+    return this.rendering.subscribe(cb);
+  }
+  demoteRendering(): void {
+    this.rendering.backendLost();
+  }
+
+  getVisibility(): UiSurfaceVisibility {
+    return this.visibility;
+  }
+
+  onVisibilityChange(cb: (visibility: UiSurfaceVisibility) => void): () => void {
+    if (this.alive) this.visibilityCbs.add(cb);
+    return () => {
+      this.visibilityCbs.delete(cb);
+    };
+  }
+
+  /** Retire wire authority on native teardown or transport loss, independently of application close. */
+  retireVisibilityObservation(): void {
+    this.demoteRendering();
+    if (this.surfaceStateId) {
+      const id = this.surfaceStateId;
+      this.surfaceStateId = 0;
+      this.platform.clearHandler(id);
+      this.platform.sendMessage(moireSurfaceStateV1.requests.destroy.encode(id));
+    }
+    if (this.visibility !== "unknown") {
+      this.visibility = "unknown";
+      for (const cb of this.visibilityCbs) cb("unknown");
+    }
+    this.visibilityCbs.clear();
   }
 
   present(
@@ -1467,8 +1812,10 @@ class WaylandWindow implements PlatformWindow {
     if (!this.alive || !this.configured) return;
     if (this.framePending) {
       this.retryAfterFrame = true;
+      this.deferDamage(damage);
       return;
     }
+    validateShmFrame(pixels, width, height);
     this.width = width;
     this.height = height;
     const channel = `surface-${this.surfaceId}`;
@@ -1481,22 +1828,44 @@ class WaylandWindow implements PlatformWindow {
       this.platform.noteSoftwareDmabufFrame();
       return;
     }
-    const stride = width * 4;
-    const size = stride * height;
+    this.commitShmFrame(pixels, width, height, damage);
+    this.platform.noteSoftwareShmFrame();
+  }
+
+  private commitShmFrame(
+    pixels: Uint8Array,
+    width: number,
+    height: number,
+    damage?: readonly RetainedClip[],
+    submissionPath: ClientSubmission["path"] = "software",
+  ): void {
+    const frame = classifyShmFrame(pixels, width, height);
+    const { size } = frame;
     let slot = this.slots.find((s) => !s.busy && s.size >= size);
     if (!slot) {
-      slot = this.allocSlot(size);
-    } else if (slot.width !== width || slot.height !== height) {
-      this.recreateBuffer(slot, width, height, stride);
+      slot = this.allocSlot(frame);
+    } else if (
+      slot.buffer.frame.width !== width ||
+      slot.buffer.frame.height !== height ||
+      slot.buffer.frame.format !== frame.format
+    ) {
+      this.recreateBuffer(slot, frame);
     }
     const copyStartedAt = performance.now();
     flushMmap(slot.map, pixels, size);
     const copyMs = performance.now() - copyStartedAt;
     slot.busy = true;
-    const commit = this.commitBuffer(slot.bufferId, width, height, "shm", copyMs, damage);
+    const commit = this.commitBuffer(
+      slot.buffer.id,
+      width,
+      height,
+      "shm",
+      copyMs,
+      damage,
+      submissionPath,
+    );
     slot.commitId = commit.commitId;
     slot.submittedAtMs = commit.submittedAtMs;
-    this.platform.noteSoftwareShmFrame();
   }
 
   presentScene(scene: RetainedSceneFrame): boolean {
@@ -1504,21 +1873,56 @@ class WaylandWindow implements PlatformWindow {
     if (this.presentationMode === "shm") return false;
     if (this.framePending) {
       this.retryAfterFrame = true;
+      this.deferDamage(scene.damage);
       return true;
     }
     const accelerated = this.platform.renderClientComposition(`surface-${this.surfaceId}`, scene);
     if (!accelerated) {
       if (this.platform.clientAccelerationAvailable()) {
         this.retainedBackpressured = true;
+        this.deferDamage(scene.damage);
         return true;
       }
       return false;
     }
     this.width = scene.width;
     this.height = scene.height;
-    this.commitAcceleratedFrame(accelerated, scene.width, scene.height);
-    this.platform.noteRetainedDmabufFrame();
+    switch (accelerated.kind) {
+      case "dmabuf":
+        this.commitAcceleratedFrame(
+          accelerated.frame,
+          scene.width,
+          scene.height,
+          accelerated.frame.damage,
+          "retained-dmabuf",
+        );
+        this.platform.noteRetainedDmabufFrame();
+        break;
+      case "shm":
+        this.commitShmFrame(
+          accelerated.frame.pixels,
+          scene.width,
+          scene.height,
+          undefined,
+          "retained-readback",
+        );
+        this.platform.noteRetainedShmFrame();
+        break;
+      default: {
+        const exhaustive: never = accelerated;
+        return exhaustive;
+      }
+    }
     return true;
+  }
+
+  private retireDmabufSlots(): void {
+    for (const [id, slot] of this.dmabufSlots) {
+      if (this.platform.hasClientFrame(id)) continue;
+      this.platform.clearHandler(slot.bufferId);
+      this.platform.sendMessage(wlBuffer.requests.destroy.encode(slot.bufferId));
+      this.dmabufSlots.delete(id);
+    }
   }
 
   private commitAcceleratedFrame(
@@ -1526,14 +1930,18 @@ class WaylandWindow implements PlatformWindow {
     width: number,
     height: number,
     damage: readonly RetainedClip[] = frame.damage,
+    submissionPath: ClientSubmission["path"] = "flat-dmabuf",
   ): void {
+    this.retireDmabufSlots();
     let slot = this.dmabufSlots.get(frame.id);
     if (!slot) {
       const frameId = frame.id;
       const bufferId = this.platform.createDmabufBuffer(frame, () => {
+        if (!this.alive) return;
         const released = this.dmabufSlots.get(frameId);
         const receivedAtMs = performance.now();
         this.platform.releaseClientFrame(frameId);
+        this.retireDmabufSlots();
         const retrySuggested = this.retainedBackpressured;
         this.retainedBackpressured = false;
         if (released?.commitId) {
@@ -1550,9 +1958,36 @@ class WaylandWindow implements PlatformWindow {
       slot = { frameId, bufferId, commitId: 0, submittedAtMs: 0 };
       this.dmabufSlots.set(frameId, slot);
     }
-    const commit = this.commitBuffer(slot.bufferId, width, height, "dmabuf", 0, damage);
+    const commit = this.commitBuffer(
+      slot.bufferId,
+      width,
+      height,
+      "dmabuf",
+      0,
+      damage,
+      submissionPath,
+    );
     slot.commitId = commit.commitId;
     slot.submittedAtMs = commit.submittedAtMs;
+  }
+
+  private deferDamage(damage: readonly RetainedClip[] | undefined): void {
+    if (!damage) {
+      this.deferredFullDamage = true;
+      return;
+    }
+    for (const rect of damage) {
+      const previous = this.deferredDamage;
+      const left = previous ? Math.min(previous.x, rect.x) : rect.x;
+      const top = previous ? Math.min(previous.y, rect.y) : rect.y;
+      const right = previous
+        ? Math.max(previous.x + previous.width, rect.x + rect.width)
+        : rect.x + rect.width;
+      const bottom = previous
+        ? Math.max(previous.y + previous.height, rect.y + rect.height)
+        : rect.y + rect.height;
+      this.deferredDamage = { x: left, y: top, width: right - left, height: bottom - top };
+    }
   }
 
   private commitBuffer(
@@ -1562,9 +1997,11 @@ class WaylandWindow implements PlatformWindow {
     transport: "dmabuf" | "shm",
     copyMs: number,
     damage?: readonly RetainedClip[],
+    submissionPath: ClientSubmission["path"] = "software",
   ): { commitId: number; submittedAtMs: number } {
     const p = this.platform;
-    const commitId = this.nextCommitId++;
+    const commitId = this.nextCommitId;
+    this.nextCommitId = (commitId + 1) >>> 0 || 1;
     // All entry points coalesce while this is true. Keeping this invariant at
     // the protocol boundary prevents unrelated application wakes from ever
     // building a wl_surface.frame callback backlog.
@@ -1629,7 +2066,11 @@ class WaylandWindow implements PlatformWindow {
       xdgSurface.requests.setWindowGeometry.encode(this.xdgSurfaceId, 0, 0, width, height),
     );
     p.sendMessage(wlSurface.requests.attach.encode(this.surfaceId, bufferId, 0, 0));
-    const clippedDamage = (damage ?? [{ x: 0, y: 0, width, height }])
+    const full = [{ x: 0, y: 0, width, height }];
+    const committedDamage = this.deferredFullDamage
+      ? full
+      : [...(damage ?? full), ...(this.deferredDamage ? [this.deferredDamage] : [])];
+    const clippedDamage = committedDamage
       .map((rect) => {
         const x = Math.max(0, Math.floor(rect.x));
         const y = Math.max(0, Math.floor(rect.y));
@@ -1654,7 +2095,16 @@ class WaylandWindow implements PlatformWindow {
         ),
       );
     }
+    if (this.surfaceStateId && p.getSurfaceStateVersion() >= 2)
+      p.sendMessage(moireSurfaceStateV1.requests.submission.encode(this.surfaceStateId, commitId));
     p.sendMessage(wlSurface.requests.commit.encode(this.surfaceId));
+    this.deferredDamage = undefined;
+    this.deferredFullDamage = false;
+    this.rendering.submitted({
+      token: commitId,
+      path: submissionPath,
+      execution: p.getClientExecution(),
+    });
     const submittedAtMs = performance.now();
     this.emitFrame({
       type: "submitted",
@@ -1680,6 +2130,35 @@ class WaylandWindow implements PlatformWindow {
     this.platform.sendMessage(xdgToplevel.requests.move.encode(this.toplevelId, seatId, serial));
   }
 
+  setMaximized(maximized: boolean): void {
+    if (!this.alive || !this.toplevelId) return;
+    const request = maximized
+      ? xdgToplevel.requests.setMaximized
+      : xdgToplevel.requests.unsetMaximized;
+    this.platform.sendMessage(request.encode(this.toplevelId));
+  }
+
+  isMaximized(): boolean {
+    return this.maximized;
+  }
+
+  setFullscreen(fullscreen: boolean): void {
+    if (!this.alive || !this.toplevelId) return;
+    const request = fullscreen
+      ? xdgToplevel.requests.setFullscreen.encode(this.toplevelId, 0)
+      : xdgToplevel.requests.unsetFullscreen.encode(this.toplevelId);
+    this.platform.sendMessage(request);
+  }
+
+  isFullscreen(): boolean {
+    return this.fullscreen;
+  }
+
+  minimize(): void {
+    if (!this.alive || !this.toplevelId) return;
+    this.platform.sendMessage(xdgToplevel.requests.setMinimized.encode(this.toplevelId));
+  }
+
   onClose(cb: () => void): void {
     this.closeCbs.push(cb);
   }
@@ -1700,18 +2179,73 @@ class WaylandWindow implements PlatformWindow {
     for (const cb of this.frameCbs) cb(ev);
   }
 
+  private observeInput(observe: () => void): void {
+    try {
+      if (!this.diagnosticTrace.active()) return;
+      if (!this.alive || this.appId !== "org.moire.Screenshot") {
+        this.diagnosticTrace.stop("focus");
+        return;
+      }
+      observe();
+    } catch {
+      // Diagnostic IO/policy failure must not affect delivery of the original event.
+      try {
+        this.diagnosticTrace.stop("io-error");
+      } catch {
+        /* observer is already unusable */
+      }
+    }
+  }
+
+  observeInputFocus(
+    device: "keyboard" | "pointer",
+    type: "enter" | "leave",
+    surfaceId: number,
+  ): void {
+    this.observeInput(() => {
+      this.diagnosticTrace.write({ layer: "client-focus", device, type, surfaceId });
+      // A fixture is scoped to one uninterrupted keyboard focus lifetime.
+      // Pointer leave is normal while that keyboard focus remains unchanged.
+      if (device === "keyboard" && type === "leave") this.diagnosticTrace.stop("focus");
+    });
+  }
+
   emitPointer(ev: UiPointerEvent): void {
+    this.observeInput(() => {
+      const ordinal = this.diagnosticTrace.write({
+        layer: "client-pointer",
+        type: ev.type,
+        x: ev.x,
+        y: ev.y,
+        timeMs: ev.timeMs,
+        button: ev.button ?? null,
+        modifiers: ev.modifiers ?? { ctrl: false, alt: false, shift: false, meta: false },
+      });
+      this.diagnosticTrace.link(ev, ordinal);
+    });
     for (const cb of this.pointerCbs) cb(ev);
   }
 
   emitKey(ev: UiKeyEvent): void {
+    this.observeInput(() => {
+      const ordinal = this.diagnosticTrace.write({
+        layer: "client-key",
+        type: ev.type,
+        code: ev.code,
+        timeMs: ev.timeMs,
+        modifiers: ev.modifiers ?? { ctrl: false, alt: false, shift: false, meta: false },
+      });
+      this.diagnosticTrace.link(ev, ordinal);
+    });
     for (const cb of this.keyCbs) cb(ev);
   }
 
   destroy(): void {
     if (!this.alive) return;
     this.alive = false;
+    this.rendering.destroy();
     const p = this.platform;
+    this.retireVisibilityObservation();
     for (const slot of this.slots) this.freeSlot(slot);
     this.slots = [];
     for (const slot of this.dmabufSlots.values()) {
@@ -1729,6 +2263,8 @@ class WaylandWindow implements PlatformWindow {
     this.pendingPresentationFeedbacks.clear();
     this.framePending = false;
     this.retryAfterFrame = false;
+    this.deferredDamage = undefined;
+    this.deferredFullDamage = false;
     p.dropClientChannel(`surface-${this.surfaceId}`);
     if (this.popupId) {
       p.sendMessage(xdgPopup.requests.destroy.encode(this.popupId));
@@ -1736,6 +2272,11 @@ class WaylandWindow implements PlatformWindow {
       this.popupId = 0;
     }
     if (this.toplevelId) {
+      if (this.decorationId) {
+        p.sendMessage(zxdgToplevelDecorationV1.requests.destroy.encode(this.decorationId));
+        p.clearHandler(this.decorationId);
+        this.decorationId = 0;
+      }
       p.sendMessage(xdgToplevel.requests.destroy.encode(this.toplevelId));
       p.clearHandler(this.toplevelId);
     }
@@ -1754,30 +2295,20 @@ class WaylandWindow implements PlatformWindow {
     this.frameCbs = [];
   }
 
-  private allocSlot(size: number): ShmSlot {
+  private allocSlot(frame: ShmFrame): ShmSlot {
     const p = this.platform;
+    const { width, height, stride, size, format } = frame;
     const fd = memfdCreate(size);
     const map = mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     const poolId = p.allocId();
     p.sendMessage(wlShm.requests.createPool.encode(p.getShmId(), poolId, fd, size));
     const bufferId = p.allocId();
-    const width = this.width;
-    const height = this.height;
-    const stride = width * 4;
     p.sendMessage(
-      wlShmPool.requests.createBuffer.encode(
-        poolId,
-        bufferId,
-        0,
-        width,
-        height,
-        stride,
-        WL_SHM_FORMAT_ARGB8888,
-      ),
+      wlShmPool.requests.createBuffer.encode(poolId, bufferId, 0, width, height, stride, format),
     );
     p.setHandler(bufferId, (opcode) => {
       if (opcode === EV.buffer_release) {
-        const s = this.slots.find((x) => x.bufferId === bufferId);
+        const s = this.slots.find((x) => x.buffer.id === bufferId);
         if (s) {
           s.busy = false;
           const receivedAtMs = performance.now();
@@ -1798,9 +2329,7 @@ class WaylandWindow implements PlatformWindow {
       size,
       map,
       poolId,
-      bufferId,
-      width,
-      height,
+      buffer: { id: bufferId, frame },
       busy: false,
       commitId: 0,
       submittedAtMs: 0,
@@ -1809,36 +2338,28 @@ class WaylandWindow implements PlatformWindow {
     return slot;
   }
 
-  private recreateBuffer(slot: ShmSlot, width: number, height: number, stride: number): void {
+  private recreateBuffer(slot: ShmSlot, frame: ShmFrame): void {
     const p = this.platform;
-    const need = stride * height;
-    if (need > slot.size) {
-      this.freeSlot(slot);
-      const idx = this.slots.indexOf(slot);
-      if (idx >= 0) this.slots.splice(idx, 1);
-      const neu = this.allocSlot(need);
-      Object.assign(slot, neu);
-      if (!this.slots.includes(slot)) this.slots.push(slot);
-      return;
-    }
-    p.sendMessage(wlBuffer.requests.destroy.encode(slot.bufferId));
-    p.clearHandler(slot.bufferId);
-    slot.bufferId = p.allocId();
-    slot.width = width;
-    slot.height = height;
+    // Selection only hands us an idle slot with sufficient storage. Changing
+    // format cannot mutate the existing protocol object, even at the same size.
+    const { width, height, stride, format } = frame;
+    p.sendMessage(wlBuffer.requests.destroy.encode(slot.buffer.id));
+    p.clearHandler(slot.buffer.id);
+    const bufferId = p.allocId();
+    slot.buffer = { id: bufferId, frame };
     p.sendMessage(
       wlShmPool.requests.createBuffer.encode(
         slot.poolId,
-        slot.bufferId,
+        bufferId,
         0,
         width,
         height,
         stride,
-        WL_SHM_FORMAT_ARGB8888,
+        format,
       ),
     );
-    p.setHandler(slot.bufferId, (opcode) => {
-      if (opcode === EV.buffer_release) {
+    p.setHandler(bufferId, (opcode) => {
+      if (opcode === EV.buffer_release && slot.buffer.id === bufferId) {
         slot.busy = false;
         const receivedAtMs = performance.now();
         if (slot.commitId) {
@@ -1857,11 +2378,11 @@ class WaylandWindow implements PlatformWindow {
   private freeSlot(slot: ShmSlot): void {
     const p = this.platform;
     try {
-      p.sendMessage(wlBuffer.requests.destroy.encode(slot.bufferId));
+      p.sendMessage(wlBuffer.requests.destroy.encode(slot.buffer.id));
     } catch {
       // ok
     }
-    p.clearHandler(slot.bufferId);
+    p.clearHandler(slot.buffer.id);
     try {
       p.sendMessage(wlShmPool.requests.destroy.encode(slot.poolId));
     } catch {

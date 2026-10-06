@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Screenshot
+Comment=Capture and annotate the desktop
+Exec=moire-screenshot
+TryExec=moire-screenshot
+Icon=moire-screenshot
+Terminal=false
+Type=Application
+Categories=Graphics;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Screenshot

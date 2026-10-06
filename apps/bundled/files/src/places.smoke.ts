@@ -16,20 +16,20 @@ try {
   const initial = loadPlaces();
   assert.deepEqual(
     initial.map((place) => place.id),
-    ["home", "desktop", "downloads"],
+    ["home", "desktop", "downloads", "documents", "pictures"],
   );
   assert.equal(initial[1]?.path, path.join(os.homedir(), "Desk"));
   assert.equal(initial[2]?.path, path.join(os.homedir(), "Incoming"));
 
   const projectPath = path.join(os.homedir(), "Projects", "Moire");
   const withFavorite = addFavorite(initial, projectPath);
-  assert.equal(withFavorite.length, 4);
-  assert.equal(withFavorite[3]?.label, "Moire");
+  assert.equal(withFavorite.length, 6);
+  assert.equal(withFavorite[5]?.label, "Moire");
   savePlaces(withFavorite);
 
   const reloaded = loadPlaces();
-  assert.equal(reloaded[3]?.path, projectPath);
-  assert.equal(reloaded[3]?.builtIn, false);
+  assert.equal(reloaded[5]?.path, projectPath);
+  assert.equal(reloaded[5]?.builtIn, false);
 
   const renamed = normalizePlaceLabels(
     reloaded.map((place) =>
@@ -37,7 +37,7 @@ try {
     ),
   );
   savePlaces(renamed);
-  assert.equal(loadPlaces()[3]?.label, "Workspace");
+  assert.equal(loadPlaces()[5]?.label, "Workspace");
 
   const deduplicated = addFavorite(renamed, projectPath);
   assert.equal(deduplicated.length, renamed.length);

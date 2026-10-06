@@ -1,0 +1,5 @@
+// Immutable fallback: missing/malformed allow rules must not restore broad
+// stock active-user permissions. Root retains its existing recovery authority.
+polkit.addRule(function(action, subject) {
+  if (subject.user !== "root") return polkit.Result.NO;
+});

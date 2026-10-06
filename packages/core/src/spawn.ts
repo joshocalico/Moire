@@ -24,14 +24,52 @@ export function spawnDesktopApp(opts: SpawnOptions): ChildProcess {
     delete env.DISPLAY;
   }
 
-  const parts = opts.exec.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [opts.exec];
-  const argv = parts.map((p) => p.replace(/^"(.*)"$/, "$1"));
+  const argv = parseDesktopCommand(opts.exec);
   const [cmd, ...args] = argv;
 
-  return spawn(cmd!, args, {
+  const child = spawn(cmd!, args, {
     env,
     cwd: opts.cwd,
     stdio: "ignore",
     detached: true,
   });
+  // File activation and desktop launch callers may not subscribe to errors.
+  // A missing command must never terminate the compositor.
+  child.on("error", (error) => console.warn(`[spawn] ${cmd}: ${error.message}`));
+  return child;
+}
+
+/** Decode quoted command arguments without executing a shell or expanding input. */
+export function parseDesktopCommand(command: string): string[] {
+  const arguments_: string[] = [];
+  let argument = "";
+  let started = false;
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index]!;
+    if (character === "\\" && quote !== "'") {
+      const next = command[++index];
+      if (next === undefined) throw new Error("Command ends with an escape");
+      if (quote === '"' && !['"', "\\", "$", "`", "\n"].includes(next)) argument += "\\";
+      if (next !== "\n") argument += next;
+      started = true;
+    } else if (quote) {
+      if (character === quote) quote = null;
+      else argument += character;
+    } else if (character === "'" || character === '"') {
+      quote = character;
+      started = true;
+    } else if (/\s/.test(character)) {
+      if (started) arguments_.push(argument);
+      argument = "";
+      started = false;
+    } else {
+      argument += character;
+      started = true;
+    }
+  }
+  if (quote) throw new Error("Command contains an unterminated quote");
+  if (started) arguments_.push(argument);
+  if (!arguments_[0]) throw new Error("Command has no executable");
+  return arguments_;
 }

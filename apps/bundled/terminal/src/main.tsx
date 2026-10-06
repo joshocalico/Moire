@@ -9,7 +9,7 @@ import {
   measureTerminalGrid,
   requestActiveWindowRedraw,
   setUiScaleFactor,
-  themePalette,
+  usePalette,
   type HitKeyEvent,
   type RichTextLine,
   type RichTextRun,
@@ -107,7 +107,7 @@ function TerminalApp(
     onTitle: (title: string) => void;
   },
 ): ReactNode {
-  const pal = themePalette();
+  const pal = usePalette();
   const viewHeight = Math.max(1, props.height - STATUS_HEIGHT);
   const grid = measureTerminalGrid(props.width, viewHeight, {
     fontSize: FONT_SIZE,

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Image Viewer
+Exec=moire-image-viewer %U
+TryExec=moire-image-viewer
+Icon=moire-image
+Terminal=false
+Type=Application
+Categories=Graphics;Viewer;
+MimeType=image/png;image/jpeg;image/webp;image/gif;image/bmp;image/tiff;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.ImageViewer

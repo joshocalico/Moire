@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import { loadTheme, setTheme, type MoireTheme } from "@moire/theme";
 import { activeThemePath, loadSettings, settingsPath } from "./store";
-import { bundledThemePath } from "./apply";
+import { bundledThemePath, themeForSettings } from "./apply";
 
 export type PrefsWatcher = {
   /** Poll for changes (call from compositor frame / shell timer). */
@@ -29,37 +29,40 @@ export function resolveRuntimeThemePath(): string {
 }
 
 export function loadRuntimeTheme(): MoireTheme {
-  const theme = loadTheme(resolveRuntimeThemePath());
+  const theme = fs.existsSync(activeThemePath())
+    ? loadTheme(resolveRuntimeThemePath())
+    : themeForSettings(loadSettings());
   setTheme(theme);
   return theme;
 }
 
 export function createPrefsWatcher(onChange?: (theme: MoireTheme) => void): PrefsWatcher {
-  let lastSettingsMtime = 0;
-  let lastThemeMtime = 0;
+  let lastSettingsStamp = "";
+  let lastThemeStamp = "";
   let lastSig = "";
   let current = loadRuntimeTheme();
   let debounceUntil = 0;
 
-  const mtime = (p: string): number => {
+  const fileStamp = (p: string): string => {
     try {
-      return fs.statSync(p).mtimeMs;
+      const stat = fs.statSync(p, { bigint: true });
+      return `${stat.ino}:${stat.mtimeNs}:${stat.size}`;
     } catch {
-      return 0;
+      return "";
     }
   };
 
   const signature = (): string => {
     try {
       const s = loadSettings();
-      return `${s.dark}|${s.uiScale}|${mtime(activeThemePath())}|${current.name}`;
+      return `${s.dark}|${s.themeFamily}|${s.uiScale}|${s.reducedMotion}|${fileStamp(activeThemePath())}|${current.name}`;
     } catch {
-      return String(mtime(activeThemePath()));
+      return String(fileStamp(activeThemePath()));
     }
   };
 
-  lastSettingsMtime = mtime(settingsPath());
-  lastThemeMtime = mtime(activeThemePath());
+  lastSettingsStamp = fileStamp(settingsPath());
+  lastThemeStamp = fileStamp(activeThemePath());
   lastSig = signature();
 
   return {
@@ -67,15 +70,15 @@ export function createPrefsWatcher(onChange?: (theme: MoireTheme) => void): Pref
     poll(): boolean {
       const now = Date.now();
       if (now < debounceUntil) return false;
-      const sm = mtime(settingsPath());
-      const tm = mtime(activeThemePath());
-      if (sm === lastSettingsMtime && tm === lastThemeMtime) return false;
-      lastSettingsMtime = sm;
-      lastThemeMtime = tm;
+      const sm = fileStamp(settingsPath());
+      const tm = fileStamp(activeThemePath());
+      if (sm === lastSettingsStamp && tm === lastThemeStamp) return false;
+      lastSettingsStamp = sm;
+      lastThemeStamp = tm;
       try {
         const settings = loadSettings();
         const next = loadRuntimeTheme();
-        const sig = `${settings.dark}|${settings.uiScale}|${tm}|${next.name}`;
+        const sig = `${settings.dark}|${settings.themeFamily}|${settings.uiScale}|${settings.reducedMotion}|${tm}|${next.name}`;
         if (sig === lastSig) return false;
         lastSig = sig;
         current = next;
@@ -97,6 +100,7 @@ export function createPrefsWatcher(onChange?: (theme: MoireTheme) => void): Pref
 export {
   loadSettings,
   saveSettings,
+  updateSettings,
   settingsPath,
   activeThemePath,
   configDir,
@@ -115,3 +119,13 @@ export {
   bundledThemePath,
   type ApplyResult,
 } from "./apply";
+export {
+  createAudioStatusAdapter,
+  executeAudioCommand,
+  type AudioStatus,
+  type AudioReady,
+  type AudioSink,
+  type AudioStatusAdapter,
+  type AudioCommandExecutor,
+  type AudioCommandResult,
+} from "./audio-status";

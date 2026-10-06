@@ -1,5 +1,5 @@
-import React, { useMemo, useState, type ReactNode } from "react";
-import { Group, measureText } from "@moire/react-host";
+import React, { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Group, measureTextBounds } from "@moire/react-host";
 import { resolveStatefulStyle, useWidgetTheme, type ButtonSize } from "#ui/widget-theme";
 import { Button } from "./button";
 import { DropZone } from "./dnd";
@@ -34,7 +34,14 @@ export function Breadcrumbs(props: BreadcrumbsProps): ReactNode {
   const pressedSegment = resolveStatefulStyle(recipe.segment, "pressed");
   const visible = useMemo(() => {
     const widths = props.segments.map(
-      (item) => Math.ceil(measureText(item.label, label.fontSize / 14)) + metrics.paddingX * 2,
+      (item) =>
+        Math.ceil(
+          Math.max(
+            measureTextBounds(item.label, label).width,
+            measureTextBounds(item.label, currentLabel).width,
+          ),
+        ) +
+        metrics.paddingX * 2,
     );
     let total =
       widths.reduce((sum, width) => sum + width, 0) +
@@ -45,7 +52,15 @@ export function Breadcrumbs(props: BreadcrumbsProps): ReactNode {
       start++;
     }
     return props.segments.slice(start);
-  }, [label.fontSize, metrics, props.segments, props.width]);
+  }, [
+    label.fontSize,
+    label.fontWeight,
+    currentLabel.fontSize,
+    currentLabel.fontWeight,
+    metrics,
+    props.segments,
+    props.width,
+  ]);
 
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={h} clip>
@@ -53,7 +68,13 @@ export function Breadcrumbs(props: BreadcrumbsProps): ReactNode {
         {visible.map((segment, index) => {
           const itemWidth = Math.min(
             props.width,
-            Math.ceil(measureText(segment.label, label.fontSize / 14)) + metrics.paddingX * 2,
+            Math.ceil(
+              Math.max(
+                measureTextBounds(segment.label, label).width,
+                measureTextBounds(segment.label, currentLabel).width,
+              ),
+            ) +
+              metrics.paddingX * 2,
           );
           const isCurrent = index === visible.length - 1;
           const labelStyle = isCurrent ? currentLabel : label;
@@ -114,6 +135,8 @@ export type PathBarProps = BreadcrumbsProps & {
   value: string;
   onCommit: (value: string) => string | undefined;
   editButtonWidth?: number;
+  focusRequest?: number;
+  onEditingChange?: (editing: boolean) => void;
 };
 
 export function PathBar(props: PathBarProps): ReactNode {
@@ -124,6 +147,14 @@ export function PathBar(props: PathBarProps): ReactNode {
   const buttonWidth = props.editButtonWidth ?? recipe.metrics.editButtonWidth;
   const gap = recipe.metrics.editGap;
   const h = props.height ?? recipe.metrics.height;
+
+  useEffect(() => {
+    if (!props.focusRequest) return;
+    setDraft(props.value);
+    setError(null);
+    setEditing(true);
+  }, [props.focusRequest]);
+  useEffect(() => props.onEditingChange?.(editing), [editing, props.onEditingChange]);
 
   const beginEditing = () => {
     setDraft(props.value);
@@ -154,6 +185,7 @@ export function PathBar(props: PathBarProps): ReactNode {
               size={props.size}
               value={draft}
               autoFocus
+              selectAllOnFocus
               invalid={!!error}
               onChange={(value) => {
                 setDraft(value);

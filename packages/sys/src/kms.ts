@@ -1,4 +1,5 @@
 import koffi from "koffi";
+import type { SeatDeviceAccess } from "./seat";
 import { assertLinux } from "./platform";
 import { readDisplayIdentity, type DisplayIdentity } from "./display-identity";
 import {
@@ -14,14 +15,20 @@ import {
   PROT_WRITE,
 } from "./libc";
 import { LinuxReadinessDispatcher } from "./readiness";
+import { DrmPageFlipHandler2, PageFlipEvents } from "./page-flip-events";
+import {
+  ReadbackScanoutPool,
+  ScanoutPresenter,
+  packScanoutPixels,
+  pageFlipFeedback,
+  type KmsPresentationFeedback,
+  type PageFlipQueueResult,
+} from "./scanout-presentation";
+export type { KmsPresentationFeedback } from "./scanout-presentation";
 
 const DRM_MODE_CONNECTED = 1;
 const DRM_MODE_TYPE_PREFERRED = 1 << 3;
 const DRM_MODE_PAGE_FLIP_EVENT = 0x01;
-
-const DrmPageFlipHandler2 = koffi.proto(
-  "void MoireDrmPageFlipHandler2(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_id, void *user_data)",
-);
 
 const DrmEventContext = koffi.struct("drmEventContext_moire", {
   version: "int",
@@ -29,23 +36,6 @@ const DrmEventContext = koffi.struct("drmEventContext_moire", {
   page_flip_handler: "void *",
   page_flip_handler2: koffi.pointer(DrmPageFlipHandler2),
 });
-
-type PendingPageFlip = {
-  output: KmsOutput;
-  resolve: (feedback: KmsPresentationFeedback) => void;
-  reject: (error: Error) => void;
-  timeout: NodeJS.Timeout;
-};
-
-/** Timestamp and sequence reported by DRM for a completed scanout update. */
-export type KmsPresentationFeedback = {
-  sequence: number;
-  seconds: number;
-  nanoseconds: number;
-  vsync: boolean;
-  hardwareClock: boolean;
-  hardwareCompletion: boolean;
-};
 
 type KmsPageFlipDevicePresenter = {
   fd: number;
@@ -56,12 +46,20 @@ type KmsPageFlipDevicePresenter = {
   pageFlip: (...args: unknown[]) => unknown;
   handleEvent: (...args: unknown[]) => unknown;
   outputs: Set<KmsOutput>;
-  pending: Map<number, PendingPageFlip>;
-  support: WeakMap<KmsOutput, boolean>;
+  events: PageFlipEvents<KmsOutput>;
 };
 
 const pageFlipPresenters = new WeakMap<KmsOutput, KmsPageFlipDevicePresenter>();
 const pageFlipDevices = new Map<number, KmsPageFlipDevicePresenter>();
+const outputScanouts = new WeakMap<KmsOutput, KmsScanout>();
+const trackedOutputs = new Set<KmsOutput>();
+const pageFlipReady = new WeakSet<KmsOutput>();
+
+type KmsScanout = {
+  ownership: ScanoutPresenter;
+  readback: ReadbackScanoutPool<KmsFramebuffer>;
+  readiness: LinuxReadinessDispatcher | undefined;
+};
 
 const CURSOR_BUFFER_SIZE = 64;
 
@@ -201,9 +199,12 @@ export type KmsMode = {
 type KmsModeData = KmsMode & { raw: Record<string, unknown> };
 
 export type KmsOutput = {
+  /** Connector/mode observation, independent of queued/active framebuffer ownership. */
+  availability: "available" | "unavailable" | "unknown";
   fd: number;
   /** Only the primary output owns DRM mastership and closes the shared fd. */
   ownsFd: boolean;
+  releaseFd?: () => void;
   cardPath: string;
   connectorId: number;
   connectorName: string;
@@ -332,8 +333,18 @@ function describeModes(rawModes: Record<string, unknown>[]): KmsModeData[] {
 export function openKmsOutput(
   cardPath = "/dev/dri/card1",
   requestedModeId = process.env.MOIRE_MODE,
+  bounds?: { maxWidth: number; maxHeight: number },
+  devices?: SeatDeviceAccess,
 ): KmsOutput {
   assertLinux("KMS");
+  if (
+    bounds &&
+    (!Number.isSafeInteger(bounds.maxWidth) ||
+      bounds.maxWidth < 1 ||
+      !Number.isSafeInteger(bounds.maxHeight) ||
+      bounds.maxHeight < 1)
+  )
+    throw new Error("KMS allocation bounds must be positive integer dimensions");
 
   const libdrm = loadLibdrm();
   const drmIoctl = libdrm.func("int drmIoctl(int fd, unsigned long request, void *arg)");
@@ -358,8 +369,9 @@ export function openKmsOutput(
   void DrmModeEncoder;
   void DrmModeRes;
 
-  const fd = openPath(cardPath, O_RDWR | O_CLOEXEC);
-  const master = drmSetMaster(fd) as number;
+  const fd = devices ? devices.open(cardPath) : openPath(cardPath, O_RDWR | O_CLOEXEC);
+  const releaseFd = () => (devices ? devices.close(fd) : closeFd(fd));
+  const master = devices ? 0 : (drmSetMaster(fd) as number);
   if (master !== 0) {
     // May still work if we already are master via logind; continue and fail on modeset if needed.
     console.warn("drmSetMaster returned", master, "(continuing)");
@@ -367,7 +379,7 @@ export function openKmsOutput(
 
   const resPtr = drmModeGetResources(fd);
   if (!resPtr) {
-    closeFd(fd);
+    releaseFd();
     throw new Error("drmModeGetResources failed");
   }
 
@@ -412,7 +424,9 @@ export function openKmsOutput(
           conn.modes,
           koffi.array(DrmModeModeInfo, conn.count_modes),
         ) as Record<string, unknown>[];
-        const modes = describeModes(rawModes);
+        const modes = describeModes(rawModes).filter(
+          (mode) => !bounds || (mode.width <= bounds.maxWidth && mode.height <= bounds.maxHeight),
+        );
         const selected =
           modes.find((candidate) => candidate.id === requestedModeId) ??
           modes.find((candidate) => candidate.preferred) ??
@@ -527,8 +541,10 @@ export function openKmsOutput(
         }
 
         return {
+          availability: "available",
           fd,
           ownsFd: true,
+          releaseFd,
           cardPath,
           connectorId,
           connectorName: connectorName(conn.connector_type, conn.connector_type_id),
@@ -568,6 +584,9 @@ export function openKmsOutput(
     }
 
     throw new Error("No connected DRM connector with modes found");
+  } catch (error) {
+    releaseFd();
+    throw error;
   } finally {
     drmModeFreeResources(resPtr);
   }
@@ -578,7 +597,26 @@ export function openKmsOutput(
  * metadata in place but does not choose a replacement mode; core owns that
  * policy because it also has to reflow the logical desktop.
  */
-export function refreshKmsOutputModes(out: KmsOutput): KmsOutputRefresh {
+export function refreshKmsOutputModes(
+  out: Pick<
+    KmsOutput,
+    | "availability"
+    | "fd"
+    | "connectorId"
+    | "getConnector"
+    | "freeConnector"
+    | "cardPath"
+    | "connectorName"
+    | "identity"
+    | "physicalWidthMm"
+    | "physicalHeightMm"
+    | "modes"
+    | "modeData"
+    | "currentModeId"
+  >,
+): KmsOutputRefresh {
+  // A failed query cannot preserve an earlier connected witness.
+  out.availability = "unknown";
   const connPtr = out.getConnector(out.fd, out.connectorId);
   if (!connPtr) {
     return {
@@ -600,6 +638,7 @@ export function refreshKmsOutputModes(out: KmsOutput): KmsOutputRefresh {
       modes: unknown;
     };
     if (conn.connection !== DRM_MODE_CONNECTED || conn.count_modes < 1) {
+      out.availability = "unavailable";
       return {
         connected: false,
         modesChanged: false,
@@ -630,6 +669,7 @@ export function refreshKmsOutputModes(out: KmsOutput): KmsOutputRefresh {
     out.physicalHeightMm = conn.mmHeight;
     out.modes = nextModeData.map(({ raw: _raw, ...mode }) => mode);
     out.modeData = new Map(nextModeData.map((mode) => [mode.id, mode]));
+    out.availability = "available";
 
     return {
       connected: true,
@@ -654,6 +694,7 @@ export function switchKmsConnector(
   requestedModeId?: string,
 ): boolean {
   if (nextConnectorId === out.connectorId) return false;
+  const scanout = kmsScanout(out);
   const connPtr = out.getConnector(out.fd, nextConnectorId);
   if (!connPtr) throw new Error(`DRM connector ${nextConnectorId} not found`);
 
@@ -746,6 +787,18 @@ export function switchKmsConnector(
       modeData: out.modeData,
       currentModeId: out.currentModeId,
     };
+    const previousFramebuffer = scanout.ownership.activeFramebuffer ?? out.fbId;
+
+    if (crtcId !== previous.crtcId) {
+      const disabled = out.setCrtc(out.fd, previous.crtcId, 0, 0, 0, null, 0, null);
+      if (disabled !== 0) {
+        const failure = new Error(`Cannot retire old CRTC ${previous.crtcId} (${disabled})`);
+        scanout.ownership.quarantine(failure);
+        koffi.free(nextConnectorsPtr);
+        throw failure;
+      }
+      scanout.ownership.confirmHandoff(0);
+    }
 
     out.connectorId = nextConnectorId;
     out.connectorName = connectorName(conn.connector_type, conn.connector_type_id);
@@ -762,6 +815,7 @@ export function switchKmsConnector(
 
     try {
       setKmsMode(out, selected.id);
+      out.availability = "available";
       koffi.free(previous.connectorsPtr);
       return true;
     } catch (error) {
@@ -776,6 +830,16 @@ export function switchKmsConnector(
       out.modeData = previous.modeData;
       out.currentModeId = previous.currentModeId;
       koffi.free(nextConnectorsPtr);
+      if (crtcId !== previous.crtcId) {
+        try {
+          setKmsFramebuffer(out, previousFramebuffer);
+          scanout.ownership.confirmHandoff(previousFramebuffer);
+        } catch (restoreError) {
+          scanout.ownership.quarantine(
+            restoreError instanceof Error ? restoreError : new Error(String(restoreError)),
+          );
+        }
+      }
       throw error;
     }
   } finally {
@@ -1005,6 +1069,7 @@ export function openAdditionalKmsOutput(
 
     return {
       ...primary,
+      availability: "available",
       ownsFd: false,
       connectorId,
       connectorName: connectorName(conn.connector_type, conn.connector_type_id),
@@ -1032,7 +1097,8 @@ export function openAdditionalKmsOutput(
  * released, so a failed request leaves the current display intact.
  */
 export function setKmsMode(out: KmsOutput, modeId: string): boolean {
-  if (modeId === out.currentModeId) return false;
+  const scanout = kmsScanout(out);
+  if (modeId === out.currentModeId && scanout.ownership.status !== "quarantined") return false;
   const mode = out.modeData.get(modeId);
   if (!mode) throw new Error(`Unknown KMS mode ${modeId}`);
 
@@ -1115,7 +1181,6 @@ export function setKmsMode(out: KmsOutput, modeId: string): boolean {
       modePtr,
     };
 
-    cancelPendingPageFlip(out, "display mode changed");
     const set = out.setCrtc(
       out.fd,
       out.crtcId,
@@ -1130,6 +1195,8 @@ export function setKmsMode(out: KmsOutput, modeId: string): boolean {
       throw new Error(`drmModeSetCrtc mode switch failed (${set})`);
     }
 
+    scanout.ownership.confirmHandoff(next.fbId);
+    scanout.readback.reset(next);
     const previous: KmsFramebuffer = {
       width: out.width,
       height: out.height,
@@ -1158,41 +1225,98 @@ export function setKmsMode(out: KmsOutput, modeId: string): boolean {
   }
 }
 
-/** Re-apply the CRTC → FB mapping (forces some virtual GPUs to refresh). */
+/** Re-apply the durable output framebuffer for a confirmed shutdown/mode handoff. */
 export function presentKms(out: KmsOutput): void {
-  cancelPendingPageFlip(out, "framebuffer replaced by SetCrtc");
-  setKmsFramebuffer(out, out.fbId);
+  const scanout = kmsScanout(out);
+  try {
+    setKmsFramebuffer(out, out.fbId);
+    scanout.ownership.confirmHandoff(out.fbId);
+  } catch (error) {
+    scanout.ownership.quarantine(error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
 }
 
-function rejectPendingPageFlips(
-  presenter: KmsPageFlipDevicePresenter,
-  error: Error,
-  output?: KmsOutput,
-): void {
-  for (const [crtcId, pending] of presenter.pending) {
-    if (output && pending.output !== output) continue;
-    presenter.pending.delete(crtcId);
-    clearTimeout(pending.timeout);
-    pending.reject(error);
+function kmsScanout(out: KmsOutput): KmsScanout {
+  const cached = outputScanouts.get(out);
+  if (cached) return cached;
+  const ownership = new ScanoutPresenter(out.fbId, {
+    queue: (framebuffer, token) => queuePageFlip(out, framebuffer, token),
+    setFramebuffer: (framebuffer) => setKmsFramebuffer(out, framebuffer),
+  });
+  const scanout: KmsScanout = {
+    ownership,
+    readiness: undefined,
+    readback: new ReadbackScanoutPool(out, ownership, {
+      allocate: () => {
+        const mode = out.modeData.get(out.currentModeId);
+        if (!mode) throw new Error(`Missing active mode ${out.currentModeId}`);
+        return createFramebuffer(out, mode);
+      },
+      copy: (frame, pixels) => {
+        const packed = packScanoutPixels(
+          pixels,
+          out.width,
+          out.height,
+          out.pitch,
+          frame.pitch,
+          frame.size,
+        );
+        flushMmap(frame.map, packed, frame.size);
+      },
+      destroy: (frame) => destroyFramebuffer(out, frame),
+    }),
+  };
+  outputScanouts.set(out, scanout);
+  trackedOutputs.add(out);
+  return scanout;
+}
+
+/** A quarantined output must not render again until a matching event or confirmed modeset. */
+export function isKmsPresentationReady(out: KmsOutput): boolean {
+  return out.availability === "available" && kmsScanout(out).ownership.status === "ready";
+}
+
+/** Used by the direct renderer before writing a target, including after failed renders. */
+export function isKmsFramebufferWritable(
+  fd: number,
+  framebuffer: number,
+  outputId: string,
+): boolean {
+  for (const out of trackedOutputs) {
+    if (out.fd !== fd) continue;
+    const ownership = kmsScanout(out).ownership;
+    if (out.connectorName === outputId && !ownership.canWrite(framebuffer)) return false;
+    if (ownership.ownsFramebuffer(framebuffer) && !ownership.canRetire(framebuffer)) return false;
   }
+  return true;
+}
+
+/** Resources still owned by scanout stay allocated if shutdown/mode handoff failed. */
+export function canRetireKmsFramebuffer(fd: number, framebuffer: number): boolean {
+  for (const out of trackedOutputs) {
+    const ownership = kmsScanout(out).ownership;
+    if (
+      out.fd === fd &&
+      ownership.ownsFramebuffer(framebuffer) &&
+      !ownership.canRetire(framebuffer)
+    )
+      return false;
+  }
+  return true;
 }
 
 function handlePageFlipEvents(presenter: KmsPageFlipDevicePresenter): void {
   try {
     const handled = Number(presenter.handleEvent(presenter.fd, presenter.context));
-    if (handled !== 0) {
-      throw new Error(`drmHandleEvent failed (${handled}) on fd=${presenter.fd}`);
-    }
+    if (handled !== 0) throw new Error(`drmHandleEvent failed (${handled}) on fd=${presenter.fd}`);
   } catch (error) {
-    const failure = error instanceof Error ? error : new Error(`drmHandleEvent failed: ${error}`);
-    rejectPendingPageFlips(presenter, failure);
+    const failure = error instanceof Error ? error : new Error(String(error));
+    for (const out of presenter.outputs) kmsScanout(out).ownership.quarantine(failure);
   }
 }
 
-function pageFlipPresenter(
-  out: KmsOutput,
-  readiness?: LinuxReadinessDispatcher,
-): KmsPageFlipDevicePresenter {
+function pageFlipPresenter(out: KmsOutput): KmsPageFlipDevicePresenter {
   const cached = pageFlipPresenters.get(out);
   if (cached) return cached;
   const shared = pageFlipDevices.get(out.fd);
@@ -1202,38 +1326,38 @@ function pageFlipPresenter(
     return shared;
   }
   const libdrm = loadLibdrm();
-  const presenter = {
+  const callback = koffi.register(
+    (
+      _fd: number,
+      sequence: number,
+      seconds: number,
+      microseconds: number,
+      _crtcId: number,
+      userData: unknown,
+    ) => {
+      const event = presenter.events.consume(userData);
+      if (!event) return;
+      // The event token is specific to this output and flip, including across mode changes.
+      kmsScanout(event.output).ownership.complete(
+        event.token,
+        pageFlipFeedback(sequence, seconds, microseconds),
+      );
+    },
+    koffi.pointer(DrmPageFlipHandler2),
+  );
+  const presenter: KmsPageFlipDevicePresenter = {
     fd: out.fd,
-    readiness: readiness ?? new LinuxReadinessDispatcher("kms"),
-    ownsReadiness: readiness == null,
-    callback: null,
-    context: null,
+    readiness: kmsScanout(out).readiness ?? new LinuxReadinessDispatcher("kms"),
+    ownsReadiness: kmsScanout(out).readiness == null,
+    callback,
+    context: koffi.alloc(DrmEventContext, 1),
     pageFlip: libdrm.func(
       "int drmModePageFlip(int fd, uint32_t crtc_id, uint32_t fb_id, uint32_t flags, void *user_data)",
     ),
     handleEvent: libdrm.func("int drmHandleEvent(int fd, void *evctx)"),
-    outputs: new Set<KmsOutput>([out]),
-    pending: new Map<number, PendingPageFlip>(),
-    support: new WeakMap<KmsOutput, boolean>(),
-  } as unknown as KmsPageFlipDevicePresenter;
-  presenter.callback = koffi.register(
-    (_fd: number, sequence: number, seconds: number, microseconds: number, crtcId: number) => {
-      const pending = presenter.pending.get(crtcId);
-      if (!pending) return;
-      presenter.pending.delete(crtcId);
-      clearTimeout(pending.timeout);
-      pending.resolve({
-        sequence,
-        seconds,
-        nanoseconds: microseconds * 1_000,
-        vsync: true,
-        hardwareClock: true,
-        hardwareCompletion: true,
-      });
-    },
-    koffi.pointer(DrmPageFlipHandler2),
-  );
-  presenter.context = koffi.alloc(DrmEventContext, 1);
+    outputs: new Set([out]),
+    events: new PageFlipEvents<KmsOutput>(),
+  };
   koffi.encode(presenter.context, DrmEventContext, {
     version: 3,
     vblank_handler: null,
@@ -1246,98 +1370,83 @@ function pageFlipPresenter(
   return presenter;
 }
 
-function cancelPendingPageFlip(out: KmsOutput, reason: string): void {
-  const presenter = pageFlipPresenters.get(out);
-  if (!presenter) return;
-  const pending = presenter.pending.get(out.crtcId);
-  if (pending?.output === out) {
-    presenter.pending.delete(out.crtcId);
-    clearTimeout(pending.timeout);
-    pending.reject(new Error(`DRM page flip cancelled on ${out.connectorName}: ${reason}`));
-  }
-}
-
-async function tryPageFlip(
-  out: KmsOutput,
-  framebufferId: number,
-  readiness?: LinuxReadinessDispatcher,
-): Promise<KmsPresentationFeedback | null> {
-  const presenter = pageFlipPresenter(out, readiness);
-  if (presenter.support.get(out) === false) return null;
-  if (presenter.pending.has(out.crtcId)) {
-    throw new Error(`DRM page flip already pending on ${out.connectorName}`);
-  }
-  const queued = Number(
-    presenter.pageFlip(out.fd, out.crtcId, framebufferId, DRM_MODE_PAGE_FLIP_EVENT, null),
-  );
-  if (queued !== 0) {
-    console.warn(
-      `[kms] page flips unavailable on ${out.connectorName}; retaining SetCrtc fallback (${queued})`,
+function queuePageFlip(out: KmsOutput, framebuffer: number, token: number): PageFlipQueueResult {
+  const presenter = pageFlipPresenter(out);
+  const allocation = presenter.events.allocate(out, token);
+  let queued: number;
+  let errno: number;
+  try {
+    queued = Number(
+      presenter.pageFlip(out.fd, out.crtcId, framebuffer, DRM_MODE_PAGE_FLIP_EVENT, allocation),
     );
-    presenter.support.set(out, false);
-    return null;
+    errno = koffi.errno();
+  } catch (error) {
+    presenter.events.cancel(allocation);
+    throw error;
   }
-  const wasSupported = presenter.support.get(out) === true;
-  const feedback = await new Promise<KmsPresentationFeedback>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      presenter.pending.delete(out.crtcId);
-      reject(new Error(`DRM page flip timed out on ${out.connectorName}`));
-    }, 1_000);
-    presenter.pending.set(out.crtcId, { output: out, resolve, reject, timeout });
-  });
-  if (!wasSupported) {
-    console.log(`[kms] page-flip presentation ready on ${out.connectorName}`);
+  if (queued === 0) return { kind: "queued" };
+  presenter.events.cancel(allocation);
+  // EINVAL / ENOTTY / ENOSYS / EOPNOTSUPP mean unsupported legacy page flips.
+  // EBUSY and other errors do not establish buffer ownership and must quarantine.
+  if ([22, 25, 38, 95].includes(errno)) {
+    console.warn(
+      `[kms] page flips unavailable on ${out.connectorName}; using non-vsync SetCrtc fallback (${queued}, errno=${errno})`,
+    );
+    return { kind: "unsupported" };
   }
-  presenter.support.set(out, true);
-  return feedback;
+  return {
+    kind: "failed",
+    error: new Error(`DRM page flip rejected on ${out.connectorName} (${queued}, errno=${errno})`),
+  };
 }
 
 function destroyPageFlipPresenter(out: KmsOutput): void {
-  const presenter = pageFlipPresenters.get(out);
+  const presenter = pageFlipPresenters.get(out) ?? pageFlipDevices.get(out.fd);
   if (!presenter) return;
   pageFlipPresenters.delete(out);
   presenter.outputs.delete(out);
-  rejectPendingPageFlips(
-    presenter,
-    new Error(`DRM output ${out.connectorName} closed during page flip`),
-    out,
-  );
-  if (presenter.outputs.size > 0) return;
+  // Keep retired output tokens until their kernel events arrive. Freeing and
+  // reusing an address early could make an old event match another output's flip.
+  if (!out.ownsFd) return;
+  for (const other of presenter.outputs) pageFlipPresenters.delete(other);
+  presenter.events.destroy();
   pageFlipDevices.delete(presenter.fd);
   presenter.readiness.remove(presenter.fd);
   if (presenter.ownsReadiness) presenter.readiness.stop();
-  try {
-    koffi.unregister(presenter.callback);
-  } catch {
-    // best effort
-  }
-  try {
-    koffi.free(presenter.context);
-  } catch {
-    // best effort
-  }
+  koffi.unregister(presenter.callback);
+  koffi.free(presenter.context);
 }
 
-/** Present a renderer-owned DRM framebuffer on this output's current mode. */
+/** Present an idle renderer-owned framebuffer; ownership survives rejected/timed-out flips. */
 export async function presentKmsFramebuffer(
   out: KmsOutput,
   framebufferId: number,
   readiness?: LinuxReadinessDispatcher,
+  onAvailable?: () => void,
 ): Promise<KmsPresentationFeedback> {
-  if (framebufferId !== out.fbId) {
-    const feedback = await tryPageFlip(out, framebufferId, readiness);
-    if (feedback) return feedback;
+  const scanout = kmsScanout(out);
+  scanout.readiness = readiness;
+  scanout.ownership.setAvailableCallback(onAvailable);
+  const feedback = await scanout.ownership.present(framebufferId);
+  if (scanout.ownership.usesPageFlips && !pageFlipReady.has(out)) {
+    console.log(
+      `[kms] page-flip presentation ready on ${out.connectorName}; hardware timing unverified`,
+    );
+    pageFlipReady.add(out);
   }
-  setKmsFramebuffer(out, framebufferId);
-  const now = process.hrtime.bigint();
-  return {
-    sequence: 0,
-    seconds: Number(now / 1_000_000_000n),
-    nanoseconds: Number(now % 1_000_000_000n),
-    vsync: false,
-    hardwareClock: false,
-    hardwareCompletion: false,
-  };
+  return feedback;
+}
+
+/** CPU/readback presents copy only into an idle allocation, then use the same flip protocol. */
+export async function presentKmsPixels(
+  out: KmsOutput,
+  pixels: Uint8Array,
+  readiness?: LinuxReadinessDispatcher,
+  onAvailable?: () => void,
+): Promise<KmsPresentationFeedback> {
+  const scanout = kmsScanout(out);
+  const framebuffer = scanout.readback.write(pixels);
+  return presentKmsFramebuffer(out, framebuffer, readiness, onAvailable);
 }
 
 function setKmsFramebuffer(out: KmsOutput, framebufferId: number): void {
@@ -1536,76 +1645,57 @@ function destroyKmsCursor(out: KmsOutput): void {
   if (state.buffer) destroyKmsCursorBuffer(out, state.buffer);
 }
 
-/** Fill the dumb buffer with a solid color (XRGB8888). */
-export function fillKmsColor(out: KmsOutput, color: Rgba): void {
-  const ab = koffi.view(out.map, out.size) as ArrayBuffer;
-  const pixels = new Uint32Array(ab);
-  const r = color.r & 0xff;
-  const g = color.g & 0xff;
-  const b = color.b & 0xff;
-  // XRGB8888 little-endian word: 0xXXRRGGBB
-  const pixel = (0xff000000 | (r << 16) | (g << 8) | b) >>> 0;
-  // pitch may include padding — fill row by row when needed
-  if (out.pitch === out.width * 4 && ab.byteLength >= out.width * out.height * 4) {
-    pixels.fill(pixel, 0, out.width * out.height);
-    return;
-  }
-  const bytes = new Uint8Array(ab);
+/** Fill an idle dumb framebuffer and present it without modifying live scanout. */
+export async function fillKmsColor(
+  out: KmsOutput,
+  color: Rgba,
+  readiness?: LinuxReadinessDispatcher,
+): Promise<void> {
+  const stage = new Uint8Array(out.size);
+  const pixels = new Uint32Array(stage.buffer);
+  const pixel =
+    (0xff000000 | ((color.r & 0xff) << 16) | ((color.g & 0xff) << 8) | (color.b & 0xff)) >>> 0;
   for (let y = 0; y < out.height; y++) {
-    let off = y * out.pitch;
-    for (let x = 0; x < out.width; x++) {
-      bytes[off] = b;
-      bytes[off + 1] = g;
-      bytes[off + 2] = r;
-      bytes[off + 3] = 0xff;
-      off += 4;
-    }
+    pixels.fill(pixel, (y * out.pitch) / 4, (y * out.pitch) / 4 + out.width);
   }
+  await presentKmsPixels(out, stage, readiness);
+}
+
+function releaseKmsOutputResources(out: KmsOutput): void {
+  const scanout = kmsScanout(out);
+  scanout.ownership.close();
+  scanout.readback.destroy();
+  trackedOutputs.delete(out);
+  destroyFramebuffer(out, out);
+  koffi.free(out.connectorsPtr);
 }
 
 export function closeKmsOutput(out: KmsOutput): void {
+  out.availability = "unavailable";
+  const scanout = kmsScanout(out);
+  if (scanout.ownership.status === "closed") return;
   destroyKmsCursor(out);
+  // Disable scanout before retiring storage. If this fails on a shared fd,
+  // keep all resources until the owning output closes that fd.
+  const disabled = out.setCrtc(out.fd, out.crtcId, 0, 0, 0, null, 0, null);
+  if (disabled !== 0 && !out.ownsFd) {
+    scanout.ownership.quarantine(new Error(`DRM CRTC disable failed (${disabled})`));
+    console.error(
+      `[kms] retaining ${out.connectorName} buffers after failed CRTC disable (${disabled})`,
+    );
+    return;
+  }
   destroyPageFlipPresenter(out);
-  const libdrm = loadLibdrm();
-  const drmIoctl = libdrm.func("int drmIoctl(int fd, unsigned long request, void *arg)");
-  const drmModeRmFB = libdrm.func("int drmModeRmFB(int fd, uint32_t bufferId)");
-  const drmDropMaster = libdrm.func("int drmDropMaster(int fd)");
-
-  try {
-    munmap(out.map, out.size);
-  } catch {
-    // ignore
-  }
-  try {
-    drmModeRmFB(out.fd, out.fbId);
-  } catch {
-    // ignore
-  }
-  try {
-    const destroy = koffi.alloc(DrmModeDestroyDumb, 1);
-    koffi.encode(destroy, DrmModeDestroyDumb, { handle: out.handle });
-    drmIoctl(out.fd, DRM_IOCTL_MODE_DESTROY_DUMB, destroy);
-    koffi.free(destroy);
-  } catch {
-    // ignore
-  }
-  try {
-    if (out.connectorsPtr) koffi.free(out.connectorsPtr);
-  } catch {
-    // ignore
-  }
-  try {
-    if (out.modePtr) koffi.free(out.modePtr);
-  } catch {
-    // ignore
-  }
   if (out.ownsFd) {
-    try {
-      drmDropMaster(out.fd);
-    } catch {
-      // ignore
+    if (out.releaseFd) out.releaseFd();
+    else closeFd(out.fd);
+    // Closing the owning fd also retires any shared-output resources whose
+    // earlier disable failed. No late event can reach a reused event token.
+    for (const other of trackedOutputs) {
+      if (other.fd === out.fd) releaseKmsOutputResources(other);
     }
-    closeFd(out.fd);
+  } else {
+    releaseKmsOutputResources(out);
   }
 }
 
@@ -1635,7 +1725,7 @@ export async function runClearColorLoop(opts?: {
       const r = Math.floor((Math.sin(t) * 0.5 + 0.5) * 255);
       const g = Math.floor((Math.sin(t + 2.0) * 0.5 + 0.5) * 255);
       const b = Math.floor((Math.sin(t + 4.0) * 0.5 + 0.5) * 255);
-      fillKmsColor(out, { r, g, b });
+      await fillKmsColor(out, { r, g, b });
       frame++;
       await new Promise((r) => setTimeout(r, delay));
     }

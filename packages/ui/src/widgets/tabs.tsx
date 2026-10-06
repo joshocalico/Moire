@@ -11,6 +11,8 @@ import {
 import { Pressable } from "./pressable";
 import { Box, Horizontal, Inset, Measure, registerIntrinsicSize } from "./layout";
 import { TextBlock } from "./primitives";
+import { IconButton } from "./icon-button";
+import { Icon } from "./icon";
 
 export type TabSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
@@ -19,6 +21,7 @@ export type TabItem = {
   label: string;
   leading?: TabSlot;
   disabled?: boolean;
+  closable?: boolean;
 };
 
 export type TabsProps = {
@@ -31,6 +34,9 @@ export type TabsProps = {
   height?: number;
   size?: ButtonSize;
   disabled?: boolean;
+  variant?: "standard" | "titlebar";
+  onClose?: (index: number) => void;
+  onAdd?: () => void;
 };
 
 function normalizeTab(tab: string | TabItem, index: number): TabItem {
@@ -75,8 +81,183 @@ export function Tabs(props: TabsProps): ReactNode {
     ) {
       target = index;
     }
-    if (target != null) props.onChange?.(target);
+    if (target != null) {
+      setFocused(target);
+      props.onChange?.(target);
+    }
   };
+
+  if (props.variant === "titlebar") {
+    // Older families keep their header appearance; new header recipes own the
+    // resolved selected paint instead of being bypassed by root/divider colors.
+    const header = recipe.titlebar ?? {
+      tab: {
+        ...recipe.tab,
+        base: { ...recipe.tab.base, radius: recipe.root.radius },
+        states: {
+          ...recipe.tab.states,
+          selected: { fill: recipe.root.fill, stroke: recipe.divider.fill, strokeWidth: 1 },
+        },
+      },
+      label: recipe.label,
+      icon: recipe.icon,
+    };
+    const actionWidth = Math.min(height, Math.max(1, props.width / 2));
+    const addWidth = props.onAdd ? actionWidth : 0;
+    const canShowArrows = props.width >= height * 4;
+    const capacity = Math.max(
+      1,
+      Math.floor((props.width - addWidth - (canShowArrows ? actionWidth * 2 : 0)) / 120),
+    );
+    const start = Math.max(0, Math.min(tabs.length - capacity, props.active - capacity + 1));
+    const shown = tabs.slice(start, start + capacity);
+    const overflow = tabs.length > capacity && canShowArrows;
+    let previous = -1;
+    let next = -1;
+    for (let index = 0; index < tabs.length; index++) {
+      if (props.disabled || tabs[index]?.disabled) continue;
+      if (index < start) previous = index;
+      if (index >= start + capacity && next < 0) next = index;
+    }
+    const tabWidth = Math.max(
+      1,
+      Math.min(
+        200,
+        (props.width - addWidth - (overflow ? actionWidth * 2 : 0)) / Math.max(1, shown.length),
+      ),
+    );
+    const offset = overflow ? actionWidth : 0;
+    return (
+      <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={height} clip>
+        {overflow ? (
+          <IconButton
+            width={actionWidth}
+            height={height}
+            variant="ghost"
+            icon={<Icon symbolic name="back" size={16} />}
+            disabled={previous < 0}
+            onPress={() => props.onChange?.(previous)}
+            tooltip="Previous tabs"
+          />
+        ) : null}
+        {shown.map((tab, visibleIndex) => {
+          const index = start + visibleIndex;
+          const selected = index === props.active;
+          const disabled = !!props.disabled || !!tab.disabled;
+          const states: WidgetState[] = selected ? ["selected"] : [];
+          if (focused === index) states.push("focused");
+          if (disabled && recipe.titlebar) states.push("disabled");
+          const closable = tab.closable && tabWidth >= actionWidth * 2;
+          const paintStates: WidgetState[] =
+            !recipe.titlebar && selected ? [...states.slice(1), "selected"] : states;
+          const style = resolveStatefulStyle(header.tab, ...paintStates);
+          const icon = resolveStatefulStyle(header.icon, ...states);
+          const label = resolveStatefulStyle(header.label, ...states);
+          return (
+            <Group
+              key={tab.id}
+              x={offset + visibleIndex * tabWidth}
+              width={tabWidth}
+              height={height}
+            >
+              <Pressable
+                width={tabWidth}
+                height={height}
+                fill={style.fill}
+                hoverFill={
+                  selected && recipe.titlebar?.selectedInteraction
+                    ? recipe.titlebar.selectedInteraction.hoverFill
+                    : resolveStatefulStyle(header.tab, "hover", ...(recipe.titlebar ? states : []))
+                        .fill
+                }
+                pressedFill={
+                  selected && recipe.titlebar?.selectedInteraction
+                    ? recipe.titlebar.selectedInteraction.pressedFill
+                    : resolveStatefulStyle(
+                        header.tab,
+                        "pressed",
+                        ...(recipe.titlebar ? states : []),
+                      ).fill
+                }
+                disabledFill={style.fill}
+                radius={style.radius}
+                stroke={style.stroke}
+                strokeWidth={style.strokeWidth}
+                focusable
+                focusId={`tabs:${generatedId}:${tab.id}`}
+                disabled={disabled}
+                onPress={() => props.onChange?.(index)}
+                autoFocus={focused === index}
+                onFocusChange={(next) => {
+                  if (next) setFocused(index);
+                  else setFocused((current) => (current === index ? null : current));
+                }}
+                onKeyDown={(event) => handleKey(event, index)}
+              />
+              <Inset
+                width={Math.max(1, tabWidth - (closable ? actionWidth : 0))}
+                height={height}
+                padding={{ horizontal: recipe.metrics.paddingX }}
+              >
+                <Horizontal gap={recipe.metrics.gap} align="center">
+                  {tab.leading ? (
+                    <Box width={icon.size} height={icon.size}>
+                      {renderSlot(tab.leading, icon)}
+                    </Box>
+                  ) : null}
+                  <TextBlock
+                    text={tab.label}
+                    color={label.color}
+                    fontSize={label.fontSize}
+                    fontWeight={recipe.titlebar ? label.fontWeight : undefined}
+                    flexShrink={1}
+                    maxLines={1}
+                    overflow="ellipsis"
+                  />
+                </Horizontal>
+              </Inset>
+              {closable ? (
+                <IconButton
+                  x={tabWidth - actionWidth}
+                  width={actionWidth}
+                  height={height}
+                  variant="ghost"
+                  icon={<Icon symbolic name="close" size={14} />}
+                  tooltip={`Close ${tab.label}`}
+                  disabled={props.disabled || tab.disabled}
+                  onPress={() => props.onClose?.(index)}
+                />
+              ) : null}
+            </Group>
+          );
+        })}
+        {overflow ? (
+          <IconButton
+            x={offset + shown.length * tabWidth}
+            width={actionWidth}
+            height={height}
+            variant="ghost"
+            icon={<Icon symbolic name="forward" size={16} />}
+            disabled={next < 0}
+            onPress={() => props.onChange?.(next)}
+            tooltip="Next tabs"
+          />
+        ) : null}
+        {props.onAdd ? (
+          <IconButton
+            x={offset + shown.length * tabWidth + (overflow ? actionWidth : 0)}
+            width={actionWidth}
+            height={height}
+            variant="ghost"
+            icon={<Icon symbolic name="plus" size={16} />}
+            tooltip="New folder tab"
+            disabled={props.disabled}
+            onPress={props.onAdd}
+          />
+        ) : null}
+      </Group>
+    );
+  }
 
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={height} clip>
@@ -121,6 +302,7 @@ export function Tabs(props: TabsProps): ReactNode {
                     disabled={disabled}
                     focusable
                     focusId={`tabs:${generatedId}:${tab.id}`}
+                    autoFocus={focused === index}
                     onFocusChange={(next) => {
                       if (next) setFocused(index);
                       else {

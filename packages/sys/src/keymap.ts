@@ -71,7 +71,7 @@ export function createXkbKeymapMemfd(): KeymapMemfd {
     strPtr = xkb_keymap_get_as_string(keymapPtr, XKB_KEYMAP_FORMAT_TEXT_V1);
     if (!strPtr) throw new Error("xkb_keymap_get_as_string failed");
 
-    const size = Number(strlen(strPtr));
+    const size = Number(strlen(strPtr)) + 1;
     const fd = memfd_create("moire-keymap", MFD_CLOEXEC) as number;
     if (fd < 0) throw new Error("memfd_create failed");
 

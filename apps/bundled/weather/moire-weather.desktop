@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Weather
+Comment=Local forecasts and saved places
+Exec=moire-weather
+TryExec=moire-weather
+Icon=moire-weather
+Terminal=false
+Type=Application
+Categories=Utility;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Weather

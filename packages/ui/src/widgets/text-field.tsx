@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useState, type ReactNode } from "react";
+import React, { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Group,
   Rect,
@@ -16,6 +16,7 @@ import {
   type WidgetState,
 } from "#ui/widget-theme";
 import { registerIntrinsicSize } from "./layout";
+import { readClipboardText } from "#ui/window";
 
 export type TextFieldSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
@@ -26,6 +27,8 @@ export type TextFieldProps = {
   height?: number;
   size?: ButtonSize;
   value: string;
+  /** Paint one bullet per UTF-16 unit; keep the caller-owned editing value private. */
+  password?: boolean;
   placeholder?: string;
   leading?: TextFieldSlot;
   trailing?: TextFieldSlot;
@@ -40,6 +43,7 @@ export type TextFieldProps = {
   /** Optional controlled visual focus override. */
   focused?: boolean;
   autoFocus?: boolean;
+  selectAllOnFocus?: boolean;
   invalid?: boolean;
   disabled?: boolean;
   readOnly?: boolean;
@@ -70,8 +74,45 @@ export function TextField(props: TextFieldProps): ReactNode {
   const generatedId = useId();
   const height = props.height ?? recipe.metrics.height;
   const [internallyFocused, setInternallyFocused] = useState(false);
-  const [cursor, setCursor] = useState(props.value.length);
+  // Focus and input can arrive in the same host event turn. Keep the editor
+  // position current immediately, while React state drives its presentation.
+  const position = useRef({
+    cursor: props.value.length,
+    anchor: props.autoFocus && props.selectAllOnFocus ? 0 : props.value.length,
+  });
+  const [selection, setSelection] = useState(position.current);
+  const { cursor, anchor } = selection;
+  const setCursor = (value: number | ((current: number) => number)) => {
+    const next = typeof value === "function" ? value(position.current.cursor) : value;
+    if (next === position.current.cursor) return;
+    position.current = {
+      ...position.current,
+      cursor: next,
+    };
+    setSelection(position.current);
+  };
+  const setAnchor = (value: number | ((current: number) => number)) => {
+    const next = typeof value === "function" ? value(position.current.anchor) : value;
+    if (next === position.current.anchor) return;
+    position.current = {
+      ...position.current,
+      anchor: next,
+    };
+    setSelection(position.current);
+  };
   const focused = props.focused ?? internallyFocused;
+  const displayValue = props.password ? "•".repeat(props.value.length) : props.value;
+  const currentFocus = useRef(focused);
+  currentFocus.current = focused;
+  const currentProps = useRef(props);
+  currentProps.current = props;
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const states: WidgetState[] = [];
   if (focused) states.push("focused");
   if (props.invalid) states.push("invalid");
@@ -97,17 +138,18 @@ export function TextField(props: TextFieldProps): ReactNode {
 
   useEffect(() => {
     setCursor((current) => Math.min(current, props.value.length));
+    setAnchor((current) => Math.min(current, props.value.length));
   }, [props.value]);
 
   const available = Math.max(1, props.width - textX - trailingWidth - recipe.metrics.paddingX);
   let visibleStart = 0;
   while (
     visibleStart < cursor &&
-    measureText(props.value.slice(visibleStart, cursor), textStyle.fontSize / 14) > available - 2
+    measureText(displayValue.slice(visibleStart, cursor), textStyle.fontSize / 14) > available - 2
   ) {
     visibleStart++;
   }
-  let visibleValue = props.value.slice(visibleStart);
+  let visibleValue = displayValue.slice(visibleStart);
   while (
     visibleValue.length > 0 &&
     measureText(visibleValue, textStyle.fontSize / 14) > available
@@ -117,58 +159,120 @@ export function TextField(props: TextFieldProps): ReactNode {
   const shown = props.value.length > 0 ? visibleValue : (props.placeholder ?? "");
   const shownStyle = props.value.length > 0 ? textStyle : placeholderStyle;
   const caretX =
-    textX + measureText(props.value.slice(visibleStart, cursor), textStyle.fontSize / 14);
+    textX + measureText(displayValue.slice(visibleStart, cursor), textStyle.fontSize / 14);
 
   const replaceValue = (next: string, nextCursor: number) => {
     props.onChange?.(next);
     setCursor(nextCursor);
+    setAnchor(nextCursor);
   };
 
   const handleKey = (event: HitKeyEvent) => {
+    const shortcut = event.ctrlKey || event.metaKey;
+    if (
+      props.password &&
+      shortcut &&
+      (event.code === 46 ||
+        event.code === 45 ||
+        event.key?.toLowerCase() === "c" ||
+        event.key?.toLowerCase() === "x")
+    )
+      return;
     if (props.onKeyDown?.(event) === true) return;
     const editing = !props.disabled && !props.readOnly;
+    const { cursor, anchor } = position.current;
+    const start = Math.min(anchor, cursor),
+      end = Math.max(anchor, cursor);
+    if (props.password && shortcut && (event.code === 47 || event.key?.toLowerCase() === "v")) {
+      if (editing) {
+        const source = props.value,
+          selection = position.current;
+        void readClipboardText()
+          .then((text) => {
+            const latest = currentProps.current;
+            if (
+              !mounted.current ||
+              !currentFocus.current ||
+              latest.disabled ||
+              latest.readOnly ||
+              !latest.password ||
+              latest.value !== source ||
+              position.current !== selection
+            )
+              return;
+            const singleLine = text.replace(/[\r\n]/g, "");
+            latest.onChange?.(source.slice(0, start) + singleLine + source.slice(end));
+            setCursor(start + singleLine.length);
+            setAnchor(start + singleLine.length);
+          })
+          .catch(() => {
+            /* Clipboard failure leaves the existing secret unchanged. */
+          });
+      }
+      return;
+    }
+    const moveCursor = (next: number) => {
+      setCursor(next);
+      if (!event.shiftKey) setAnchor(next);
+    };
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      (event.key?.toLowerCase() === "a" || event.code === 30)
+    ) {
+      setAnchor(0);
+      setCursor(props.value.length);
+      return;
+    }
     switch (event.code) {
       case 1:
         props.onCancel?.();
         return;
       case 14:
-        if (editing && cursor > 0) {
-          replaceValue(props.value.slice(0, cursor - 1) + props.value.slice(cursor), cursor - 1);
+        if (editing && (cursor > 0 || start !== end)) {
+          const from = start !== end ? start : cursor - 1;
+          replaceValue(props.value.slice(0, from) + props.value.slice(end), from);
         }
         return;
       case 28:
         props.onSubmit?.(props.value);
         return;
       case 102:
-        setCursor(0);
+        moveCursor(0);
         return;
       case 105:
-        setCursor((current) => Math.max(0, current - 1));
+        moveCursor(!event.shiftKey && start !== end ? start : Math.max(0, cursor - 1));
         return;
       case 106:
-        setCursor((current) => Math.min(props.value.length, current + 1));
+        moveCursor(
+          !event.shiftKey && start !== end ? end : Math.min(props.value.length, cursor + 1),
+        );
         return;
       case 107:
-        setCursor(props.value.length);
+        moveCursor(props.value.length);
         return;
       case 111:
-        if (editing && cursor < props.value.length) {
-          replaceValue(props.value.slice(0, cursor) + props.value.slice(cursor + 1), cursor);
+        if (editing && (cursor < props.value.length || start !== end)) {
+          replaceValue(
+            props.value.slice(0, start) + props.value.slice(start !== end ? end : cursor + 1),
+            start,
+          );
         }
         return;
     }
 
     if (editing && event.text && !event.ctrlKey && !event.altKey && !event.metaKey) {
       replaceValue(
-        props.value.slice(0, cursor) + event.text + props.value.slice(cursor),
-        cursor + event.text.length,
+        props.value.slice(0, start) + event.text + props.value.slice(end),
+        start + event.text.length,
       );
     }
   };
 
   const handlePress = (event: HitPointerEvent) => {
     if (!props.disabled) {
-      setCursor(cursorFromX(props.value, event.localX, textX, textStyle.fontSize));
+      const next = cursorFromX(displayValue, event.localX, textX, textStyle.fontSize);
+      setCursor(next);
+      if (!event.shiftKey) setAnchor(next);
     }
     props.onPress?.(event);
   };
@@ -189,7 +293,10 @@ export function TextField(props: TextFieldProps): ReactNode {
         focusId={`text-field:${generatedId}`}
         onFocusChange={(next) => {
           setInternallyFocused(next);
-          if (next) setCursor(props.value.length);
+          if (next) {
+            setCursor(props.value.length);
+            setAnchor(props.selectAllOnFocus ? 0 : props.value.length);
+          }
           props.onFocusChange?.(next);
         }}
         onKeyDown={handleKey}
@@ -204,6 +311,35 @@ export function TextField(props: TextFieldProps): ReactNode {
         >
           {renderSlot(props.leading, leadingStyle)}
         </Group>
+      ) : null}
+      {focused && anchor !== cursor ? (
+        <Rect
+          x={Math.max(
+            textX,
+            textX +
+              measureText(
+                displayValue.slice(visibleStart, Math.max(visibleStart, Math.min(anchor, cursor))),
+                textStyle.fontSize / 14,
+              ),
+          )}
+          y={Math.floor((height - lineHeight) / 2)}
+          width={Math.min(
+            available,
+            measureText(
+              displayValue.slice(
+                Math.max(visibleStart, Math.min(anchor, cursor)),
+                Math.max(anchor, cursor),
+              ),
+              textStyle.fontSize / 14,
+            ),
+          )}
+          height={lineHeight}
+          fill={
+            ((resolveStatefulStyle(recipe.root, "focused").stroke ?? recipe.caret.fill) &
+              0x00ffffff) |
+            0x40000000
+          }
+        />
       ) : null}
       <Text
         x={textX}

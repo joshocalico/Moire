@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Help
+Comment=Search desktop help and keyboard shortcuts
+Exec=moire-help
+TryExec=moire-help
+Icon=moire-help
+Terminal=false
+Categories=Utility;Documentation;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Help

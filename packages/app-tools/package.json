@@ -1,0 +1,29 @@
+{
+  "name": "@moire/app-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./testing": "./src/testing.ts",
+    "./local-store": "./src/local-store.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../..",
+    "smoke": "tsx src/playback.smoke.ts && tsx src/views.smoke.tsx"
+  },
+  "dependencies": {
+    "@moire/ui": "workspace:*",
+    "@moire/prefs": "workspace:*",
+    "react": "^19.0.0",
+    "@moire/react-host": "workspace:*",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/pngjs": "^6.0.5"
+  }
+}

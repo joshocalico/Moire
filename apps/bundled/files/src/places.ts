@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export type PlaceIcon = "home" | "desktop" | "downloads" | "folder";
+export type PlaceIcon = "home" | "desktop" | "downloads" | "folder" | "file" | "image";
 
 export type FilePlace = {
   id: string;
@@ -63,6 +63,20 @@ export function builtInPlaces(): FilePlace[] {
       label: "Downloads",
       path: userDirs.get("DOWNLOAD") ?? path.join(home, "Downloads"),
       icon: "downloads",
+      builtIn: true,
+    },
+    {
+      id: "documents",
+      label: "Documents",
+      path: userDirs.get("DOCUMENTS") ?? path.join(home, "Documents"),
+      icon: "file",
+      builtIn: true,
+    },
+    {
+      id: "pictures",
+      label: "Pictures",
+      path: userDirs.get("PICTURES") ?? path.join(home, "Pictures"),
+      icon: "image",
       builtIn: true,
     },
   ];

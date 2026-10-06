@@ -194,6 +194,26 @@ function fallbackMime(filePath: string): string {
     ".mp3": "audio/mpeg",
     ".mp4": "video/mp4",
     ".zip": "application/zip",
+    ".tar": "application/x-tar",
+    ".gz": "application/gzip",
+    ".tgz": "application/gzip",
+    ".xz": "application/x-xz",
+    ".bz2": "application/x-bzip2",
+    ".7z": "application/x-7z-compressed",
+    ".wav": "audio/x-wav",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".mkv": "video/x-matroska",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".ttc": "font/collection",
+    ".log": "text/x-log",
   };
   return known[ext] ?? "application/octet-stream";
 }
@@ -230,7 +250,7 @@ export function buildDesktopExec(app: DesktopEntry, paths: string[]): string {
     if (code === "%i") return app.icon ? `--icon ${shellQuote(app.icon)}` : "";
     return "";
   });
-  command = command.replaceAll(marker, "%").replace(/\s+/g, " ").trim();
+  command = command.replaceAll(marker, "%").trim();
   if (!usedFileCode && local.length > 0) command += ` ${local.join(" ")}`;
   return app.terminal ? `moire-terminal --command ${shellQuote(command)}` : command;
 }

@@ -20,10 +20,27 @@ import type {
   UiFrameEvent,
   UiPresentationMode,
   UiPointerEvent,
+  UiSurfaceVisibility,
+  UiRenderingState,
 } from "./platform";
 import { getMotionActivity, tickMotionFrame } from "./motion";
+import {
+  WindowRetainedMotionController,
+  type RetainedMotionAdmission,
+  type RetainedMotionPolicy,
+} from "./retained-motion-admission";
+import { wrapWidgetTheme, type WidgetTheme } from "./widget-theme";
 
 export type WindowSize = { width: number; height: number };
+
+/** Client chrome uses the same close guard and native state as server chrome. */
+export type WindowActions = {
+  beginMove(): void;
+  requestClose(): void;
+  setMaximized(maximized: boolean): void;
+  isMaximized(): boolean;
+  minimize(): void;
+};
 
 export type WindowPerformanceSnapshot = {
   width: number;
@@ -71,6 +88,7 @@ export type WindowPerformanceSnapshot = {
  * single-window, so a module-level "active window" is sufficient.
  */
 let activeWindowForHitTest: Window | null = null;
+const mountedWindows = new Set<Window>();
 
 /**
  * Look up the `data` payload (see `Draggable`'s `dropData` prop) of the
@@ -101,6 +119,15 @@ export function clearActiveWindowDropHover(): void {
  */
 export function requestActiveWindowRedraw(): void {
   activeWindowForHitTest?.requestRedraw();
+}
+
+export async function writeClipboardText(text: string): Promise<void> {
+  if (!activeWindowForHitTest) throw new Error("No active window for clipboard");
+  await activeWindowForHitTest.writeClipboardText(text);
+}
+export async function readClipboardText(): Promise<string> {
+  if (!activeWindowForHitTest) throw new Error("No active window for clipboard");
+  return activeWindowForHitTest.readClipboardText();
 }
 
 export type WindowContent = ReactNode | ((size: WindowSize) => ReactNode);
@@ -158,6 +185,10 @@ export type WindowOpts = {
   resizable?: boolean;
   /** When false, the client owns its chrome and no SSD titlebar is requested. */
   decorated?: boolean;
+  /** Request native fullscreen before the first frame. */
+  fullscreen?: boolean;
+  /** Explicit bounded software backdrop policy; ordinary windows remain hardware-only. */
+  retainedMotionPolicy?: RetainedMotionPolicy;
 };
 
 /**
@@ -168,9 +199,11 @@ export class Window {
   readonly appId: string;
   readonly resizable: boolean;
   readonly decorated: boolean;
+  private requestedFullscreen: boolean;
   private width: number;
   private height: number;
   private content: WindowContent = null;
+  private theme: WidgetTheme | null = null;
   private root: ShellRoot = createShellRoot({
     onCommit: () => {
       // Timer/promise-driven React state (Spinner, async loading, progress)
@@ -189,10 +222,18 @@ export class Window {
   /** Suppress invalidation caused by the explicit renderShell call in tick. */
   private renderingRoot = false;
   private closed = false;
+  private closeGuard: (() => boolean) | null = null;
   private readonly onCloseCallbacks = new Set<() => void>();
   private readonly invalidationCallbacks = new Set<() => void>();
   private readonly compositorFrameCallbacks = new Set<(timestampMs: number) => void>();
+  private readonly visibilityCallbacks = new Set<(visibility: UiSurfaceVisibility) => void>();
+  private stopVisibilityObservation: (() => void) | null = null;
+  private visibility: UiSurfaceVisibility = "unknown";
+  private renderingState: UiRenderingState = { kind: "static", reason: "pending" };
+  private readonly renderingCallbacks = new Set<(state: UiRenderingState) => void>();
+  private stopRenderingObservation: (() => void) | null = null;
   private animationsActive = false;
+  private readonly retainedMotion: WindowRetainedMotionController;
   /** Current Wayland/headless presentation path consumes software frames. */
   private readonly renderer = new SoftwareRenderer();
   /** Primitive-layer renderer offered to accelerated platform windows first. */
@@ -232,6 +273,10 @@ export class Window {
   private readonly recentPresentationLatencies: number[] = [];
   private focusedId: string | null = null;
   private focusedHit: HitRegion | null = null;
+  private readonly focusScopeHistory: Array<{
+    scopeId: string;
+    returnFocusId: string | null;
+  }> = [];
   private readonly consumedAutoFocusIds = new Set<string>();
 
   // Pointer state
@@ -258,12 +303,17 @@ export class Window {
   private lastTickMs: number = Date.now();
 
   constructor(opts: WindowOpts) {
+    this.retainedMotion = new WindowRetainedMotionController((paint) => {
+      if (paint) this.invalidate(false);
+      else for (const callback of this.invalidationCallbacks) callback();
+    }, opts.retainedMotionPolicy);
     this.title = opts.title;
     this.appId = opts.appId ?? "moire.app";
     this.width = opts.width ?? 480;
     this.height = opts.height ?? 360;
     this.resizable = opts.resizable !== false;
     this.decorated = opts.decorated !== false;
+    this.requestedFullscreen = opts.fullscreen === true;
   }
 
   setContent(node: WindowContent): void {
@@ -271,10 +321,41 @@ export class Window {
     this.invalidate();
   }
 
+  /** Set the application-wide theme inherited by this window and its popups. */
+  setTheme(theme: WidgetTheme | null): void {
+    if (theme === this.theme) return;
+    this.theme = theme;
+    for (const popup of this.popups) popup.setTheme(theme);
+    this.invalidate();
+  }
+
+  private contentTree(): ReactNode {
+    const content =
+      typeof this.content === "function"
+        ? this.content({ width: this.width, height: this.height })
+        : this.content;
+    return this.theme ? wrapWidgetTheme(this.theme, content) : content;
+  }
+
   setTitle(title: string): void {
     if (title === this.title) return;
     this.title = title;
     this.platformWin?.setTitle(title);
+  }
+
+  /** Return false to keep the window open for an unsaved-changes prompt. */
+  setCloseGuard(guard: (() => boolean) | null): void {
+    this.closeGuard = guard;
+  }
+
+  async writeClipboardText(text: string): Promise<void> {
+    if (!this.backend?.writeClipboardText)
+      throw new Error("Clipboard unavailable on this platform");
+    await this.backend.writeClipboardText(text);
+  }
+  async readClipboardText(): Promise<string> {
+    if (!this.backend?.readClipboardText) throw new Error("Clipboard unavailable on this platform");
+    return this.backend.readClipboardText();
   }
 
   onClose(cb: () => void): void {
@@ -285,6 +366,15 @@ export class Window {
   onInvalidated(cb: () => void): () => void {
     this.invalidationCallbacks.add(cb);
     return () => this.invalidationCallbacks.delete(cb);
+  }
+
+  /** Whether presentation-only motion needs another visual frame. */
+  hasActiveAnimations(): boolean {
+    return this.animationsActive || this.retainedMotion.isActive();
+  }
+
+  getRetainedMotionAdmission(): RetainedMotionAdmission {
+    return this.retainedMotion.admission;
   }
 
   private invalidate(reconcile = true): void {
@@ -309,6 +399,45 @@ export class Window {
 
   getPlatformDiagnostics(): PlatformDiagnostics | null {
     return this.backend?.getDiagnostics() ?? null;
+  }
+
+  /** Authoritative compositor coverage; input focus and frame callbacks cannot establish it. */
+  getVisibility(): UiSurfaceVisibility {
+    return this.closed ? "unknown" : this.visibility;
+  }
+
+  onVisibilityChange(callback: (visibility: UiSurfaceVisibility) => void): () => void {
+    this.visibilityCallbacks.add(callback);
+    return () => this.visibilityCallbacks.delete(callback);
+  }
+
+  private publishVisibility(visibility: UiSurfaceVisibility): void {
+    if (visibility === this.visibility) return;
+    this.visibility = visibility;
+    this.retainedMotion.visibilityChanged(visibility);
+    for (const callback of this.visibilityCallbacks) callback(visibility);
+  }
+
+  getRenderingState(): UiRenderingState {
+    return this.closed ? { kind: "static", reason: "destroyed" } : this.renderingState;
+  }
+
+  onRenderingChange(callback: (state: UiRenderingState) => void): () => void {
+    if (!this.closed) this.renderingCallbacks.add(callback);
+    return () => this.renderingCallbacks.delete(callback);
+  }
+
+  private publishRendering(state: UiRenderingState): void {
+    const previous = this.renderingState;
+    if (
+      previous.kind === state.kind &&
+      previous.commitId === state.commitId &&
+      (state.kind !== "static" || (previous.kind === "static" && previous.reason === state.reason))
+    )
+      return;
+    this.renderingState = state;
+    this.retainedMotion.renderingChanged(state);
+    for (const callback of this.renderingCallbacks) callback(state);
   }
 
   getPerformanceSnapshot(): WindowPerformanceSnapshot {
@@ -374,6 +503,7 @@ export class Window {
       height: this.height,
       resizable: this.resizable,
       decorated: this.decorated,
+      fullscreen: this.requestedFullscreen,
     });
     this.attachPlatformWindow(pw, true);
   }
@@ -383,6 +513,40 @@ export class Window {
     this.platformWin?.beginMove();
   }
 
+  requestClose(): void {
+    if (this.closed) return;
+    if (this.closeGuard?.() === false) {
+      this.requestRedraw();
+      return;
+    }
+    this.closed = true;
+    this.retainedMotion.destroy();
+    this.publishVisibility("unknown");
+    this.publishRendering({ kind: "static", reason: "destroyed" });
+    for (const callback of this.onCloseCallbacks) callback();
+  }
+
+  setMaximized(maximized: boolean): void {
+    this.platformWin?.setMaximized?.(maximized);
+  }
+
+  isMaximized(): boolean {
+    return this.platformWin?.isMaximized?.() ?? false;
+  }
+
+  setFullscreen(fullscreen: boolean): void {
+    this.requestedFullscreen = fullscreen;
+    this.platformWin?.setFullscreen?.(fullscreen);
+  }
+
+  isFullscreen(): boolean {
+    return this.platformWin?.isFullscreen?.() ?? false;
+  }
+
+  minimize(): void {
+    this.platformWin?.minimize?.();
+  }
+
   setPresentationMode(mode: UiPresentationMode): void {
     this.platformWin?.setPresentationMode(mode);
     this.requestRedraw();
@@ -390,6 +554,15 @@ export class Window {
 
   private attachPlatformWindow(pw: PlatformWindow, makeActive: boolean): void {
     this.platformWin = pw;
+    this.stopRenderingObservation = pw.onRenderingChange((state) => {
+      if (!this.closed) this.publishRendering(state);
+    });
+    this.publishRendering(pw.getRenderingState());
+    this.stopVisibilityObservation = pw.onVisibilityChange((visibility) => {
+      if (this.closed) return;
+      this.publishVisibility(visibility);
+    });
+    this.publishVisibility(pw.getVisibility());
     pw.onConfigure((w, h) => {
       const nextW = w > 0 ? w : this.width;
       const nextH = h > 0 ? h : this.height;
@@ -402,14 +575,20 @@ export class Window {
         this.invalidate();
       }
     });
-    pw.onClose(() => {
-      this.closed = true;
-      for (const callback of this.onCloseCallbacks) callback();
+    pw.onClose(() => this.requestClose());
+    pw.onPointer((ev) => {
+      if (mountedWindows.has(this)) activeWindowForHitTest = this;
+      this.handlePointer(ev);
     });
-    pw.onPointer((ev) => this.handlePointer(ev));
-    pw.onKey((ev) => this.handleKey(ev));
+    pw.onKey((ev) => {
+      if (mountedWindows.has(this)) activeWindowForHitTest = this;
+      this.handleKey(ev);
+    });
     pw.onFrame((ev) => this.handleFrameEvent(ev));
-    if (makeActive) activeWindowForHitTest = this;
+    if (makeActive) {
+      mountedWindows.add(this);
+      activeWindowForHitTest = this;
+    }
   }
 
   /** Open a native child popup when supported by the current platform. */
@@ -426,6 +605,7 @@ export class Window {
       resizable: false,
     });
     popup.backend = backend;
+    popup.setTheme(this.theme);
     // Wake the application loop for the popup without rebuilding the parent.
     popup.onInvalidated(() => this.invalidate(false));
     popup.setContent(opts.content);
@@ -515,7 +695,8 @@ export class Window {
       ? tickMotionFrame(dt)
       : { active: false, presentationChanged: false, requiresReconcile: false };
     this.animationsActive = motion.active;
-    if (motion.presentationChanged || motion.requiresReconcile) {
+    const retainedChanged = this.retainedMotion.tick(now);
+    if (retainedChanged || motion.presentationChanged || motion.requiresReconcile) {
       this.dirty = true;
       if (motion.requiresReconcile) this.reconcileDirty = true;
       for (const popup of this.popups) {
@@ -531,10 +712,7 @@ export class Window {
     this.reconcileDirty = false;
     if (shouldReconcile) {
       this.reconciledFrameCount++;
-      const tree =
-        typeof this.content === "function"
-          ? this.content({ width: this.width, height: this.height })
-          : this.content;
+      const tree = this.contentTree();
       this.renderingRoot = true;
       try {
         renderShell(this.root, tree);
@@ -565,7 +743,12 @@ export class Window {
         : this.retainedRenderer.render(this.root.container, viewport);
       this.lastLayerCount = retained.layers.length;
       const submitStartedAt = performance.now();
+      this.retainedMotion.beforePresent();
       if (platformWin.presentScene(retained)) {
+        // The scene renderer advances its damage baseline even when a frame
+        // gate skips submission. A later SHM fallback/retry must rebuild CPU
+        // pixels from the current graph rather than apply only the next delta.
+        this.retainedSoftwareRenderer.invalidate();
         this.recordRenderedFrame(
           "retained",
           frameStartedAt,
@@ -603,7 +786,16 @@ export class Window {
   }
 
   private handleFrameEvent(ev: UiFrameEvent): void {
+    if (ev.type === "output-accepted") {
+      this.retainedMotion.outputAccepted(ev.commitId);
+      return;
+    }
+    if (ev.type === "output-revoked") {
+      this.retainedMotion.outputRevoked(ev.commitId);
+      return;
+    }
     if (ev.type === "submitted") {
+      this.retainedMotion.submitted(ev.commitId);
       this.frameCount++;
       this.lastTransport = ev.transport;
       if (ev.transport === "dmabuf") this.dmabufFrameCount++;
@@ -624,6 +816,7 @@ export class Window {
       return;
     }
     if (ev.type === "compositor-frame") {
+      this.retainedMotion.frameReady(ev.commitId);
       this.compositorFrameCount++;
       this.recentCompositorTimes.push({
         sourceMs: ev.timestampMs,
@@ -662,7 +855,10 @@ export class Window {
     }
     this.lastBufferReleaseMs = ev.latencyMs;
     retainSample(this.recentBufferReleaseDurations, ev.latencyMs);
-    if (ev.retrySuggested) this.invalidate(false);
+    if (ev.retrySuggested) {
+      this.retainedMotion.retry();
+      this.invalidate(false);
+    }
   }
 
   private recordRenderedFrame(
@@ -693,7 +889,16 @@ export class Window {
     for (const popup of [...this.popups]) popup.destroy();
     this.popups.clear();
     this.closed = true;
+    this.retainedMotion.destroy();
+    this.publishVisibility("unknown");
     this.compositorFrameCallbacks.clear();
+    this.stopVisibilityObservation?.();
+    this.stopVisibilityObservation = null;
+    this.visibilityCallbacks.clear();
+    this.publishRendering({ kind: "static", reason: "destroyed" });
+    this.stopRenderingObservation?.();
+    this.stopRenderingObservation = null;
+    this.renderingCallbacks.clear();
     this.invalidationCallbacks.clear();
     this.pendingSubmissionTimes.clear();
     this.focusedHit?.onFocusChange?.(false);
@@ -703,7 +908,9 @@ export class Window {
     this.platformWin?.destroy();
     this.platformWin = null;
     this.backend = null;
-    if (activeWindowForHitTest === this) activeWindowForHitTest = null;
+    mountedWindows.delete(this);
+    if (activeWindowForHitTest === this)
+      activeWindowForHitTest = [...mountedWindows].at(-1) ?? null;
   }
 
   /**
@@ -711,10 +918,7 @@ export class Window {
    * refresh hit regions, and mark as dirty for the next present call.
    */
   private flushAndDirty(): void {
-    const tree =
-      typeof this.content === "function"
-        ? this.content({ width: this.width, height: this.height })
-        : this.content;
+    const tree = this.contentTree();
     this.renderingRoot = true;
     try {
       renderShell(this.root, tree);
@@ -726,9 +930,50 @@ export class Window {
   }
 
   private refreshHits(): void {
-    this.hits = collectHits(this.root.container);
+    // Exit animations may still paint a closed flyout. Its inactive scope
+    // must stop receiving pointer and keyboard input immediately.
+    this.hits = collectHits(this.root.container, [], undefined, {
+      x: 0,
+      y: 0,
+      width: this.width,
+      height: this.height,
+    }).filter((hit) => hit.focusScopeActive !== false);
+    // React commits replace HitRegion objects even though their host nodes
+    // retain stable ids. Keep an implicit pointer grab attached to the latest
+    // callbacks and geometry so stateful drag controls (scroll thumbs,
+    // sliders, splitters) update continuously rather than using the closure
+    // captured before their pointer-down render.
+    if (this.capturedHit?.focusId) {
+      this.capturedHit = this.hits.find((hit) => hit.focusId === this.capturedHit?.focusId) ?? null;
+      if (!this.capturedHit) this.downPos = null;
+    }
     this.reconcileHoverAfterLayout();
     const activeScopeId = this.activeTrappedScopeId();
+    const previousScope = this.focusScopeHistory.at(-1)?.scopeId ?? null;
+    if (activeScopeId !== previousScope) {
+      let returnFocusId: string | null = null;
+      const retainedIndex = this.focusScopeHistory.findIndex(
+        (entry) => entry.scopeId === activeScopeId,
+      );
+      while (
+        this.focusScopeHistory.length > (retainedIndex >= 0 ? retainedIndex + 1 : 0) &&
+        (activeScopeId === null ||
+          retainedIndex >= 0 ||
+          !this.hits.some((hit) => hit.focusScopeId === this.focusScopeHistory.at(-1)?.scopeId))
+      ) {
+        returnFocusId = this.focusScopeHistory.pop()!.returnFocusId;
+      }
+      if (returnFocusId) {
+        const returnHit = this.hits.find((hit) => hit.focusable && hit.focusId === returnFocusId);
+        if (returnHit) this.changeFocus(returnHit);
+      }
+      if (activeScopeId && retainedIndex < 0) {
+        this.focusScopeHistory.push({
+          scopeId: activeScopeId,
+          returnFocusId: this.focusedId,
+        });
+      }
+    }
     const presentAutoFocusIds = new Set(
       this.hits.filter((hit) => hit.autoFocus && hit.focusId).map((hit) => hit.focusId!),
     );
@@ -943,7 +1188,7 @@ export class Window {
         const dy = ev.y - this.downPos.y;
         if (dx * dx + dy * dy < 100) {
           const pressHit = this.capturedHit ?? this.findTopHit(ev.x, ev.y, (h) => !!h.onPress);
-          if (pressHit?.onPress) {
+          if (pressHit?.onPress && hitRegionContains(pressHit, ev.x, ev.y)) {
             pressHit.onPress(this.makeEvArgs(pressHit, ev));
           }
         }

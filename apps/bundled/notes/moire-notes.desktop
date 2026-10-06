@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Notes
+Comment=Keep local notes
+Exec=moire-notes
+TryExec=moire-notes
+Icon=moire-notes
+Terminal=false
+Categories=Office;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Notes

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Music
+Exec=moire-music %U
+TryExec=moire-music
+Icon=moire-music
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/mpeg;audio/flac;audio/ogg;audio/x-wav;audio/mp4;
+OnlyShowIn=Moire;
+StartupNotify=true
+StartupWMClass=org.moire.Music

@@ -3,21 +3,25 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Moire Files — native file browser",
+  "description": "Moire Files \u2014 native file browser",
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "smoke": "tsx src/places.smoke.ts"
+    "smoke": "tsx src/places.smoke.ts && tsx src/filesystem.smoke.ts && tsx src/keyboard.smoke.tsx && tsx src/keyboard.smoke.tsx --list && tsx src/tabs.smoke.tsx && tsx src/inspector.smoke.tsx && tsx src/transfer-outcome.smoke.ts && tsx src/transfer-outcome.ui.smoke.tsx",
+    "smoke:visual": "tsx src/visual.smoke.tsx"
   },
   "dependencies": {
     "@moire/app-discovery": "workspace:*",
     "@moire/prefs": "workspace:*",
+    "@moire/system-management": "workspace:*",
     "@moire/ui": "workspace:*",
     "react": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
+    "@types/pngjs": "^6.0.5",
+    "pngjs": "^7.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

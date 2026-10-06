@@ -67,6 +67,36 @@ the focused task minimizes it. If the focused window is minimized, the
 compositor promotes the next visible top-level so keyboard focus and
 `_NET_ACTIVE_WINDOW` do not point at a hidden surface.
 
+## Launcher input and process startup
+
+Super toggles the launcher. Up/Down select applications, Enter starts the selected
+application, and Escape dismisses the launcher. Search keys route to the shared
+`SearchField` editor, including caret movement, Home/End, Delete, Ctrl+A, and
+Shift selection. Its pointer hit places the caret. The shell currently translates
+raw evdev keys with a US layout; client XKB/composition does not apply to shell
+search.
+
+Shell pointer grabs belong to the button that started them. Right-click invokes
+context actions when available, and ordinary button activation belongs to left
+release. A retained React commit rebinds the pressed hit by identity, so removing
+an application or task while pressed cannot activate a stale callback. Clicks
+inside launcher chrome stay in the launcher; its backdrop dismisses outside
+clicks. Pointer hit tests also honor rounded controls and ancestor clips, so
+partly visible application rows cannot activate through the launcher footer.
+
+For spawn callbacks that expose Node-style `once`, launcher startup stays pending
+until `spawn` or `error`. Pending launches cannot start twice. Startup failure
+keeps the search and selection for retry and displays feedback in the footer.
+Dismissal cancels that attempt's UI feedback, so a late process event cannot
+reopen the launcher. Callbacks without process events retain immediate success
+behavior. This confirms process creation, not application window readiness or
+subsequent exit status.
+
+Run `pnpm --filter @moire/shell smoke:launcher` for disposable application-entry
+fixtures, actual search editing, pointer ownership, all five theme families in
+both variants, and real Node `ENOENT`/spawn/retry paths. The existing `smoke`
+command covers panel, desktop, drag, and SSD scene behavior.
+
 ## Two React worlds
 
 Shell uses `react-host` directly with dirty flags — **no** `Application.run()` loop. Files/Settings use `@moire/ui` `Application` as Wayland clients. Shared widgets/tokens where possible.
