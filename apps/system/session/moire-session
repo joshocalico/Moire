@@ -30,7 +30,7 @@ chmod 700 "$XDG_RUNTIME_DIR"
 
 # Install the development-tree portal backend into this session's XDG roots.
 # The D-Bus daemon can then activate it on demand when xdg-desktop-portal asks
-# for Moire's AppChooser implementation.
+# for one of the interfaces Moire implements (docs/portals.md).
 mkdir -p \
   "$XDG_DATA_HOME/dbus-1/services" \
   "$XDG_DATA_HOME/xdg-desktop-portal/portals" \
@@ -78,6 +78,13 @@ session_inner() {
   local management_pid=$!
   echo "Moire session: started System Management service"
 
+  (
+    cd "$ROOT"
+    exec pnpm --filter @moire/index-service start
+  ) >/tmp/moire-index.log 2>&1 &
+  local index_pid=$!
+  echo "Moire session: started file index service"
+
   # shellcheck disable=SC2086
   bash -c "$MOIRE_COMPOSITOR" &
   local comp_pid=$!
@@ -85,6 +92,9 @@ session_inner() {
   cleanup() {
     if [[ -n "${management_pid:-}" ]]; then
       kill "$management_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${index_pid:-}" ]]; then
+      kill "$index_pid" 2>/dev/null || true
     fi
     if [[ -n "${comp_pid:-}" ]]; then
       kill "$comp_pid" 2>/dev/null || true

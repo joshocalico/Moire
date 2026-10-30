@@ -1,0 +1,20 @@
+// Administrator actions (docs/polkit-agent.md, "Policy changes"). For an active, local session
+// these answer "ask for an administrator's password": polkit raises the prompt through Moire's
+// authentication agent (the compositor), and accepts the password of any identity in
+// security.polkit.adminIdentities (unix-group:wheel). The subject does not have to be an
+// administrator: a standard user gets through when an administrator types their own password.
+// KEEP holds the authorization for the asking process for five minutes.
+//
+// The list is explicit and every addition is a separate approval. Everything else falls through
+// to the 00-moire-*.rules allowances and then the immutable 01-moire-deny-unapproved.rules.
+polkit.addRule(function(action, subject) {
+  if (subject.user === "root") return;
+  if (subject.local !== true || subject.active !== true) return;
+  var administrator = [
+    // AccountsService: other users' accounts (create, delete, type, name, password).
+    "org.freedesktop.accounts.user-administration",
+    // moire-dm-settings: automatic login for the caller's own account, or off.
+    "org.moire.dm.set-autologin"
+  ];
+  if (administrator.indexOf(action.id) !== -1) return polkit.Result.AUTH_ADMIN_KEEP;
+});

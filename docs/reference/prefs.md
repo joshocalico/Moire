@@ -12,7 +12,7 @@ Do **not** use a separate `prefs.json` for Moire UI settings — Settings, shell
 | `uiScale` | `number` | `1` | Clamped 0.75–2; fonts and Moire UI |
 | `displayMode` | mode id \| `null` | `null` | Last confirmed `WIDTHxHEIGHT@MILLIHZ`; null uses DRM preferred mode |
 | `displayOutputs` | identity → output settings | `{}` | Per-monitor position, primary state, scale metadata and confirmed mode |
-| `volume` | `number` | `0.7` | Sink volume 0..1 (`wpctl` / `pactl` when available) |
+| `volume` | `number` | `0.7` | Last requested sink volume 0..1 (live volume: PipeWire, see [audio](../audio.md)) |
 | `notifications` | `boolean` | | Prefs field; toast daemon not shipped |
 | `showDesktopIcons` | `boolean` | `true` | When false, `paintDesktop` no-ops |
 | `wallpaper` | object \| `null` | `null` | Override; `null` = bundled theme wallpaper |

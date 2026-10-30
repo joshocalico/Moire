@@ -24,7 +24,7 @@ import {
   type StorageVolume,
 } from "@moire/system-management/storage-status";
 import { FilesApp } from "./main";
-import { RemovableDriveRow } from "./removable-drive-row";
+import { openFiles, withHome } from "./harness";
 import { createFolderTab, navigateFolderTab, tabDirectory } from "./navigation";
 import {
   RemovableDriveController,
@@ -236,6 +236,8 @@ const previous = {
 };
 process.env.HOME = fixture;
 process.env.XDG_CONFIG_HOME = path.join(fixture, ".config");
+// The session file clipboard lives in the runtime directory; keep it in the fixture.
+process.env.XDG_RUNTIME_DIR = path.join(fixture, ".run");
 process.env.XDG_DATA_HOME = path.join(fixture, ".data");
 const output = process.env.MOIRE_DRIVES_CAPTURE;
 try {
@@ -326,17 +328,23 @@ try {
         }
         assert.fail(`Expected ${name}; received ${title}`);
       };
-      // Search actual dispatched sidebar context targets, rather than assume a row's screen Y.
+      // The drive's rail item, found by its id; a real secondary click opens its menu.
       const drivePoint = async () => {
         await settle();
-        for (let y = 100; y < 850; y += 12) {
-          title = "";
-          native.injectPointer({ type: "down", button: "right", x: 85, y, timeMs: Date.now() });
-          window.tick();
-          if (title === volume().label && actions.some((action) => action.id === "drive-open"))
-            return { x: 85, y };
-        }
-        assert.fail("Actual Files sidebar did not expose the live drive row");
+        const internals = window as unknown as {
+          hits: Array<{ focusId?: string; x: number; y: number; width: number; height: number }>;
+        };
+        const hit = internals.hits.find((candidate) => candidate.focusId === `rail:drive:${id}`);
+        assert.ok(hit, "Actual Files rail did not expose the live drive item");
+        const point = { x: hit.x + hit.width / 2, y: hit.y + hit.height / 2 };
+        title = "";
+        native.injectPointer({ type: "down", button: "right", ...point, timeMs: Date.now() });
+        window.tick();
+        assert.ok(
+          title === volume().label && actions.some((action) => action.id === "drive-open"),
+          "the drive item opens its menu",
+        );
+        return point;
       };
       const click = (point: { x: number; y: number }) => {
         native.injectPointer({ type: "down", button: "left", ...point, timeMs: Date.now() });
@@ -449,108 +457,66 @@ try {
         client.publish({ kind: "unavailable", message: "Service disconnected" });
         await waitFolder(path.basename(fixture));
         assert.ok(statusChanges >= 7, "storage changes retire caller-owned native menus");
-        if (scheme === "light" && scale === 1) {
-          client.publish(ready([], 10));
+        // No drives, or no storage service at all, is not news: the rail shows
+        // neither an empty Drives section nor a raw service message.
+        for (const state of [
+          ready([], 10),
+          { kind: "unavailable" as const, message: "UDisks storage backend unavailable" },
+        ]) {
+          client.publish(state);
           await settle();
-          const before = client.refreshes;
-          for (
-            let y = 900 - 30 * scale - 40;
-            y < 900 - 30 * scale && client.refreshes === before;
-            y += 6
-          )
-            for (let x = 12; x < 245 && client.refreshes === before; x += 8) click({ x, y });
-          await settle();
-          assert.equal(
-            client.refreshes,
-            before + 1,
-            "empty Drives section has a reachable refresh action",
+          const internals = window as unknown as { hits: Array<{ focusId?: string }> };
+          assert.ok(
+            !internals.hits.some((hit) => hit.focusId === "drives:refresh"),
+            `${state.kind} storage shows no drive footer`,
+          );
+          assert.ok(
+            !internals.hits.some((hit) => hit.focusId?.startsWith("rail:drive:")),
+            `${state.kind} storage shows no Drives rows`,
           );
         }
         window.destroy();
         assert.equal(client.listeners.size, 0, "Window teardown unsubscribes its drive observer");
         assert.equal(client.disposed, false);
         console.log(
-          `[files/drives/window] ${scheme}/${scale} real sidebar pointer, observed mount, menu unmount, two-tab loss/history, intervening navigation, readonly and owner loss passed`,
+          `[files/drives/window] ${scheme}/${scale} real rail pointer, observed mount, menu unmount, two-tab loss/history, intervening navigation, readonly and owner loss passed`,
         );
       } finally {
         window.destroy();
         backend.disconnect();
       }
     }
-  for (const scale of [1, 1.5]) {
-    setUiScaleFactor(scale);
-    const backend = new HeadlessPlatform();
-    await backend.connect();
-    const window = new Window({ title: "Compact drive row", width: 240, height: 80 });
-    let opened = 0,
-      menus = 0;
-    const theme = createPersonalizedWidgetTheme(
-      discoverPersonalization("linux", {
-        themeFamily: "moire",
-        colorScheme: "dark",
-        reducedMotion: true,
-      }),
-    );
-    window.setContent(() => (
-      <WidgetThemeProvider theme={theme}>
-        <RemovableDriveRow
-          width={240}
-          height={40}
-          volume={volume(mounted)}
-          state={ready([volume(mounted)])}
-          selected={false}
-          busy={false}
-          onActivate={() => {
-            opened++;
-          }}
-          onActions={() => {
-            menus++;
-          }}
-        />
-      </WidgetThemeProvider>
-    ));
-    window.mount(backend);
-    await Promise.resolve();
-    window.tick();
-    const native = backend.getWindows()[0];
-    assert.ok(native);
-    const send = (code: number, key: string) => {
-      const modifiers = { ctrl: false, alt: false, shift: false, meta: false };
-      native.injectKey({ type: "down", code, key, modifiers, timeMs: 1 });
-      native.injectKey({ type: "up", code, key, modifiers, timeMs: 2 });
-      window.tick();
-    };
-    try {
-      assert.ok(native.lastFrame);
-      const empty = native.lastFrame.slice(60 * 240 * 4, 60 * 240 * 4 + 4);
-      for (let y = 40; y < 80; y++)
-        for (let x = 0; x < 240; x++) {
-          const offset = (y * 240 + x) * 4;
-          assert.deepEqual(
-            native.lastFrame.slice(offset, offset + 4),
-            empty,
-            "both measured row text lines remain inside40px at each scale",
-          );
-        }
-      send(15, "Tab");
-      send(28, "Enter");
-      assert.equal(opened, 1, "compact row keyboard activation opens once");
-      send(15, "Tab");
-      send(28, "Enter");
-      assert.equal(menus, 1, "separate compact drive action is keyboard reachable");
-      native.injectPointer({ type: "down", button: "left", x: 224, y: 20, timeMs: 3 });
-      native.injectPointer({ type: "up", button: "left", x: 224, y: 20, timeMs: 4 });
-      window.tick();
-      assert.equal(menus, 2, "compact action hit remains inside allocated row");
-      assert.ok(native.lastFrame?.some((byte) => byte !== 0));
-      console.log(
-        `[files/drives/compact] ${scale} long-label row keyboard + separate pointer action passed`,
-      );
-    } finally {
-      window.destroy();
-      backend.disconnect();
-    }
-  }
+  // The rail's drive item: eject on hover, and a mounted drive's page has Eject in its title row.
+  for (const expanded of [false, true])
+    await withHome(async (home) => {
+      const mount = path.join(home, "drive");
+      await fs.mkdir(mount, { recursive: true });
+      await fs.writeFile(path.join(mount, "on-drive.txt"), "drive bytes");
+      const client = new PrivateStorage(ready([volume(mount)]));
+      const files = await openFiles({
+        initialPath: mount,
+        storageClient: client,
+        preferences: { railExpanded: expanded },
+      });
+      try {
+        await files.until(() => files.texts().includes("Eject"), "the drive page offers Eject");
+        const item = files.center(`rail:drive:${id}`);
+        files.pointer("move", item.x, item.y);
+        await files.settle(3);
+        files.click(files.center(`rail:drive:${id}:action`));
+        await files.until(
+          () => client.calls.some((call) => call.action === "eject"),
+          "the rail's eject button ejects",
+        );
+        const before = client.calls.length;
+        files.press("Eject");
+        await files.until(() => client.calls.length > before, "the title row's Eject ejects");
+        assert.equal(client.calls.at(-1)?.action, "eject");
+        console.log(`[files/drives/rail] expanded=${expanded} hover eject and page Eject passed`);
+      } finally {
+        files.close();
+      }
+    });
 } finally {
   setUiScaleFactor(1);
   for (const [key, value] of Object.entries(previous)) {

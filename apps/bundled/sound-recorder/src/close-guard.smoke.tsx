@@ -5,6 +5,7 @@ import path from "node:path";
 import React from "react";
 import { Window, installUiFonts, getFontEngine } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
+import { windowControl } from "@moire/app-tools/testing";
 import { SoundRecorderApp, type RecorderControls } from "./main";
 import type { RecordingState } from "./backend";
 
@@ -83,8 +84,7 @@ async function fixture(
   work: (fixture: {
     recorder: FixtureRecorder;
     window: Window;
-    click: (x: number, y: number) => void;
-    enterDestination: (value: string) => void;
+    click: (control: string) => void;
     settle: () => Promise<void>;
     blockClose: () => void;
     allowClose: () => void;
@@ -102,6 +102,8 @@ async function fixture(
     <SoundRecorderApp
       {...size}
       onCloseGuard={(guard) => window.setCloseGuard(guard)}
+      recordingsFolder={path.join(directory, "Recordings")}
+      probeInput={async () => ({ kind: "ready", name: "Fixture input" })}
       recorderFactory={(change) => {
         recorder = new FixtureRecorder(path.join(directory, `private-${number++}.wav`), change);
         return recorder;
@@ -115,14 +117,24 @@ async function fixture(
   assert.ok(native);
   assert.ok(recorder);
   const current = recorder;
-  const click = (x: number, y: number) => {
+  // Controls are located in the live scene: "recorder:record" toggles Record/Stop, the take card
+  // carries "recorder:save" and "recorder:discard".
+  const press = (x: number, y: number) => {
     native.injectPointer({ type: "down", x, y, button: "left", timeMs: 1 });
     native.injectPointer({ type: "up", x, y, button: "left", timeMs: 2 });
     window.tick();
   };
-  const settle = async () => {
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  const click = (control: string) => {
     window.tick();
+    const { x, y } = windowControl(window, { focusId: control });
+    press(x, y);
+  };
+  // A few frames: the fixture's file writes must finish on a busy machine too.
+  const settle = async () => {
+    for (let frame = 0; frame < 5; frame++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      window.tick();
+    }
   };
   try {
     await work({
@@ -130,19 +142,6 @@ async function fixture(
       window,
       click,
       settle,
-      enterDestination: (value) => {
-        click(60, 20);
-        const modifiers = { ctrl: false, shift: false, alt: false, meta: false };
-        native.injectKey({
-          type: "down",
-          code: 30,
-          key: "a",
-          modifiers: { ...modifiers, ctrl: true },
-          timeMs: 1,
-        });
-        native.injectKey({ type: "down", code: 30, key: "a", text: value, modifiers, timeMs: 2 });
-        window.tick();
-      },
       blockClose: () => {
         visibleText.length = 0;
         native.requestClose();
@@ -176,8 +175,8 @@ try {
   await fixture(async ({ allowClose }) => {
     allowClose();
   });
-  await fixture(async ({ recorder, click, settle, enterDestination, blockClose, allowClose }) => {
-    click(50, 64);
+  await fixture(async ({ recorder, click, settle, blockClose, allowClose }) => {
+    click("recorder:record");
     blockClose(); // Includes the same turn before the start promise completes.
     assert.equal(recorder.snapshot().kind, "starting");
     recorder.starting.release();
@@ -185,38 +184,39 @@ try {
     assert.equal(recorder.snapshot().kind, "recording");
     blockClose();
     recorder.holdStop = true;
-    click(140, 64);
+    click("recorder:record");
     blockClose();
     recorder.stopping.release();
     await settle();
     assert.equal(recorder.snapshot().kind, "ready");
     blockClose();
     const take = await fs.readFile(recorder.file);
-    const destination = path.join(directory, "saved take.wav");
-    enterDestination(destination);
     recorder.failSave = true;
-    click(800, 20);
+    click("recorder:save");
     await settle();
     blockClose();
     assert.deepEqual(await fs.readFile(recorder.file), take, "failed save preserves unsaved audio");
     recorder.failSave = false;
     recorder.holdSave = true;
-    click(800, 20);
+    click("recorder:save");
     blockClose();
     recorder.saving.release();
     await settle();
-    assert.deepEqual(await fs.readFile(destination), take);
+    // Save puts the take in the recordings folder under its automatic, dated name.
+    const [saved] = await fs.readdir(path.join(directory, "Recordings"));
+    assert.match(saved ?? "", /^Recording \d{4}-\d{2}-\d{2} \d{2}\.\d{2}\.\d{2}\.wav$/);
+    assert.deepEqual(await fs.readFile(path.join(directory, "Recordings", saved!)), take);
     allowClose();
   });
   await fixture(async ({ recorder, click, settle, blockClose, allowClose }) => {
-    click(50, 64);
+    click("recorder:record");
     recorder.starting.release();
     await settle();
-    click(140, 64);
+    click("recorder:record");
     await settle();
     blockClose();
     recorder.holdDiscard = true;
-    click(260, 64);
+    click("recorder:discard");
     blockClose();
     recorder.discarding.release();
     await settle();

@@ -3,4 +3,4 @@ set -euo pipefail
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 ROOT="$(cd "$(dirname "$SELF")/../../.." && pwd)"
 cd "$ROOT/apps/core/settings"
-exec "$ROOT/node_modules/.bin/tsx" src/main.ts "$@"
+exec "$ROOT/node_modules/.bin/tsx" src/main.tsx "$@"

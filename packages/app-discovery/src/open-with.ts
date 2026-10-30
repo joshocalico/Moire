@@ -1,8 +1,10 @@
 import path from "node:path";
 import { discoverApplications, resolveApplicationIcon } from "./applications";
 import type { DesktopEntry } from "./desktop";
+import { applicationDisplayName } from "./names";
 import {
   buildDesktopExec,
+  buildDesktopExecForUris,
   loadMimeAssociationDatabase,
   type MimeAssociationDatabase,
 } from "./mime";
@@ -164,11 +166,43 @@ export class FileActivationService {
     return this.activate(filePath, mimeType, application);
   }
 
+  /** The MIME type that selects a handler for a non-file URI: `x-scheme-handler/<scheme>`. */
+  static schemeMimeType(uri: string): string | null {
+    const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(uri)?.[1]?.toLowerCase();
+    return scheme && scheme !== "file" ? `x-scheme-handler/${scheme}` : null;
+  }
+
+  /**
+   * Hand a non-file URI (`https:`, `mailto:`) to an application: the given one, else the default
+   * for its scheme. The URI is only ever an argument to that application's Exec line.
+   */
+  openUri(uri: string, desktopId?: string): FileActivation | null {
+    const mimeType = FileActivationService.schemeMimeType(uri);
+    if (!mimeType) return null;
+    const application = desktopId
+      ? this.applicationForId(desktopId)
+      : this.mimeDatabase.defaultApplicationForMime(mimeType);
+    if (!application) return null;
+    const activation = {
+      filePath: uri,
+      mimeType,
+      application,
+      command: buildDesktopExecForUris(application, [uri]),
+    };
+    this.launch(activation);
+    return activation;
+  }
+
   setDefaultApplication(mimeType: string, applicationId: string): boolean {
     const application = this.applicationForId(applicationId);
     if (!application) return false;
     this.mimeDatabase.setDefaultApplication(mimeType, application.id);
     return true;
+  }
+
+  /** The display name for an app id as recent-file lists record it. */
+  applicationName(appId: string): string {
+    return applicationDisplayName(appId, this.applications);
   }
 
   private applicationForId(applicationId: string): DesktopEntry | undefined {

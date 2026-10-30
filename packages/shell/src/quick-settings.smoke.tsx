@@ -17,7 +17,7 @@ import {
   type SceneNode,
   measureTextBounds,
 } from "@moire/react-host";
-import { installUiFonts, Window, setUiScaleFactor } from "@moire/ui";
+import { installUiFonts, Window, setUiScaleFactor, tickAllMotions } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
 import { getTheme, setTheme, applyThemeFamily, THEME_FAMILIES } from "@moire/theme";
 import type { DesktopStatusState } from "@moire/system-management/desktop-status";
@@ -91,6 +91,15 @@ function clock() {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 const inert = () => {};
+/** Rasterize with popup entrances settled, as the compositor shows them after opening. */
+function settledRaster(
+  root: { container: Parameters<typeof rasterize>[0] },
+  width: number,
+  height: number,
+) {
+  tickAllMotions(1);
+  return rasterize(root.container, width, height);
+}
 function png(width: number, height: number, bgra: Uint8Array): Buffer {
   const rgba = Buffer.alloc(height * (width * 4 + 1));
   for (let y = 0; y < height; y++)
@@ -190,7 +199,7 @@ try {
             />,
           );
           frames++;
-          return rasterize(scene.container, width, height);
+          return settledRaster(scene, width, height);
         };
         const main = render("main");
         assert(
@@ -245,7 +254,7 @@ try {
             onClose={inert}
           />,
         );
-        const tray = rasterize(scene.container, width, height);
+        const tray = settledRaster(scene, width, height);
         frames++;
         assert(tray.hits.some((hit) => hit.focusScopeId === NOTIFICATIONS_SCOPE));
         assert(!tray.hits.some((hit) => hit.focusScopeId === QUICK_SETTINGS_SCOPE));
@@ -340,6 +349,8 @@ try {
     client.tick();
     const native = backend.getWindows()[0]!;
     const paint = () => {
+      // Settle popup entrances, as a real frame does a few frames after opening.
+      tickAllMotions(1);
       const frame = shell.chromeRaster(width, height);
       assert(frame);
       frames++;
@@ -450,7 +461,7 @@ try {
           onSettings={inert}
         />,
       );
-      return rasterize(scene.container, width, height).hits;
+      return settledRaster(scene, width, height).hits;
     }
     const descendants = (node: SceneNode): SceneNode[] => [
       node,
@@ -483,7 +494,7 @@ try {
         fontWeight: node.fontWeight,
         scale: node.scale,
       });
-      const expected = rasterize(scene.container, width, height).pixels;
+      const expected = settledRaster(scene, width, height).pixels;
       const actual = paint();
       assert(x >= 0 && y >= 0 && x + bounds.width <= width && y + bounds.height <= height);
       if (viewport)
@@ -531,7 +542,7 @@ try {
           onClose={inert}
         />,
       );
-      return rasterize(scene.container, width, height).hits;
+      return settledRaster(scene, width, height).hits;
     }
     edge(29, 1);
     controlsOpen();
@@ -550,7 +561,8 @@ try {
     const first = paint();
     key(15);
     assert.notDeepEqual(paint(), first, "actual shell Tab paints focus");
-    key(15); // network -> mute -> generated volume slider
+    key(15); // network -> Do not disturb tile
+    key(15); // -> mute -> generated volume slider
     let before = calls.length;
     edge(103, 1);
     assert.equal(calls.length, before, "ArrowUp down only edits requested thumb");
@@ -574,7 +586,7 @@ try {
     await flush();
     readback(0.41);
     const plainHits = controlsHits();
-    const plainFrame = rasterize(scene.container, width, height);
+    const plainFrame = settledRaster(scene, width, height);
     const unfocusedSlider = plainHits.find(
       (hit) => hit.focusable && hit.focusId?.startsWith("slider:"),
     )!;
@@ -690,11 +702,11 @@ try {
       volumeCalls,
       "unknown volume does not retry without actual audio readback",
     );
-    // Generated Toggle remains part of the same focus scope; reveal occurs before activation.
+    // The Do not disturb tile remains part of the same focus scope; reveal occurs before activation.
     const focusable = controlsHits().filter(
       (hit) => hit.focusable && hit.focusScopeId === QUICK_SETTINGS_SCOPE,
     );
-    const toggleIndex = focusable.findIndex((hit) => hit.focusId?.startsWith("toggle:"));
+    const toggleIndex = focusable.findIndex((hit) => hit.focusId === "quick:dnd");
     assert(toggleIndex >= 0);
     for (let index = 0; index <= toggleIndex; index++) key(15); // remembered disabled slider -> first active -> DND
     before = calls.length;
@@ -961,7 +973,8 @@ try {
       clientId: 12,
       surfaceId: index + 1,
       title: `Fixture hidden window ${index + 1}`,
-      appId: "Editor",
+      // Distinct applications, so the panel overflows rather than grouping them.
+      appId: `Fixture${index + 1}`,
       focused: false,
       minimized: true,
     }));
@@ -983,7 +996,7 @@ try {
         onDismiss={inert}
       />,
     );
-    const taskHits = rasterize(scene.container, width, height).hits;
+    const taskHits = settledRaster(scene, width, height).hits;
     assert(taskHits.some((hit) => hit.focusScopeId === TASK_WINDOWS_SCOPE));
     capture("hidden-windows");
     const firstHidden = hidden[0]!;

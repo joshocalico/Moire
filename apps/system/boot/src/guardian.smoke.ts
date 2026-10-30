@@ -122,7 +122,8 @@ function scenario(mode: string, overrides: Partial<GuardianOptions> = {}) {
 }
 
 try {
-  const healthy = scenario("normal");
+  // A loaded builder can take longer than the default 40 ms to deliver SIGTERM to a healthy child.
+  const healthy = scenario("normal", { gracefulMs: 800 });
   healthy.guardian.start();
   healthy.guardian.start();
   await healthy.presented;

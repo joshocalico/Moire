@@ -220,7 +220,7 @@ try {
             ).pixels;
             const retainedScene = new RetainedSceneRenderer(),
               retained = new RetainedSoftwareRenderer();
-            const radius = 12 * scale;
+            const radius = 16 * scale;
             const borderWidth = 1;
             const maxScroll = Math.max(0, natural - geometry.height);
             for (const [position, scrollY] of [

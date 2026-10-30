@@ -22,6 +22,8 @@ export type ToggleProps = {
   size?: ButtonSize;
   disabled?: boolean;
   autoFocus?: boolean;
+  /** Stable keyboard-focus identity, e.g. for workflow tests. */
+  focusId?: string;
 };
 
 export function Toggle(props: ToggleProps): ReactNode {
@@ -110,7 +112,7 @@ export function Toggle(props: ToggleProps): ReactNode {
         fill={0x00000000}
         focusable={!props.disabled}
         autoFocus={props.autoFocus}
-        focusId={`toggle:${generatedId}`}
+        focusId={props.focusId ?? `toggle:${generatedId}`}
         onFocusChange={setFocused}
         onKeyDown={handleKey}
         onPointerEnter={props.disabled ? undefined : () => setHovered(true)}

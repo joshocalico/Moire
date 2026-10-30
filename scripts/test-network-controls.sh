@@ -9,6 +9,8 @@ command -v dbus-daemon >/dev/null || { echo 'Private D-Bus checks require dbus-d
 export MOIRE_TEST_REAL_DBUS=1
 for task_check in \
   packages/dbus/src/signals.smoke.ts \
+  packages/system-management/src/vpn-config.smoke.ts \
+  packages/prefs/tests/network-proxy.smoke.ts \
   apps/system/management-service/src/network-manager.smoke.ts \
   apps/system/management-service/src/desktop-controls.smoke.ts \
   packages/ui/src/text-field-password.smoke.tsx \
@@ -19,7 +21,8 @@ for task_check in \
   packages/shell/src/quick-settings-details.smoke.tsx \
   packages/shell/src/quick-settings.smoke.tsx \
   packages/shell/src/panel-status.smoke.tsx \
-  packages/shell/src/popup-frame.smoke.tsx; do
+  packages/shell/src/popup-frame.smoke.tsx \
+  apps/core/settings/src/connections.smoke.tsx; do
   printf '\n[network-controls] %s\n' "$task_check"
   node --import "$task_loader" "$task_check"
 done

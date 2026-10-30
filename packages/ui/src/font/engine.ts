@@ -9,13 +9,16 @@ import opentype from "opentype.js";
 import type { Font as OtFont, Path as OtPath } from "opentype.js";
 
 export type FontWeight = "regular" | "medium" | "bold";
-export type FontFamily = "sans" | "mono" | "serif";
+/** `display` is the brand face (the Newsreader wordmark cut); it falls back to `serif`. */
+export type FontFamily = "sans" | "mono" | "serif" | "display";
 
 export type TextStyle = {
   family?: FontFamily;
   weight?: FontWeight;
   size?: number;
   color?: number; // ARGB
+  /** Extra advance after each glyph, in pixels. */
+  letterSpacing?: number;
 };
 
 type FaceKey = `${FontFamily}:${FontWeight}`;
@@ -39,9 +42,15 @@ function fontsDir(): string {
   return path.resolve(here, "../../fonts");
 }
 
+/** Absolute path of a bundled font file (brand faces such as the Newsreader wordmark cut). */
+export function uiFontPath(filename: string): string {
+  return path.join(fontsDir(), filename);
+}
+
 function faceFile(family: FontFamily, weight: FontWeight): string {
   const dir = fontsDir();
   if (family === "serif") return path.join(dir, "DejaVuSerif.ttf");
+  if (family === "display") return path.join(dir, "Newsreader-Display330.ttf");
   if (family === "mono") {
     return path.join(dir, "IBMPlexMono-Regular.ttf");
   }
@@ -55,51 +64,53 @@ export class FontEngine {
   private glyphs = new Map<GlyphCacheKey, GlyphBitmap>();
   private ready = false;
 
+  /** Faces that failed to load (missing file or parse error); never retried. */
+  private missing = new Set<FaceKey>();
+
+  /**
+   * Load the fallback face now; every other face is parsed on first use, so a process that
+   * draws one family (the boot scene's wordmark) never pays for the rest.
+   */
   async init(): Promise<void> {
     if (this.ready) return;
-    const specs: Array<[FontFamily, FontWeight]> = [
-      ["sans", "regular"],
-      ["sans", "medium"],
-      ["sans", "bold"],
-      ["mono", "regular"],
-      ["serif", "regular"],
-    ];
-    try {
-      for (const [family, weight] of specs) {
-        const file = faceFile(family, weight);
-        const buf = fs.readFileSync(file);
-        const font = opentype.parse(
-          buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
-        );
-        this.faces.set(`${family}:${weight}`, font);
-      }
-      this.ready = true;
-    } catch (err) {
-      console.warn("[ui/font] TTF load partial failure:", err);
-      const file = faceFile("sans", "regular");
-      if (fs.existsSync(file)) {
-        const buf = fs.readFileSync(file);
-        const font = opentype.parse(
-          buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
-        );
-        this.faces.set("sans:regular", font);
-        this.ready = true;
-      }
-    }
+    this.ready = this.load("sans", "regular") !== null;
   }
 
   isReady(): boolean {
     return this.ready && this.faces.size > 0;
   }
 
+  private load(family: FontFamily, weight: FontWeight): OtFont | null {
+    const key: FaceKey = `${family}:${weight}`;
+    const cached = this.faces.get(key);
+    if (cached || this.missing.has(key)) return cached ?? null;
+    const file = faceFile(family, weight);
+    try {
+      const buf = fs.readFileSync(file);
+      const font = opentype.parse(
+        buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+      );
+      this.faces.set(key, font);
+      return font;
+    } catch (err) {
+      this.missing.add(key);
+      // The display face is optional (it falls back to serif); the others ship with the UI.
+      if (family !== "display") console.warn(`[ui/font] could not load ${key}:`, err);
+      return null;
+    }
+  }
+
   private face(style: TextStyle): OtFont | null {
+    if (!this.ready) return null;
     const family = style.family ?? "sans";
     const weight = style.weight ?? "regular";
+    // Only these weights are bundled; others resolve to the family's regular face.
+    const bundled = family === "sans" || weight === "regular" ? weight : "regular";
     return (
-      this.faces.get(`${family}:${weight}`) ??
-      this.faces.get(`${family}:regular`) ??
-      this.faces.get("sans:regular") ??
-      null
+      this.load(family, bundled) ??
+      this.load(family, "regular") ??
+      (family === "display" ? this.load("serif", "regular") : null) ??
+      this.load("sans", "regular")
     );
   }
 
@@ -122,7 +133,7 @@ export class FontEngine {
     let width = 0;
     for (const ch of text) {
       const g = font.charToGlyph(ch);
-      width += (g.advanceWidth ?? 0) * scale;
+      width += (g.advanceWidth ?? 0) * scale + (style.letterSpacing ?? 0);
     }
     const asc = (font.ascender ?? 0) * scale;
     const desc = Math.abs((font.descender ?? 0) * scale);
@@ -161,7 +172,7 @@ export class FontEngine {
     // opentype Path has .commands — use getPath and drawFilled-ish by
     // leveraging getBoundingBox + stroke points... Better: use font.getPath and
     // draw with a crude polygon fill from commands.
-    this.fillPathAlpha(path, alpha, width, height, -x0, -y0);
+    rasterizePathAlpha(path, alpha, width, height, -x0, -y0);
 
     const bmp: GlyphBitmap = {
       width,
@@ -173,123 +184,6 @@ export class FontEngine {
     };
     this.glyphs.set(key, bmp);
     return bmp;
-  }
-
-  /**
-   * Rasterize an opentype Path into an alpha mask using even-odd point-in-path
-   * on a coarse grid (good enough for UI sizes).
-   */
-  private fillPathAlpha(
-    path: OtPath,
-    alpha: Uint8Array,
-    width: number,
-    height: number,
-    ox: number,
-    oy: number,
-  ): void {
-    // Flatten to polylines
-    type Pt = { x: number; y: number };
-    const contours: Pt[][] = [];
-    let cur: Pt[] = [];
-    let cx = 0;
-    let cy = 0;
-    const cmds = path.commands as Array<{
-      type: string;
-      x?: number;
-      y?: number;
-      x1?: number;
-      y1?: number;
-      x2?: number;
-      y2?: number;
-    }>;
-    for (const c of cmds) {
-      if (c.type === "M") {
-        if (cur.length) contours.push(cur);
-        cur = [];
-        cx = c.x ?? 0;
-        cy = c.y ?? 0;
-        cur.push({ x: cx, y: cy });
-      } else if (c.type === "L") {
-        cx = c.x ?? cx;
-        cy = c.y ?? cy;
-        cur.push({ x: cx, y: cy });
-      } else if (c.type === "Q") {
-        // Approximate quadratic with 4 segments
-        const x1 = c.x1 ?? cx;
-        const y1 = c.y1 ?? cy;
-        const x = c.x ?? cx;
-        const y = c.y ?? cy;
-        for (let i = 1; i <= 8; i++) {
-          const t = i / 8;
-          const u = 1 - t;
-          cur.push({
-            x: u * u * cx + 2 * u * t * x1 + t * t * x,
-            y: u * u * cy + 2 * u * t * y1 + t * t * y,
-          });
-        }
-        cx = x;
-        cy = y;
-      } else if (c.type === "C") {
-        const x1 = c.x1 ?? cx;
-        const y1 = c.y1 ?? cy;
-        const x2 = c.x2 ?? cx;
-        const y2 = c.y2 ?? cy;
-        const x = c.x ?? cx;
-        const y = c.y ?? cy;
-        for (let i = 1; i <= 10; i++) {
-          const t = i / 10;
-          const u = 1 - t;
-          cur.push({
-            x: u * u * u * cx + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x,
-            y: u * u * u * cy + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y,
-          });
-        }
-        cx = x;
-        cy = y;
-      } else if (c.type === "Z") {
-        if (cur.length) {
-          contours.push(cur);
-          cur = [];
-        }
-      }
-    }
-    if (cur.length) contours.push(cur);
-
-    const inside = (px: number, py: number): boolean => {
-      let winding = 0;
-      for (const poly of contours) {
-        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-          const yi = poly[i]!.y;
-          const yj = poly[j]!.y;
-          const xi = poly[i]!.x;
-          const xj = poly[j]!.x;
-          if (yi > py !== yj > py) {
-            const xint = ((xj - xi) * (py - yi)) / (yj - yi + 0.0) + xi;
-            if (px < xint) winding++;
-          }
-        }
-      }
-      return (winding & 1) === 1;
-    };
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        // 4×4 coverage AA — softens the binary bitmap look.
-        let cover = 0;
-        for (let sy = 0; sy < 4; sy++) {
-          for (let sx = 0; sx < 4; sx++) {
-            const px = x - ox + (sx + 0.5) / 4;
-            const py = y - oy + (sy + 0.5) / 4;
-            if (inside(px, py)) cover++;
-          }
-        }
-        if (cover > 0) {
-          // Gamma-ish coverage → alpha so edges look softer than linear 4×4.
-          const t = cover / 16;
-          alpha[y * width + x] = Math.min(255, (Math.pow(t, 0.75) * 255) | 0);
-        }
-      }
-    }
   }
 
   draw(
@@ -354,7 +248,147 @@ export class FontEngine {
           fb[row + px] = ((outA << 24) | (outR << 16) | (outG << 8) | outB) >>> 0;
         }
       }
-      penX += g.advance;
+      penX += g.advance + (style.letterSpacing ?? 0);
+    }
+  }
+}
+
+/**
+ * Rasterize an opentype Path into an alpha mask with the nonzero winding rule.
+ */
+export function rasterizePathAlpha(
+  path: OtPath,
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  ox: number,
+  oy: number,
+): void {
+  // Flatten to polylines
+  type Pt = { x: number; y: number };
+  const contours: Pt[][] = [];
+  let cur: Pt[] = [];
+  let cx = 0;
+  let cy = 0;
+  const cmds = path.commands as Array<{
+    type: string;
+    x?: number;
+    y?: number;
+    x1?: number;
+    y1?: number;
+    x2?: number;
+    y2?: number;
+  }>;
+  for (const c of cmds) {
+    if (c.type === "M") {
+      if (cur.length) contours.push(cur);
+      cur = [];
+      cx = c.x ?? 0;
+      cy = c.y ?? 0;
+      cur.push({ x: cx, y: cy });
+    } else if (c.type === "L") {
+      cx = c.x ?? cx;
+      cy = c.y ?? cy;
+      cur.push({ x: cx, y: cy });
+    } else if (c.type === "Q") {
+      // Approximate quadratic with 4 segments
+      const x1 = c.x1 ?? cx;
+      const y1 = c.y1 ?? cy;
+      const x = c.x ?? cx;
+      const y = c.y ?? cy;
+      for (let i = 1; i <= 8; i++) {
+        const t = i / 8;
+        const u = 1 - t;
+        cur.push({
+          x: u * u * cx + 2 * u * t * x1 + t * t * x,
+          y: u * u * cy + 2 * u * t * y1 + t * t * y,
+        });
+      }
+      cx = x;
+      cy = y;
+    } else if (c.type === "C") {
+      const x1 = c.x1 ?? cx;
+      const y1 = c.y1 ?? cy;
+      const x2 = c.x2 ?? cx;
+      const y2 = c.y2 ?? cy;
+      const x = c.x ?? cx;
+      const y = c.y ?? cy;
+      for (let i = 1; i <= 10; i++) {
+        const t = i / 10;
+        const u = 1 - t;
+        cur.push({
+          x: u * u * u * cx + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x,
+          y: u * u * u * cy + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y,
+        });
+      }
+      cx = x;
+      cy = y;
+    } else if (c.type === "Z") {
+      if (cur.length) {
+        contours.push(cur);
+        cur = [];
+      }
+    }
+  }
+  if (cur.length) contours.push(cur);
+
+  // Nonzero scanline fill (TrueType's rule; overlapping contours from instanced variable
+  // fonts must not cancel). Each of ROWS sub-rows per pixel adds exact horizontal span
+  // coverage, so cost scales with edges per row rather than samples × edges.
+  const ROWS = 8;
+  type Edge = { x0: number; y0: number; x1: number; y1: number; dir: number };
+  const edges: Edge[] = [];
+  for (const poly of contours) {
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[j]!;
+      const b = poly[i]!;
+      if (a.y === b.y) continue;
+      edges.push(
+        a.y < b.y
+          ? { x0: a.x + ox, y0: a.y + oy, x1: b.x + ox, y1: b.y + oy, dir: 1 }
+          : { x0: b.x + ox, y0: b.y + oy, x1: a.x + ox, y1: a.y + oy, dir: -1 },
+      );
+    }
+  }
+  const coverage = new Float32Array(width * height);
+  const crossings: Array<{ x: number; dir: number }> = [];
+  const addSpan = (row: number, from: number, to: number) => {
+    const left = Math.max(0, from);
+    const right = Math.min(width, to);
+    if (right <= left) return;
+    const first = Math.floor(left);
+    const last = Math.min(width - 1, Math.ceil(right) - 1);
+    for (let x = first; x <= last; x++) {
+      coverage[row + x]! += (Math.min(right, x + 1) - Math.max(left, x)) / ROWS;
+    }
+  };
+  for (let y = 0; y < height; y++) {
+    for (let sub = 0; sub < ROWS; sub++) {
+      const py = y + (sub + 0.5) / ROWS;
+      crossings.length = 0;
+      for (const e of edges) {
+        if (py < e.y0 || py >= e.y1) continue;
+        crossings.push({ x: e.x0 + ((py - e.y0) * (e.x1 - e.x0)) / (e.y1 - e.y0), dir: e.dir });
+      }
+      if (crossings.length < 2) continue;
+      crossings.sort((a, b) => a.x - b.x);
+      let winding = 0;
+      for (let k = 0; k < crossings.length - 1; k++) {
+        winding += crossings[k]!.dir;
+        if (winding !== 0) addSpan(y * width, crossings[k]!.x, crossings[k + 1]!.x);
+      }
+    }
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      // Nearly covered pixels render solid, as point sampling did: keeps small text crisp.
+      const raw = coverage[y * width + x]!;
+      const t = raw >= 0.9 ? 1 : raw;
+      if (t > 1e-3) {
+        // Gamma-ish coverage → alpha so edges look softer than linear coverage.
+        alpha[y * width + x] = Math.min(255, (Math.pow(t, 0.75) * 255) | 0);
+      }
     }
   }
 }

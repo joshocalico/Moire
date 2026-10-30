@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { operationError } from "./filesystem";
+import { operationError } from "@moire/file-operations";
 
 export type TransferItemMetadata =
   | {

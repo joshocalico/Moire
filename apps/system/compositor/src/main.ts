@@ -3,6 +3,7 @@ import {
   MOIRE,
   spawnDesktopApp,
   startXwayland,
+  type SpawnOptions,
   X11Wm,
   type XwaylandHandle,
 } from "@moire/core";
@@ -12,14 +13,43 @@ import {
   type DesktopStatusClient,
 } from "@moire/system-management/desktop-status";
 import { SessionBus } from "@moire/dbus";
-import { loadSettings, saveSettings } from "@moire/prefs";
-import { isLinux, listDrmConnectors, type LogindSeat } from "@moire/sys";
+import {
+  INPUT_INTERFACE,
+  INPUT_PATH,
+  layoutWire,
+  pointerDevicesWire,
+} from "@moire/system-management/input-settings";
+import { loadSettings, proxyEnvironment, saveSettings } from "@moire/prefs";
+import { holdDisplayAcrossExit, isLinux, listDrmConnectors, type LogindSeat } from "@moire/sys";
 import { acquireNativeDesktopSeat } from "./native-session";
 import { OwnedDesktopApps } from "./owned-apps";
 import path from "node:path";
 import os from "node:os";
 import { writeScreenshot } from "./capture";
 import { StartupDesktop } from "./startup";
+import {
+  batteryCriticalOf,
+  powerSourceOf,
+  startPowerSession,
+  type PowerSession,
+} from "./power-session";
+import { LaunchRecords, callerIdentifier, procInspector } from "./sleep-blockers";
+import type { PolkitAgent } from "./polkit-agent";
+import { startSessionPolkitAgent } from "./polkit-session";
+import { discoverApplications } from "@moire/app-discovery";
+import { createLockAuthenticator, exportLockStatus, lockUser } from "./lock-session";
+
+/** The desktop entry name for a command the compositor launched, for Settings to show. */
+function launchedAppName(command: string): string | null {
+  try {
+    const entry = discoverApplications().find(
+      (candidate) => candidate.exec.trim().split(/\s+/)[0] === command,
+    );
+    return entry?.name ?? null;
+  } catch {
+    return null;
+  }
+}
 
 async function main() {
   console.log(`${MOIRE.name} compositor ${MOIRE.version}`);
@@ -65,8 +95,30 @@ async function main() {
     display,
     seat ? { mode: "desktop", devices: seat } : undefined,
   );
+  // The lock screen: the compositor owns the lock; the password is checked for this user only.
+  const user = lockUser();
+  // One capability source for the lock screen's power menu and Quick Settings: what logind
+  // told the power session it allows without asking.
+  const powerCapabilities = () => {
+    const capabilities = power?.status().capabilities;
+    return {
+      suspend: !!capabilities?.suspend,
+      reboot: !!capabilities?.reboot,
+      powerOff: !!capabilities?.powerOff,
+    };
+  };
+  server.setLockEnvironment({
+    user,
+    authenticate: createLockAuthenticator({ username: user.username }),
+    power: () => powerCapabilities(),
+    runPowerAction: (action) => power?.requestPowerAction(action, "lock screen"),
+  });
+  server.onLockChanged((locked) => power?.setLocked(locked));
   const ownedApps = new OwnedDesktopApps();
-  const spawnApp = native ? ownedApps.spawn.bind(ownedApps) : spawnDesktopApp;
+  // What the compositor started, by pid: how a sleep-blocking request is tied to an app.
+  const launches = new LaunchRecords();
+  const spawnOwned = native ? ownedApps.spawn.bind(ownedApps) : spawnDesktopApp;
+  const spawnApp = (options: SpawnOptions) => launches.track(spawnOwned(options), options.exec);
   let xwayland: XwaylandHandle | null = null;
   let xwm: X11Wm | null = null;
   let displayBus: SessionBus | null = null;
@@ -74,9 +126,13 @@ async function main() {
   let shell: ShellBridge | null = null;
   let removeDisplayListener: (() => void) | null = null;
   let removeFatalListener: (() => void) | null = null;
+  let power: PowerSession | null = null;
+  let polkit: PolkitAgent | null = null;
   let stopping = false;
 
   const clientEnv = (): NodeJS.ProcessEnv => ({
+    // Settings' manual proxy, read fresh so apps started after a change get it.
+    ...proxyEnvironment(loadSettings().proxy),
     WAYLAND_DISPLAY: display,
     XDG_RUNTIME_DIR: runtimeDir,
     ...(xwayland ? { DISPLAY: xwayland.display, MOIRE_XWAYLAND: "1" } : {}),
@@ -89,7 +145,10 @@ async function main() {
           exec: opts.exec,
           env: clientEnv(),
         }),
-      (task) => server.toggleTask(task.clientId, task.surfaceId),
+      (task) =>
+        task.kind === "close"
+          ? server.closeTask(task.clientId, task.surfaceId)
+          : server.toggleTask(task.clientId, task.surfaceId),
       {
         setVolume: async (value) => {
           if (!desktopControls) throw new Error("Sound controls unavailable");
@@ -144,6 +203,11 @@ async function main() {
             void stop();
           }
         : undefined,
+      () => void server.lockSession("request"),
+      {
+        capabilities: powerCapabilities,
+        run: (action) => power?.requestPowerAction(action, "quick settings"),
+      },
     );
     if (desktopControls) shell.setDesktopStatus(desktopControls.state);
     server.setShell(shell);
@@ -156,6 +220,19 @@ async function main() {
     stopping = true;
     console.log("\nShutting down…");
     let status = exitCode;
+    // Wake and undim first, so a logout veil or the console is never left behind a dark screen.
+    await power?.dispose().catch((error: unknown) => console.warn("[power] stop:", error));
+    // Logging out: veil the desktop to the stage ground and leave that on screen, so the
+    // greeter rises out of it instead of the screen cutting to black. Apps then exit unseen.
+    let handedOff = false;
+    if (native && exitCode === 0 && !revoked) {
+      try {
+        handedOff = await server.handOffDisplay("desktop", { veil: true });
+        if (handedOff) holdDisplayAcrossExit(server.getKms().fd);
+      } catch (error) {
+        console.warn("[session] display handoff failed:", error);
+      }
+    }
     try {
       try {
         await desktopControls?.dispose();
@@ -169,9 +246,13 @@ async function main() {
         () => xwayland?.stop(),
         () => removeDisplayListener?.(),
         () => removeFatalListener?.(),
+        () => void polkit?.dispose(),
         () => displayBus?.close(),
         () => server.stop(),
-        () => seat?.setGraphics(false),
+        // A handed-off frame stays on screen only while the VT stays in graphics mode.
+        () => {
+          if (!handedOff) seat?.setGraphics(false);
+        },
         () => {
           if (revoked) seat?.acknowledgeDisable();
         },
@@ -208,10 +289,73 @@ async function main() {
 
   try {
     await server.start(cardPath);
+    power = startPowerSession(server, {
+      // logind's Lock arrives as a policy "request"; idle and suspend locks keep their reason.
+      lock: (reason) => server.lockSession(reason === "request" ? "logind" : reason),
+      unlock: () => server.unlockSession("logind"),
+      identifyCaller: callerIdentifier({
+        launches,
+        clients: () => server.clientProcesses(),
+        displayName: launchedAppName,
+      }),
+      notify: (summary, body) =>
+        void displayBus
+          ?.call({
+            destination: "org.freedesktop.Notifications",
+            path: "/org/freedesktop/Notifications",
+            interface: "org.freedesktop.Notifications",
+            member: "Notify",
+            signature: "susssasa{sv}i",
+            body: ["Power", 0, "", summary, body, [], {}, -1],
+          })
+          .catch(() => {}),
+    });
+    // The polkit agent registers for this logind session before any client starts, so no user
+    // process can take the session's one agent slot (docs/polkit-agent.md). Desktop only: the
+    // greeter's compositor never registers.
+    if (native || process.env.MOIRE_GREETER !== "1") {
+      const securityNotice = (summary: string, body: string) =>
+        void displayBus
+          ?.call({
+            destination: "org.freedesktop.Notifications",
+            path: "/org/freedesktop/Notifications",
+            interface: "org.freedesktop.Notifications",
+            member: "Notify",
+            signature: "susssasa{sv}i",
+            body: ["Security", 0, "", summary, body, [], {}, -1],
+          })
+          .catch(() => {});
+      server.onSecurePromptFlood((program) =>
+        securityNotice(
+          "Password requests paused",
+          `${program} kept asking for a password after you cancelled. Its requests are refused for 5 minutes.`,
+        ),
+      );
+      polkit = await startSessionPolkitAgent(server, {
+        sessionUser: user.username,
+        onStatus: (status) => {
+          if (status !== "agent-taken") return;
+          securityNotice(
+            "Another program is answering password requests",
+            "Moire could not register its own password prompt for this session. Don't type an administrator's password until you have signed out and in again.",
+          );
+        },
+        launchOf: (pid) => {
+          const root = launches.rootOf(pid, procInspector);
+          return (
+            root && {
+              pid: root.pid,
+              name: launchedAppName(root.command) ?? path.basename(root.command),
+            }
+          );
+        },
+      }).catch(() => null);
+    }
     if (native) {
       desktop.start();
       console.log(`[native-desktop] owner=${process.pid} display=ready`);
       spawnApp({ exec: "moire-management", env: clientEnv() });
+      spawnApp({ exec: "moire-index", env: clientEnv() });
       spawnApp({ exec: "moire-files", env: { ...clientEnv(), MOIRE_UI_PLATFORM: "wayland" } });
     }
   } catch (error) {
@@ -367,15 +511,63 @@ async function main() {
         },
       },
     });
+    // Keyboard layout state for Settings and the panel; settings themselves live in prefs.
+    displayBus.exportObject(INPUT_PATH, {
+      name: INPUT_INTERFACE,
+      methods: {
+        GetActiveLayout: {
+          inSignature: "",
+          outSignature: "ussssu",
+          handler: () => ({ body: layoutWire(server.keyboardLayout()) }),
+        },
+        SetActiveLayout: {
+          inSignature: "u",
+          outSignature: "ussssu",
+          handler: ({ body }) => ({
+            body: layoutWire(server.cycleKeyboardLayout(Number(body[0] ?? 0))),
+          }),
+        },
+        // Which pointer devices are open, so Settings shows touchpad rows only with a touchpad.
+        GetPointerDevices: {
+          inSignature: "",
+          outSignature: "a(ssb)",
+          handler: () => ({ body: pointerDevicesWire(server.pointerDevices()) }),
+        },
+      },
+    });
+    power?.exportStatus(displayBus);
+    const unexportLock = exportLockStatus(displayBus, server);
     const ownership = await displayBus.requestName("org.moire.Display1");
     if (ownership !== 1) {
       throw new Error(`name ownership result ${ownership}`);
     }
     console.log("[display] D-Bus org.moire.Display1 ready");
-    desktopControls = await observeDesktopStatus(displayBus, (state) =>
-      shell?.setDesktopStatus(state),
+    desktopControls = await observeDesktopStatus(displayBus, (state) => {
+      shell?.setDesktopStatus(state);
+      power?.setPowerSource(powerSourceOf(state));
+      power?.setBatteryCritical(batteryCriticalOf(state));
+    });
+    power?.setPowerSource(powerSourceOf(desktopControls.state));
+    power?.setBatteryCritical(batteryCriticalOf(desktopControls.state));
+    const removeLayoutListener = server.onKeyboardLayoutChanged((layout) =>
+      displayBus?.emitSignal({
+        path: INPUT_PATH,
+        interface: INPUT_INTERFACE,
+        member: "LayoutChanged",
+        signature: "ussssu",
+        body: layoutWire(layout),
+      }),
     );
-    removeDisplayListener = server.onDisplayChanged(() => {
+    const removePointerDevicesListener = server.onPointerDevicesChanged((devices) =>
+      displayBus?.emitSignal({
+        path: INPUT_PATH,
+        interface: INPUT_INTERFACE,
+        member: "PointerDevicesChanged",
+        signature: "a(ssb)",
+        body: pointerDevicesWire(devices),
+      }),
+    );
+    const removeDisplayChanged = server.onDisplayChanged(() => {
       if (!displayBus) return;
       const modes = server.listDisplayModes();
       const output = server.displayOutputInfo();
@@ -394,6 +586,12 @@ async function main() {
         ],
       });
     });
+    removeDisplayListener = () => {
+      removeDisplayChanged();
+      removeLayoutListener();
+      removePointerDevicesListener();
+      unexportLock();
+    };
   } catch (error) {
     removeDisplayListener?.();
     removeDisplayListener = null;

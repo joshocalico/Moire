@@ -334,6 +334,18 @@ export function measureColumnContent(
   return flowIntrinsic({ ...props, height: undefined }, theme, "column", true);
 }
 
+/**
+ * Natural width of children laid out side by side: each child's width (explicit or intrinsic,
+ * at least its minWidth) plus the gaps. For sizing a slot to its content before laying it out.
+ */
+export function measureRowWidth(children: ReactNode, theme: WidgetTheme, gap = 8): number {
+  const { specs } = collectFlexChildren(children, theme, "row", "center");
+  return (
+    specs.reduce((sum, spec) => sum + Math.max(spec.width ?? 0, spec.minWidth ?? 0), 0) +
+    Math.max(0, specs.length - 1) * gap
+  );
+}
+
 registerIntrinsicSize(Row, (props, theme) => flowIntrinsic(props, theme, "row", false));
 registerIntrinsicSize(Horizontal, (props, theme) => flowIntrinsic(props, theme, "row", true));
 registerIntrinsicSize(Column, (props, theme) => flowIntrinsic(props, theme, "column", true));

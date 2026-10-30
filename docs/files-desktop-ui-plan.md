@@ -16,8 +16,7 @@ registry.
 Its largest gaps are structural:
 
 - Files now has Back/Forward history plus a reusable clickable/editable path
-  bar with breadcrumb drop targets. Completion and keyboard location shortcuts
-  remain.
+  bar with breadcrumb drop targets, Ctrl+L and Tab completion.
 - Sidebar places now respect XDG user directories and persist custom favorites
   with add-current-folder, rename, and remove editing. Reordering, sections,
   devices, collapsed state, and reusable sidebar widgets remain.
@@ -25,9 +24,11 @@ Its largest gaps are structural:
   single-line editing, and a keyed selection controller now exist; clipboard,
   composition, and full control keyboard parity remain.
 - Files grid and list views now share replace/toggle/range selection plus
-  arrow, Home/End, Space, and Select All keyboard behavior. Rubber-band and
-  type-to-select remain.
-- File operations are synchronous calls embedded in the main view.
+  arrow, Home/End, Space, Select All, rubber-band and type-to-select.
+- File operations live in `@moire/file-operations` and run through an
+  `OperationQueue` with progress, cancellation, outcomes and Undo; Files and
+  the desktop share it, the freedesktop Trash, the session file clipboard and
+  the standard context menu (`fileMenu`).
 - `CollectionItem` now owns focus, activation, and context-menu semantics while
   `useDragSource` owns drag mechanics and `SelectionModel` remains a separate,
   reusable keyed controller.

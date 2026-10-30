@@ -48,7 +48,7 @@ A desktop-icon drag starts purely local (no compositor DnD session). If the poin
 | File | Role |
 | --- | --- |
 | `packages/shell/src/DesktopIcons.tsx` | React tree |
-| `packages/shell/src/controller.ts` | Selection, associations, context actions, layout I/O, drag |
+| `packages/shell/src/controller.tsx` | Selection, associations, context actions, layout I/O, drag |
 | Shell composite hooks | Pointer dispatch + drag blit |
 
 ## Related

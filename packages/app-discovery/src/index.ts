@@ -1,5 +1,6 @@
 export type { DesktopEntry } from "./desktop";
 export { parseDesktopFile } from "./desktop";
+export { applicationDisplayName } from "./names";
 export {
   discoverApplications,
   filterApplications,
@@ -10,6 +11,7 @@ export {
 export {
   MimeAssociationDatabase,
   buildDesktopExec,
+  buildDesktopExecForUris,
   loadMimeAssociationDatabase,
   type MimeAssociationSnapshot,
 } from "./mime";
@@ -30,3 +32,4 @@ export {
   type OpenWithModel,
 } from "./open-with";
 export { FileActivationPortalClient, type FileChooserResponse } from "./portal-client";
+export { enterableFolder, findTerminal, terminalLaunch, type TerminalLaunch } from "./terminal";

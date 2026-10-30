@@ -94,7 +94,7 @@ Package: `apps/bundled/files` (`@moire/files`).
 
 ## Desktop icons
 
-Implementation: `packages/shell/src/DesktopIcons.tsx`, wired from `packages/shell/src/controller.ts`.
+Implementation: `packages/shell/src/DesktopIcons.tsx`, wired from `packages/shell/src/controller.tsx`.
 
 - Contents of `~/Desktop`; positions in `~/.config/moire/desktop-layout.json`.
 - Prefs: `showDesktopIcons` (default `true`).
@@ -213,7 +213,7 @@ packages/ui/src/widgets/{scroll,list,grid,icon,dnd,tabs}.ts
 packages/ui/icons/*.png
 packages/ui/src/platforms/wayland/index.ts
 packages/ui/src/motion.ts
-packages/shell/src/{DesktopIcons.tsx,controller.ts,Panel.tsx,Launcher.tsx}
+packages/shell/src/{DesktopIcons.tsx,controller.tsx,Panel.tsx,Launcher.tsx}
 packages/core/src/server.ts          # DnD session + paintDragPreview
 packages/theme/src/index.ts
 packages/prefs/src/

@@ -1,129 +1,219 @@
 import React, { useState, type ReactNode } from "react";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
-  Application,
-  Window,
-  Surface,
-  Toolbar,
+  EmptyState,
   Label,
-  SearchField,
   NavigationSidebar,
+  Row,
   ScrollColumn,
-  ContentCard,
-  StatusBar,
-  setUiScaleFactor,
+  SearchField,
+  Separator,
+  Surface,
+  Vertical,
   getUiScaleFactor,
+  measureColumnContent,
   usePalette,
+  useWidgetTheme,
+  type NavigationSidebarSection,
+  type WindowActions,
   type WindowSize,
 } from "@moire/ui";
-import { loadSettings } from "@moire/prefs";
-import { HELP_TOPICS, searchHelp } from "./catalog";
-export function HelpApp(props: WindowSize): ReactNode {
+import { AppFrame, appFrameBody, runApp, startMain } from "@moire/app-tools";
+import { HELP_TOPICS, searchHelp, type HelpTopic } from "./catalog";
+
+/** Topics grouped under their category, in catalogue order. */
+function topicSections(topics: readonly HelpTopic[]): NavigationSidebarSection[] {
+  const sections = new Map<
+    string,
+    { id: string; label: string; items: { id: string; label: string }[] }
+  >();
+  for (const topic of topics) {
+    let section = sections.get(topic.category);
+    if (!section) {
+      section = { id: topic.category, label: topic.category, items: [] };
+      sections.set(topic.category, section);
+    }
+    // "Archive Manager: inspect and extract…" reads as just the app name in the list.
+    section.items.push({ id: topic.id, label: topic.title.split(":")[0]! });
+  }
+  return [...sections.values()];
+}
+
+function ShortcutCard(props: { width: number; shortcuts: HelpTopic["shortcuts"] }): ReactNode {
+  const theme = useWidgetTheme();
   const pal = usePalette();
   const ui = getUiScaleFactor();
-  const [query, setQuery] = useState(""),
-    [selected, setSelected] = useState(HELP_TOPICS[0]!.id);
-  const topics = searchHelp(query),
-    topic = topics.find((item) => item.id === selected) ?? topics[0];
-  const sideW = props.width < 620 ? 170 : 238,
-    bodyX = sideW + 20,
-    bodyW = Math.max(1, props.width - bodyX - 20);
-  return (
-    <Surface width={props.width} height={props.height} fill={pal.bg}>
-      <Toolbar width={props.width} height={52}>
-        <Label text="Moire Help" fontSize={20} fontWeight="medium" />
-      </Toolbar>
-      <SearchField
-        x={16}
-        y={64}
-        width={Math.max(1, props.width - 32)}
-        value={query}
-        onChange={setQuery}
-        autoFocus
-        placeholder="Search help, an action, or a shortcut"
+  const pad = 14 * ui;
+  const inner = Math.max(1, props.width - pad * 2);
+  const stacked = inner < 360 * ui;
+  const keysW = stacked ? inner : Math.min(220 * ui, Math.round(inner * 0.38));
+  const actionW = stacked ? inner : Math.max(1, inner - keysW - 12 * ui);
+  const rows = props.shortcuts.map((shortcut, index) => {
+    const keys = (
+      <Label
+        width={keysW}
+        text={shortcut.keys}
+        fontFamily="mono"
+        fontSize={12}
+        color={pal.accent}
+        wrap
       />
-      <NavigationSidebar
-        y={112}
-        width={sideW}
-        height={Math.max(1, props.height - 142)}
-        selectedId={topic?.id}
-        sections={[
-          {
-            id: "topics",
-            label: `${topics.length} topics`,
-            items: topics.map((item) => ({
-              id: item.id,
-              label: item.title,
-              subtitle: item.category,
-            })),
-          },
-        ]}
-        onSelect={(item) => setSelected(item.id)}
-      />
-      <ScrollColumn
-        key={topic?.id ?? "empty"}
-        x={bodyX}
-        y={120}
-        width={bodyW}
-        height={Math.max(1, props.height - 162)}
-        gap={12 * ui}
-      >
-        {topic ? (
-          <>
-            <Label text={topic.title} fontSize={22} fontWeight="medium" wrap />
-            <Label text={topic.body} fontSize={14} wrap />
-            {topic.shortcuts.map((shortcut) => (
-              <ContentCard key={shortcut.keys} padding={12 * ui} gap={8 * ui}>
-                <Label
-                  text={shortcut.keys}
-                  fontFamily="mono"
-                  fontSize={13}
-                  color={pal.accent}
-                  wrap
-                />
-                <Label text={shortcut.action} fontSize={12} wrap />
-              </ContentCard>
-            ))}
-          </>
+    );
+    const action = <Label width={actionW} text={shortcut.action} fontSize={13} wrap />;
+    return (
+      <Vertical key={shortcut.keys} width={inner} gap={0}>
+        {index > 0 ? <Separator width={inner} color={pal.borderSubtle} /> : null}
+        {stacked ? (
+          <Vertical width={inner} padding={{ vertical: 10 * ui }} gap={4 * ui}>
+            {keys}
+            {action}
+          </Vertical>
         ) : (
-          <Label
-            text="No help topics match. Try an application name, action, or key combination."
-            wrap
-            fontSize={16}
-            color={pal.muted}
-          />
+          <Row width={inner} padding={{ vertical: 10 * ui }} gap={12 * ui} align="start">
+            {keys}
+            {action}
+          </Row>
         )}
-      </ScrollColumn>
-      <StatusBar y={props.height - 30} width={props.width} height={30}>
-        <Label
-          text="Keyboard and workflow guide for the features available in Moire"
-          fontSize={11}
-          color={pal.muted}
-          overflow="ellipsis"
-          maxLines={1}
-        />
-      </StatusBar>
+      </Vertical>
+    );
+  });
+  const height = measureColumnContent(
+    {
+      width: props.width,
+      padding: { horizontal: pad, vertical: 4 * ui },
+      gap: 0,
+      children: rows,
+    },
+    theme,
+  ).height;
+  return (
+    <Surface
+      width={props.width}
+      height={height}
+      fill={pal.surface}
+      radius={10 * ui}
+      stroke={pal.borderSubtle}
+      strokeWidth={1}
+    >
+      <Vertical
+        width={props.width}
+        height={height}
+        padding={{ horizontal: pad, vertical: 4 * ui }}
+        gap={0}
+      >
+        {rows}
+      </Vertical>
     </Surface>
   );
 }
-export async function main(): Promise<void> {
-  const settings = loadSettings();
-  setUiScaleFactor(settings.uiScale);
-  const app = new Application();
-  const win = new Window({
-    title: "Moire Help",
-    appId: "org.moire.Help",
-    width: Math.round(820 * settings.uiScale),
-    height: Math.round(660 * settings.uiScale),
-    resizable: true,
-  });
-  win.setContent((size) => <HelpApp {...size} />);
-  app.addWindow(win);
-  await app.run();
+
+function TopicArticle(props: WindowSize & { x: number; topic: HelpTopic }): ReactNode {
+  const pal = usePalette();
+  const ui = getUiScaleFactor();
+  const pad = 24 * ui;
+  const width = Math.max(1, Math.min(720 * ui, props.width - pad * 2));
+  return (
+    <ScrollColumn
+      key={props.topic.id}
+      x={props.x}
+      width={props.width}
+      height={props.height}
+      padding={{ horizontal: pad, top: 20 * ui, bottom: pad }}
+      gap={8 * ui}
+    >
+      <Label
+        width={width}
+        text={props.topic.category.toUpperCase()}
+        fontSize={11}
+        fontWeight="medium"
+        color={pal.accent}
+      />
+      <Label width={width} text={props.topic.title} fontSize={20} fontWeight="medium" wrap />
+      <Label width={width} text={props.topic.body} fontSize={13} color={pal.text} wrap />
+      {props.topic.shortcuts.length ? (
+        <>
+          <Label
+            width={width}
+            height={32 * ui}
+            text="Keyboard shortcuts"
+            fontSize={12}
+            fontWeight="medium"
+            color={pal.muted}
+            verticalAlign="end"
+          />
+          <ShortcutCard width={width} shortcuts={props.topic.shortcuts} />
+        </>
+      ) : null}
+    </ScrollColumn>
+  );
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  void main().catch((error) => {
-    console.error("[help]", error);
-    process.exitCode = 1;
-  });
+
+export function HelpApp(props: WindowSize & { window?: WindowActions | null }): ReactNode {
+  const pal = usePalette();
+  const ui = getUiScaleFactor();
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(HELP_TOPICS[0]!.id);
+  const topics = searchHelp(query);
+  const topic = topics.find((item) => item.id === selected) ?? topics[0];
+  const body = appFrameBody({ height: props.height, title: "Help" });
+  const sideW = Math.round(Math.min(300 * ui, Math.max(180 * ui, props.width * 0.3)));
+  const searchW = Math.min(300 * ui, Math.max(140 * ui, props.width - 260 * ui));
+  const count = `${topics.length} ${topics.length === 1 ? "topic" : "topics"}`;
+  return (
+    <AppFrame
+      {...props}
+      title="Help"
+      icon="help"
+      actions={
+        <SearchField
+          width={searchW}
+          height={32 * ui}
+          value={query}
+          onChange={setQuery}
+          onClear={() => setQuery("")}
+          autoFocus
+          placeholder="Search help or a shortcut"
+        />
+      }
+      status={
+        query.trim()
+          ? `${count} match “${query.trim()}”`
+          : "Keyboard and workflow guide for the features available in Moire"
+      }
+      statusEnd={query.trim() ? undefined : count}
+    >
+      <NavigationSidebar
+        width={sideW}
+        height={body.height}
+        selectedId={topic?.id}
+        labelCase="preserve"
+        sections={topicSections(topics)}
+        onSelect={(item) => setSelected(item.id)}
+      />
+      <Separator x={sideW} width={1} height={body.height} color={pal.borderSubtle} />
+      {topic ? (
+        <TopicArticle
+          x={sideW + 1}
+          width={Math.max(1, props.width - sideW - 1)}
+          height={body.height}
+          topic={topic}
+        />
+      ) : (
+        <EmptyState
+          x={sideW + 1}
+          width={Math.max(1, props.width - sideW - 1)}
+          height={body.height}
+          icon="search"
+          title="No matching topics"
+          message="Try an application name, an action, or a key combination."
+        />
+      )}
+    </AppFrame>
+  );
+}
+
+startMain(import.meta.url, () =>
+  runApp("Moire Help", "org.moire.Help", (size, window) => <HelpApp {...size} window={window} />, {
+    width: 820,
+    height: 660,
+  }),
+);

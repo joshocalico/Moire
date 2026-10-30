@@ -3,6 +3,7 @@ import { Group, Rect, measureTextBounds } from "@moire/react-host";
 import { Icon, type IconName } from "./icon";
 import { Surface, TextBlock } from "./primitives";
 import { Align, Box, Center, Horizontal, Inset, Vertical, registerIntrinsicSize } from "./layout";
+import { getUiScaleFactor } from "#ui/font";
 import { useWidgetTheme } from "#ui/widget-theme";
 
 export type BadgeTone = "neutral" | "accent" | "success" | "warning" | "danger";
@@ -65,12 +66,20 @@ export type BannerProps = {
   tone?: BadgeTone;
   icon?: IconName;
   action?: ReactNode;
+  /** Room for `action` (scaled); 140 by default, wider for a row of buttons. */
+  actionWidth?: number;
 };
+
+/** The banner's height for these props, scaled. */
+export function bannerHeight(props: Pick<BannerProps, "height" | "message">): number {
+  return props.height ?? (props.message ? 70 : 56) * getUiScaleFactor();
+}
 
 export function Banner(props: BannerProps): ReactNode {
   const theme = useWidgetTheme();
   const pal = theme.foundations.palette;
-  const height = props.height ?? (props.message ? 70 : 56);
+  const ui = getUiScaleFactor();
+  const height = bannerHeight(props);
   const accent = toneColor(props.tone ?? "accent", pal);
   return (
     <Surface
@@ -84,17 +93,21 @@ export function Banner(props: BannerProps): ReactNode {
       strokeWidth={theme.foundations.borders.control}
       elevation="low"
     >
-      <Rect width={4} height={height} fill={accent} radius={2} />
-      <Inset width={props.width} height={height} padding={{ left: 14, right: 12, vertical: 10 }}>
-        <Horizontal gap={10} align="center">
+      <Rect width={4 * ui} height={height} fill={accent} radius={2 * ui} />
+      <Inset
+        width={props.width}
+        height={height}
+        padding={{ left: 14 * ui, right: 12 * ui, vertical: 10 * ui }}
+      >
+        <Horizontal gap={10 * ui} align="center">
           {props.icon ? (
-            <Box width={20} height={20}>
-              <Icon name={props.icon} size={20} color={accent} symbolic />
+            <Box width={20 * ui} height={20 * ui}>
+              <Icon name={props.icon} size={20 * ui} color={accent} symbolic />
             </Box>
           ) : null}
-          <Vertical flexGrow={1} gap={2} justify="center">
+          <Vertical flexGrow={1} gap={2 * ui} justify="center">
             <TextBlock
-              height={18}
+              height={18 * ui}
               text={props.title}
               color={pal.text}
               fontSize={13}
@@ -105,7 +118,7 @@ export function Banner(props: BannerProps): ReactNode {
             />
             {props.message ? (
               <TextBlock
-                height={30}
+                height={30 * ui}
                 text={props.message}
                 color={pal.muted}
                 fontSize={11}
@@ -118,7 +131,7 @@ export function Banner(props: BannerProps): ReactNode {
             ) : null}
           </Vertical>
           {props.action ? (
-            <Align width={108} alignX="stretch" alignY="center">
+            <Align width={props.actionWidth ?? 108 * ui} alignX="stretch" alignY="center">
               {props.action}
             </Align>
           ) : null}
@@ -178,26 +191,29 @@ export type EmptyStateProps = {
   message?: string;
   icon?: IconName;
   action?: ReactNode;
+  /** Room for `action` (scaled); 140 by default, wider for a row of buttons. */
+  actionWidth?: number;
 };
 
 export function EmptyState(props: EmptyStateProps): ReactNode {
   const theme = useWidgetTheme();
   const pal = theme.foundations.palette;
-  const contentWidth = Math.max(1, Math.min(360, props.width - 32));
+  const ui = getUiScaleFactor();
+  const contentWidth = Math.max(1, Math.min(360 * ui, props.width - 32 * ui));
   const contentHeight =
-    (props.icon ? 56 : 0) + 24 + (props.message ? 44 : 0) + (props.action ? 46 : 0);
+    ((props.icon ? 56 : 0) + 24 + (props.message ? 44 : 0) + (props.action ? 46 : 0)) * ui;
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
       <Center width={props.width} height={props.height}>
-        <Vertical width={contentWidth} height={contentHeight} gap={8} align="center">
+        <Vertical width={contentWidth} height={contentHeight} gap={8 * ui} align="center">
           {props.icon ? (
-            <Box width={48} height={48}>
-              <Icon name={props.icon} size={48} color={pal.muted} symbolic />
+            <Box width={48 * ui} height={48 * ui}>
+              <Icon name={props.icon} size={48 * ui} color={pal.muted} symbolic />
             </Box>
           ) : null}
           <TextBlock
             width={contentWidth}
-            height={24}
+            height={24 * ui}
             text={props.title}
             color={pal.text}
             fontSize={15}
@@ -210,7 +226,7 @@ export function EmptyState(props: EmptyStateProps): ReactNode {
           {props.message ? (
             <TextBlock
               width={contentWidth}
-              height={36}
+              height={36 * ui}
               text={props.message}
               color={pal.muted}
               fontSize={11}
@@ -223,7 +239,7 @@ export function EmptyState(props: EmptyStateProps): ReactNode {
             />
           ) : null}
           {props.action ? (
-            <Box width={140} height={36}>
+            <Box width={Math.min(contentWidth, props.actionWidth ?? 140 * ui)} height={36 * ui}>
               {props.action}
             </Box>
           ) : null}
@@ -239,10 +255,7 @@ registerIntrinsicSize(Badge, (props) => {
   return { width: Math.max(height, bounds.width + 14), height };
 });
 
-registerIntrinsicSize(Banner, (props) => ({
-  width: props.width,
-  height: props.height ?? (props.message ? 70 : 56),
-}));
+registerIntrinsicSize(Banner, (props) => ({ width: props.width, height: bannerHeight(props) }));
 
 registerIntrinsicSize(Spinner, (props) => {
   const size = props.size ?? 24;

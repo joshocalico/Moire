@@ -95,6 +95,8 @@ function make() {
     let decoded = 0;
     const events = [];
     const decoder = new WaylandKeyboard({
+      // Client repeat timers are covered by the Wayland keyboard suite; keep this wire proof deterministic.
+      timers: { setTimeout: () => 0, clearTimeout() {} },
       pressedKeys: new Set(),
       resolveSurface: (surfaceId) => (surfaceId === 10 ? id : null),
       emitKey: (_target, event) => events.push(event),
@@ -185,13 +187,13 @@ try {
     f.key(20, 0);
     assert.deepEqual(
       f.a.events.map((event) => event.type),
-      ["down", "repeat", "up"],
+      ["down", "up"],
+      "kernel autorepeat is not a wl_keyboard event; clients repeat from repeat_info",
     );
     assert.deepEqual(
       f.a.wireKeys().map((event) => [event.key, event.state, event.time]),
       [
         [20, 1, 1],
-        [20, 1, 2],
         [20, 0, 3],
       ],
     );
@@ -229,8 +231,8 @@ try {
     f.key(20, 1);
     assert.equal(f.a.enters().length, 0);
     f.key(20, 2);
-    assert.deepEqual(f.a.enters(), [[20]]);
-    assert.equal(f.a.events.at(-1).type, "repeat");
+    assert.deepEqual(f.a.enters(), [[20]], "the hold is still conveyed by enter");
+    assert.equal(f.a.events.length, 0, "the kernel repeat itself is not forwarded");
     assert.deepEqual(f.server.keyboardPressedKeys(), [20]);
   });
   check("registered fallback release includes the prior hold then delivers up", (f) => {
@@ -336,7 +338,7 @@ try {
     f.key(42, 0);
     f.key(53, 0);
   });
-  check("ordinary down up repeat and same-focus wire ordering preserved", (f) => {
+  check("ordinary down up, dropped kernel repeat and same-focus wire ordering preserved", (f) => {
     f.focus(f.a);
     const enters = f.a.enters().length;
     f.focus(f.a);
@@ -349,14 +351,13 @@ try {
       f.a.wireKeys().map((event) => [event.key, event.state, event.time]),
       [
         [20, 1, 1],
-        [20, 1, 2],
         [20, 0, 3],
         [20, 1, 4],
       ],
     );
     assert.deepEqual(
       f.a.events.map((event) => event.type),
-      ["down", "repeat", "up", "down"],
+      ["down", "up", "down"],
     );
     f.key(20, 0);
     f.focus(f.b);

@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { SessionBus, DbusRemoteError, variant, type DbusVariant } from "@moire/dbus";
 import {
+  parseBluetoothId,
   type BluetoothAdapter,
   type DesktopBluetooth,
 } from "@moire/system-management/bluetooth-status";
@@ -13,7 +14,8 @@ const BLUEZ = "org.bluez",
   MANAGER = "org.freedesktop.DBus.ObjectManager",
   PROPS = "org.freedesktop.DBus.Properties";
 const ADAPTER = BLUEZ + ".Adapter1",
-  DEVICE = BLUEZ + ".Device1";
+  DEVICE = BLUEZ + ".Device1",
+  BATTERY = BLUEZ + ".Battery1";
 const HCI = "/org/bluez/hci0",
   FIRST = HCI + "/dev_00_11_22_33_44_55",
   SECOND = HCI + "/dev_00_11_22_33_44_66";
@@ -50,8 +52,48 @@ class BluezFixture {
   delayedTrust = false;
   pendingTrust: { p: string; value: boolean } | null = null;
   ignoreTrust = false;
+  /** Radio power and device removal, kept apart from the Connect/Disconnect log. */
+  adapterWrites: { member: string; value: unknown }[] = [];
+  aliasWrites: { path: string; value: unknown }[] = [];
   constructor(readonly bus: SessionBus) {
     this.reset();
+    bus.exportObject(HCI, {
+      name: PROPS,
+      methods: {
+        Set: {
+          inSignature: "ssv",
+          outSignature: "",
+          handler: ({ body }) => {
+            assert.equal(body[0], ADAPTER);
+            assert.equal(body[1], "Powered");
+            const desired = body[2];
+            assert(desired && typeof desired === "object" && "value" in desired);
+            assert.equal(typeof desired.value, "boolean");
+            this.adapterWrites.push({ member: "Powered", value: desired.value });
+            this.set(HCI, "Powered", "b", desired.value);
+            this.changed(HCI);
+            return { body: [] };
+          },
+        },
+      },
+    });
+    bus.exportObject(HCI, {
+      name: ADAPTER,
+      methods: {
+        RemoveDevice: {
+          inSignature: "o",
+          outSignature: "",
+          handler: ({ body }) => {
+            assert.equal(typeof body[0], "string");
+            if (typeof body[0] !== "string" || !this.objects[body[0]])
+              throw new DbusRemoteError("org.bluez.Error.DoesNotExist", "fixture");
+            this.adapterWrites.push({ member: "RemoveDevice", value: body[0] });
+            this.removed(body[0]);
+            return { body: [] };
+          },
+        },
+      },
+    });
     bus.exportObject("/", {
       name: MANAGER,
       methods: {
@@ -104,6 +146,14 @@ class BluezFixture {
           outSignature: "",
           handler: async ({ body }) => {
             assert.equal(body[0], DEVICE);
+            if (body[1] === "Alias") {
+              const alias = body[2];
+              assert(alias && typeof alias === "object" && "value" in alias);
+              this.aliasWrites.push({ path: p, value: alias.value });
+              this.set(p, "Alias", "s", alias.value);
+              this.changed(p);
+              return { body: [] };
+            }
             assert.equal(body[1], "Trusted");
             const desired = body[2];
             assert(
@@ -153,6 +203,7 @@ class BluezFixture {
     });
   }
   set(p: string, key: string, signature: string, value: unknown) {
+    // Device properties live under Device1, the adapter's under Adapter1.
     const props = this.objects[p]?.[p === HCI ? ADAPTER : DEVICE];
     assert(props);
     props[key] = variant(signature, value);
@@ -319,6 +370,102 @@ try {
     () => readonly.setConnected({ id: ready(readonly).devices[0]!.id, connected: true }),
     /read-only/,
   );
+  assert.equal(f.writes.length, 0);
+  cases++;
+  await assert.rejects(
+    () => readonly.setPowered!({ adapterId: ready(readonly).adapters[0]!.id, powered: false }),
+    /read-only/,
+  );
+  await assert.rejects(
+    () => readonly.forgetDevice!({ id: ready(readonly).devices[0]!.id }),
+    /read-only/,
+  );
+  assert.equal(f.adapterWrites.length, 0);
+  cases++;
+  const radio = ready(a).adapters[0]!.id;
+  await a.setPowered!({ adapterId: radio, powered: false });
+  assert.equal(ready(a).adapters[0]!.powered, false);
+  await a.setPowered!({ adapterId: radio, powered: true });
+  assert.equal(ready(a).adapters[0]!.powered, true);
+  await a.setPowered!({ adapterId: radio, powered: true });
+  assert.deepEqual(
+    f.adapterWrites.map((write) => write.value),
+    [false, true],
+    "already powered sends nothing",
+  );
+  assert.equal(snapshot(a).operation.kind, "idle");
+  cases++;
+  await assert.rejects(
+    () => a.setPowered!({ adapterId: parseBluetoothId("bluez_missing"), powered: false }),
+    /no longer available/,
+  );
+  await assert.rejects(
+    () => a.forgetDevice!({ id: parseBluetoothId("bluez_missing") }),
+    /no longer available/,
+  );
+  assert.equal(f.adapterWrites.length, 2);
+  cases++;
+  await a.forgetDevice!({ id: second.id });
+  assert.deepEqual(f.adapterWrites.at(-1), { member: "RemoveDevice", value: SECOND });
+  assert.deepEqual(
+    ready(a).devices.map((device) => device.id),
+    [first.id],
+  );
+  f.device(SECOND, "00:11:22:33:44:66");
+  f.added(SECOND);
+  await until(() => ready(a).devices.length === 2, "forgotten device paired again");
+  assert.equal(f.writes.length, 0);
+  cases++;
+  const byAddress = (mac: string) => ready(a).devices.find((device) => device.address === mac)!;
+  assert.equal(byAddress("00:11:22:33:44:55").kind, "other", "no Icon or Class");
+  assert.equal(byAddress("00:11:22:33:44:55").battery, undefined, "no Battery1");
+  f.set(FIRST, "Icon", "s", "input-mouse");
+  // Class of Device 0x240404: audio/video, wearable headset.
+  f.set(SECOND, "Class", "u", 0x240404);
+  const beforeBattery = byAddress("00:11:22:33:44:55").id;
+  f.objects[FIRST]![BATTERY] = { Percentage: variant("y", 64) };
+  f.bus.emitSignal({
+    path: "/",
+    interface: MANAGER,
+    member: "InterfacesAdded",
+    signature: "oa{sa{sv}}",
+    body: [FIRST, { [BATTERY]: f.objects[FIRST]![BATTERY] }],
+  });
+  await until(() => byAddress("00:11:22:33:44:55").battery === 64, "battery appears");
+  assert.equal(byAddress("00:11:22:33:44:55").id, beforeBattery, "a battery keeps the identity");
+  assert.equal(byAddress("00:11:22:33:44:55").kind, "mouse");
+  assert.equal(byAddress("00:11:22:33:44:66").kind, "headset");
+  f.objects[FIRST]![BATTERY]!.Percentage = variant("y", 12);
+  f.bus.emitSignal({
+    path: FIRST,
+    interface: PROPS,
+    member: "PropertiesChanged",
+    signature: "sa{sv}as",
+    body: [BATTERY, { Percentage: variant("y", 12) }, []],
+  });
+  await until(() => byAddress("00:11:22:33:44:55").battery === 12, "battery change signal");
+  f.objects[FIRST]![BATTERY]!.Percentage = variant("y", 101);
+  await a.refresh();
+  assert.equal(snapshot(a).status.kind, "error", "out-of-range battery is rejected");
+  f.objects[FIRST]![BATTERY]!.Percentage = variant("y", 12);
+  await a.refresh();
+  assert.equal(byAddress("00:11:22:33:44:55").battery, 12);
+  cases++;
+  const mouse = byAddress("00:11:22:33:44:55");
+  await assert.rejects(
+    () => readonly.renameDevice!({ id: ready(readonly).devices[0]!.id, name: "Desk mouse" }),
+    /read-only/,
+  );
+  await assert.rejects(() => a.renameDevice!({ id: mouse.id, name: "  " }), /1 to 64/);
+  await assert.rejects(() => a.renameDevice!({ id: mouse.id, name: "bad\nname" }), /1 to 64/);
+  assert.equal(f.aliasWrites.length, 0);
+  await a.renameDevice!({ id: mouse.id, name: "  Desk mouse " });
+  assert.deepEqual(f.aliasWrites, [{ path: FIRST, value: "Desk mouse" }]);
+  assert.equal(byAddress("00:11:22:33:44:55").name, "Desk mouse");
+  assert.equal(byAddress("00:11:22:33:44:55").id, mouse.id, "renaming keeps the identity");
+  await a.renameDevice!({ id: mouse.id, name: "Desk mouse" });
+  assert.equal(f.aliasWrites.length, 1, "same name sends nothing");
+  assert.equal(snapshot(a).operation.kind, "idle");
   assert.equal(f.writes.length, 0);
   cases++;
   f.set(HCI, "Powered", "b", false);
@@ -780,7 +927,7 @@ try {
   console.log(
     JSON.stringify({
       scope:
-        "actual private dbus-daemon fake BlueZ connection and explicit trust; no radio, discovery, pairing, power or audio-route claims",
+        "actual private dbus-daemon fake BlueZ connection, adapter power, device removal, rename, kind, battery and explicit trust; no radio, discovery, pairing or audio-route claims",
       cases,
       actualExitCode: 0,
     }),

@@ -45,7 +45,7 @@ export function playbackBarHeight(width: number): number {
   const ui = getUiScaleFactor();
   return (width >= 900 * ui ? 112 : width >= 650 * ui ? 156 : 190) * ui;
 }
-type MediaSymbol = "play" | "pause" | "previous" | "next" | "stop";
+export type MediaSymbol = "play" | "pause" | "previous" | "next" | "stop";
 function mediaGeometry(kind: MediaSymbol, style: { size: number; color: number }): ReactNode {
   const { size, color } = style;
   if (kind === "pause")
@@ -110,6 +110,20 @@ function mediaGeometry(kind: MediaSymbol, style: { size: number; color: number }
         />
       ) : null}
     </>
+  );
+}
+/** A transport symbol (play, pause, …) drawn as geometry, for media controls outside the bar. */
+export function MediaGlyph(props: {
+  x?: number;
+  y?: number;
+  kind: MediaSymbol;
+  size: number;
+  color: number;
+}): ReactNode {
+  return (
+    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.size} height={props.size}>
+      {mediaGeometry(props.kind, { size: props.size, color: props.color })}
+    </Group>
   );
 }
 function mediaSymbol(kind: MediaSymbol, style: { size: number; color: number }): ReactNode {

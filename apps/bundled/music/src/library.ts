@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { localPath, runTool, errorText } from "@moire/app-tools";
+import { loadDocument, writeDocument, type StoreCleanup } from "@moire/app-tools/local-store";
 export type Track = {
   id: string;
   path: string;
@@ -18,14 +19,6 @@ export type Track = {
   artwork?: string;
 };
 export type Library = { tracks: Track[]; revision: string | null };
-export type Album = {
-  id: string;
-  title: string;
-  artist: string;
-  year: string;
-  tracks: Track[];
-  artwork?: string;
-};
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -65,6 +58,21 @@ export function parseTrack(value: unknown): Track {
     ...(typeof value.artwork === "string" ? { artwork: value.artwork } : {}),
   };
 }
+const MAX_TRACKS = 5000;
+type LibraryRecord = { version: 1; tracks: Track[] };
+function parseLibrary(value: unknown): LibraryRecord {
+  if (
+    !object(value) ||
+    value.version !== 1 ||
+    !Array.isArray(value.tracks) ||
+    value.tracks.length > MAX_TRACKS
+  )
+    throw new Error("Music library is invalid. The original library is preserved.");
+  const tracks = value.tracks.map(parseTrack);
+  if (new Set(tracks.map((track) => track.id)).size !== tracks.length)
+    throw new Error("Music library has duplicate track identities.");
+  return { version: 1, tracks };
+}
 export class MusicLibraryStore {
   readonly directory: string;
   readonly file: string;
@@ -78,87 +86,38 @@ export class MusicLibraryStore {
     this.file = path.join(directory, "library.json");
   }
   load(): Library {
-    if (!fs.existsSync(this.file)) return { tracks: [], revision: null };
-    if (fs.statSync(this.file).size > 16 * 1024 * 1024)
-      throw new Error("Music library is too large to open.");
-    const content = fs.readFileSync(this.file, "utf8"),
-      value: unknown = JSON.parse(content);
-    if (
-      !object(value) ||
-      value.version !== 1 ||
-      !Array.isArray(value.tracks) ||
-      value.tracks.length > 5000
-    )
-      throw new Error("Music library is invalid. The original library is preserved.");
-    const tracks = value.tracks.map(parseTrack);
-    if (new Set(tracks.map((track) => track.id)).size !== tracks.length)
-      throw new Error("Music library has duplicate track identities.");
-    return { tracks, revision: hash(content) };
+    const { value, revision } = loadDocument(this.file, parseLibrary);
+    return { tracks: value?.tracks ?? [], revision };
   }
-  save(library: Library): Library {
-    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    const lock = path.join(this.directory, ".write-lock");
-    // A crashed writer can leave a lock; a live writer is never overridden.
-    if (fs.existsSync(lock)) {
-      const owner = fs.readFileSync(lock, "utf8"),
-        pid = Number(owner);
-      let stale = false;
-      if (/^\d+$/.test(owner) && Number.isSafeInteger(pid) && pid > 0)
-        try {
-          process.kill(pid, 0);
-        } catch (error) {
-          stale = error instanceof Error && "code" in error && error.code === "ESRCH";
-        }
-      if (!/^\d+$/.test(owner)) stale = Date.now() - fs.statSync(lock).mtimeMs > 30000;
-      if (stale && fs.readFileSync(lock, "utf8") === owner) fs.unlinkSync(lock);
-    }
-    let lockFd: number;
-    try {
-      lockFd = fs.openSync(lock, "wx", 0o600);
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "EEXIST")
-        throw new Error("Another Music window is saving. Try again shortly.");
-      throw error;
-    }
-    const temporary = path.join(this.directory, `.library-${randomUUID()}.tmp`);
-    try {
-      fs.writeFileSync(lockFd, String(process.pid));
-      if (this.load().revision !== library.revision)
-        throw new Error("Music changed in another window. Reload before editing.");
-      const tracks = library.tracks.map(parseTrack);
-      if (tracks.length > 5000 || new Set(tracks.map((track) => track.id)).size !== tracks.length)
-        throw new Error("Music supports up to 5000 distinct tracks.");
-      const content = JSON.stringify({ version: 1, tracks }, null, 2) + "\n";
-      const fd = fs.openSync(temporary, "wx", 0o600);
-      try {
-        fs.writeFileSync(fd, content);
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
-      fs.renameSync(temporary, this.file);
-      return { tracks, revision: hash(content) };
-    } finally {
-      fs.closeSync(lockFd);
-      if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
-      fs.unlinkSync(lock);
-    }
+  /** Throws when another window saved first ("Reload before editing"). */
+  save(library: Library): Library & { cleanup: StoreCleanup } {
+    if (library.tracks.length > MAX_TRACKS)
+      throw new Error(`Music supports up to ${MAX_TRACKS} tracks.`);
+    const written = writeDocument(
+      this.file,
+      parseLibrary({ version: 1, tracks: library.tracks }),
+      library.revision,
+      parseLibrary,
+    );
+    return { tracks: written.value.tracks, revision: written.revision, cleanup: written.cleanup };
   }
 }
-const audioExtensions = new Set([
-  ".mp3",
-  ".flac",
-  ".ogg",
-  ".opus",
-  ".wav",
-  ".m4a",
-  ".m4b",
-  ".aac",
-  ".aif",
-  ".aiff",
-  ".wma",
-  ".alac",
-]);
+/** Extensions a folder import picks up; a directly chosen file may have any extension. */
+export const AUDIO_EXTENSIONS: readonly string[] = [
+  "mp3",
+  "flac",
+  "ogg",
+  "opus",
+  "wav",
+  "m4a",
+  "m4b",
+  "aac",
+  "aif",
+  "aiff",
+  "wma",
+  "alac",
+];
+const audioExtensions = new Set(AUDIO_EXTENSIONS.map((extension) => `.${extension}`));
 class MusicImportLimitError extends Error {}
 async function audioFiles(value: string, signal: AbortSignal): Promise<string[]> {
   const root = await fsp.realpath(localPath(value)),
@@ -169,8 +128,8 @@ async function audioFiles(value: string, signal: AbortSignal): Promise<string[]>
     if (stat.isSymbolicLink()) return; // No cycles or traversal outside the chosen tree.
     if (stat.isFile()) {
       if (depth === 0 || audioExtensions.has(path.extname(file).toLowerCase())) result.push(file);
-      if (result.length > 5000)
-        throw new MusicImportLimitError("Import supports at most 5000 audio files.");
+      if (result.length > MAX_TRACKS)
+        throw new MusicImportLimitError(`Import supports at most ${MAX_TRACKS} audio files.`);
     } else if (stat.isDirectory()) {
       if (depth > 16) throw new Error("The music folder is nested more than 16 levels deep.");
       for (const entry of (await fsp.readdir(file)).sort())
@@ -310,8 +269,8 @@ export async function importMusic(
       if (signal.aborted || error instanceof MusicImportLimitError) throw error;
       warnings.push(`${path.basename(value)}: ${errorText(error)}`);
     }
-    if (candidates.size > 5000)
-      throw new MusicImportLimitError("Import supports at most 5000 audio files.");
+    if (candidates.size > MAX_TRACKS)
+      throw new MusicImportLimitError(`Import supports at most ${MAX_TRACKS} audio files.`);
   }
   const files = [...candidates],
     imported: Track[] = [];
@@ -333,37 +292,3 @@ export async function importMusic(
     merged.set(track.id, { ...track, addedAt: merged.get(track.id)?.addedAt ?? track.addedAt });
   return { library: store.save({ ...actual, tracks: [...merged.values()] }), warnings, imported };
 }
-export function albumsFor(tracks: readonly Track[]): Album[] {
-  const albums = new Map<string, Album>();
-  for (const track of tracks) {
-    const id = JSON.stringify([track.artist, track.album || path.dirname(track.path)]);
-    let album = albums.get(id);
-    if (!album) {
-      album = {
-        id,
-        title: track.album || path.basename(path.dirname(track.path)),
-        artist: track.artist,
-        year: track.year,
-        tracks: [],
-        artwork: track.artwork,
-      };
-      albums.set(id, album);
-    }
-    album.tracks.push(track);
-    if (!album.artwork && track.artwork) album.artwork = track.artwork;
-  }
-  return [...albums.values()]
-    .map((album) => ({
-      ...album,
-      tracks: album.tracks.sort(
-        (a, b) => (a.number || Infinity) - (b.number || Infinity) || a.title.localeCompare(b.title),
-      ),
-    }))
-    .sort((a, b) => a.title.localeCompare(b.title));
-}
-export const filterTracks = (tracks: readonly Track[], query: string): Track[] => {
-  const needle = query.trim().toLocaleLowerCase();
-  return tracks.filter((track) =>
-    `${track.title}\n${track.artist}\n${track.album}`.toLocaleLowerCase().includes(needle),
-  );
-};

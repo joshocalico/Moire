@@ -77,6 +77,8 @@ console.log(
 const target = {};
 const events: UiKeyEvent[] = [];
 const keyboard = new WaylandKeyboard({
+  // Client repeat timing is covered by the Wayland keyboard suite; keep this boot check deterministic.
+  timers: { setTimeout: () => 0, clearTimeout() {} },
   pressedKeys: new Set<number>(),
   resolveSurface: (id) => (id === 10 ? target : null),
   emitKey: (_target, event) => events.push(event),
@@ -104,13 +106,16 @@ function masks(depressed: number, locked = 0): void {
     new MessageBuilder().uint(2).uint(depressed).uint(0).uint(locked).uint(0),
   );
 }
+/** One fresh press and its release; wl_keyboard never re-presses a held key. */
 function down(code = 30): UiKeyEvent {
   const before = events.length;
   dispatch(wlKeyboard.events.key.opcode, new MessageBuilder().uint(3).uint(0).uint(code).uint(1));
-  assert.equal(events.length, before + 1, "each focused key dispatch must deliver a fresh event");
+  assert.equal(events.length, before + 1, "each focused key press must deliver a fresh event");
   const event = events.at(-1);
   assert.ok(event);
   assert.equal(event.code, code);
+  assert.equal(event.type, "down");
+  dispatch(wlKeyboard.events.key.opcode, new MessageBuilder().uint(3).uint(0).uint(code).uint(0));
   return event;
 }
 try {

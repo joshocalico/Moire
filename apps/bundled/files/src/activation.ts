@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import type { FileActivation } from "@moire/app-discovery";
+import type { FileActivation, TerminalLaunch } from "@moire/app-discovery";
 
 type FileLaunchTarget = { filePath: string; applicationName: string };
 export type FileLaunchFailure = FileLaunchTarget &
@@ -41,6 +41,16 @@ export class FileLauncher {
     );
   }
 
+  /** A terminal opened in a folder ("Open in Terminal"). */
+  launchTerminal(directory: string, terminal: TerminalLaunch): ChildProcess | null {
+    return this.launch(
+      { filePath: directory, applicationName: terminal.name },
+      "/bin/sh",
+      ["-c", terminal.command],
+      terminal.cwd,
+    );
+  }
+
   launchFallback(filePath: string): ChildProcess | null {
     return this.launch({ filePath, applicationName: "the default application" }, "xdg-open", [
       filePath,
@@ -51,6 +61,7 @@ export class FileLauncher {
     target: FileLaunchTarget,
     executable: string,
     args: string[],
+    cwd?: string,
   ): ChildProcess | null {
     let reported = false;
     const report = (failure: FileLaunchFailure) => {
@@ -62,7 +73,7 @@ export class FileLauncher {
     try {
       // Inherit the established session environment; a login shell can replace its PATH.
       // Preserve command quoting, detachment, I/O and application-owned lifetime.
-      child = spawn(executable, args, { detached: true, stdio: "ignore" });
+      child = spawn(executable, args, { cwd, detached: true, stdio: "ignore" });
     } catch (error) {
       report({
         ...target,

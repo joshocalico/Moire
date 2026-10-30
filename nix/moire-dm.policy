@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- moire-dm automatic login (docs/moire-dm.md). Every default is no:
+     nix/moire-admin.rules answers "an administrator's password" for active, local sessions, and
+     the message below is the prompt's headline. The owner annotation lets the unprivileged
+     moire-dm-settings ask polkit about its callers (polkit allows that only to root otherwise). -->
+<policyconfig>
+  <vendor>Moire</vendor>
+  <action id="org.moire.dm.set-autologin">
+    <description>Turn automatic login on for your own account, or off</description>
+    <message>An administrator's password is needed to change automatic login</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>no</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.owner">unix-user:moire-dm-settings</annotate>
+  </action>
+</policyconfig>

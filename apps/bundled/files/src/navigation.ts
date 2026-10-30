@@ -8,26 +8,44 @@ import {
   type SelectionModel,
   type SelectionState,
 } from "@moire/ui";
+import type { KindFilter } from "./search/kind-counts";
+import type { SearchScope } from "./search/scope";
+
+/** A page that is not a folder listing: Recent shows files from everywhere. */
+type SpecialPage = "recent";
 
 export type FolderTab = {
   id: string;
   navigation: { paths: string[]; index: number };
+  /** The search field's text; non-empty turns the page into results. */
   query: string;
-  tagFilter: string | null;
+  /** Where the search looks; null means the default for the folder. */
+  scope: SearchScope | null;
+  page: SpecialPage | null;
+  /** The folder page's kind chip. */
+  kindFilter: KindFilter;
   selection: SelectionState<string>;
   entryKeys: readonly string[];
   scrollY: number;
 };
 
+/** What a tab forgets when it moves to another place. */
+const FRESH_PLACE: Pick<
+  FolderTab,
+  "query" | "scope" | "page" | "kindFilter" | "entryKeys" | "scrollY"
+> = { query: "", scope: null, page: null, kindFilter: "all", entryKeys: [], scrollY: 0 };
+
+/** Recent sits at Home in the history, as a page over it. */
+export function openSpecialPage(tab: FolderTab, page: SpecialPage, home: string): FolderTab {
+  return { ...navigateFolderTab(tab, home), page };
+}
+
 export function createFolderTab(id: string, directory: string): FolderTab {
   return {
     id,
     navigation: { paths: [path.resolve(directory)], index: 0 },
-    query: "",
-    tagFilter: null,
+    ...FRESH_PLACE,
     selection: createSelectionState<string>([]),
-    entryKeys: [],
-    scrollY: 0,
   };
 }
 
@@ -46,11 +64,8 @@ export function navigateFolderTab(tab: FolderTab, directory: string): FolderTab 
   return {
     ...tab,
     navigation: { paths, index: paths.length - 1 },
-    query: "",
-    tagFilter: null,
+    ...FRESH_PLACE,
     selection: createSelectionState<string>([]),
-    entryKeys: [],
-    scrollY: 0,
   };
 }
 
@@ -63,11 +78,8 @@ export function travelFolderTab(tab: FolderTab, offset: -1 | 1): FolderTab {
   return {
     ...tab,
     navigation: { ...tab.navigation, index },
-    query: "",
-    tagFilter: null,
+    ...FRESH_PLACE,
     selection: createSelectionState<string>([]),
-    entryKeys: [],
-    scrollY: 0,
   };
 }
 
@@ -107,5 +119,6 @@ export function useFolderTabSelection(
     last: (options) => dispatch({ type: "last", options }),
     selectAll: () => dispatch({ type: "all" }),
     clear: () => dispatch({ type: "clear" }),
+    selectKeys: (keys, focusKey) => dispatch({ type: "set", keys, focusKey }),
   };
 }

@@ -16,6 +16,8 @@ const previous = {
 };
 process.env.HOME = fixture;
 process.env.XDG_CONFIG_HOME = path.join(fixture, ".config");
+// The session file clipboard lives in the runtime directory; keep it in the fixture.
+process.env.XDG_RUNTIME_DIR = path.join(fixture, ".run");
 process.env.XDG_DATA_HOME = path.join(fixture, ".local", "share");
 const backend = new HeadlessPlatform();
 const window = new Window({ title: "Files keyboard workflows", width: 1020, height: 600 });
@@ -81,7 +83,7 @@ try {
       context();
       if (
         title === name &&
-        actions.find((action) => action.id === "moire.background:select-all")?.disabled === false
+        actions.some((action) => action.id === "select-all" && !action.disabled)
       )
         return;
     }
@@ -104,9 +106,11 @@ try {
     1,
     "folder menu offers one Refresh action",
   );
+  // Space previews the focused item, selecting it; Escape closes the preview.
   send(57, " ");
+  send(1, "Escape");
   context();
-  assert.equal(title, "Alpha", "Space selects the initially focused folder without a click");
+  assert.equal(title, "Alpha", "Space selects and previews the initially focused folder");
   send(28, "Enter");
   await waitForFolder("Alpha");
   send(102, "Home");
@@ -127,6 +131,8 @@ try {
   send(33, "f", { ctrl: true });
   for (const character of "beta") send(48, character, { text: character });
   send(1, "Escape");
+  context();
+  assert.equal(title, "beta.txt", "Escape leaves search with the best match selected");
   send(107, "End");
   context();
   assert.equal(title, "gamma.txt", "Escape clears search and restores collection keyboard input");
@@ -134,11 +140,13 @@ try {
   send(105, "ArrowLeft", { alt: true });
   await waitForFolder("source");
   send(57, " ");
+  send(1, "Escape");
   context();
   assert.equal(title, "Alpha", "Back resets selection and restores initial collection focus");
   send(106, "ArrowRight", { alt: true });
   await waitForFolder("Alpha");
   send(57, " ");
+  send(1, "Escape");
   context();
   assert.equal(title, "beta.txt", "Forward resets selection for the destination folder");
 
@@ -156,7 +164,7 @@ try {
   }
   assert.equal((await fs.stat(path.join(folder, "Keyboard folder"))).isDirectory(), true);
   console.log(
-    `[files/keyboard/${view}] initial focus, Space/Enter, arrows, range selection, path/search Escape, history and named creation passed`,
+    `[files/keyboard/${view}] initial focus, Space preview/Enter, arrows, range selection, path/search Escape, history and named creation passed`,
   );
 } finally {
   window.destroy();

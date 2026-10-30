@@ -13,8 +13,8 @@ import {
   discoverPersonalization,
 } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
-import { withFixture } from "@moire/app-tools/testing";
-import { runTool } from "@moire/app-tools";
+import { windowControl, withFixture } from "@moire/app-tools/testing";
+import { privatePreviewsSettled, runTool } from "@moire/app-tools";
 import { FontViewerApp } from "./main";
 
 await installUiFonts();
@@ -92,9 +92,11 @@ await withFixture(async (directory) => {
       }
       throw new Error(`Font workflow timed out: ${label}`);
     };
-    const click = (x: number, y: number) => {
-      native.injectPointer({ type: "down", button: "left", x: x * scale, y: y * scale, timeMs: 1 });
-      native.injectPointer({ type: "up", button: "left", x: x * scale, y: y * scale, timeMs: 2 });
+    const click = (match: { focusId: string } | { text: string }) => {
+      window.tick();
+      const { x, y } = windowControl(window, match);
+      native.injectPointer({ type: "down", button: "left", x, y, timeMs: 1 });
+      native.injectPointer({ type: "up", button: "left", x, y, timeMs: 2 });
     };
     const key = (code: number, key: string, text?: string, ctrl = false) => {
       const modifiers = { ctrl, shift: false, alt: false, meta: false };
@@ -129,25 +131,27 @@ await withFixture(async (directory) => {
       await fs.rm(raw);
     };
     try {
+      // The specimen opens first; the paged sample preview lives in the Type tester.
+      click({ text: "Type tester" });
       await wait(loaded, "initial selected font");
-      click(40, 122);
+      click({ focusId: "font:sample" });
       key(30, "a", undefined, true);
       key(
         30,
         "Text",
         Array.from({ length: 12 }, (_, index) => `Line ${index}: Wide glyphs WWW gjÅΩ`).join("\n"),
       );
-      click(235, 60);
+      click({ focusId: "font:preview" });
       await new Promise((resolve) => setTimeout(resolve, 40));
       await wait(loaded, "edited long sample");
       const first = previewHash();
       await capture("first-page");
-      click(235, 212);
+      click({ focusId: "font-page-next" });
       await wait(() => loaded() && previewHash() !== first, "Next shows a distinct raster page");
       const second = previewHash();
       key(57, " ");
       await wait(() => loaded() && previewHash() !== second, "focused Next keyboard activation");
-      click(50, 212);
+      click({ focusId: "font-page-previous" });
       await wait(() => loaded() && previewHash() === second, "Previous restores exact page pixels");
       await capture("second-page");
       native.setSize(480, 680);
@@ -157,15 +161,14 @@ await withFixture(async (directory) => {
       );
       assert.ok(native.lastFrame?.length === 480 * 680 * 4);
       // Close during a real asynchronous render must abort/dispose its private resources.
-      click(151, 60);
+      click({ focusId: "font:larger" });
     } finally {
       stop();
       window.destroy();
       backend.disconnect();
     }
-    const deadline = performance.now() + 5000;
-    while ((await fs.readdir(path.join(directory, "tmp"))).length && performance.now() < deadline)
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    // The close aborted a render mid-flight; wait for it and the disposals, not a deadline.
+    await privatePreviewsSettled();
     assert.deepEqual(
       await fs.readdir(path.join(directory, "tmp")),
       [],

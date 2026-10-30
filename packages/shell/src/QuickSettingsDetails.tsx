@@ -46,6 +46,27 @@ import { BluetoothDetailsContent, bluetoothInteractionScope } from "./BluetoothD
 import { batteryPresentation } from "./battery-presentation";
 
 export type QuickSettingsDetailsView = "network" | "audio" | "bluetooth" | "power" | "battery";
+
+/** The logind actions offered in the power view (Suspend, Reboot and PowerOff). */
+export type QuickSettingsPowerAction = "suspend" | "reboot" | "power-off";
+/** What logind allows this session without asking; the lock screen's menu reads the same. */
+export type QuickSettingsPower = Readonly<{ suspend: boolean; reboot: boolean; powerOff: boolean }>;
+/** A restart or shut down waiting out its countdown. */
+export type QuickSettingsPowerConfirm = Readonly<{
+  action: "reboot" | "power-off";
+  secondsLeft: number;
+}>;
+
+/** Each details view's way into Settings: the row's label and its `page#setting` deep link. */
+export const DETAILS_SETTINGS_LINKS: Readonly<
+  Record<QuickSettingsDetailsView, { label: string; link: string }>
+> = {
+  network: { label: "Wi‑Fi settings…", link: "network#networks" },
+  audio: { label: "Sound settings…", link: "sound#output" },
+  bluetooth: { label: "Bluetooth settings…", link: "bluetooth#devices" },
+  power: { label: "Power settings…", link: "power" },
+  battery: { label: "Battery settings…", link: "power#battery" },
+};
 export type QuickSettingsDetailsProps = {
   /** Content allocation only; the shell owns the single panel frame/anchor/scroll viewport. */
   width: number;
@@ -75,8 +96,17 @@ export type QuickSettingsDetailsProps = {
   busy?: boolean;
   error?: string;
   onLogout?: () => void;
+  /** Lock the session; the compositor owns the lock screen. */
+  onLock?: () => void;
+  sessionPower?: QuickSettingsPower;
+  /** Suspend runs at once; restart and shut down ask first (powerConfirm). */
+  onPowerAction?: (action: QuickSettingsPowerAction) => void;
+  powerConfirm?: QuickSettingsPowerConfirm;
+  onPowerConfirm?: () => void;
+  onPowerCancel?: () => void;
   onBack(): void;
-  onSettings?: () => void;
+  /** Open Settings, at `link` (`page#setting`) when given. */
+  onSettings?: (link?: string) => void;
   onVolumeChange?: (value: number) => void;
   onVolumeStart?: () => void;
   onVolumeCommit?: (value: number) => void;
@@ -176,7 +206,7 @@ function content(props: QuickSettingsDetailsProps, theme: WidgetTheme): ReactNod
       <TextBlock
         width={Math.max(0, width - 42 * ui)}
         text={title}
-        fontSize={20}
+        fontSize={17}
         fontWeight="medium"
         wrap
       />
@@ -359,13 +389,156 @@ function content(props: QuickSettingsDetailsProps, theme: WidgetTheme): ReactNod
         </Column>
       );
       break;
-    case "power":
-      if (props.onLogout) {
+    case "power": {
+      const power = props.sessionPower;
+      const canRun = !!props.onPowerAction;
+      const allowed = {
+        suspend: canRun && !!power?.suspend,
+        reboot: canRun && !!power?.reboot,
+        powerOff: canRun && !!power?.powerOff,
+      };
+      if (props.onLogout || props.onLock || allowed.suspend || allowed.reboot || allowed.powerOff) {
+        const confirm = props.powerConfirm;
+        if (confirm) {
+          const restart = confirm.action === "reboot";
+          const verb = restart ? "Restart" : "Shut down";
+          const seconds = Math.max(0, Math.ceil(confirm.secondsLeft));
+          const inner = Math.max(0, width - 24 * ui);
+          body = (
+            <ContentCard width={width} padding={12 * ui} gap={10 * ui}>
+              <TextBlock width={inner} text={`${verb} now?`} fontSize={15} fontWeight="medium" />
+              <TextBlock
+                width={inner}
+                text={`${restart ? "Restarting" : "Shutting down"} in ${seconds} ${seconds === 1 ? "second" : "seconds"}. Apps that are still open will close without saving.`}
+                fontSize={12}
+                color={palette.muted}
+                wrap
+              />
+              <Horizontal width={inner} gap={8 * ui} align="center">
+                <Button
+                  label="Cancel"
+                  focusId="quick:power:cancel"
+                  autoFocus
+                  disabled={!props.onPowerCancel}
+                  onPress={() => props.onPowerCancel?.()}
+                />
+                <Button
+                  label={verb}
+                  variant="danger"
+                  focusId="quick:power:confirm"
+                  disabled={!props.onPowerConfirm}
+                  onPress={() => props.onPowerConfirm?.()}
+                />
+              </Horizontal>
+            </ContentCard>
+          );
+          break;
+        }
+        const tileHeight = 64 * ui;
+        const root = theme.recipes.button.ghost.medium.root;
+        const tile = (
+          focusId: string,
+          icon: "lock" | "logout" | "moon" | "restart" | "power",
+          title: string,
+          detail: string,
+          onPress: () => void,
+        ) => (
+          <Box key={focusId} width={width} height={tileHeight}>
+            <Pressable
+              width={width}
+              height={tileHeight}
+              fill={palette.surface}
+              hoverFill={resolveStatefulStyle(root, "hover").fill}
+              pressedFill={resolveStatefulStyle(root, "pressed").fill}
+              radius={12 * ui}
+              focusId={focusId}
+              onPress={onPress}
+            >
+              <Horizontal
+                width={width}
+                height={tileHeight}
+                gap={12 * ui}
+                align="center"
+                padding={{ left: 14 * ui, right: 14 * ui }}
+              >
+                <Box width={24 * ui} height={24 * ui} flexShrink={0}>
+                  <Icon name={icon} size={22 * ui} color={palette.accentLine} symbolic />
+                </Box>
+                <Vertical width={Math.max(0, width - 64 * ui)} gap={3 * ui}>
+                  <TextBlock text={title} fontSize={13} fontWeight="medium" />
+                  <TextBlock
+                    width={Math.max(0, width - 64 * ui)}
+                    text={detail}
+                    fontSize={11}
+                    color={palette.muted}
+                    overflow="ellipsis"
+                    maxLines={1}
+                  />
+                </Vertical>
+              </Horizontal>
+            </Pressable>
+          </Box>
+        );
+        const run = (action: QuickSettingsPowerAction) => () => props.onPowerAction?.(action);
+        const missing = [
+          props.onLock ? null : "lock",
+          allowed.suspend ? null : "suspend",
+          allowed.reboot ? null : "restart",
+          allowed.powerOff ? null : "shutdown",
+        ].filter((name): name is string => !!name);
+        const missingText = missing.length
+          ? `${missing.length > 1 ? `${missing.slice(0, -1).join(", ")} and ${missing.at(-1)}` : missing[0]} ${missing.length > 1 ? "are" : "is"} unavailable here.`
+          : "";
         body = (
           <Column width={width} gap={gap}>
-            <Button width={width} label="Log out" focusId="quick:logout" onPress={props.onLogout} />
-            {message("Close this desktop and return to sign in.")}
-            {message("Lock, suspend, restart and shutdown are unavailable.")}
+            {props.onLock
+              ? tile(
+                  "quick:lock",
+                  "lock",
+                  "Lock",
+                  "Lock the screen; your apps keep running.",
+                  props.onLock,
+                )
+              : null}
+            {props.onLogout
+              ? tile(
+                  "quick:logout",
+                  "logout",
+                  "Log out",
+                  "Close this desktop and return to sign in.",
+                  props.onLogout,
+                )
+              : null}
+            {allowed.suspend
+              ? tile(
+                  "quick:suspend",
+                  "moon",
+                  "Suspend",
+                  "Sleep now; your apps stay open.",
+                  run("suspend"),
+                )
+              : null}
+            {allowed.reboot
+              ? tile(
+                  "quick:reboot",
+                  "restart",
+                  "Restart",
+                  "Close every app and start again.",
+                  run("reboot"),
+                )
+              : null}
+            {allowed.powerOff
+              ? tile(
+                  "quick:power-off",
+                  "power",
+                  "Shut down",
+                  "Close every app and turn off.",
+                  run("power-off"),
+                )
+              : null}
+            {missingText
+              ? message(missingText.charAt(0).toUpperCase() + missingText.slice(1))
+              : null}
           </Column>
         );
         break;
@@ -386,11 +559,13 @@ function content(props: QuickSettingsDetailsProps, theme: WidgetTheme): ReactNod
         </Column>
       );
       break;
+    }
     default: {
       const exhaustive: never = props.view;
       throw new Error(`Unknown details view: ${exhaustive}`);
     }
   }
+  const settingsLink = DETAILS_SETTINGS_LINKS[props.view];
   const footerInset = 8 * ui;
   const footerWidth = Math.max(0, width - footerInset * 2);
   const footerTree = (
@@ -398,7 +573,7 @@ function content(props: QuickSettingsDetailsProps, theme: WidgetTheme): ReactNod
       {icon("settings")}
       <TextBlock
         width={Math.max(0, footerWidth - iconWidth - 36 * ui)}
-        text="Settings"
+        text={settingsLink.label}
         fontSize={14}
         wrap
       />
@@ -427,7 +602,7 @@ function content(props: QuickSettingsDetailsProps, theme: WidgetTheme): ReactNod
             radius={palette.radiusSm}
             focusId="quick:details:settings"
             disabled={!props.onSettings}
-            onPress={props.onSettings}
+            onPress={() => props.onSettings?.(settingsLink.link)}
           >
             <Column {...footerLayout} />
           </Pressable>

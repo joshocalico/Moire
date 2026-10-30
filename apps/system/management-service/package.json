@@ -8,9 +8,11 @@
     "start": "tsx src/main.ts",
     "smoke": "tsx src/identity.smoke.ts && tsx src/smoke.ts",
     "smoke:identity": "tsx src/identity.smoke.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke:settings": "tsx src/time-settings.smoke.ts && tsx src/accounts-settings.smoke.ts && tsx src/backlight.smoke.ts && tsx src/appearance-schedule.smoke.ts && node ../../../scripts/test-settings-policy.mjs"
   },
   "dependencies": {
+    "@moire/audio": "workspace:*",
     "@moire/dbus": "workspace:*",
     "@moire/system-management": "workspace:*",
     "@moire/prefs": "workspace:*"

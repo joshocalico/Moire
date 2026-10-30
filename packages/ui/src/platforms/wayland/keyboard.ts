@@ -25,12 +25,36 @@ const navigationKeys: Readonly<Record<number, string>> = Object.freeze({
   108: "ArrowDown",
   111: "Delete",
 });
+/** Logs key codes and focus only, never text, so secrets stay out of journals. */
+const DEBUG_KEYS = process.env.MOIRE_DEBUG_KEYS === "1";
+/** Modifier and lock keys never auto-repeat (evdev codes). */
+const nonRepeatingKeys: ReadonlySet<number> = new Set([
+  29, 42, 54, 56, 58, 69, 70, 97, 100, 125, 126, 127,
+]);
+/** wl_keyboard.repeat_info is v4+; older seats get the conventional default. */
+const DEFAULT_REPEAT = Object.freeze({ rate: 25, delay: 600 });
+export type KeyRepeatTimers = Readonly<{
+  setTimeout(callback: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}>;
+const nodeTimers: KeyRepeatTimers = {
+  setTimeout: (callback, ms) => {
+    const handle = setTimeout(callback, ms);
+    // A held key must never keep a closing client alive.
+    handle.unref?.();
+    return handle;
+  },
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 function noModifiers(): UiKeyModifiers {
   return { shift: false, ctrl: false, alt: false, meta: false };
 }
 
 export class WaylandKeyboard<Target> {
   private focus: { surfaceId: number; target: Target } | null = null;
+  private repeatRate: number = DEFAULT_REPEAT.rate;
+  private repeatDelay: number = DEFAULT_REPEAT.delay;
+  private repeating: { key: number; timer: unknown } | null = null;
   private keymap: ClientKeymap | null = null;
   private availability: KeymapAvailability = Object.freeze({
     kind: "unavailable",
@@ -47,6 +71,8 @@ export class WaylandKeyboard<Target> {
       keymapIo?: KeymapFdIo;
       /** Optional decoded-focus observer. Its failure must never affect input delivery. */
       onFocus?: (type: "enter" | "leave", surfaceId: number, target: Target | null) => void;
+      /** Client-side key repeat clock; injectable for deterministic tests. */
+      timers?: KeyRepeatTimers;
     },
   ) {}
 
@@ -54,6 +80,13 @@ export class WaylandKeyboard<Target> {
     const { pressedKeys } = this.options;
     if (opcode === wlKeyboard.events.keymap.opcode) {
       this.replaceKeymap(reader);
+      return;
+    }
+    if (opcode === wlKeyboard.events.repeatInfo.opcode) {
+      const event = wlKeyboard.events.repeatInfo.decodeReader(reader);
+      this.repeatRate = Math.max(0, event.rate);
+      this.repeatDelay = Math.max(0, event.delay);
+      if (this.repeatRate === 0) this.stopRepeat();
       return;
     }
     if (opcode === wlKeyboard.events.modifiers.opcode) {
@@ -76,6 +109,8 @@ export class WaylandKeyboard<Target> {
       if (event.keys.length % 4 !== 0) throw new Error("Invalid wl_keyboard.enter key array");
       this.reset();
       const target = this.options.resolveSurface(event.surface);
+      if (DEBUG_KEYS)
+        console.log(`[keys] client enter surface=${event.surface} known=${target !== null}`);
       this.observeFocus("enter", event.surface, target);
       if (target === null) return;
       this.focus = { surfaceId: event.surface, target };
@@ -87,6 +122,7 @@ export class WaylandKeyboard<Target> {
     }
     if (opcode === wlKeyboard.events.leave.opcode) {
       const event = wlKeyboard.events.leave.decodeReader(reader);
+      if (DEBUG_KEYS) console.log(`[keys] client leave surface=${event.surface}`);
       this.observeFocus("leave", event.surface, this.options.resolveSurface(event.surface));
       if (this.focus?.surfaceId === event.surface) this.reset();
       return;
@@ -95,12 +131,25 @@ export class WaylandKeyboard<Target> {
     const { serial, key, state } = wlKeyboard.events.key.decodeReader(reader);
     if (state !== wlKeyboard.enums.keyState.pressed && state !== wlKeyboard.enums.keyState.released)
       return;
-    if (!this.focus) return;
     const pressed = state === wlKeyboard.enums.keyState.pressed;
-    const repeat = pressed && pressedKeys.has(key);
+    // A press for a key already held is not a wl_keyboard event; repeat is ours.
+    const duplicate = pressed && pressedKeys.has(key);
+    if (DEBUG_KEYS)
+      console.log(
+        `[keys] client key=${key} pressed=${pressed} duplicate=${duplicate} focus=${this.focus?.surfaceId ?? "none"}`,
+      );
+    if (!this.focus) return;
+    this.options.onSerial(serial);
+    if (duplicate) return;
     if (pressed) pressedKeys.add(key);
     else pressedKeys.delete(key);
-    this.options.onSerial(serial);
+    if (!pressed && this.repeating?.key === key) this.stopRepeat();
+    this.emitTranslated(key, pressed ? "down" : "up");
+    if (pressed) this.startRepeat(key);
+  }
+
+  private emitTranslated(key: number, type: UiKeyEvent["type"]): void {
+    if (!this.focus) return;
     let modifiers = this.modifiers();
     let logical: KeymapTranslation;
     try {
@@ -111,13 +160,36 @@ export class WaylandKeyboard<Target> {
       modifiers = noModifiers();
     }
     this.options.emitKey(this.focus.target, {
-      type: repeat ? "repeat" : pressed ? "down" : "up",
+      type,
       code: key,
       key: logical.key,
       text: logical.text,
       modifiers,
       timeMs: Date.now(),
     });
+  }
+
+  /** The newest pressed key repeats until released, replaced, or focus ends. */
+  private startRepeat(key: number): void {
+    this.stopRepeat();
+    if (this.repeatRate <= 0 || nonRepeatingKeys.has(key)) return;
+    const timers = this.options.timers ?? nodeTimers;
+    const interval = Math.max(1, 1000 / this.repeatRate);
+    const fire = () => {
+      if (!this.repeating || this.repeating.key !== key || !this.options.pressedKeys.has(key)) {
+        this.stopRepeat();
+        return;
+      }
+      this.repeating.timer = timers.setTimeout(fire, interval);
+      this.emitTranslated(key, "repeat");
+    };
+    this.repeating = { key, timer: timers.setTimeout(fire, this.repeatDelay) };
+  }
+
+  private stopRepeat(): void {
+    if (!this.repeating) return;
+    (this.options.timers ?? nodeTimers).clearTimeout(this.repeating.timer);
+    this.repeating = null;
   }
 
   private replaceKeymap(reader: MessageReader): void {
@@ -198,6 +270,7 @@ export class WaylandKeyboard<Target> {
   }
 
   reset(): void {
+    this.stopRepeat();
     this.focus = null;
     this.options.pressedKeys.clear();
     try {

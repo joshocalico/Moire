@@ -8,9 +8,22 @@ import type { KeymapFdIo } from "./keymap-types";
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "moire-keymap-fd-"));
 const filename = path.join(directory, "synthetic-keymap");
 let cases = 0;
+/**
+ * The descriptor was closed: fstat fails with EBADF, or (if a runtime thread already reused the
+ * number) it now names a different file.
+ */
+function assertClosed(fd: number, inode: number) {
+  try {
+    assert.notEqual(fs.fstatSync(fd).ino, inode, "keymap descriptor still open");
+  } catch (error) {
+    if (error instanceof assert.AssertionError) throw error;
+    assert.ok(error instanceof Error && "code" in error && error.code === "EBADF");
+  }
+}
 function exercise(bytes: Buffer, size: number, accepted: boolean) {
   fs.writeFileSync(filename, bytes);
   const fd = fs.openSync(filename, "r");
+  const inode = fs.fstatSync(fd).ino;
   let closes = 0,
     reads = 0;
   const io: KeymapFdIo = {
@@ -30,10 +43,7 @@ function exercise(bytes: Buffer, size: number, accepted: boolean) {
     assert.throws(() => readKeymapFd(io, fd, size), /Keymap unavailable/);
   }
   assert.equal(closes, 1);
-  assert.throws(
-    () => fs.fstatSync(fd),
-    (error: unknown) => error instanceof Error && "code" in error && error.code === "EBADF",
-  );
+  assertClosed(fd, inode);
   if (size < 2 || size > 1024 * 1024 || !Number.isSafeInteger(size)) assert.equal(reads, 0);
   cases++;
 }
@@ -46,8 +56,9 @@ try {
   exercise(Buffer.from("short\0"), 20, false);
   for (const size of [0, 1, -1, 1.5, 1024 * 1024 + 1]) exercise(Buffer.from("x\0"), size, false);
   const fd = fs.openSync(directory, "r");
+  const inode = fs.fstatSync(fd).ino;
   assert.throws(() => readKeymapFd(nodeKeymapFdIo, fd, 2), /Keymap unavailable/);
-  assert.throws(() => fs.fstatSync(fd));
+  assertClosed(fd, inode);
   cases++;
   let closes = 0;
   const readFailure: KeymapFdIo = {

@@ -1,4 +1,5 @@
 import { SessionBus, type DbusInterface, type DbusMethodContext } from "@moire/dbus";
+import { DEFAULT_NOTIFICATION_RULE, notificationAppKey, type NotificationRule } from "@moire/prefs";
 
 export const NOTIFICATIONS_BUS = "org.freedesktop.Notifications";
 export const NOTIFICATIONS_PATH = "/org/freedesktop/Notifications";
@@ -26,6 +27,13 @@ export type NotificationEntry = Readonly<{
   urgency: 0 | 1 | 2;
   category: string;
   desktopEntry: string;
+  /** The rule key: the desktop entry, else the app name. */
+  appId: string;
+  /** The app's rule allows a banner and sound; Do not disturb is applied separately. */
+  banner: boolean;
+  sound: boolean;
+  /** Kept in history once closed. */
+  history: boolean;
   createdAt: number;
   expiresAt: number | null;
 }>;
@@ -55,6 +63,13 @@ export type NotificationOptions = {
   /** Supply only when the presenter implements actual action controls. */
   present?: (notification: NotificationEntry, controls: NotificationControls) => void;
   onError?: (error: unknown) => void;
+  /** The user's rule for an app id, read at each arrival so Settings changes apply at once. */
+  rule?: (appId: string) => NotificationRule;
+  /**
+   * Play the alert for a new notification whose app rule has Sound on, outside Do not disturb,
+   * unless the sender passed `suppress-sound`. Replacements are silent.
+   */
+  sound?: (notification: NotificationEntry) => void;
 };
 export type NotificationTransport = {
   watchSender(
@@ -120,14 +135,20 @@ function plainBody(value: unknown): string {
     });
 }
 
-function hints(value: unknown): { urgency: 0 | 1 | 2; category: string; desktopEntry: string } {
+function hints(value: unknown): {
+  urgency: 0 | 1 | 2;
+  category: string;
+  desktopEntry: string;
+  suppressSound: boolean;
+} {
   if (!value || typeof value !== "object" || Array.isArray(value) || value instanceof Map)
     throw new Error("Invalid notification hints");
   const entries = Object.entries(value);
   if (entries.length > NOTIFICATION_LIMITS.hints) throw new Error("Too many notification hints");
   let urgency: 0 | 1 | 2 = 1;
   let category = "",
-    desktopEntry = "";
+    desktopEntry = "",
+    suppressSound = false;
   for (const [key, variant] of entries) {
     text(key, "hint key", 128);
     if (
@@ -147,6 +168,10 @@ function hints(value: unknown): { urgency: 0 | 1 | 2; category: string; desktopE
       const parsed = text(variant.value, key, 256);
       if (key === "category") category = parsed;
       else desktopEntry = parsed;
+    } else if (key === "suppress-sound") {
+      if (signature !== "b" || typeof variant.value !== "boolean")
+        throw new Error("Invalid notification suppress-sound");
+      suppressSound = variant.value;
     } else if (key === "image-data" || key === "image_data" || key === "icon_data") {
       // Unsupported image hints are never retained or dereferenced. Bound their decoded byte payload.
       if (signature !== "(iiibiiay)" || !Array.isArray(variant.value) || variant.value.length !== 7)
@@ -162,7 +187,7 @@ function hints(value: unknown): { urgency: 0 | 1 | 2; category: string; desktopE
     }
     // Unknown hints are ignored, not forwarded to rendering or used for file/network access.
   }
-  return { urgency, category, desktopEntry };
+  return { urgency, category, desktopEntry, suppressSound };
 }
 
 function parseNotify(context: DbusMethodContext) {
@@ -275,14 +300,16 @@ export function createNotificationService(
       return false;
     active.delete(id); // Invalidate ID/actions before any observer or closed signal runs.
     current.cancel();
-    history.unshift(
-      Object.freeze({
-        notification: Object.freeze({ ...current.entry, actions: Object.freeze([]) }),
-        closedAt: time.now(),
-        reason,
-      }),
-    );
-    history.length = Math.min(history.length, NOTIFICATION_LIMITS.history);
+    if (current.entry.history) {
+      history.unshift(
+        Object.freeze({
+          notification: Object.freeze({ ...current.entry, actions: Object.freeze([]) }),
+          closedAt: time.now(),
+          reason,
+        }),
+      );
+      history.length = Math.min(history.length, NOTIFICATION_LIMITS.history);
+    }
     retireSender(current.entry.sender);
     if (emit && !disposed) {
       try {
@@ -340,6 +367,40 @@ export function createNotificationService(
     nextId = nextId === 0xffff_ffff ? 1 : nextId + 1;
     return id;
   }
+  const readRule = (appId: string): NotificationRule => {
+    try {
+      return options.rule?.(appId) ?? DEFAULT_NOTIFICATION_RULE;
+    } catch (error) {
+      report(error);
+      return DEFAULT_NOTIFICATION_RULE;
+    }
+  };
+  /**
+   * An app the user turned off: the sender still gets an id, as the spec requires, and is told
+   * at once that it closed (reason 2, dismissed by the user), so it can drop its own state. A
+   * replacement closes the sender's earlier notification too.
+   */
+  function refuse(sender: string, replacesId: number): number {
+    const prior = active.get(replacesId);
+    if (prior?.entry.sender === sender) {
+      close(replacesId, 2);
+      return replacesId;
+    }
+    const id = allocateId();
+    try {
+      transport.emitSignal({
+        destination: sender,
+        path: NOTIFICATIONS_PATH,
+        interface: NOTIFICATIONS_INTERFACE,
+        member: "NotificationClosed",
+        signature: "uu",
+        body: [id, 2],
+      });
+    } catch (error) {
+      report(error);
+    }
+    return id;
+  }
   function invokeAction(id: number, key: string, expectedRevision: number): boolean {
     const current = active.get(id);
     if (
@@ -365,8 +426,11 @@ export function createNotificationService(
   async function notify(context: DbusMethodContext): Promise<number> {
     if (disposed) throw new Error("Notification service is disposed");
     const parsed = parseNotify(context);
+    const appId = notificationAppKey(parsed.desktopEntry, parsed.appName);
+    const rule = readRule(appId);
     const lease = await reserveSender(parsed.sender);
     try {
+      if (!rule.allow) return refuse(parsed.sender, parsed.replacesId);
       const replaced = active.get(parsed.replacesId);
       const prior = replaced?.entry.sender === parsed.sender ? replaced : undefined;
       if (!prior && active.size >= NOTIFICATION_LIMITS.active)
@@ -390,6 +454,10 @@ export function createNotificationService(
         urgency: parsed.urgency,
         category: parsed.category,
         desktopEntry: parsed.desktopEntry,
+        appId,
+        banner: rule.banners,
+        sound: rule.sound,
+        history: rule.history,
         createdAt: now,
         expiresAt: timeout === 0 ? null : now + timeout,
       });
@@ -402,7 +470,27 @@ export function createNotificationService(
       prior?.cancel();
       active.set(id, { entry, cancel });
       changed();
-      if (!doNotDisturb && !disposed && active.get(id)?.entry === entry && options.present) {
+      if (
+        !prior &&
+        !doNotDisturb &&
+        entry.sound &&
+        !parsed.suppressSound &&
+        !disposed &&
+        options.sound
+      ) {
+        try {
+          options.sound(entry);
+        } catch (error) {
+          report(error);
+        }
+      }
+      if (
+        !doNotDisturb &&
+        entry.banner &&
+        !disposed &&
+        active.get(id)?.entry === entry &&
+        options.present
+      ) {
         try {
           options.present(entry, {
             dismiss: () => close(id, 2, entry.revision),

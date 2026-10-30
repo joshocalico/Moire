@@ -4,7 +4,7 @@ import { unlinkSync, readdirSync, renameSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { FileCatalog } from "./catalog";
-import { FileOperations, type Progress, type TransferKind } from "./filesystem";
+import { FileOperations, type Progress, type TransferKind } from "@moire/file-operations";
 import { executeTransfer, transferOutcomeNotice } from "./transfer-outcome";
 
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "moire-transfer-outcomes-"));
@@ -82,7 +82,7 @@ try {
       "Second original bytes",
     );
     if (kind === "move") {
-      await f.operations.undo();
+      // One Undo reverses the whole move, as it does for a group moved to Trash.
       await f.operations.undo();
       assert.equal(await fs.readFile(f.first, "utf8"), "First original bytes");
       assert.equal(await fs.readFile(f.second, "utf8"), "Second original bytes");

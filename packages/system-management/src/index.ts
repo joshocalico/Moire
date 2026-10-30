@@ -85,3 +85,13 @@ export function memoryPressure(snapshot: SystemSnapshot): number {
   if (snapshot.totalMemoryBytes <= 0) return 0;
   return Math.max(0, Math.min(1, 1 - snapshot.availableMemoryBytes / snapshot.totalMemoryBytes));
 }
+
+export {
+  connectInputSettings,
+  createFakeInputSettings,
+  type ActiveKeyboardLayout,
+  type InputSettingsClient,
+  type InputSettingsState,
+  type KeyboardLayoutCatalog,
+  type KeyboardLayoutInfo,
+} from "./input-settings";

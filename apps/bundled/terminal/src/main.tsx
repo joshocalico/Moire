@@ -1,11 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  AppHeaderBar,
+  AppStatusLine,
   Application,
-  Window,
-  Label,
-  StatusBar,
   Surface,
   TerminalView,
+  Window,
+  appChromeBody,
   measureTerminalGrid,
   requestActiveWindowRedraw,
   setUiScaleFactor,
@@ -13,6 +17,7 @@ import {
   type HitKeyEvent,
   type RichTextLine,
   type RichTextRun,
+  type WindowActions,
   type WindowSize,
 } from "@moire/ui";
 import {
@@ -26,7 +31,6 @@ import { loadSettings } from "@moire/prefs";
 
 const FONT_SIZE = 13;
 const PADDING = 10;
-const STATUS_HEIGHT = 28;
 
 function sameStyle(a: TerminalCell, b: TerminalCell): boolean {
   return a.foreground === b.foreground && a.background === b.background && a.bold === b.bold;
@@ -101,14 +105,18 @@ function keySequence(event: HitKeyEvent): string | undefined {
   return sequence;
 }
 
-function TerminalApp(
+export function TerminalApp(
   props: WindowSize & {
     command?: string;
+    /** The shell's starting folder; Home when unset. */
+    cwd?: string;
     onTitle: (title: string) => void;
+    /** The window the header bar controls (minimize, maximize, close, move). */
+    window?: WindowActions | null;
   },
 ): ReactNode {
   const pal = usePalette();
-  const viewHeight = Math.max(1, props.height - STATUS_HEIGHT);
+  const { y: titleH, height: viewHeight } = appChromeBody(props.height);
   const grid = measureTerminalGrid(props.width, viewHeight, {
     fontSize: FONT_SIZE,
     padding: PADDING,
@@ -118,6 +126,7 @@ function TerminalApp(
   const session = useRef<PtySession | null>(null);
   const [snapshot, setSnapshot] = useState(() => model.current!.snapshot());
   const [status, setStatus] = useState("Starting shell…");
+  const [title, setTitle] = useState("");
   const [scrollY, setScrollY] = useState(0);
   const followEnd = useRef(true);
   const lines = useMemo(() => snapshotLines(snapshot), [snapshot]);
@@ -129,7 +138,7 @@ function TerminalApp(
     const pty = new PtySession({
       columns: grid.columns,
       rows: grid.rows,
-      cwd: process.env.HOME,
+      cwd: props.cwd ?? process.env.HOME,
       command: props.command,
       onData(data) {
         terminal.write(data);
@@ -137,6 +146,7 @@ function TerminalApp(
         const next = terminal.snapshot();
         setSnapshot(next);
         props.onTitle(next.title);
+        setTitle(next.title);
         setStatus("Connected");
         requestActiveWindowRedraw();
       },
@@ -176,7 +186,15 @@ function TerminalApp(
 
   return (
     <Surface width={props.width} height={props.height} fill={pal.bg}>
+      <AppHeaderBar
+        width={props.width}
+        title="Terminal"
+        icon="terminal"
+        subtitle={title}
+        window={props.window}
+      />
       <TerminalView
+        y={titleH}
         width={props.width}
         height={viewHeight}
         lines={lines}
@@ -211,57 +229,72 @@ function TerminalApp(
           if (sequence) session.current?.write(sequence);
         }}
       />
-      <StatusBar y={viewHeight} width={props.width} height={STATUS_HEIGHT}>
-        <Label
-          text={status}
-          color={pal.muted}
-          fontSize={10}
-          width={Math.max(80, props.width - 210)}
-          height={18}
-        />
-        <Label
-          text={`${grid.columns} × ${grid.rows}`}
-          color={pal.muted}
-          fontSize={10}
-          fontFamily="mono"
-          width={86}
-          height={18}
-        />
-        <Label
-          text="xterm-256color"
-          color={pal.accent}
-          fontSize={10}
-          fontFamily="mono"
-          width={100}
-          height={18}
-        />
-      </StatusBar>
+      <AppStatusLine
+        y={titleH + viewHeight}
+        width={props.width}
+        status={status}
+        end={`${grid.columns} × ${grid.rows} · xterm-256color`}
+      />
     </Surface>
   );
+}
+
+/** `--name value` or `--name=value` from the launch arguments. */
+function option(args: readonly string[], name: string): string | undefined {
+  const at = args.indexOf(name);
+  if (at >= 0) return args[at + 1];
+  return args.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+
+/**
+ * The folder to start in (`--working-directory`, as Files' "Open in Terminal" passes it). A
+ * folder that is gone, not a folder or cannot be entered falls back to Home rather than failing to
+ * start.
+ */
+export function workingDirectory(args: readonly string[]): string | undefined {
+  const value = option(args, "--working-directory");
+  if (!value) return undefined;
+  const resolved = path.resolve(value);
+  try {
+    fs.accessSync(resolved, fs.constants.X_OK);
+    return fs.statSync(resolved).isDirectory() ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function main(): Promise<void> {
   const settings = loadSettings();
   setUiScaleFactor(settings.uiScale);
   const app = new Application();
-  const commandIndex = process.argv.indexOf("--command");
-  const command = commandIndex >= 0 ? process.argv[commandIndex + 1] : undefined;
+  const args = process.argv.slice(2);
+  const command = option(args, "--command");
+  const cwd = workingDirectory(args);
   const win = new Window({
     title: "Terminal",
     appId: "org.moire.Terminal",
     width: Math.round(820 * settings.uiScale),
     height: Math.round(520 * settings.uiScale),
     resizable: true,
+    // The AppHeaderBar is this window's titlebar.
+    decorated: false,
   });
   win.setContent((size) => (
-    <TerminalApp {...size} command={command} onTitle={(title) => win.setTitle(title)} />
+    <TerminalApp
+      {...size}
+      window={win}
+      command={command}
+      cwd={cwd}
+      onTitle={(title) => win.setTitle(title)}
+    />
   ));
   win.onClose(() => app.quit());
   app.addWindow(win);
   await app.run();
 }
 
-main().catch((error: unknown) => {
-  console.error("[terminal] fatal:", error);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch((error: unknown) => {
+    console.error("[terminal] fatal:", error);
+    process.exit(1);
+  });

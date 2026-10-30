@@ -14,6 +14,7 @@ import {
 import { installUiFonts, TextField, Window, type ContextMenuAction } from "@moire/ui";
 import { HeadlessPlatform } from "../src/platforms/headless/index";
 import { FilesApp } from "../../../apps/bundled/files/src/main";
+import { TAG_ADD_ID } from "../../../apps/bundled/files/src/views/inspector/tags-card";
 
 await installUiFonts();
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "moire-files-ui-"));
@@ -21,6 +22,8 @@ const previousHome = process.env.HOME,
   previousConfig = process.env.XDG_CONFIG_HOME;
 process.env.HOME = fixture;
 process.env.XDG_CONFIG_HOME = path.join(fixture, ".config");
+// The session file clipboard lives in the runtime directory; keep it in the fixture.
+process.env.XDG_RUNTIME_DIR = path.join(fixture, ".run");
 const source = path.join(fixture, "source"),
   destination = path.join(fixture, "destination");
 await fs.mkdir(source);
@@ -28,6 +31,9 @@ await fs.mkdir(destination);
 await fs.writeFile(path.join(source, "note.md"), "Real document preview");
 const root = createShellRoot();
 let actions: ContextMenuAction[] = [];
+/** Menu actions including those in submenus (Sort By ▸, View ▸). */
+const all = (list = actions): ContextMenuAction[] =>
+  list.flatMap((action) => [action, ...(action.submenu ? all(action.submenu) : [])]);
 const tree = (
   <FilesApp
     width={1020}
@@ -45,6 +51,38 @@ const texts = (node: SceneNode): string[] => [
   ...(node.kind === "text" ? [node.text ?? ""] : []),
   ...node.children.flatMap(texts),
 ];
+/** Press the topmost pressable under a visible label (the first such label that has one). */
+const pressText = (label: string) => {
+  const found: Array<{ x: number; y: number }> = [];
+  const offset = (value: SceneNode["translateY"]) =>
+    typeof value === "number" ? value : (value?.get() ?? 0);
+  const find = (node: SceneNode, x: number, y: number) => {
+    x += node.x + offset(node.translateX);
+    y += node.y + offset(node.translateY);
+    if (node.kind === "text" && node.text === label) found.push({ x, y });
+    for (const child of node.children) find(child, x, y);
+  };
+  find(root.container, 0, 0);
+  assert.ok(found.length, `${label} is visible`);
+  const hits = collectHits(root.container);
+  for (const at of found) {
+    const hit = hits
+      .filter(
+        (hit) =>
+          hit.onPress &&
+          at.x >= hit.x &&
+          at.x < hit.x + hit.width &&
+          at.y >= hit.y &&
+          at.y < hit.y + hit.height,
+      )
+      .at(-1);
+    if (!hit) continue;
+    hit.onPress!({ x: at.x, y: at.y, localX: at.x - hit.x, localY: at.y - hit.y });
+    refresh();
+    return;
+  }
+  assert.fail(`${label} is pressable`);
+};
 const wait = async (condition: () => boolean) => {
   for (let attempt = 0; attempt < 200 && !condition(); attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -88,7 +126,7 @@ function button(label: string) {
 }
 try {
   refresh();
-  await wait(() => texts(root.container).includes("1 item"));
+  await wait(() => texts(root.container).includes("note.md"));
   const backgroundMenu = () => {
     const background = collectHits(root.container).find(
       (hit) => !hit.focusable && hit.onContextMenu,
@@ -100,13 +138,13 @@ try {
   backgroundMenu();
   for (const id of ["new-folder", "new-file", "paste", "undo", "sort-name", "sort-modified"])
     assert.ok(
-      actions.some((action) => action.id === id),
+      all().some((action) => action.id === id),
       `Folder menu must retain ${id}`,
     );
-  assert.equal(actions.find((action) => action.id === "paste")?.disabled, true);
-  assert.equal(actions.find((action) => action.id === "undo")?.disabled, true);
+  assert.equal(all().find((action) => action.id === "paste")?.disabled, true);
+  assert.equal(all().find((action) => action.id === "undo")?.disabled, true);
   for (const id of ["copy", "cut", "rename", "trash"])
-    assert.ok(!actions.some((action) => action.id === id), `Folder background has no ${id} target`);
+    assert.ok(!all().some((action) => action.id === id), `Folder background has no ${id} target`);
   const file = collectHits(root.container).find(
     (hit) => hit.focusId === `file:${path.join(source, "note.md")}`,
   );
@@ -116,19 +154,23 @@ try {
   const item = collectHits(root.container).find((hit) => hit.focusId === file.focusId);
   assert.ok(item?.onContextMenu);
   item.onContextMenu({ x: item.x + 2, y: item.y + 2, localX: 2, localY: 2 });
-  for (const id of ["copy", "cut", "rename", "trash", "copy-to", "move-to", "inspect"]) {
-    const action = actions.find((action) => action.id === id);
+  for (const id of ["copy", "cut", "rename", "trash", "copy-to", "move-to", "properties"]) {
+    const action = all().find((action) => action.id === id);
     assert.ok(action, `Single-item menu must contain ${id}`);
     assert.equal(action.disabled ?? false, false, `Single-item menu must offer ${id}`);
   }
-  actions.find((action) => action.id === "copy")?.onPress();
+  all()
+    .find((action) => action.id === "copy")
+    ?.onPress?.();
   refresh();
   backgroundMenu();
   assert.equal(
-    actions.find((action) => action.id === "paste")?.disabled,
+    all().find((action) => action.id === "paste")?.disabled,
     false,
     "Copying an item enables Paste in the folder menu",
   );
+  // Two presses within 400ms are a double-click, which opens the file instead.
+  await new Promise((resolve) => setTimeout(resolve, 450));
   collectHits(root.container)
     .find((hit) => hit.focusId === file.focusId)
     ?.onPress?.({
@@ -138,27 +180,79 @@ try {
       localY: 2,
     });
   refresh();
-  await wait(() => texts(root.container).includes("Real document preview"));
-  assert.ok(texts(root.container).includes("Permissions"));
-  const fields = collectHits(root.container).filter((hit) =>
-    hit.focusId?.startsWith("text-field:"),
-  );
-  const tagField = fields[fields.length - 1];
-  assert.ok(tagField?.onKeyDown);
-  tagField.onFocusChange?.(true);
-  refresh();
+  // The inspector is the Properties sheet, opened from the item's menu.
   collectHits(root.container)
-    .find((hit) => hit.focusId === tagField.focusId)
-    ?.onKeyDown?.({ ...key, text: "work, ideas" });
+    .find((hit) => hit.focusId === file.focusId)
+    ?.onContextMenu?.({ x: file.x + 2, y: file.y + 2, localX: 2, localY: 2 });
+  all()
+    .find((action) => action.id === "properties")
+    ?.onPress?.();
   refresh();
-  button("Add tags");
-  await wait(() => texts(root.container).includes("work · 1"));
+  await wait(() => texts(root.container).includes("Real document preview"));
+  // Permissions: the Sharing & permissions card gives owner, group and everyone an access control.
+  await wait(() => texts(root.container).includes("Sharing & permissions"));
+  for (const label of ["You", "Group", "Everyone", "Allow running as a program"])
+    assert.ok(texts(root.container).includes(label), `Sharing & permissions shows ${label}`);
+  for (const id of ["owner:read", "owner:write", "group:none", "group:write", "others:read"])
+    assert.ok(
+      collectHits(root.container).some((hit) => hit.focusId?.endsWith(id)),
+      `Sharing & permissions offers ${id}`,
+    );
+  assert.ok(
+    collectHits(root.container).some((hit) => hit.focusId === "inspector:executable"),
+    "Sharing & permissions offers the executable toggle",
+  );
+  /** Press the control with this focus id. */
+  const pressId = (focusId: string) => {
+    const hit = collectHits(root.container).find((hit) => hit.focusId === focusId);
+    assert.ok(hit?.onPress, `${focusId} is pressable`);
+    hit.onPress({ x: hit.x + 2, y: hit.y + 2, localX: 2, localY: 2 });
+    refresh();
+  };
+  // Tags: the "Add tag" chip turns into a field; Enter adds what was typed, and the chip
+  // comes back for the next one.
+  for (const tag of ["work", "ideas"]) {
+    await wait(() => collectHits(root.container).some((hit) => hit.focusId === TAG_ADD_ID));
+    pressId(TAG_ADD_ID);
+    await wait(() =>
+      collectHits(root.container).some((hit) => hit.focusId === `${TAG_ADD_ID}:field`),
+    );
+    const tagField = collectHits(root.container).find(
+      (hit) => hit.focusId === `${TAG_ADD_ID}:field`,
+    );
+    assert.ok(tagField?.onKeyDown);
+    tagField.onFocusChange?.(true);
+    refresh();
+    collectHits(root.container)
+      .find((hit) => hit.focusId === tagField.focusId)
+      ?.onKeyDown?.({ ...key, text: tag });
+    refresh();
+    collectHits(root.container)
+      .find((hit) => hit.focusId === tagField.focusId)
+      ?.onKeyDown?.({ ...key, code: 28, key: "Enter" });
+    refresh();
+    await wait(() =>
+      collectHits(root.container).some((hit) => hit.focusId === `inspector:tag:${tag}`),
+    );
+  }
   const stored = JSON.parse(
     await fs.readFile(path.join(fixture, ".config/moire/files-tags.json"), "utf8"),
   );
   assert.deepEqual(stored.records[0].tags, ["work", "ideas"]);
-  button("Organise selection…");
-  actions.find((action) => action.id === "copy-to")?.onPress?.();
+  // Organising the selection: the action row's ⋯ is the item's own menu, with Copy to….
+  const organise = () => {
+    actions = [];
+    pressId("inspector:more");
+    for (const id of ["copy-to", "move-to", "rename", "trash"])
+      assert.ok(
+        all().some((action) => action.id === id && !action.disabled),
+        `the inspector's ⋯ menu offers ${id}`,
+      );
+  };
+  organise();
+  all()
+    .find((action) => action.id === "copy-to")
+    ?.onPress?.();
   refresh();
   const location = collectHits(root.container).find(
     (hit) => hit.autoFocus && hit.focusId?.startsWith("text-field:"),
@@ -171,14 +265,17 @@ try {
     ?.onKeyDown?.({ ...key, text: destination });
   refresh();
   button("Copy here");
-  await wait(() => texts(root.container).includes("Copying files · Complete"));
+  await wait(() => texts(root.container).includes("Copy complete"));
   assert.equal(
     await fs.readFile(path.join(destination, "note.md"), "utf8"),
     "Real document preview",
   );
-  button("Done");
-  button("Organise selection…");
-  actions.find((action) => action.id === "copy-to")?.onPress?.();
+  pressText("Done");
+  await wait(() => !texts(root.container).includes("Copy complete"));
+  organise();
+  all()
+    .find((action) => action.id === "copy-to")
+    ?.onPress?.();
   refresh();
   const nextLocation = collectHits(root.container).find(
     (hit) => hit.autoFocus && hit.focusId?.startsWith("text-field:"),
@@ -191,17 +288,25 @@ try {
     ?.onKeyDown?.({ ...key, text: destination });
   refresh();
   button("Copy here");
-  await wait(() => texts(root.container).includes("An item with this name already exists"));
+  await wait(() => texts(root.container).includes("This item already exists"));
   button("Keep both");
-  await wait(() => texts(root.container).includes("Copying files · Complete"));
+  await wait(() => texts(root.container).includes("Copy complete"));
   assert.equal(
     await fs.readFile(path.join(destination, "note (2).md"), "utf8"),
     "Real document preview",
   );
-  button("Done");
-  assert.ok(texts(root.container).includes("work · 3"));
+  pressText("Done");
+  await wait(() => !texts(root.container).includes("Copy complete"));
+  // Tags follow copies: the original and both copies carry "work".
+  const tagged = async () =>
+    JSON.parse(
+      await fs.readFile(path.join(fixture, ".config/moire/files-tags.json"), "utf8"),
+    ).records.filter((record: { tags: string[] }) => record.tags.includes("work")).length;
+  for (let attempt = 0; attempt < 200 && (await tagged()) < 3; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(await tagged(), 3, "the copies keep their tags");
   console.log(
-    "[files/ui] actual inspector metadata/preview, persistent tags, organisation dialog, transfer completion, keep-both and repeated flow passed",
+    "[files/ui] actual Properties metadata/preview, persistent tags, organisation dialog, transfer completion, keep-both and repeated flow passed",
   );
   renderShell(root, null);
   const liveBackend = new HeadlessPlatform();
@@ -267,13 +372,13 @@ try {
   liveWindow.tick();
   send(68, "F10", undefined, false, true);
   assert.ok(
-    actions.some((action) => action.id === "new-file"),
+    all().some((action) => action.id === "new-file"),
     "Shift+F10 opens folder actions",
   );
   send(30, "a", undefined, true);
   send(139, "ContextMenu");
   assert.equal(
-    actions.find((action) => action.id === "rename")?.disabled,
+    all().find((action) => action.id === "rename")?.disabled,
     false,
     "Menu key opens actions for the single selection",
   );
@@ -284,12 +389,12 @@ try {
   send(30, "a", undefined, true);
   send(68, "F10", undefined, false, true);
   assert.equal(
-    actions.find((action) => action.id === "rename")?.disabled,
+    all().find((action) => action.id === "rename")?.disabled,
     true,
     "Multiple selection disables single-item Rename",
   );
   assert.equal(
-    actions.find((action) => action.id === "copy")?.disabled,
+    all().find((action) => action.id === "copy")?.disabled,
     false,
     "Multiple selection retains Copy",
   );

@@ -1,191 +1,204 @@
-import React, { useEffect, useState, type ReactNode } from "react";
+import path from "node:path";
+import React, { useCallback, useReducer, useState, type ReactNode } from "react";
 import {
   Button,
-  Row,
-  TextArea,
-  ImageWidget,
-  Label,
+  ShortcutManager,
   getUiScaleFactor,
+  usePalette,
+  type WindowActions,
   type WindowSize,
 } from "@moire/ui";
 import {
   AppFrame,
-  FileHeader,
+  FileChooser,
+  OpenButton,
+  OpenFileState,
+  TitleActions,
+  appFrameBody,
   errorText,
   initialFile,
+  localPath,
+  rememberRecentFile,
   runApp,
   startMain,
-  type Preview,
 } from "@moire/app-tools";
-import { fontPreview } from "./backend";
-export function FontViewerApp(props: WindowSize & { initialPath?: string }): ReactNode {
+import { useInstalledCheck } from "./hooks";
+import { installFont } from "./install";
+import { FONT_EXTENSIONS, initialState, installMessage, reduce, type Face } from "./model";
+import { FontToolbar } from "./views/font-toolbar";
+import { Specimen } from "./views/specimen";
+import { TypeTester } from "./views/type-tester";
+
+const APP_ID = "org.moire.FontViewer";
+const TITLE = "Font Viewer";
+const INSTALL_BUTTON_WIDTH = 92;
+
+export function FontViewerApp(
+  props: WindowSize & { initialPath?: string; window?: WindowActions | null },
+): ReactNode {
   const ui = getUiScaleFactor();
-  const [file, setFile] = useState(props.initialPath ?? ""),
-    [sample, setSample] = useState("The quick brown fox jumps over the lazy dog. 0123456789"),
-    [renderedSample, setRenderedSample] = useState(
-      "The quick brown fox jumps over the lazy dog. 0123456789",
-    ),
-    [size, setSize] = useState(36),
-    [page, setPage] = useState(0),
-    [pageCount, setPageCount] = useState(0),
-    [preview, setPreview] = useState<Preview | null>(null),
-    [status, setStatus] = useState("Open a TTF, OTF or TTC font."),
-    [revision, setRevision] = useState(0);
-  const viewportWidth = Math.min(4096, Math.max(160, Math.floor(props.width - 24 * ui))),
-    viewportHeight = Math.min(2048, Math.max(160, Math.floor(props.height - 278 * ui)));
-  useEffect(() => {
-    if (!file) {
-      setPreview(null);
-      setPageCount(0);
-      setStatus("Open a TTF, OTF or TTC font.");
-      return;
+  const pal = usePalette();
+  const [state, dispatch] = useReducer(reduce, props.initialPath, initialState);
+  const [choosing, setChoosing] = useState(false);
+  useInstalledCheck(state, dispatch);
+  const file = state.kind === "open" ? state.file : "";
+  const body = appFrameBody({ height: props.height, title: TITLE, controls: !!file });
+
+  const open = (value: string) => {
+    try {
+      dispatch({ type: "open", file: localPath(value) });
+    } catch (error) {
+      dispatch({ type: "close", error: errorText(error) });
     }
-    let alive = true,
-      loaded: Preview | null = null;
-    const controller = new AbortController();
-    setPreview(null);
-    setStatus("Rendering selected font…");
-    void fontPreview(file, renderedSample, size, controller.signal, {
-      width: viewportWidth,
-      height: viewportHeight,
-      page,
-    }).then(
-      (value) => {
-        loaded = value.preview;
-        if (alive) {
-          setPreview(value.preview);
-          setPage(value.page);
-          setPageCount(value.pageCount);
-          setStatus(`${value.family} · ${value.style} · ${size} px · first face in collections`);
-        } else void value.preview.dispose();
-      },
-      (error) => {
-        if (alive) {
-          setPageCount(0);
-          setStatus(errorText(error));
-        }
-      },
-    );
-    return () => {
-      alive = false;
-      controller.abort();
-      if (loaded) void loaded.dispose();
-    };
-  }, [file, size, revision, renderedSample, page, viewportWidth, viewportHeight]);
+  };
+  const onFace = useCallback(
+    (face: Face) => {
+      dispatch({ type: "face", face });
+      rememberRecentFile(APP_ID, file);
+    },
+    [file],
+  );
+  const onError = useCallback((message: string) => dispatch({ type: "error", message }), []);
+  const install = async () => {
+    dispatch({ type: "install-state", file, install: { kind: "installing" } });
+    try {
+      const result = await installFont(file);
+      dispatch({ type: "install-state", file, install: { kind: "installed", result } });
+    } catch (error) {
+      const message = errorText(error);
+      dispatch({ type: "install-state", file, install: { kind: "failed", message } });
+    }
+  };
+
+  const status =
+    state.kind !== "open"
+      ? "Open a TTF, OTF or TTC font"
+      : state.error ||
+        installMessage(state.install) ||
+        (!state.face
+          ? "Rendering selected font…"
+          : state.mode === "tester"
+            ? `${state.face.family} · ${state.face.style} · ${state.tester.rendered.size} px · first face in collections`
+            : `${state.face.family} · ${state.face.style}`);
+  const installKind = state.kind === "open" ? state.install.kind : "unknown";
+
   return (
-    <AppFrame
-      {...props}
-      status={status}
-      header={
-        <FileHeader
-          key={file}
-          width={props.width}
-          value={file}
-          onOpen={(value) => {
-            setPage(0);
-            setFile(value);
-            setRevision((revision) => revision + 1);
-          }}
-        />
-      }
-      controls={
-        <Row width={props.width} height={44 * ui} padding={6 * ui} gap={6 * ui}>
-          <Button
-            height={32 * ui}
-            width={44 * ui}
-            label="−"
-            disabled={size <= 12}
-            onPress={() => {
-              setPage(0);
-              setSize((value) => value - 4);
-            }}
-          />
-          <Label width={50 * ui} height={30 * ui} text={`${size} px`} />
-          <Button
-            height={32 * ui}
-            width={44 * ui}
-            label="+"
-            disabled={size >= 96}
-            onPress={() => {
-              setPage(0);
-              setSize((value) => value + 4);
-            }}
-          />
-          <Button
-            height={32 * ui}
-            width={76 * ui}
-            label="Preview"
-            onPress={() => {
-              setPage(0);
-              setRenderedSample(sample);
-              setRevision((value) => value + 1);
-            }}
-          />
-        </Row>
-      }
+    <ShortcutManager
+      width={props.width}
+      height={props.height}
+      enabled={!choosing}
+      shortcuts={[{ id: "open", key: "o", ctrl: true, onInvoke: () => setChoosing(true) }]}
     >
-      <TextArea
-        x={12 * ui}
-        y={8 * ui}
-        width={props.width - 24 * ui}
-        height={94 * ui}
-        value={sample}
-        onChange={setSample}
-        placeholder="Sample text in the selected font"
-      />
-      <Row
-        x={12 * ui}
-        y={108 * ui}
-        width={Math.max(1, props.width - 24 * ui)}
-        height={32 * ui}
-        gap={8 * ui}
+      <AppFrame
+        {...props}
+        title={TITLE}
+        icon="font"
+        subtitle={
+          state.kind === "open"
+            ? state.face
+              ? `${state.face.family} ${state.face.style}`
+              : path.basename(file)
+            : undefined
+        }
+        status={status}
+        actions={
+          state.kind === "open" ? (
+            <TitleActions>
+              <Button
+                width={INSTALL_BUTTON_WIDTH * ui}
+                height={32 * ui}
+                size="small"
+                variant="primary"
+                focusId="font:install"
+                label={
+                  installKind === "installed"
+                    ? "Installed"
+                    : installKind === "installing"
+                      ? "Installing…"
+                      : "Install"
+                }
+                disabled={installKind !== "not-installed" && installKind !== "failed"}
+                onPress={() => void install()}
+              />
+              <OpenButton focusId="font:open" onPress={() => setChoosing(true)} />
+            </TitleActions>
+          ) : null
+        }
+        controls={
+          state.kind === "open" ? (
+            <FontToolbar
+              width={props.width}
+              mode={state.mode}
+              size={state.tester.rendered.size}
+              onMode={(mode) => dispatch({ type: "mode", mode })}
+              onResize={(by) => dispatch({ type: "resize", by })}
+              onPreview={() => dispatch({ type: "preview" })}
+            />
+          ) : undefined
+        }
       >
-        <Button
-          minWidth={82 * ui}
-          height={32 * ui}
-          label="Previous"
-          focusId="font-page-previous"
-          disabled={pageCount === 0 || page <= 0}
-          onPress={() => setPage((value) => value - 1)}
+        {state.kind !== "open" ? (
+          <OpenFileState
+            width={props.width}
+            height={body.height}
+            appId={APP_ID}
+            icon="font"
+            title="Open a font"
+            message="Preview TrueType, OpenType and collection fonts, and install them for your apps."
+            placeholder="Path to a .ttf, .otf or .ttc file"
+            error={state.error}
+            onBrowse={() => setChoosing(true)}
+            onOpen={open}
+          />
+        ) : state.mode === "specimen" ? (
+          <Specimen
+            key={`${file}:${state.attempt}`}
+            file={file}
+            width={props.width}
+            height={body.height}
+            color={pal.text}
+            onFace={onFace}
+            onError={onError}
+          />
+        ) : (
+          <TypeTester
+            key={`${file}:${state.attempt}`}
+            file={file}
+            width={props.width}
+            height={body.height}
+            sample={state.tester.draft}
+            onSample={(sample) => dispatch({ type: "draft", sample })}
+            rendered={state.tester.rendered}
+            onPage={(page) => dispatch({ type: "page", page })}
+            pageCount={state.tester.pageCount}
+            onPageCount={(count) => dispatch({ type: "page-count", count })}
+            onFace={onFace}
+            onError={onError}
+          />
+        )}
+      </AppFrame>
+      {choosing ? (
+        <FileChooser
+          width={props.width}
+          height={props.height}
+          mode="open"
+          title="Open a font"
+          appId={APP_ID}
+          accept={FONT_EXTENSIONS}
+          directory={file ? path.dirname(file) : undefined}
+          onChoose={(chosen) => {
+            setChoosing(false);
+            open(chosen);
+          }}
+          onCancel={() => setChoosing(false)}
         />
-        <Label
-          width={110 * ui}
-          height={32 * ui}
-          text={pageCount ? `Page ${page + 1} of ${pageCount}` : "No preview"}
-        />
-        <Button
-          minWidth={58 * ui}
-          height={32 * ui}
-          label="Next"
-          focusId="font-page-next"
-          disabled={pageCount === 0 || page + 1 >= pageCount}
-          onPress={() => setPage((value) => value + 1)}
-        />
-      </Row>
-      {preview ? (
-        <ImageWidget
-          x={10 * ui}
-          y={152 * ui}
-          width={props.width - 20 * ui}
-          height={Math.max(1, props.height - 278 * ui)}
-          bitmap={preview.bitmap}
-          fit="contain"
-        />
-      ) : (
-        <Label
-          x={20 * ui}
-          y={152 * ui}
-          width={props.width - 40 * ui}
-          height={Math.max(1, props.height - 278 * ui)}
-          text={status}
-          wrap
-        />
-      )}
-    </AppFrame>
+      ) : null}
+    </ShortcutManager>
   );
 }
+
 startMain(import.meta.url, () =>
-  runApp("Font Viewer", "org.moire.FontViewer", (size) => (
-    <FontViewerApp {...size} initialPath={initialFile()} />
+  runApp(TITLE, APP_ID, (size, window) => (
+    <FontViewerApp {...size} window={window} initialPath={initialFile()} />
   )),
 );

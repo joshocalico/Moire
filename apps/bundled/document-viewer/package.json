@@ -3,10 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#document-viewer/*": "./src/*.ts"
+  },
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../../..",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/smoke.ts && tsx src/model.smoke.ts && tsx src/workflow.smoke.tsx"
   },
   "dependencies": {
     "@moire/app-tools": "workspace:*",

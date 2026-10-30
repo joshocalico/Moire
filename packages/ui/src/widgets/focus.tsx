@@ -54,11 +54,14 @@ export type Shortcut = {
   platformModifier?: boolean;
   allowRepeat?: boolean;
   disabled?: boolean;
-  onInvoke: () => void;
+  /** Receives the key event, whose `targetBounds` locate the focused control (to anchor a menu). */
+  onInvoke: (event: HitKeyEvent) => void;
 };
 
 export type ShortcutManagerProps = FlexItemProps & {
   shortcuts: readonly Shortcut[];
+  /** Keys no shortcut matched, still ahead of the focused widget; return true to consume. */
+  onKeyDown?: (event: HitKeyEvent) => boolean | void;
   enabled?: boolean;
   children?: ReactNode;
 };
@@ -98,8 +101,8 @@ export function ShortcutManager(props: ShortcutManagerProps): ReactNode {
               const shortcut = props.shortcuts.find((candidate) =>
                 matchesShortcut(candidate, event),
               );
-              if (!shortcut) return false;
-              shortcut.onInvoke();
+              if (!shortcut) return props.onKeyDown?.(event) === true;
+              shortcut.onInvoke(event);
               return true;
             }
       }

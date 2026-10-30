@@ -22,6 +22,8 @@ const previous = {
 };
 process.env.HOME = fixture;
 process.env.XDG_CONFIG_HOME = path.join(fixture, ".config");
+// The session file clipboard lives in the runtime directory; keep it in the fixture.
+process.env.XDG_RUNTIME_DIR = path.join(fixture, ".run");
 process.env.XDG_DATA_HOME = path.join(fixture, ".local", "share");
 const output = process.env.MOIRE_CAPTURE_DIR;
 const backend = new HeadlessPlatform();

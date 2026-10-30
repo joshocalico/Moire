@@ -6,6 +6,7 @@ import { setTextRenderer } from "@moire/react-host";
 import {
   getFontEngine,
   getFontEngineSync,
+  uiFontPath,
   type FontFamily,
   type FontWeight,
   type TextStyle,
@@ -30,6 +31,7 @@ function mapWeight(w?: string): FontWeight {
 function mapFamily(f?: string): FontFamily {
   if (f === "mono" || f === "monospace") return "mono";
   if (f === "serif") return "serif";
+  if (f === "display") return "display";
   return "sans";
 }
 
@@ -39,6 +41,7 @@ function toStyle(style?: {
   fontSize?: number;
   fontWeight?: string;
   fontFamily?: string;
+  letterSpacing?: number;
 }): TextStyle {
   const local = style?.scale ?? 1;
   // Quantize so glyph cache stays bounded across uiScale tweaks.
@@ -49,6 +52,7 @@ function toStyle(style?: {
     size,
     weight: mapWeight(style?.fontWeight),
     family: mapFamily(style?.fontFamily),
+    letterSpacing: (style?.letterSpacing ?? 0) * uiScaleFactor,
   };
 }
 
@@ -84,3 +88,5 @@ export {
   type FontWeight,
   type TextStyle,
 } from "./engine";
+
+export { uiFontPath };

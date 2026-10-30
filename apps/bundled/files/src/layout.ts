@@ -1,41 +1,26 @@
-/** Keep every toolbar control inside its allocation as the window narrows. */
-export function filesLayout(width: number, height: number, scale: number) {
-  const px = (value: number) => Math.round(value * scale);
-  const compact = width < px(760);
-  const tiny = width < px(360);
-  const btn = px(tiny ? 28 : 36);
-  const pad = px(12);
-  const gap = px(6);
-  const navWidth = btn * 3 + gap * 2;
-  const viewsWidth = btn * 2 + gap;
-  const viewsX = width - pad - viewsWidth;
-  const afterNav = pad + navWidth + px(8);
-  const searchWidth = tiny ? width - pad * 2 : compact ? viewsX - px(8) - afterNav : px(210);
-  const searchX = tiny ? pad : compact ? afterNav : viewsX - px(8) - searchWidth;
-  const searchY = tiny ? px(52) : px(12);
-  const pathY = compact ? px(tiny ? 92 : 56) : px(12);
-  const pathX = compact ? pad : afterNav;
-  const pathWidth = compact ? width - pad * 2 : searchX - px(8) - pathX;
-  const toolbarH = px(tiny ? 140 : compact ? 104 : 60);
-  const statusH = px(30);
-  const sideW = width < px(480) ? 0 : px(width < px(760) ? 168 : 196);
-  const inspectorW = width >= px(960) ? px(240) : 0;
+/** The window's fixed geometry: rail, top bar, tab strip and the page's margins, scaled. */
+const RAIL_WIDTH = 64;
+const RAIL_EXPANDED_WIDTH = 200;
+const TOP_BAR_HEIGHT = 52;
+const TAB_STRIP_HEIGHT = 36;
+const PAGE_PADDING = 24;
+/** Below this window height the folder page opens with its header already collapsed. */
+const COMPACT_HEIGHT = 700;
+
+export function filesLayout(width: number, height: number, ui: number, railExpanded = false) {
+  const px = (value: number) => Math.round(value * ui);
+  const railW = px(railExpanded ? RAIL_EXPANDED_WIDTH : RAIL_WIDTH);
+  const mainW = Math.max(1, width - railW);
+  const pad = px(PAGE_PADDING);
   return {
-    btn,
+    railW,
+    mainW,
+    topH: px(TOP_BAR_HEIGHT),
+    stripH: px(TAB_STRIP_HEIGHT),
     pad,
-    gap,
-    viewsX,
-    searchX,
-    searchY,
-    searchWidth,
-    pathX,
-    pathY,
-    pathWidth,
-    toolbarH,
-    statusH,
-    sideW,
-    inspectorW,
-    bodyH: Math.max(1, height - toolbarH - statusH - 1),
-    contentW: Math.max(1, width - sideW - (sideW > 0 ? 1 : 0) - inspectorW),
+    contentW: Math.max(1, mainW - pad * 2),
+    compact: height < px(COMPACT_HEIGHT),
   };
 }
+
+export type FilesLayout = ReturnType<typeof filesLayout>;

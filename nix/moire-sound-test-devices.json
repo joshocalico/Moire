@@ -1,0 +1,27 @@
+{
+  "context.objects": [
+    {
+      "factory": "adapter",
+      "args": {
+        "factory.name": "support.null-audio-sink",
+        "node.name": "moire_test_output",
+        "node.description": "Moire Test Output",
+        "media.class": "Audio/Sink",
+        "audio.position": ["FL", "FR"],
+        "monitor.channel-volumes": true,
+        "object.linger": true
+      }
+    },
+    {
+      "factory": "adapter",
+      "args": {
+        "factory.name": "support.null-audio-sink",
+        "node.name": "moire_test_input",
+        "node.description": "Moire Test Input",
+        "media.class": "Audio/Source",
+        "audio.position": ["FL", "FR"],
+        "object.linger": true
+      }
+    }
+  ]
+}

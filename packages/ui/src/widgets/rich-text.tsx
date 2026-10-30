@@ -2,6 +2,7 @@ import React, { type ReactNode } from "react";
 import { Group, Rect, Text, measureTextBounds } from "@moire/react-host";
 import { ScrollArea } from "./scroll";
 import { useWidgetTheme } from "#ui/widget-theme";
+import { getUiScaleFactor } from "#ui/font";
 
 export type RichTextRun = {
   text: string;
@@ -26,6 +27,8 @@ export type RichTextViewProps = {
   lineHeight?: number;
   padding?: number;
   lineNumbers?: boolean;
+  /** Number of the first line, when the lines are an excerpt. */
+  firstLine?: number;
   fill?: number;
   radius?: number;
   stroke?: number;
@@ -38,10 +41,19 @@ export type RichTextViewProps = {
 /** Styled text runs with one shared renderer-native layout and scroll model. */
 export function RichTextView(props: RichTextViewProps): ReactNode {
   const pal = useWidgetTheme().foundations.palette;
+  const ui = getUiScaleFactor();
   const fontSize = props.fontSize ?? 12;
-  const lineHeight = props.lineHeight ?? Math.ceil(fontSize * 1.55);
-  const padding = props.padding ?? 10;
-  const gutter = props.lineNumbers ? 38 : 0;
+  // Text is drawn at fontSize × the UI scale, so default metrics scale with it.
+  const lineHeight = props.lineHeight ?? Math.ceil(fontSize * ui * 1.55);
+  const padding = props.padding ?? Math.round(10 * ui);
+  const firstLine = props.firstLine ?? 1;
+  const lastNumber = String(firstLine + props.lines.length - 1);
+  const gutter = props.lineNumbers
+    ? measureTextBounds("0".repeat(Math.max(2, lastNumber.length)), {
+        fontSize,
+        fontFamily: "mono",
+      }).width + Math.round(14 * ui)
+    : 0;
   const contentHeight = Math.max(props.height, padding * 2 + props.lines.length * lineHeight);
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height} clip>
@@ -76,8 +88,8 @@ export function RichTextView(props: RichTextViewProps): ReactNode {
                 <Text
                   x={padding}
                   y={0}
-                  text={String(lineIndex + 1).padStart(2, " ")}
-                  color={0xff59636f}
+                  text={String(firstLine + lineIndex).padStart(Math.max(2, lastNumber.length), " ")}
+                  color={pal.muted}
                   fontSize={fontSize}
                   fontFamily="mono"
                 />

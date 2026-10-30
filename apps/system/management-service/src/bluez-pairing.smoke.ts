@@ -13,7 +13,7 @@ import {
   type BluetoothAdapter,
   type DesktopBluetooth,
 } from "@moire/system-management/bluetooth-status";
-import { type AudioStatusAdapter } from "@moire/prefs";
+import { type AudioStatusAdapter } from "@moire/audio";
 import { WIFI_UNAVAILABLE, type WifiAdapter } from "@moire/system-management/network-status";
 import { BATTERY_UNAVAILABLE, type BatteryAdapter } from "@moire/system-management/battery-status";
 
@@ -838,6 +838,7 @@ try {
       dispose: async () => {},
     };
     const controls = await attachDesktopControls(server, {
+      alertSound: () => {},
       audio,
       wifi,
       battery,
@@ -1256,6 +1257,7 @@ try {
       pollMs: 15,
     });
     const controls = await attachDesktopControls(server, {
+      alertSound: () => {},
       audio,
       wifi,
       battery,

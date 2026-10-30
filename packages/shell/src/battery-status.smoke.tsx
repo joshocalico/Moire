@@ -265,7 +265,10 @@ try {
     const root = createShellRoot();
     const props = { screenW: 1000, screenH: 800, status: state(battery), onControlsClick: noop };
     renderShell(root, <Panel {...props} />);
-    const images = all(root.container).filter((n) => n.kind === "image");
+    // Status glyphs live in the system-controls button; brand and Apps artwork are elsewhere.
+    const controls = all(root.container).find((n) => n.focusId === "panel:controls");
+    assert.ok(controls?.parent);
+    const images = all(controls.parent).filter((n) => n.kind === "image");
     assert.equal(
       images.length,
       batteryPresentation(battery).supported ? 2 : 1,

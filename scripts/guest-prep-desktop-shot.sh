@@ -20,8 +20,8 @@ EOF
 # Kill overlapping apps for a clear desktop shot
 pkill -u moire -x nautilus 2>/dev/null || true
 pkill -u moire -x foot 2>/dev/null || true
-pkill -u moire -f '@moire/settings' 2>/dev/null || true
+pkill -u moire -f '@moire/settings|apps/core/settings/src/main.tsx' 2>/dev/null || true
 pkill -u moire -f '@moire/files' 2>/dev/null || true
-pkill -u moire -f 'filter @moire/files' 2>/dev/null || true
+pkill -u moire -f 'filter @moire/files|apps/bundled/files/src/main.tsx' 2>/dev/null || true
 sleep 1
 echo done

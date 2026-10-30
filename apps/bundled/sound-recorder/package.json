@@ -6,10 +6,11 @@
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../../..",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/model.smoke.ts && tsx src/smoke.ts && tsx src/close-guard.smoke.tsx && tsx src/workflow.smoke.tsx"
   },
   "dependencies": {
     "@moire/app-tools": "workspace:*",
+    "@moire/audio": "workspace:*",
     "@moire/ui": "workspace:*",
     "react": "^19.0.0"
   },

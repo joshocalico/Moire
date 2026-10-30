@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { Window, installUiFonts, type WindowSize } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
+import { NOTE_ACTIONS, type NoteAction } from "./model";
 export async function harness(
   render: (size: WindowSize, window: Window) => ReactNode,
   width = 800,
@@ -104,12 +105,12 @@ export async function harness(
 /** Invoke the real Notes action menu through its public keyboard shortcut. */
 export async function noteAction(
   app: Awaited<ReturnType<typeof harness>>,
-  index: number,
+  action: NoteAction,
 ): Promise<void> {
   app.key(50, "m", { ctrl: true, shift: true });
   await app.settle();
   app.key(102, "Home");
-  for (let row = 0; row < index; row++) app.key(108, "ArrowDown");
+  for (let row = 0; row < NOTE_ACTIONS.indexOf(action); row++) app.key(108, "ArrowDown");
   app.key(28, "Enter");
   await app.settle();
 }

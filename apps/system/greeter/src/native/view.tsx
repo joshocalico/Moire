@@ -17,16 +17,18 @@ import {
   Surface,
   TextField,
   WidgetThemeProvider,
-  createSilkBackdrop,
   getUiScaleFactor,
+  useAnimatedValue,
   usePalette,
   useWidgetTheme,
   type WindowSize,
   type RetainedMotionAdmission,
 } from "@moire/ui";
+import { Group } from "@moire/react-host";
 import type { AttemptId, PromptId, NativeGreeterController, NativeGreeterState } from "./types";
 import type { LocalLoginUser, LocalUserProvider } from "./local-users";
 import { useUserSelection } from "./user-selection";
+import { nativeGreeterSilk } from "./silk";
 
 export type NativeGreeterActions = Pick<NativeGreeterController, "begin" | "answer" | "cancel">;
 export type NativeGreeterViewProps = WindowSize &
@@ -40,6 +42,8 @@ export type NativeGreeterViewProps = WindowSize &
     onReducedMotionChange?: (value: boolean) => void;
     /** Trusted read-only provider. Omitted only by the preserved username-flow entry. */
     users?: LocalUserProvider;
+    /** The compositor draws the backdrop scene beneath this (transparent) window. */
+    compositorBackdrop?: boolean;
   }>;
 type InputState = Extract<NativeGreeterState, { kind: "ready" | "prompt" }>;
 function identity(state: NativeGreeterState): string {
@@ -492,17 +496,19 @@ export function NativeGreeterView(props: NativeGreeterViewProps): ReactNode {
     setAccessibilityIdentity(null);
   }, [currentIdentity]);
   const silk = useMemo(
-    () =>
-      createSilkBackdrop({
-        variant: "greeter",
-        palette: {
-          background: pal.bg,
-          filament: pal.accent,
-          highlight: pal.muted,
-        },
-      }),
+    () => nativeGreeterSilk({ bg: pal.bg, accent: pal.accent, muted: pal.muted }),
     [pal.bg, pal.accent, pal.muted],
   );
+  // Over the compositor's scene the login rises in while the ribbon pours into the wave.
+  const entering = props.compositorBackdrop === true && props.reducedMotion !== true;
+  const entrance = useAnimatedValue(1, {
+    initialValue: entering ? 0 : 1,
+    duration: 1100,
+    easing: "ease-out",
+  });
+  const entranceRise = {
+    get: () => Math.round((1 - entrance.get()) * 14 * ui),
+  };
   const narrow = props.width < 700 * ui;
   const margin = Math.min(80 * ui, Math.max(20 * ui, props.width * 0.063));
   const centered = !!props.users;
@@ -524,252 +530,264 @@ export function NativeGreeterView(props: NativeGreeterViewProps): ReactNode {
   const popupWidth = Math.min(350 * ui, props.width - 24 * ui),
     popupHeight = (props.onReducedMotionChange ? 260 : 208) * ui;
   return (
-    <Surface width={props.width} height={props.height} fill={pal.surface} clip>
-      <Backdrop
-        width={props.width}
-        height={props.height}
-        source={silk}
-        motionStyle="wave"
-        admission={props.admission}
-        reducedMotion={props.reducedMotion ?? true}
-      />
-      <FocusScope width={props.width} height={props.height} active={interactive} trap={false}>
-        <OverlayHost width={props.width} height={props.height}>
-          <BrandMark
-            x={centered ? (props.width - 112 * ui) / 2 : margin}
-            y={(centered ? (narrow ? 70 : 128) : 60) * ui}
-            width={(centered ? 112 : 210) * ui}
-            height={(centered ? 36 : 66) * ui}
-          />
-          {!narrow && (
-            <Label
-              x={props.width - margin - (centered ? 140 : 240) * ui}
-              y={(centered ? 40 : 65) * ui}
-              width={(centered ? 140 : 240) * ui}
-              height={(centered ? 28 : 40) * ui}
-              horizontalAlign={centered ? "end" : "start"}
-              text={new Intl.DateTimeFormat(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-              }).format(props.now ?? new Date())}
-              fontSize={centered ? 18 : 27}
-              color={centered ? pal.muted : pal.text}
+    <Surface
+      width={props.width}
+      height={props.height}
+      // Transparent over the compositor's scene; otherwise the greeter owns its ground.
+      fill={props.compositorBackdrop ? 0x00000000 : pal.surface}
+      clip
+    >
+      {!props.compositorBackdrop && (
+        <Backdrop
+          width={props.width}
+          height={props.height}
+          source={silk}
+          motionStyle="wave"
+          admission={props.admission}
+          reducedMotion={props.reducedMotion ?? true}
+        />
+      )}
+      <Group width={props.width} height={props.height} opacity={entrance} translateY={entranceRise}>
+        <FocusScope width={props.width} height={props.height} active={interactive} trap={false}>
+          <OverlayHost width={props.width} height={props.height}>
+            <BrandMark
+              x={centered ? (props.width - 112 * ui) / 2 : margin}
+              y={(centered ? (narrow ? 70 : 128) : 60) * ui}
+              width={(centered ? 112 : 210) * ui}
+              height={(centered ? 36 : 66) * ui}
             />
-          )}
-          <ScrollColumn
-            x={formX}
-            y={formY}
-            width={formWidth}
-            height={Math.max(0, props.height - 74 * ui - formY)}
-            gap={10 * ui}
-            smooth={false}
-            fill={0x00000000}
-          >
-            {centered && picked && (
-              <Surface width={formWidth} height={76 * ui} fill={0}>
-                <Surface x={(formWidth - 76 * ui) / 2} width={76 * ui} height={76 * ui} fill={0}>
-                  <AccountInitial user={picked} size={76 * ui} />
-                </Surface>
-              </Surface>
-            )}
-            <Label
-              width={formWidth}
-              height={centered ? (picked ? 38 : 42) * ui : undefined}
-              horizontalAlign={centered ? "center" : "start"}
-              text={picked ? picked.displayName : props.users ? "Welcome to Moire" : "Sign in"}
-              fontSize={centered ? (picked ? 27 : 28) : narrow ? 26 : 32}
-              fontWeight="medium"
-              wrap
-            />
-            {(!centered || picked) && (
+            {!narrow && (
               <Label
-                width={formWidth}
-                height={centered ? 22 * ui : undefined}
-                horizontalAlign={centered ? "center" : "start"}
-                text={centered ? (picked?.username ?? "") : (props.sessionLabel ?? "Moire Wayland")}
+                x={props.width - margin - (centered ? 140 : 240) * ui}
+                y={(centered ? 40 : 65) * ui}
+                width={(centered ? 140 : 240) * ui}
+                height={(centered ? 28 : 40) * ui}
+                horizontalAlign={centered ? "end" : "start"}
+                text={new Intl.DateTimeFormat(undefined, {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }).format(props.now ?? new Date())}
+                fontSize={centered ? 18 : 27}
                 color={centered ? pal.muted : pal.text}
-                fontSize={centered ? 13 : 16}
-                wrap
               />
             )}
-            {!(centered && passwordPrompt && state.kind === "prompt") && (
+            <ScrollColumn
+              x={formX}
+              y={formY}
+              width={formWidth}
+              height={Math.max(0, props.height - 74 * ui - formY)}
+              gap={10 * ui}
+              smooth={false}
+              fill={0x00000000}
+            >
+              {centered && picked && (
+                <Surface width={formWidth} height={76 * ui} fill={0}>
+                  <Surface x={(formWidth - 76 * ui) / 2} width={76 * ui} height={76 * ui} fill={0}>
+                    <AccountInitial user={picked} size={76 * ui} />
+                  </Surface>
+                </Surface>
+              )}
               <Label
                 width={formWidth}
+                height={centered ? (picked ? 38 : 42) * ui : undefined}
                 horizontalAlign={centered ? "center" : "start"}
-                text={
-                  selection.kind === "loading"
-                    ? "Finding local users…"
-                    : selection.kind === "checking"
-                      ? "Checking account availability…"
-                      : selection.kind === "changing"
-                        ? "Cancelling sign in…"
-                        : selection.kind === "unavailable"
-                          ? "Local users are unavailable. Try again."
-                          : selection.kind === "choosing"
-                            ? selection.message ||
-                              (state.kind === "ready" && state.message !== "Sign in"
-                                ? state.message
-                                : "") ||
-                              (selection.users.length
-                                ? "Choose your account to sign in."
-                                : "No eligible local users are available.")
-                            : picked && state.kind === "prompt" && state.style === "secret"
-                              ? passwordPrompt
-                                ? `Enter your password for ${picked.username}.`
-                                : "Enter the additional authentication response."
-                              : message(state)
-                }
-                fontSize={14}
-                color={highContrast ? pal.text : pal.muted}
+                text={picked ? picked.displayName : props.users ? "Welcome to Moire" : "Sign in"}
+                fontSize={centered ? (picked ? 27 : 28) : narrow ? 26 : 32}
+                fontWeight="medium"
                 wrap
               />
-            )}
-            {selection.kind === "choosing" &&
-              Array.from({ length: Math.ceil(selection.users.length / columns) }, (_, row) => (
-                <Surface key={row} width={formWidth} height={164 * ui} fill={0}>
-                  {selection.users
-                    .slice(row * columns, (row + 1) * columns)
-                    .map((user, index, users) => (
-                      <Surface
-                        key={user.username}
-                        x={
-                          (formWidth - (users.length * 156 + (users.length - 1) * 48) * ui) / 2 +
-                          index * 204 * ui
-                        }
-                        width={156 * ui}
-                        height={164 * ui}
-                        fill={0}
-                      >
-                        <AccountChoice
-                          user={user}
+              {(!centered || picked) && (
+                <Label
+                  width={formWidth}
+                  height={centered ? 22 * ui : undefined}
+                  horizontalAlign={centered ? "center" : "start"}
+                  text={
+                    centered ? (picked?.username ?? "") : (props.sessionLabel ?? "Moire Wayland")
+                  }
+                  color={centered ? pal.muted : pal.text}
+                  fontSize={centered ? 13 : 16}
+                  wrap
+                />
+              )}
+              {!(centered && passwordPrompt && state.kind === "prompt") && (
+                <Label
+                  width={formWidth}
+                  horizontalAlign={centered ? "center" : "start"}
+                  text={
+                    selection.kind === "loading"
+                      ? "Finding local users…"
+                      : selection.kind === "checking"
+                        ? "Checking account availability…"
+                        : selection.kind === "changing"
+                          ? "Cancelling sign in…"
+                          : selection.kind === "unavailable"
+                            ? "Local users are unavailable. Try again."
+                            : selection.kind === "choosing"
+                              ? selection.message ||
+                                (state.kind === "ready" && state.message !== "Sign in"
+                                  ? state.message
+                                  : "") ||
+                                (selection.users.length
+                                  ? "Choose your account to sign in."
+                                  : "No eligible local users are available.")
+                              : picked && state.kind === "prompt" && state.style === "secret"
+                                ? passwordPrompt
+                                  ? `Enter your password for ${picked.username}.`
+                                  : "Enter the additional authentication response."
+                                : message(state)
+                  }
+                  fontSize={14}
+                  color={highContrast ? pal.text : pal.muted}
+                  wrap
+                />
+              )}
+              {selection.kind === "choosing" &&
+                Array.from({ length: Math.ceil(selection.users.length / columns) }, (_, row) => (
+                  <Surface key={row} width={formWidth} height={164 * ui} fill={0}>
+                    {selection.users
+                      .slice(row * columns, (row + 1) * columns)
+                      .map((user, index, users) => (
+                        <Surface
+                          key={user.username}
+                          x={
+                            (formWidth - (users.length * 156 + (users.length - 1) * 48) * ui) / 2 +
+                            index * 204 * ui
+                          }
                           width={156 * ui}
-                          autoFocus={row === 0 && index === 0}
-                          onPress={() => choose(user)}
-                        />
-                      </Surface>
-                    ))}
-                </Surface>
-              ))}
-            {selection.kind === "unavailable" && state.kind === "ready" && (
-              <Button
-                width={formWidth}
-                label="Try again"
-                focusId="native:users-retry"
-                autoFocus
-                onPress={retry}
-              />
-            )}
-            {(selection.kind === "legacy" || selection.kind === "selected") &&
-              (state.kind === "ready" || state.kind === "prompt") && (
-                <Surface width={formWidth} height={(centered ? 146 : 160) * ui} fill={0x00000000}>
-                  <NativeInput
+                          height={164 * ui}
+                          fill={0}
+                        >
+                          <AccountChoice
+                            user={user}
+                            width={156 * ui}
+                            autoFocus={row === 0 && index === 0}
+                            onPress={() => choose(user)}
+                          />
+                        </Surface>
+                      ))}
+                  </Surface>
+                ))}
+              {selection.kind === "unavailable" && state.kind === "ready" && (
+                <Button
+                  width={formWidth}
+                  label="Try again"
+                  focusId="native:users-retry"
+                  autoFocus
+                  onPress={retry}
+                />
+              )}
+              {(selection.kind === "legacy" || selection.kind === "selected") &&
+                (state.kind === "ready" || state.kind === "prompt") && (
+                  <Surface width={formWidth} height={(centered ? 146 : 160) * ui} fill={0x00000000}>
+                    <NativeInput
+                      key={currentIdentity}
+                      width={formWidth}
+                      height={(centered ? 146 : 160) * ui}
+                      state={state}
+                      actions={props.actions}
+                      onChangeUser={selection.kind === "selected" ? changeUser : undefined}
+                      passwordPrompt={passwordPrompt}
+                      isCurrent={() =>
+                        latestState.current === state && latestIdentity.current === currentIdentity
+                      }
+                    />
+                  </Surface>
+                )}
+              {centered && interactive && (
+                <FixedDesktopChoice
+                  key={`desktop:${currentIdentity}`}
+                  width={formWidth}
+                  viewportWidth={props.width}
+                  viewportHeight={props.height}
+                />
+              )}
+              {(selection.kind === "legacy" || selection.kind === "selected") &&
+                state.kind === "authenticating" && (
+                  <WaitingCancel
                     key={currentIdentity}
                     width={formWidth}
-                    height={(centered ? 146 : 160) * ui}
                     state={state}
                     actions={props.actions}
-                    onChangeUser={selection.kind === "selected" ? changeUser : undefined}
-                    passwordPrompt={passwordPrompt}
                     isCurrent={() =>
                       latestState.current === state && latestIdentity.current === currentIdentity
                     }
                   />
-                </Surface>
-              )}
-            {centered && interactive && (
-              <FixedDesktopChoice
-                key={`desktop:${currentIdentity}`}
-                width={formWidth}
-                viewportWidth={props.width}
-                viewportHeight={props.height}
+                )}
+            </ScrollColumn>
+            <Label
+              x={margin}
+              y={props.height - 54 * ui}
+              width={Math.max(0, props.width - margin * 2 - 156 * ui)}
+              height={36 * ui}
+              text={
+                centered
+                  ? (props.sessionLabel ?? "Moire Wayland")
+                  : "Tab to move · Enter to submit · Escape to cancel"
+              }
+              fontSize={11}
+              color={highContrast ? pal.text : pal.muted}
+              wrap
+            />
+            {interactive && (
+              <Button
+                {...accessibility}
+                label="Accessibility"
+                variant="ghost"
+                focusId="native:accessibility"
+                onPress={() => setAccessibilityIdentity(currentIdentity)}
               />
             )}
-            {(selection.kind === "legacy" || selection.kind === "selected") &&
-              state.kind === "authenticating" && (
-                <WaitingCancel
-                  key={currentIdentity}
-                  width={formWidth}
-                  state={state}
-                  actions={props.actions}
-                  isCurrent={() =>
-                    latestState.current === state && latestIdentity.current === currentIdentity
-                  }
-                />
-              )}
-          </ScrollColumn>
-          <Label
-            x={margin}
-            y={props.height - 54 * ui}
-            width={Math.max(0, props.width - margin * 2 - 156 * ui)}
-            height={36 * ui}
-            text={
-              centered
-                ? (props.sessionLabel ?? "Moire Wayland")
-                : "Tab to move · Enter to submit · Escape to cancel"
-            }
-            fontSize={11}
-            color={highContrast ? pal.text : pal.muted}
-            wrap
-          />
-          {interactive && (
-            <Button
-              {...accessibility}
-              label="Accessibility"
-              variant="ghost"
-              focusId="native:accessibility"
-              onPress={() => setAccessibilityIdentity(currentIdentity)}
-            />
-          )}
-          <Popover
-            open={accessibilityIdentity === currentIdentity && interactive}
-            viewportWidth={props.width}
-            viewportHeight={props.height}
-            width={popupWidth}
-            height={popupHeight}
-            anchor={accessibility}
-            placement="top-end"
-            modal
-            onDismiss={() => setAccessibilityIdentity(null)}
-          >
-            <Column width={popupWidth} height={popupHeight} padding={20 * ui} gap={16 * ui}>
-              <Label text="Accessibility" fontSize={18} fontWeight="medium" />
-              <Checkbox
-                label="Stronger status text"
-                checked={highContrast}
-                width={popupWidth - 40 * ui}
-                height={36 * ui}
-                autoFocus
-                onChange={(value) => {
-                  if (latestIdentity.current === currentIdentity) setHighContrast(value);
-                }}
-              />
-              {props.onReducedMotionChange && (
+            <Popover
+              open={accessibilityIdentity === currentIdentity && interactive}
+              viewportWidth={props.width}
+              viewportHeight={props.height}
+              width={popupWidth}
+              height={popupHeight}
+              anchor={accessibility}
+              placement="top-end"
+              modal
+              onDismiss={() => setAccessibilityIdentity(null)}
+            >
+              <Column width={popupWidth} height={popupHeight} padding={20 * ui} gap={16 * ui}>
+                <Label text="Accessibility" fontSize={18} fontWeight="medium" />
                 <Checkbox
-                  label="Reduce motion"
-                  checked={props.reducedMotion ?? true}
+                  label="Stronger status text"
+                  checked={highContrast}
                   width={popupWidth - 40 * ui}
                   height={36 * ui}
+                  autoFocus
                   onChange={(value) => {
-                    if (latestIdentity.current === currentIdentity)
-                      props.onReducedMotionChange?.(value);
+                    if (latestIdentity.current === currentIdentity) setHighContrast(value);
                   }}
                 />
-              )}
-              <Label
-                width={popupWidth - 40 * ui}
-                text={
-                  props.onReducedMotionChange
-                    ? "These choices last only while this sign-in window is open."
-                    : "Motion stays reduced. This choice lasts only while this sign-in window is open."
-                }
-                fontSize={12}
-                color={pal.muted}
-                wrap
-              />
-            </Column>
-          </Popover>
-        </OverlayHost>
-      </FocusScope>
+                {props.onReducedMotionChange && (
+                  <Checkbox
+                    label="Reduce motion"
+                    checked={props.reducedMotion ?? true}
+                    width={popupWidth - 40 * ui}
+                    height={36 * ui}
+                    onChange={(value) => {
+                      if (latestIdentity.current === currentIdentity)
+                        props.onReducedMotionChange?.(value);
+                    }}
+                  />
+                )}
+                <Label
+                  width={popupWidth - 40 * ui}
+                  text={
+                    props.onReducedMotionChange
+                      ? "These choices last only while this sign-in window is open."
+                      : "Motion stays reduced. This choice lasts only while this sign-in window is open."
+                  }
+                  fontSize={12}
+                  color={pal.muted}
+                  wrap
+                />
+              </Column>
+            </Popover>
+          </OverlayHost>
+        </FocusScope>
+      </Group>
     </Surface>
   );
 }

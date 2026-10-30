@@ -1,6 +1,8 @@
 /**
  * Minimal evdev pointer reader.
  * Parallels Virtual Mouse primarily emits ABS_X/ABS_Y (tablet), not REL_X/REL_Y.
+ * Touchpads go through Moire's multitouch driver instead (touchpad-device.ts decodes,
+ * touchpad-gesture.ts turns frames into motion, taps and scrolling).
  */
 import fs from "node:fs";
 import type { SeatDeviceAccess } from "./seat";
@@ -10,6 +12,24 @@ import { getLibc } from "./libc";
 import { LinuxReadinessDispatcher } from "./readiness";
 import type { InputFixtureTrace } from "./input-fixture-trace";
 import { isScrollPointerEvent } from "./scroll-trace";
+import {
+  classifyPointerDevice,
+  createPointerAccelerator,
+  evdevSupports,
+  MiddleButtonEmulator,
+  NEUTRAL_POINTER_CONFIG,
+  readPointerDeviceInfo,
+  swapHandedButton,
+  touchpadSupports,
+  type ButtonTimers,
+  type PointerAccelerator,
+  type PointerConfigOption,
+  type PointerDeviceConfig,
+  type PointerDeviceConfigTarget,
+  type PointerDeviceInfo,
+} from "./pointer-config";
+import { readTouchpadGeometry, TouchpadDecoder, type TouchpadGeometry } from "./touchpad-device";
+import { TouchpadGestures, type TouchpadOutput } from "./touchpad-gesture";
 
 const EV_SYN = 0x00;
 const EV_KEY = 0x01;
@@ -63,9 +83,16 @@ export type EvdevPointerButton = {
 };
 
 export type EvdevPointerAxis = {
+  /** Wheel clicks, REL_WHEEL/REL_HWHEEL sign (up and right positive); touchpads give fractions. */
   value: number;
   timeMs: number;
+  /** Omitted for wheels, which are vertical. */
+  axis?: "vertical" | "horizontal";
+  source?: "wheel" | "finger" | "kinetic";
 };
+
+/** Compositor pixels per wheel click, as the Wayland seat sends a click. */
+const PX_PER_WHEEL_CLICK = 10;
 
 export type PointerDeviceIo = {
   open(path: string): number;
@@ -73,6 +100,19 @@ export type PointerDeviceIo = {
   close(fd: number): void;
   identity(fd: number): string;
   grab(fd: number, path: string): void;
+  /** Device kind and capabilities; fixtures without it are treated as a relative mouse. */
+  describe?(path: string): PointerDeviceInfo;
+  /** Multitouch geometry of an open touchpad (EVIOCGABS/EVIOCGPROP), or null. */
+  touchpad?(fd: number): TouchpadGeometry | null;
+};
+
+/** Timers and the clock evdev timestamps use (CLOCK_REALTIME), replaceable in smokes. */
+export type PointerClock = ButtonTimers & { now(): number };
+
+const nodeClock: PointerClock = {
+  now: () => Date.now(),
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
 export function nativePointerDeviceIo(devices?: SeatDeviceAccess): PointerDeviceIo {
@@ -89,6 +129,8 @@ export function nativePointerDeviceIo(devices?: SeatDeviceAccess): PointerDevice
       return stat.rdev.toString();
     },
     grab: tryGrab,
+    describe: readPointerDeviceInfo,
+    touchpad: readTouchpadGeometry,
   };
 }
 
@@ -108,10 +150,28 @@ type DeviceState = {
   traceAbsoluteSource: number | null;
   traceRelativeSource: number | null;
   traceWheelSource: number | null;
+  info: PointerDeviceInfo;
+  config: PointerDeviceConfig;
+  accel: PointerAccelerator;
+  middle: MiddleButtonEmulator;
+  lastButtonSource: number | null;
+  touchpad: TouchpadDriver | null;
+};
+
+type TouchpadDriver = {
+  geometry: TouchpadGeometry;
+  decoder: TouchpadDecoder;
+  gestures: TouchpadGestures;
+  timer: unknown;
 };
 
 function listPointerDevices(): string[] {
   const byPath = "/dev/input/by-path";
+  const all = () =>
+    fs
+      .readdirSync("/dev/input")
+      .filter((n) => n.startsWith("event"))
+      .map((n) => `/dev/input/${n}`);
   try {
     const links = fs.readdirSync(byPath).filter((n) => n.includes("event-mouse"));
     if (links.length > 0) {
@@ -123,15 +183,17 @@ function listPointerDevices(): string[] {
         seen.add(full);
         out.push(full);
       }
+      // udev links touchpads (ID_INPUT_TOUCHPAD) as neither mouse nor keyboard, and I2C pads
+      // often have no by-path link at all, so add them from their sysfs capabilities.
+      for (const device of all())
+        if (!seen.has(device) && readPointerDeviceInfo(device).kind === "touchpad")
+          out.push(device);
       return out;
     }
   } catch {
     // fall through
   }
-  return fs
-    .readdirSync("/dev/input")
-    .filter((n) => n.startsWith("event"))
-    .map((n) => `/dev/input/${n}`);
+  return all();
 }
 
 function norm(v: number, max: number): number {
@@ -148,6 +210,7 @@ export class EvdevPointer extends EventEmitter {
   constructor(
     private readonly readiness: Pick<LinuxReadinessDispatcher, "add" | "remove">,
     private readonly deviceIo?: PointerDeviceIo,
+    private readonly clock: PointerClock = nodeClock,
   ) {
     super();
     this.io = deviceIo ?? nativePointerDeviceIo();
@@ -189,7 +252,11 @@ export class EvdevPointer extends EventEmitter {
       try {
         const fd = this.io.open(p);
         this.io.grab(fd, p);
-        this.devices.set(fd, {
+        let info = this.io.describe?.(p) ?? classifyPointerDevice(p, {});
+        const geometry = info.kind === "touchpad" ? (this.io.touchpad?.(fd) ?? null) : null;
+        if (geometry) info = { ...info, clickpad: geometry.clickpad };
+        const config = { ...NEUTRAL_POINTER_CONFIG };
+        const dev: DeviceState = {
           path: p,
           buf: Buffer.alloc(0),
           pendingDx: 0,
@@ -205,9 +272,35 @@ export class EvdevPointer extends EventEmitter {
           traceAbsoluteSource: null,
           traceRelativeSource: null,
           traceWheelSource: null,
-        });
+          info,
+          config,
+          accel: createPointerAccelerator(config.accelProfile, config.accelSpeed),
+          middle: new MiddleButtonEmulator(() => {}),
+          lastButtonSource: null,
+          touchpad: geometry
+            ? {
+                geometry,
+                decoder: new TouchpadDecoder(geometry),
+                // Neutral until prefs are applied, like a mouse: no tapping or scrolling yet.
+                gestures: new TouchpadGestures(geometry, {
+                  tap: false,
+                  scrollMethod: "none",
+                  naturalScroll: false,
+                  kineticScroll: false,
+                  disableWhileTyping: false,
+                  clickMethod: "areas",
+                }),
+                timer: null,
+              }
+            : null,
+        };
+        dev.middle = this.middleEmulator(dev);
+        this.devices.set(fd, dev);
         this.readiness.add(fd, () => this.poll());
-        console.log(`[evdev] pointer opened ${p} fd=${fd}`);
+        console.log(
+          `[evdev] pointer opened ${p} fd=${fd} kind=${info.kind} relative=${info.relative}${geometry ? ` multitouch slots=${geometry.slots} clickpad=${geometry.clickpad}` : ""}`,
+        );
+        this.emit("device", this.configTarget(dev));
       } catch {
         // skip
       }
@@ -219,7 +312,125 @@ export class EvdevPointer extends EventEmitter {
     }
   }
 
+  /** Every open device, for re-applying prefs when they change. */
+  configTargets(): PointerDeviceConfigTarget[] {
+    return [...this.devices.values()].map((dev) => this.configTarget(dev));
+  }
+
+  private configTarget(dev: DeviceState): PointerDeviceConfigTarget {
+    const supports = (option: PointerConfigOption) =>
+      dev.touchpad ? touchpadSupports(dev.touchpad.geometry, option) : evdevSupports(dev.info, option);
+    return {
+      info: dev.info,
+      supports,
+      set: (option, value) => {
+        if (!supports(option)) return;
+        dev.config = { ...dev.config, [option]: value };
+        if (dev.touchpad) {
+          const { config } = dev;
+          this.touchpadOutputs(
+            dev,
+            dev.touchpad.gestures.configure(
+              {
+                tap: config.tap,
+                scrollMethod: config.scrollMethod,
+                naturalScroll: config.naturalScroll,
+                kineticScroll: config.kineticScroll,
+                clickMethod: config.clickMethod,
+                disableWhileTyping: config.disableWhileTyping,
+                leftHanded: config.leftHanded,
+                accelSpeed: config.accelSpeed,
+                accelProfile: config.accelProfile,
+              },
+              this.clock.now(),
+            ),
+          );
+          return;
+        }
+        if (option === "accelSpeed" || option === "accelProfile")
+          dev.accel = createPointerAccelerator(dev.config.accelProfile, dev.config.accelSpeed);
+        if (option === "middleEmulation" && !value) dev.middle.flush();
+      },
+    };
+  }
+
+  private middleEmulator(dev: DeviceState): MiddleButtonEmulator {
+    return new MiddleButtonEmulator((code, value, timeMs) =>
+      this.forward(
+        "button",
+        { code, value, timeMs } satisfies EvdevPointerButton,
+        dev.lastButtonSource,
+      ),
+    );
+  }
+
+  /**
+   * A keyboard key, for disable-while-typing on touchpads. Called by the seat with the same
+   * evdev timestamps the pads use.
+   */
+  noteKeyboard(ev: { code: number; value: number; timeMs: number }): void {
+    for (const dev of this.devices.values()) dev.touchpad?.gestures.key(ev.code, ev.value, ev.timeMs);
+  }
+
+  private touchpadOutputs(dev: DeviceState, outputs: readonly TouchpadOutput[]): void {
+    for (const output of outputs) {
+      if (output.kind === "motion")
+        this.forward("motion", { dx: output.dx, dy: output.dy, timeMs: output.timeMs }, null);
+      else if (output.kind === "button")
+        this.forward("button", { code: output.code, value: output.value, timeMs: output.timeMs }, dev.lastButtonSource);
+      else {
+        const source = output.source === "kinetic" ? "kinetic" : "finger";
+        // Wheel convention: positive is up, so a view moving down (+dy) is a negative value.
+        if (output.dy)
+          this.forward(
+            "axis",
+            { value: -output.dy / PX_PER_WHEEL_CLICK, timeMs: output.timeMs, axis: "vertical", source },
+            null,
+          );
+        if (output.dx)
+          this.forward(
+            "axis",
+            { value: output.dx / PX_PER_WHEEL_CLICK, timeMs: output.timeMs, axis: "horizontal", source },
+            null,
+          );
+      }
+    }
+    this.scheduleTouchpad(dev);
+  }
+
+  /** Arm the gesture machine's next deadline (tap release, kinetic frame). */
+  private scheduleTouchpad(dev: DeviceState): void {
+    const driver = dev.touchpad;
+    if (!driver) return;
+    if (driver.timer !== null) this.clock.clearTimeout(driver.timer);
+    driver.timer = null;
+    const deadline = driver.gestures.deadline();
+    if (deadline === null) return;
+    driver.timer = this.clock.setTimeout(
+      () => {
+        driver.timer = null;
+        this.touchpadOutputs(dev, driver.gestures.tick(Math.max(deadline, this.clock.now())));
+      },
+      Math.max(0, deadline - this.clock.now()),
+    );
+  }
+
+  private releaseTouchpad(dev: DeviceState): void {
+    const driver = dev.touchpad;
+    if (!driver) return;
+    if (driver.timer !== null) this.clock.clearTimeout(driver.timer);
+    driver.timer = null;
+    for (const output of driver.gestures.reset(this.clock.now()))
+      if (output.kind === "button")
+        this.forward("button", { code: output.code, value: output.value, timeMs: output.timeMs }, null);
+    driver.decoder = new TouchpadDecoder(driver.geometry);
+  }
+
   stop(): void {
+    for (const dev of this.devices.values()) {
+      dev.middle.reset();
+      this.releaseTouchpad(dev);
+    }
     for (const fd of this.devices.keys()) {
       this.readiness.remove(fd);
       try {
@@ -259,15 +470,18 @@ export class EvdevPointer extends EventEmitter {
       dev.absDirty = false;
       dev.traceAbsoluteSource = null;
     } else if (dev.pendingDx !== 0 || dev.pendingDy !== 0) {
-      this.forward(
-        "motion",
-        {
-          dx: dev.pendingDx,
-          dy: dev.pendingDy,
-          timeMs: dev.pendingTimeMs,
-        } satisfies EvdevPointerMotion,
-        dev.traceRelativeSource,
-      );
+      dev.middle.flush();
+      const motion = dev.accel.filter(dev.pendingDx, dev.pendingDy, dev.pendingTimeMs);
+      if (motion.dx !== 0 || motion.dy !== 0)
+        this.forward(
+          "motion",
+          {
+            dx: motion.dx,
+            dy: motion.dy,
+            timeMs: dev.pendingTimeMs,
+          } satisfies EvdevPointerMotion,
+          dev.traceRelativeSource,
+        );
       if (!this.loggedFirstRel) {
         this.loggedFirstRel = true;
         console.log(`[evdev] relative pointer dx=${dev.pendingDx} dy=${dev.pendingDy}`);
@@ -277,10 +491,11 @@ export class EvdevPointer extends EventEmitter {
       dev.traceRelativeSource = null;
     }
     if (dev.pendingWheel !== 0) {
+      dev.middle.flush();
       this.forward(
         "axis",
         {
-          value: dev.pendingWheel,
+          value: dev.config.naturalScroll ? -dev.pendingWheel : dev.pendingWheel,
           timeMs: dev.pendingTimeMs,
         } satisfies EvdevPointerAxis,
         dev.traceWheelSource,
@@ -325,6 +540,12 @@ export class EvdevPointer extends EventEmitter {
                 timeMs,
               });
             });
+          if (dev.touchpad) {
+            if (type === EV_KEY) dev.lastButtonSource = source;
+            const frame = dev.touchpad.decoder.push(type, code, value, timeMs);
+            if (frame) this.touchpadOutputs(dev, dev.touchpad.gestures.frame(frame));
+            continue;
+          }
           if (type === EV_ABS && (code === ABS_X || code === ABS_Y))
             dev.traceAbsoluteSource = source;
           if (type === EV_REL && (code === REL_X || code === REL_Y))
@@ -347,15 +568,19 @@ export class EvdevPointer extends EventEmitter {
           } else if (type === EV_KEY) {
             if (code === BTN_LEFT || code === BTN_RIGHT || code === BTN_MIDDLE) {
               this.flush(dev);
-              this.forward(
-                "button",
-                {
-                  code,
-                  value,
-                  timeMs,
-                } satisfies EvdevPointerButton,
-                source,
-              );
+              const mapped = swapHandedButton(code, dev.config.leftHanded);
+              dev.lastButtonSource = source;
+              if (dev.config.middleEmulation) dev.middle.button(mapped, value, timeMs);
+              else
+                this.forward(
+                  "button",
+                  {
+                    code: mapped,
+                    value,
+                    timeMs,
+                  } satisfies EvdevPointerButton,
+                  source,
+                );
             }
           } else if (type === EV_SYN && code === SYN_REPORT) {
             this.flush(dev);
@@ -378,6 +603,7 @@ export class EvdevPointer extends EventEmitter {
   }
 
   private reopenDevice(oldFd: number, dev: DeviceState): void {
+    this.releaseTouchpad(dev);
     this.devices.delete(oldFd);
     this.readiness.remove(oldFd);
     try {
@@ -388,8 +614,9 @@ export class EvdevPointer extends EventEmitter {
     try {
       const newFd = this.io.open(dev.path);
       this.io.grab(newFd, dev.path);
-      this.devices.set(newFd, {
-        ...dev,
+      dev.middle.reset();
+      // Same state object: config targets handed out earlier keep applying to this device.
+      Object.assign(dev, {
         buf: Buffer.alloc(0),
         pendingDx: 0,
         pendingDy: 0,
@@ -397,11 +624,14 @@ export class EvdevPointer extends EventEmitter {
         traceAbsoluteSource: null,
         traceRelativeSource: null,
         traceWheelSource: null,
+        lastButtonSource: null,
       });
+      this.devices.set(newFd, dev);
       this.readiness.add(newFd, () => this.poll());
       console.log(`[evdev] reopened ${dev.path} as fd=${newFd}`);
     } catch (err) {
       console.warn(`[evdev] failed to reopen ${dev.path}:`, err);
+      this.emit("deviceRemoved", dev.info);
     }
   }
 }

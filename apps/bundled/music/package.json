@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#music/*": "./src/*.ts"
+  },
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../../..",
@@ -11,11 +14,11 @@
   },
   "dependencies": {
     "@moire/app-tools": "workspace:*",
-    "@moire/react-host": "workspace:*",
     "@moire/ui": "workspace:*",
     "react": "^19.0.0"
   },
   "devDependencies": {
+    "@moire/react-host": "workspace:*",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "tsx": "^4.19.2",

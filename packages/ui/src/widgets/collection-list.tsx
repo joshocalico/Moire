@@ -101,8 +101,11 @@ export type CollectionListProps<T> = {
   items: readonly T[];
   getKey: (item: T) => string;
   selectedKey?: string | null;
-  onSelect: (item: T) => void;
+  /** `source` tells a pointer press (which may open the item) from arrow-key browsing. */
+  onSelect: (item: T, source: "pointer" | "keyboard") => void;
   onActivate?: (item: T) => void;
+  /** Delete (or Backspace) on the selected item, e.g. close a listed window. */
+  onDelete?: (item: T) => void;
   onContextMenu?: (item: T, event: HitPointerEvent) => void;
   renderItem: (item: T, state: { selected: boolean; width: number; height: number }) => ReactNode;
   rowHeight?: number;
@@ -140,7 +143,7 @@ export function CollectionList<T>(props: CollectionListProps<T>): ReactNode {
   const select = (index: number) => {
     const item = props.items[index];
     if (!item) return;
-    props.onSelect(item);
+    props.onSelect(item, "keyboard");
     reveal(index);
   };
   const atPointer = (event: HitPointerEvent) =>
@@ -155,6 +158,9 @@ export function CollectionList<T>(props: CollectionListProps<T>): ReactNode {
     else if (event.key === "Enter" || event.code === 28) {
       const item = props.items[selectedIndex];
       if (item) props.onActivate?.(item);
+    } else if (event.key === "Delete" || event.code === 111 || event.code === 14) {
+      const item = props.items[selectedIndex];
+      if (item) props.onDelete?.(item);
     }
   };
   return (
@@ -174,7 +180,7 @@ export function CollectionList<T>(props: CollectionListProps<T>): ReactNode {
           if (!item) return;
           const key = props.getKey(item),
             now = Date.now();
-          props.onSelect(item);
+          props.onSelect(item, "pointer");
           if (lastPress.current?.key === key && now - lastPress.current.at < 400) {
             lastPress.current = null;
             props.onActivate?.(item);
@@ -185,7 +191,7 @@ export function CollectionList<T>(props: CollectionListProps<T>): ReactNode {
             ? (event) => {
                 const item = atPointer(event);
                 if (item) {
-                  props.onSelect(item);
+                  props.onSelect(item, "pointer");
                   props.onContextMenu?.(item, event);
                 }
               }

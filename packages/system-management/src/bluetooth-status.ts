@@ -2,6 +2,22 @@
 declare const bluetoothIdentity: unique symbol;
 export type BluetoothId = string & { readonly [bluetoothIdentity]: true };
 export type BluetoothAdapterInfo = Readonly<{ id: BluetoothId; name: string; powered: boolean }>;
+export const BLUETOOTH_DEVICE_KINDS = [
+  "headphones",
+  "headset",
+  "speaker",
+  "keyboard",
+  "mouse",
+  "gamepad",
+  "tablet",
+  "phone",
+  "computer",
+  "watch",
+  "printer",
+  "camera",
+  "other",
+] as const;
+export type BluetoothDeviceKind = (typeof BLUETOOTH_DEVICE_KINDS)[number];
 export type BluetoothDevice = Readonly<{
   id: BluetoothId;
   adapterId: BluetoothId;
@@ -10,7 +26,104 @@ export type BluetoothDevice = Readonly<{
   paired: true;
   trusted: boolean;
   connected: boolean;
+  /** From BlueZ's Icon, else its Class of Device; omitted by older services. */
+  kind?: BluetoothDeviceKind;
+  /** Percent, when the device reports it (org.bluez.Battery1). */
+  battery?: number;
 }>;
+/** What kind of device it is, from BlueZ's freedesktop icon name and its Class of Device. */
+export function bluetoothDeviceKind(
+  icon: string | null,
+  deviceClass: number | null,
+): BluetoothDeviceKind {
+  switch (icon) {
+    case "audio-headphones":
+      return "headphones";
+    case "audio-headset":
+      return "headset";
+    case "audio-card":
+    case "audio-speakers":
+    case "multimedia-player":
+      return "speaker";
+    case "input-keyboard":
+      return "keyboard";
+    case "input-mouse":
+      return "mouse";
+    case "input-gaming":
+      return "gamepad";
+    case "input-tablet":
+      return "tablet";
+    case "phone":
+      return "phone";
+    case "computer":
+      return "computer";
+    case "printer":
+      return "printer";
+    case "camera-photo":
+    case "camera-video":
+    case "camera-web":
+      return "camera";
+  }
+  if (deviceClass === null) return "other";
+  const major = (deviceClass >> 8) & 0x1f,
+    minor = (deviceClass >> 2) & 0x3f;
+  switch (major) {
+    case 1:
+      return "computer";
+    case 2:
+      return "phone";
+    case 4:
+      if (minor === 1 || minor === 2) return "headset";
+      if (minor === 6) return "headphones";
+      return "speaker";
+    case 5: {
+      const pointing = (minor & 0x20) !== 0,
+        keyboard = (minor & 0x10) !== 0,
+        sub = minor & 0x0f;
+      if (sub === 1 || sub === 2) return "gamepad";
+      if (sub === 5) return "tablet";
+      if (keyboard) return "keyboard";
+      if (pointing) return "mouse";
+      return "other";
+    }
+    case 6:
+      if (minor & 0x20) return "printer";
+      if (minor & 0x08) return "camera";
+      return "other";
+    case 7:
+      return "watch";
+    default:
+      return "other";
+  }
+}
+/** How Settings and Quick Settings show each kind: a `@moire/ui` icon name and a label. */
+export const BLUETOOTH_KIND_PRESENTATION: Readonly<
+  Record<BluetoothDeviceKind, Readonly<{ icon: string; label: string }>>
+> = {
+  headphones: { icon: "headphones", label: "Headphones" },
+  headset: { icon: "headphones", label: "Headset" },
+  speaker: { icon: "volume", label: "Speaker" },
+  keyboard: { icon: "keyboard", label: "Keyboard" },
+  mouse: { icon: "mouse", label: "Mouse" },
+  gamepad: { icon: "gamepad", label: "Game controller" },
+  tablet: { icon: "phone", label: "Tablet" },
+  phone: { icon: "phone", label: "Phone" },
+  computer: { icon: "monitor", label: "Computer" },
+  watch: { icon: "clock", label: "Watch" },
+  printer: { icon: "document", label: "Printer" },
+  camera: { icon: "image", label: "Camera" },
+  other: { icon: "bluetooth", label: "Bluetooth device" },
+};
+/** A device name for BlueZ's Alias: what people type, without control characters. */
+export function parseBluetoothAlias(value: unknown): string {
+  if (typeof value !== "string") throw new Error("Invalid Bluetooth name");
+  const name = value.trim();
+  // Names are shown and stored; control characters never are.
+  // oxlint-disable-next-line no-control-regex
+  if (!name || name.length > 64 || /[\u0000-\u001f\u007f]/.test(name))
+    throw new Error("Enter a name of 1 to 64 characters");
+  return name;
+}
 export type BluetoothOperation =
   | Readonly<{ kind: "idle" }>
   | Readonly<{ kind: "pending"; id: BluetoothId; connected: boolean }>
@@ -117,6 +230,14 @@ export type BluetoothPromptAction = BluetoothCancelAction &
   Readonly<{ promptId: BluetoothId; accepted: boolean }>;
 export type BluetoothInputAction = BluetoothCancelAction &
   Readonly<{ promptId: BluetoothId; value: string }>;
+export type BluetoothPowerAction = BluetoothObservedRequest &
+  Readonly<{ adapterId: BluetoothId; powered: boolean }>;
+export type BluetoothForgetAction = BluetoothObservedRequest & Readonly<{ id: BluetoothId }>;
+export type BluetoothRenameAction = BluetoothObservedRequest &
+  Readonly<{ id: BluetoothId; name: string }>;
+export type BluetoothRenameRequest = Readonly<{ id: BluetoothId; name: string }>;
+export type BluetoothPowerChange = Readonly<{ adapterId: BluetoothId; powered: boolean }>;
+export type BluetoothForgetRequest = Readonly<{ id: BluetoothId }>;
 export type BluetoothTrustState =
   | Readonly<{ kind: "disabled" }>
   | Readonly<{
@@ -174,6 +295,9 @@ export type BluetoothAdapter = {
   subscribe(listener: () => void): () => void;
   refresh(): Promise<void>;
   setConnected(request: BluetoothChange): Promise<void>;
+  setPowered?(request: BluetoothPowerChange): Promise<void>;
+  forgetDevice?(request: BluetoothForgetRequest): Promise<void>;
+  renameDevice?(request: BluetoothRenameRequest): Promise<void>;
   requestTrust?(request: BluetoothTrustRequest): Promise<void>;
   confirmTrust?(request: BluetoothTrustConsent): Promise<void>;
   cancelTrust?(request: BluetoothTrustConsent): Promise<void>;
@@ -425,6 +549,20 @@ export function parseDesktopBluetooth(value: unknown): DesktopBluetooth {
       const address = text(device.address, 17);
       if (!/^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(address))
         throw new Error("Invalid Bluetooth address");
+      let kind: BluetoothDeviceKind | undefined;
+      if (device.kind !== undefined) {
+        if (!(BLUETOOTH_DEVICE_KINDS as readonly unknown[]).includes(device.kind))
+          throw new Error("Invalid Bluetooth device kind");
+        kind = device.kind as BluetoothDeviceKind;
+      }
+      if (
+        device.battery !== undefined &&
+        (typeof device.battery !== "number" ||
+          !Number.isInteger(device.battery) ||
+          device.battery < 0 ||
+          device.battery > 100)
+      )
+        throw new Error("Invalid Bluetooth battery level");
       return {
         id,
         adapterId,
@@ -433,6 +571,8 @@ export function parseDesktopBluetooth(value: unknown): DesktopBluetooth {
         paired: true,
         trusted: bool(device.trusted),
         connected: bool(device.connected),
+        ...(kind ? { kind } : {}),
+        ...(device.battery !== undefined ? { battery: device.battery as number } : {}),
       };
     });
     discovery = { kind: "ready", policy: status.policy, adapters, devices };

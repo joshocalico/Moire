@@ -10,7 +10,7 @@ import React from "react";
 import { Window, installUiFonts } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
 import { runTool } from "./index";
-import { withFixture } from "./testing";
+import { windowControl, withFixture } from "./testing";
 import { PlayerApp } from "./player";
 import { PlaybackSession } from "./playback";
 
@@ -303,8 +303,10 @@ async function workflow(version: string) {
       return observer;
     };
     const clickPlay = () => {
-      native.injectPointer({ type: "down", button: "left", x: 40, y: 60, timeMs: 1 });
-      native.injectPointer({ type: "up", button: "left", x: 40, y: 60, timeMs: 2 });
+      window.tick();
+      const { x, y } = windowControl(window, { focusId: "playback:pause" });
+      native.injectPointer({ type: "down", button: "left", x, y, timeMs: 1 });
+      native.injectPointer({ type: "up", button: "left", x, y, timeMs: 2 });
     };
     const playing = async (observer: MpvObserver, label: string) => {
       await wait(async () => {

@@ -275,6 +275,8 @@ if (process.platform !== "linux") {
       const pressedKeys = new Set<number>();
       // Default factory and default FD I/O. Nothing substitutes for native XKB here.
       const keyboard = new WaylandKeyboard({
+        // Client repeat timing is covered by keyboard.smoke.ts; keep native translation deterministic.
+        timers: { setTimeout: () => 0, clearTimeout() {} },
         pressedKeys,
         resolveSurface: (id) => (id === 10 ? target : null),
         emitKey(received, event) {
@@ -326,12 +328,19 @@ if (process.platform !== "linux") {
           new MessageBuilder().uint(2).uint(depressed).uint(latched).uint(locked).uint(group),
         );
       }
+      /** One fresh press and its release; wl_keyboard never re-presses a held key. */
       function down(code: number) {
+        const before = events.length;
         dispatch(
           wlKeyboard.events.key.opcode,
           new MessageBuilder().uint(3).uint(0).uint(code).uint(1),
         );
-        return events.at(-1);
+        const pressed = events.length > before ? events.at(-1) : undefined;
+        dispatch(
+          wlKeyboard.events.key.opcode,
+          new MessageBuilder().uint(3).uint(0).uint(code).uint(0),
+        );
+        return pressed;
       }
       try {
         sendMap(source);
@@ -343,7 +352,7 @@ if (process.platform !== "linux") {
         assert.equal(shifted?.key, "A");
         assert.equal(shifted?.text, "A");
         assert.equal(shifted?.modifiers.shift, true);
-        assert.equal(shifted?.type, "repeat");
+        assert.equal(shifted?.type, "down");
         wireMask(0, 2);
         const caps = down(30);
         assert.equal(caps?.text, "A");

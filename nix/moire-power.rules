@@ -1,0 +1,30 @@
+// Power & idle: logind sleep, restart, power off and the handling inhibitors the compositor
+// holds (Quick Settings and the lock screen's power menu call Suspend, Reboot and PowerOff), and
+// power-profiles-daemon's profile switch. Moire has no polkit authentication agent, so each
+// allowance is a YES for an active, local session; anything else falls through to the immutable
+// 01-moire-deny-unapproved.rules (docs/settings-redesign.md, "Power & idle backend").
+polkit.addRule(function(action, subject) {
+  if (subject.user === "root") return;
+  if (subject.local !== true || subject.active !== true) return;
+  // Not granted: the *-multiple-sessions and *-ignore-inhibit variants (another user's session
+  // or another inhibitor would be overridden), rebooting into firmware setup or a chosen boot
+  // entry, hibernate and the block-mode sleep and shutdown inhibitors.
+  //
+  // inhibit-block-sleep stays out on purpose, for the compositor too. A rule sees the subject's
+  // user, session, seat and pid, nothing that tells the compositor from an app of the same user,
+  // so a grant here would let every app veto sleep. Apps the user allows to keep the computer
+  // awake (Settings › Power) are honoured inside the compositor, which already handles the lid
+  // under inhibit-handle-lid-switch (docs/portals.md, "Sleep blocking").
+  var allowed = [
+    "org.freedesktop.login1.suspend",
+    "org.freedesktop.login1.reboot",
+    "org.freedesktop.login1.power-off",
+    "org.freedesktop.login1.inhibit-handle-lid-switch",
+    "org.freedesktop.login1.inhibit-handle-power-key",
+    "org.freedesktop.login1.inhibit-handle-suspend-key",
+    "org.freedesktop.login1.inhibit-delay-sleep",
+    "org.freedesktop.UPower.PowerProfiles.switch-profile",
+    "net.hadess.PowerProfiles.switch-profile"
+  ];
+  if (allowed.indexOf(action.id) !== -1) return polkit.Result.YES;
+});

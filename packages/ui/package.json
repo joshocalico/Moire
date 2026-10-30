@@ -10,6 +10,7 @@
   },
   "imports": {
     "#ui/font": "./src/font/index.ts",
+    "#ui/font/sample": "./src/font/sample.ts",
     "#ui/image/*": "./src/image/*.ts",
     "#ui/layout/*": "./src/layout/*.ts",
     "#ui/motion": "./src/motion.ts",
@@ -20,7 +21,8 @@
     "#ui/theme-families": "./src/theme-families/index.ts",
     "#ui/widget-theme": "./src/widget-theme.tsx",
     "#ui/widgets/*": "./src/widgets/*.tsx",
-    "#ui/window": "./src/window.ts"
+    "#ui/window": "./src/window.ts",
+    "#ui/scene/*": "./src/scene/*.ts"
   },
   "bin": {
     "moire-ui-smoke": "./src/smoke.tsx"
@@ -28,15 +30,17 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
-    "smoke": "tsx src/smoke.tsx && tsx src/personalization.smoke.ts",
+    "smoke": "tsx src/smoke.tsx && tsx src/personalization.smoke.ts && tsx src/inspector-widgets.smoke.tsx",
     "smoke:themes": "tsx src/theme.smoke.tsx",
     "smoke:polish": "tsx src/polish.smoke.tsx",
     "smoke:desktop": "tsx scripts/desktop-polish.smoke.tsx && tsx scripts/files-workflow.smoke.tsx",
     "smoke:input": "tsx src/menu-input.smoke.tsx && tsx src/wayland-input.smoke.ts && tsx scripts/integration-input.smoke.tsx && tsx src/text-area.smoke.tsx",
     "smoke:apps": "tsx scripts/settings-display.smoke.tsx",
-    "smoke:content": "tsx src/intrinsic-content.smoke.tsx"
+    "smoke:content": "tsx src/intrinsic-content.smoke.tsx",
+    "smoke:settings": "tsx src/settings-widgets.smoke.tsx"
   },
   "dependencies": {
+    "@moire/file-formats": "workspace:*",
     "@moire/prefs": "workspace:*",
     "@moire/protocol": "workspace:*",
     "@moire/react-host": "workspace:*",

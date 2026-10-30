@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { discoverApplications, xdgDataDirs } from "./applications";
 import type { DesktopEntry } from "./desktop";
 
@@ -224,9 +224,34 @@ function shellQuote(value: string): string {
 
 /** Expand freedesktop Exec field codes into a shell command. */
 export function buildDesktopExec(app: DesktopEntry, paths: string[]): string {
+  return expandDesktopExec(
+    app,
+    paths.map((value) => shellQuote(value)),
+    paths.map((value) => shellQuote(pathToFileURL(value).href)),
+  );
+}
+
+/**
+ * The same expansion for URIs (`https:`, `mailto:`, `file:`), for OpenURI. `%u`/`%U` receive the
+ * URI; `%f`/`%F` receive a local path for a `file:` URI and the URI otherwise. Every value is one
+ * single-quoted shell word, so nothing in a URI is interpreted by the shell.
+ */
+export function buildDesktopExecForUris(app: DesktopEntry, uris: string[]): string {
+  return expandDesktopExec(
+    app,
+    uris.map((value) => {
+      try {
+        return shellQuote(value.startsWith("file:") ? fileURLToPath(value) : value);
+      } catch {
+        return shellQuote(value);
+      }
+    }),
+    uris.map((value) => shellQuote(value)),
+  );
+}
+
+function expandDesktopExec(app: DesktopEntry, local: string[], uris: string[]): string {
   const template = app.execTemplate ?? app.exec;
-  const local = paths.map((value) => shellQuote(value));
-  const uris = paths.map((value) => shellQuote(pathToFileURL(value).href));
   let usedFileCode = false;
   const marker = "__MOIRE_PERCENT__";
   let command = template.replace(/%%/g, marker).replace(/%[fFuUick]/g, (code) => {
@@ -349,6 +374,24 @@ export class MimeAssociationDatabase {
       .filter((id) => !removed.has(id))
       .map((id) => byId.get(id))
       .filter((app): app is DesktopEntry => !!app);
+  }
+
+  /**
+   * File extensions (lower case, no dot) registered for a MIME type, `image/*` style wildcards
+   * included. Empty when shared-mime-info knows none, which callers treat as "cannot filter".
+   */
+  extensionsForMime(mime: string): string[] {
+    const wanted = mime.toLowerCase();
+    const matches = (candidate: string) =>
+      wanted.endsWith("/*")
+        ? candidate.startsWith(wanted.slice(0, -1))
+        : candidate === wanted || (this.subclasses.get(candidate) ?? []).includes(wanted);
+    const extensions = new Set<string>();
+    for (const glob of this.globs) {
+      const simple = /^\*\.([A-Za-z0-9_+-]+)$/.exec(glob.pattern);
+      if (simple && matches(glob.mime.toLowerCase())) extensions.add(simple[1]!.toLowerCase());
+    }
+    return [...extensions];
   }
 
   applicationsForPath(filePath: string): DesktopEntry[] {

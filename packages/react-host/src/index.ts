@@ -1,4 +1,4 @@
-import type { FunctionComponent, ReactNode } from "react";
+import type { FunctionComponent, ReactNode, Ref } from "react";
 import { createContext } from "react";
 import Reconciler from "react-reconciler";
 import {
@@ -79,9 +79,18 @@ type HostPointerProps = {
   onPointerMove?: HitHandler;
   onPointerUp?: HitHandler;
   onContextMenu?: HitHandler;
-  onWheel?: (ev: HitPointerEvent) => void;
+  /**
+   * Return false when the wheel was not consumed (e.g. a scroller already at its limit), so the
+   * next wheel handler beneath receives it (scroll chaining).
+   */
+  onWheel?: (ev: HitPointerEvent) => boolean | void;
   data?: unknown;
   onDropHoverChange?: (hovering: boolean) => void;
+  /**
+   * Reserve this group's box for a named externally drawn surface (e.g. a GPU scene). Retained
+   * frames carry it as a layer in paint order; the platform supplies the pixels.
+   */
+  surface?: string;
   focusable?: boolean;
   /** Deliver Tab to this focused surface instead of moving widget focus. */
   captureTab?: boolean;
@@ -99,6 +108,8 @@ type HostPointerProps = {
 };
 
 export type GroupProps = HostPointerProps & {
+  /** The group's scene node, for widgets that place top-layer content beside it. */
+  ref?: Ref<SceneNode>;
   x?: number;
   y?: number;
   translateX?: LiveNumber;
@@ -140,6 +151,7 @@ export type TextProps = {
   fontSize?: number;
   fontWeight?: string;
   fontFamily?: string;
+  letterSpacing?: number;
 };
 
 export type ImageProps = {
@@ -180,6 +192,7 @@ export type SceneNode = {
   fontSize?: number;
   fontWeight?: string;
   fontFamily?: string;
+  letterSpacing?: number;
   onPress?: HitHandler;
   onPointerEnter?: HitHandler;
   onPointerLeave?: HitHandler;
@@ -187,7 +200,7 @@ export type SceneNode = {
   onPointerMove?: HitHandler;
   onPointerUp?: HitHandler;
   onContextMenu?: HitHandler;
-  onWheel?: (ev: HitPointerEvent) => void;
+  onWheel?: (ev: HitPointerEvent) => boolean | void;
   focusable?: boolean;
   captureTab?: boolean;
   autoFocus?: boolean;
@@ -208,6 +221,8 @@ export type SceneNode = {
    * never cross-highlight each other.
    */
   onDropHoverChange?: (hovering: boolean) => void;
+  /** See `GroupProps.surface`. */
+  surface?: string;
   children: SceneNode[];
   parent: SceneNode | null;
 };
@@ -227,7 +242,7 @@ export type HitRegion = {
   onPointerMove?: HitHandler;
   onPointerUp?: HitHandler;
   onContextMenu?: HitHandler;
-  onWheel?: (ev: HitPointerEvent) => void;
+  onWheel?: (ev: HitPointerEvent) => boolean | void;
   focusable?: boolean;
   captureTab?: boolean;
   autoFocus?: boolean;
@@ -274,6 +289,7 @@ function makeNode(kind: SceneKind, props: Record<string, unknown>): SceneNode {
     fontSize: props.fontSize != null ? Number(props.fontSize) : undefined,
     fontWeight: props.fontWeight as string | undefined,
     fontFamily: props.fontFamily as string | undefined,
+    letterSpacing: props.letterSpacing != null ? Number(props.letterSpacing) : undefined,
     onPress: props.onPress as HitHandler | undefined,
     onPointerEnter: props.onPointerEnter as HitHandler | undefined,
     onPointerLeave: props.onPointerLeave as HitHandler | undefined,
@@ -281,7 +297,7 @@ function makeNode(kind: SceneKind, props: Record<string, unknown>): SceneNode {
     onPointerMove: props.onPointerMove as HitHandler | undefined,
     onPointerUp: props.onPointerUp as HitHandler | undefined,
     onContextMenu: props.onContextMenu as HitHandler | undefined,
-    onWheel: props.onWheel as ((ev: HitPointerEvent) => void) | undefined,
+    onWheel: props.onWheel as ((ev: HitPointerEvent) => boolean | void) | undefined,
     focusable: props.focusable as boolean | undefined,
     captureTab: props.captureTab as boolean | undefined,
     autoFocus: props.autoFocus as boolean | undefined,
@@ -293,6 +309,7 @@ function makeNode(kind: SceneKind, props: Record<string, unknown>): SceneNode {
     focusScopeId: props.focusScopeId as string | undefined,
     focusScopeTrap: props.focusScopeTrap as boolean | undefined,
     focusScopeActive: props.focusScopeActive as boolean | undefined,
+    surface: props.surface as string | undefined,
     children: [],
     parent: null,
   };
@@ -305,6 +322,7 @@ function textStyleOf(node: SceneNode): TextDrawStyle {
     fontSize: node.fontSize,
     fontWeight: node.fontWeight,
     fontFamily: node.fontFamily,
+    letterSpacing: node.letterSpacing,
   };
 }
 
@@ -360,6 +378,9 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
   if ("fontFamily" in props) {
     node.fontFamily = props.fontFamily as string | undefined;
   }
+  if ("letterSpacing" in props) {
+    node.letterSpacing = props.letterSpacing != null ? Number(props.letterSpacing) : undefined;
+  }
   if ("onPress" in props) node.onPress = props.onPress as HitHandler | undefined;
   if ("onPointerEnter" in props) {
     node.onPointerEnter = props.onPointerEnter as HitHandler | undefined;
@@ -380,7 +401,7 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
     node.onContextMenu = props.onContextMenu as HitHandler | undefined;
   }
   if ("onWheel" in props) {
-    node.onWheel = props.onWheel as ((ev: HitPointerEvent) => void) | undefined;
+    node.onWheel = props.onWheel as ((ev: HitPointerEvent) => boolean | void) | undefined;
   }
   if ("focusable" in props) node.focusable = props.focusable as boolean | undefined;
   if ("captureTab" in props) node.captureTab = props.captureTab as boolean | undefined;
@@ -408,6 +429,7 @@ function applyProps(node: SceneNode, props: Record<string, unknown>): void {
     node.focusScopeActive = props.focusScopeActive as boolean | undefined;
   }
   if ("data" in props) node.data = props.data;
+  if ("surface" in props) node.surface = props.surface as string | undefined;
   if ("onDropHoverChange" in props) {
     node.onDropHoverChange = props.onDropHoverChange as ((hovering: boolean) => void) | undefined;
   }
@@ -672,7 +694,12 @@ export function collectHits(
   const { x, y } = absPos(node);
   const pointerClip =
     node.kind === "group" && node.clip
-      ? intersectClip(inheritedClip, { x, y, width: node.width, height: node.height })
+      ? intersectClip(inheritedClip, {
+          x,
+          y,
+          width: node.width,
+          height: node.height,
+        })
       : inheritedClip;
   const scope = node.focusScopeId
     ? {
@@ -740,6 +767,61 @@ export function hitRegionContains(hit: HitRegion, x: number, y: number): boolean
   return insideRoundedRect(x, y, hit.x, hit.y, hit.width, hit.height, hit.radius ?? 0);
 }
 
+type PaintBounds = { x0: number; y0: number; x1: number; y1: number };
+
+/** Painted extent of a node in its own coordinates (shadows and text fringe included). */
+function sceneVisualBounds(node: SceneNode): PaintBounds | null {
+  let bounds: PaintBounds | null =
+    node.kind === "rect" || node.kind === "image"
+      ? { x0: 0, y0: 0, x1: node.width, y1: node.height }
+      : node.kind === "text"
+        ? // Glyph bearings and antialias coverage can extend just outside the
+          // measured advance box. Preserve that fringe in opacity layers.
+          { x0: -2, y0: -2, x1: node.width + 2, y1: node.height + 2 }
+        : null;
+  if (node.kind === "rect" && node.shadow) {
+    const spread = Math.max(0, node.shadow.spread ?? 0);
+    const extent = Math.max(0, node.shadow.blurRadius) + spread;
+    const offsetX = node.shadow.offsetX ?? 0;
+    const offsetY = node.shadow.offsetY ?? 0;
+    bounds = {
+      x0: Math.min(bounds?.x0 ?? 0, offsetX - extent),
+      y0: Math.min(bounds?.y0 ?? 0, offsetY - extent),
+      x1: Math.max(bounds?.x1 ?? node.width, node.width + offsetX + extent),
+      y1: Math.max(bounds?.y1 ?? node.height, node.height + offsetY + extent),
+    };
+  }
+  for (const child of node.children) {
+    const childBounds = sceneVisualBounds(child);
+    if (!childBounds) continue;
+    const translated = {
+      x0: child.x + resolveLiveNumber(child.translateX) + childBounds.x0,
+      y0: child.y + resolveLiveNumber(child.translateY) + childBounds.y0,
+      x1: child.x + resolveLiveNumber(child.translateX) + childBounds.x1,
+      y1: child.y + resolveLiveNumber(child.translateY) + childBounds.y1,
+    };
+    bounds = bounds
+      ? {
+          x0: Math.min(bounds.x0, translated.x0),
+          y0: Math.min(bounds.y0, translated.y0),
+          x1: Math.max(bounds.x1, translated.x1),
+          y1: Math.max(bounds.y1, translated.y1),
+        }
+      : translated;
+  }
+  if (node.kind === "group" && node.clip) {
+    if (!bounds) return null;
+    const clipped = {
+      x0: Math.max(0, bounds.x0),
+      y0: Math.max(0, bounds.y0),
+      x1: Math.min(node.width, bounds.x1),
+      y1: Math.min(node.height, bounds.y1),
+    };
+    return clipped.x1 > clipped.x0 && clipped.y1 > clipped.y0 ? clipped : null;
+  }
+  return bounds;
+}
+
 function renderSoftwareFrame(
   root: SceneNode,
   fbW: number,
@@ -753,58 +835,7 @@ function renderSoftwareFrame(
   const fb = new Uint32Array(pixels.buffer);
   const pitchPx = fbW;
 
-  type PaintBounds = { x0: number; y0: number; x1: number; y1: number };
-  const visualBounds = (node: SceneNode): PaintBounds | null => {
-    let bounds: PaintBounds | null =
-      node.kind === "rect" || node.kind === "image"
-        ? { x0: 0, y0: 0, x1: node.width, y1: node.height }
-        : node.kind === "text"
-          ? // Glyph bearings and antialias coverage can extend just outside the
-            // measured advance box. Preserve that fringe in opacity layers.
-            { x0: -2, y0: -2, x1: node.width + 2, y1: node.height + 2 }
-          : null;
-    if (node.kind === "rect" && node.shadow) {
-      const spread = Math.max(0, node.shadow.spread ?? 0);
-      const extent = Math.max(0, node.shadow.blurRadius) + spread;
-      const offsetX = node.shadow.offsetX ?? 0;
-      const offsetY = node.shadow.offsetY ?? 0;
-      bounds = {
-        x0: Math.min(bounds?.x0 ?? 0, offsetX - extent),
-        y0: Math.min(bounds?.y0 ?? 0, offsetY - extent),
-        x1: Math.max(bounds?.x1 ?? node.width, node.width + offsetX + extent),
-        y1: Math.max(bounds?.y1 ?? node.height, node.height + offsetY + extent),
-      };
-    }
-    for (const child of node.children) {
-      const childBounds = visualBounds(child);
-      if (!childBounds) continue;
-      const translated = {
-        x0: child.x + resolveLiveNumber(child.translateX) + childBounds.x0,
-        y0: child.y + resolveLiveNumber(child.translateY) + childBounds.y0,
-        x1: child.x + resolveLiveNumber(child.translateX) + childBounds.x1,
-        y1: child.y + resolveLiveNumber(child.translateY) + childBounds.y1,
-      };
-      bounds = bounds
-        ? {
-            x0: Math.min(bounds.x0, translated.x0),
-            y0: Math.min(bounds.y0, translated.y0),
-            x1: Math.max(bounds.x1, translated.x1),
-            y1: Math.max(bounds.y1, translated.y1),
-          }
-        : translated;
-    }
-    if (node.kind === "group" && node.clip) {
-      if (!bounds) return null;
-      const clipped = {
-        x0: Math.max(0, bounds.x0),
-        y0: Math.max(0, bounds.y0),
-        x1: Math.min(node.width, bounds.x1),
-        y1: Math.min(node.height, bounds.y1),
-      };
-      return clipped.x1 > clipped.x0 && clipped.y1 > clipped.y0 ? clipped : null;
-    }
-    return bounds;
-  };
+  const visualBounds = sceneVisualBounds;
 
   const paint = (
     node: SceneNode,
@@ -1242,6 +1273,11 @@ function retainedLayerBounds(layer: RetainedLayer, viewport: RenderViewport): Re
       layer.destination.y + layer.destination.height + layer.dropShadow.offsetY + extent,
     );
   }
+  // Anti-aliased edges (rounded corners, strokes) can touch the pixel just outside.
+  left -= 1;
+  top -= 1;
+  right += 1;
+  bottom += 1;
   if (layer.clip) {
     left = Math.max(left, layer.clip.x);
     top = Math.max(top, layer.clip.y);
@@ -1263,6 +1299,7 @@ function retainedLayerBounds(layer: RetainedLayer, viewport: RenderViewport): Re
 function retainedLayerSignature(layer: RetainedLayer): string {
   return JSON.stringify({
     revision: layer.revision,
+    surface: layer.surface,
     sourceWidth: layer.sourceWidth,
     sourceHeight: layer.sourceHeight,
     sourceStride: layer.sourceStride,
@@ -1333,6 +1370,15 @@ function clipsEqual(a: RetainedClip | undefined, b: RetainedClip | undefined): b
  */
 export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame> {
   readonly id = "retained-scene";
+  /**
+   * Precise damage: adding or removing layers damages only them, and presentation frames
+   * tolerate primitives that are not visible. For consumers that read every frame's damage
+   * (the shell chrome); windows keep the conservative full-damage fallbacks.
+   */
+  private readonly precise: boolean;
+  constructor(options: { precise?: boolean } = {}) {
+    this.precise = options.precise === true;
+  }
   private readonly solidPixels = new Map<number, Uint8Array>();
   private readonly rasterCache = new Map<string, RetainedRasterCache>();
   private readonly imageTextures = new WeakMap<
@@ -1347,6 +1393,10 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
   private previousHeight = 0;
   private previousClearColor = 0;
   private presentationLayers: RetainedLayer[] | null = null;
+  /** Translucent groups painted as one layer this frame (their subtrees have no own layers). */
+  private readonly flattenedGroups = new Set<string>();
+  private readonly imageIds = new WeakMap<Uint8Array, number>();
+  private nextImageId = 1;
   private readonly presentationBindings = new Map<string, RetainedPresentationBinding[]>();
 
   private solid(color: number): Uint8Array {
@@ -1384,6 +1434,115 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
     return cached;
   }
 
+  /**
+   * Paint a translucent group's subtree into one cached raster and append it as a single layer
+   * with the group's opacity. False when per-layer opacity is already exact (fewer than two
+   * painted primitives) or the subtree holds an external surface that cannot be rasterized.
+   */
+  private flattenGroup(
+    node: SceneNode,
+    x: number,
+    y: number,
+    opacity: number,
+    inheritedClip: RetainedClip | undefined,
+    appendLayer: (
+      node: SceneNode,
+      layer: RetainedLayer,
+      offsetX?: number,
+      offsetY?: number,
+    ) => void,
+  ): boolean {
+    let primitives = 0;
+    let rasterizable = true;
+    const signature: unknown[] = [];
+    const describe = (n: SceneNode, depth: number) => {
+      if (n.surface) rasterizable = false;
+      if (
+        (n.kind === "rect" && (n.fill != null || n.stroke != null || n.shadow)) ||
+        (n.kind === "text" && n.text) ||
+        (n.kind === "image" && n.imagePixels)
+      )
+        primitives++;
+      let image = 0;
+      if (n.imagePixels) {
+        image = this.imageIds.get(n.imagePixels) ?? 0;
+        if (!image) this.imageIds.set(n.imagePixels, (image = this.nextImageId++));
+      }
+      signature.push([
+        depth,
+        n.kind,
+        n.x + resolveLiveNumber(n.translateX),
+        n.y + resolveLiveNumber(n.translateY),
+        n.width,
+        n.height,
+        depth === 0 ? 1 : resolveLiveNumber(n.opacity, 1),
+        n.fill,
+        n.stroke,
+        n.strokeWidth,
+        n.radius,
+        n.shadow,
+        n.clip,
+        n.text,
+        n.color,
+        n.fontSize,
+        n.fontWeight,
+        n.fontFamily,
+        n.letterSpacing,
+        n.scale,
+        image,
+      ]);
+      for (const child of n.children) describe(child, depth + 1);
+    };
+    describe(node, 0);
+    if (!rasterizable || primitives < 2) return false;
+    const bounds = node.clip
+      ? { x0: 0, y0: 0, x1: node.width, y1: node.height }
+      : sceneVisualBounds(node);
+    if (!bounds) return true;
+    const layerX = Math.floor(bounds.x0);
+    const layerY = Math.floor(bounds.y0);
+    const width = Math.max(0, Math.ceil(bounds.x1) - layerX);
+    const height = Math.max(0, Math.ceil(bounds.y1) - layerY);
+    if (width === 0 || height === 0) return true;
+    // The group at full opacity, offset into its own bounds; its own fade is the layer's.
+    const subtree: SceneNode = Object.assign({}, node, {
+      x: -layerX,
+      y: -layerY,
+      translateX: undefined,
+      translateY: undefined,
+      opacity: undefined,
+    });
+    const cached = this.cachedRaster(
+      `${node.id}:group`,
+      JSON.stringify(signature),
+      width,
+      height,
+      (target) => {
+        const frame = renderSoftwareFrame(subtree, width, height);
+        new Uint8Array(target.buffer, target.byteOffset, target.byteLength).set(frame.pixels);
+      },
+    );
+    this.flattenedGroups.add(node.id);
+    appendLayer(
+      node,
+      {
+        id: `${node.id}:group`,
+        pixels: cached.pixels,
+        sourceWidth: cached.width,
+        sourceHeight: cached.height,
+        sourceStride: cached.width * 4,
+        revision: cached.revision,
+        destination: { x: x + layerX, y: y + layerY, width, height },
+        clip: inheritedClip,
+        opacity,
+        sampling: "nearest",
+      },
+      layerX,
+      layerY,
+    );
+    return true;
+  }
+
   private imageTexture(rgba: Uint8Array): {
     pixels: Uint8Array;
     revision: number;
@@ -1407,6 +1566,7 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
     this.frame++;
     const layers: RetainedLayer[] = [];
     this.presentationBindings.clear();
+    this.flattenedGroups.clear();
     const appendLayer = (node: SceneNode, layer: RetainedLayer, offsetX = 0, offsetY = 0): void => {
       layers.push(layer);
       const bindings = this.presentationBindings.get(node.id) ?? [];
@@ -1435,6 +1595,30 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
           : inheritedClip;
       if (clip && (clip.width <= 0 || clip.height <= 0)) return;
 
+      // A translucent group composites as a unit (as in the software renderer): overlapping
+      // children must not show through each other, so paint the subtree once and fade that.
+      if (
+        node.kind === "group" &&
+        resolveLiveNumber(node.opacity, 1) < 1 &&
+        this.flattenGroup(node, x, y, opacity, inheritedClip, appendLayer)
+      )
+        return;
+
+      if (node.surface && node.width > 0 && node.height > 0) {
+        appendLayer(node, {
+          id: `${node.id}:surface`,
+          surface: node.surface,
+          pixels: this.solid(0),
+          sourceWidth: 1,
+          sourceHeight: 1,
+          sourceStride: 4,
+          revision: 0,
+          destination: { x, y, width: node.width, height: node.height },
+          clip,
+          opacity,
+          sampling: "linear",
+        });
+      }
       if (node.kind === "rect" && node.width > 0 && node.height > 0) {
         const destination = { x, y, width: node.width, height: node.height };
         const fillAlpha = node.fill == null ? 0 : (node.fill >>> 24) & 0xff;
@@ -1587,12 +1771,21 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
     }
     const clearColor = 0x00000000;
     const order = layers.map((layer) => layer.id);
+    // Added and removed layers are damaged by the per-layer diff below; only layers that kept
+    // existing but changed their stacking need everything recomposited.
+    const kept = new Set(order);
+    const before = this.previousOrder.filter((id) => kept.has(id));
+    const previousIds = new Set(this.previousOrder);
+    const after = order.filter((id) => previousIds.has(id));
+    const reordered = this.precise
+      ? before.length !== after.length || before.some((id, index) => id !== after[index])
+      : order.length !== this.previousOrder.length ||
+        order.some((id, index) => id !== this.previousOrder[index]);
     const forceFullDamage =
       viewport.width !== this.previousWidth ||
       viewport.height !== this.previousHeight ||
       clearColor !== this.previousClearColor ||
-      order.length !== this.previousOrder.length ||
-      order.some((id, index) => id !== this.previousOrder[index]);
+      reordered;
     const nextLayers = new Map<string, RetainedLayerSnapshot>();
     const changedBounds: RetainedClip[] = [];
     for (const layer of layers) {
@@ -1638,9 +1831,35 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
     if (!layers || viewport.width !== this.previousWidth || viewport.height !== this.previousHeight)
       return null;
 
-    this.frame++;
-    const changedBounds: RetainedClip[] = [];
+    // First collect every moved layer and check the frame is presentation-only; nothing is
+    // mutated unless it is, so a bail-out leaves an ordinary render to diff (and damage) precisely.
+    const moves: Array<{
+      layer: RetainedLayer;
+      x: number;
+      y: number;
+      opacity: number;
+      clip: RetainedClip | undefined;
+    }> = [];
     let valid = true;
+    const shows = (
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      clip: RetainedClip | undefined,
+    ) => {
+      // Unsized primitives (auto-measured text) are assumed visible.
+      if (width <= 0 || height <= 0) return true;
+      const area = intersectClip(clip, { x, y, width, height });
+      return (
+        area.width > 0 &&
+        area.height > 0 &&
+        area.x < viewport.width &&
+        area.y < viewport.height &&
+        area.x + area.width > 0 &&
+        area.y + area.height > 0
+      );
+    };
     const visit = (
       node: SceneNode,
       parentX: number,
@@ -1648,11 +1867,23 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
       inheritedOpacity: number,
       inheritedClip?: RetainedClip,
     ): void => {
+      if (!valid) return;
       const x = parentX + node.x + resolveLiveNumber(node.translateX);
       const y = parentY + node.y + resolveLiveNumber(node.translateY);
-      const opacity = inheritedOpacity * resolveLiveNumber(node.opacity, 1);
+      const ownOpacity = resolveLiveNumber(node.opacity, 1);
+      const opacity = inheritedOpacity * ownOpacity;
+      const flattened = this.flattenedGroups.has(node.id);
+      // A visible group turning translucent must be flattened, which only a full render can do.
+      if (
+        !flattened &&
+        node.kind === "group" &&
+        (opacity > 0 || !this.precise) &&
+        ownOpacity < 1 &&
+        node.children.length > 1
+      )
+        valid = false;
       const clip =
-        node.kind === "group" && node.clip
+        node.kind === "group" && node.clip && !flattened
           ? intersectClip(inheritedClip, {
               x,
               y,
@@ -1673,19 +1904,10 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
             clipsEqual(layer.clip, clip)
           )
             continue;
-          changedBounds.push(retainedLayerBounds(layer, viewport));
-          layer.destination.x = nextX;
-          layer.destination.y = nextY;
-          layer.opacity = opacity;
-          layer.clip = clip;
-          const bounds = retainedLayerBounds(layer, viewport);
-          changedBounds.push(bounds);
-          this.previousLayers.set(layer.id, {
-            signature: retainedLayerSignature(layer),
-            bounds,
-          });
+          moves.push({ layer, x: nextX, y: nextY, opacity, clip });
         }
       } else if (
+        (!!node.surface && node.width > 0 && node.height > 0) ||
         (node.kind === "rect" &&
           node.width > 0 &&
           node.height > 0 &&
@@ -1699,21 +1921,41 @@ export class RetainedSceneRenderer implements RendererBackend<RetainedSceneFrame
           node.width > 0 &&
           node.height > 0)
       ) {
-        valid = false;
+        // A primitive the cached graph never drew only matters once it can be seen: faded in
+        // from zero, or moved into its clip (a list row scrolled into view).
+        if (!this.precise || (opacity > 0 && shows(x, y, node.width, node.height, clip)))
+          valid = false;
       }
+      if (flattened) return;
       for (const child of node.children) {
         visit(child, x, y, opacity, clip);
       }
     };
     visit(root, 0, 0, 1);
     if (!valid) {
-      // Some presentation value can reveal a primitive that was absent from
-      // the cached graph (most commonly opacity starting at zero). Force the
-      // immediate full-render fallback to damage the whole viewport even if
-      // earlier bindings were already refreshed during this traversal.
-      this.previousWidth = 0;
-      this.presentationLayers = null;
+      // Conservative consumers redraw everything after a bail-out.
+      if (!this.precise) {
+        this.previousWidth = 0;
+        this.presentationLayers = null;
+      }
       return null;
+    }
+
+    this.frame++;
+    const changedBounds: RetainedClip[] = [];
+    for (const move of moves) {
+      const layer = move.layer;
+      changedBounds.push(retainedLayerBounds(layer, viewport));
+      layer.destination.x = move.x;
+      layer.destination.y = move.y;
+      layer.opacity = move.opacity;
+      layer.clip = move.clip;
+      const bounds = retainedLayerBounds(layer, viewport);
+      changedBounds.push(bounds);
+      this.previousLayers.set(layer.id, {
+        signature: retainedLayerSignature(layer),
+        bounds,
+      });
     }
 
     return {
@@ -2073,26 +2315,119 @@ function fillRoundedBoxShadow(
   const sigma = Math.max(0.5, blur / 3);
   const denominator = 2 * sigma * sigma;
 
-  for (let py = y0; py < y1; py++) {
-    for (let px = x0; px < x1; px++) {
-      // The opaque surface paints over this area immediately afterwards.
-      if (roundedRectCoverage(px + 0.5, py + 0.5, x, y, width, height, radius) >= 1) {
-        continue;
-      }
-      const distance = roundedRectSignedDistance(
-        px + 0.5,
-        py + 0.5,
-        shadowX,
-        shadowY,
-        shadowWidth,
-        shadowHeight,
-        shadowRadius,
-      );
-      const coverage = distance <= 0 ? 1 : Math.exp(-(distance * distance) / denominator);
-      if (coverage < 0.002) continue;
-      blendCoverageColor(fb, py * pitchPx + px, shadow.color, coverage);
-    }
+  const shadowCoverage = (px: number, py: number) => {
+    const distance = roundedRectSignedDistance(
+      px + 0.5,
+      py + 0.5,
+      shadowX,
+      shadowY,
+      shadowWidth,
+      shadowHeight,
+      shadowRadius,
+    );
+    return distance <= 0 ? 1 : Math.exp(-(distance * distance) / denominator);
+  };
+  // Outside the shadow's corner squares the distance depends on one axis only:
+  // in rows with qy <= 0 it is a function of px, in columns with qx <= 0 of py
+  // (and both inside is coverage 1). Sample each once from the same function.
+  const r = clampedRadius(shadowWidth, shadowHeight, shadowRadius);
+  const halfW = shadowWidth / 2;
+  const halfH = shadowHeight / 2;
+  const columnInBody = (px: number) =>
+    Math.abs(px + 0.5 - (shadowX + halfW)) - Math.max(0, halfW - r) <= 0;
+  const rowInBody = (py: number) =>
+    Math.abs(py + 0.5 - (shadowY + halfH)) - Math.max(0, halfH - r) <= 0;
+  const columns = Math.max(0, Math.ceil(x1 - x0));
+  const bodyColumns = new Uint8Array(columns);
+  let referenceColumn = -1;
+  for (let i = 0; i < columns; i++) {
+    if (!columnInBody(x0 + i)) continue;
+    bodyColumns[i] = 1;
+    if (referenceColumn < 0) referenceColumn = x0 + i;
   }
+  let columnCoverage: Float64Array | null = null;
+  const shadowPixel = (px: number, py: number, bodyRow: boolean, rowCoverage: number) => {
+    // The opaque surface paints over this area immediately afterwards.
+    if (roundedRectCoverage(px + 0.5, py + 0.5, x, y, width, height, radius) >= 1) return;
+    const coverage = bodyRow
+      ? columnCoverage![px - x0]!
+      : bodyColumns[px - x0]
+        ? rowCoverage
+        : shadowCoverage(px, py);
+    if (coverage < 0.002) return;
+    blendCoverageColor(fb, py * pitchPx + px, shadow.color, coverage);
+  };
+  for (let py = y0; py < y1; py++) {
+    const bodyRow = rowInBody(py);
+    if (bodyRow && !columnCoverage) {
+      columnCoverage = new Float64Array(columns);
+      for (let i = 0; i < columns; i++) columnCoverage[i] = shadowCoverage(x0 + i, py);
+    }
+    const rowCoverage = !bodyRow && referenceColumn >= 0 ? shadowCoverage(referenceColumn, py) : 0;
+    // Skip the surface's solid interior span without evaluating each pixel.
+    const span = roundedRectFullSpan(py + 0.5, x, y, width, height, radius);
+    const a = span ? firstCentreAtLeast(x0, x1, span[0]) : x1;
+    const b = span ? Math.max(a, firstCentreAtLeast(a, x1, span[1])) : x1;
+    for (let px = x0; px < a; px++) shadowPixel(px, py, bodyRow, rowCoverage);
+    for (let px = b; px < x1; px++) shadowPixel(px, py, bodyRow, rowCoverage);
+  }
+}
+
+/**
+ * Float [left, right) of sample x positions on row `sy` where
+ * roundedRectCoverage is exactly 1, or null when the row has no such span.
+ */
+function roundedRectFullSpan(
+  sy: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+): [number, number] | null {
+  if (sy < y || sy >= y + h) return null;
+  const r = clampedRadius(w, h, radius);
+  if (r <= 0 || (sy >= y + r && sy < y + h - r)) return [x, x + w];
+  return [x + r, x + w - r];
+}
+
+/**
+ * Span form of blendFillColor for one translucent colour: identical integer
+ * results to blendRgba(..., opacity 1), with the per-destination rounding
+ * precomputed. Returns null when the colour is fully transparent.
+ */
+function constantColorBlender(
+  color: number,
+): ((fb: Uint32Array, start: number, end: number) => void) | null {
+  const c = color >>> 0;
+  const alpha = (c >>> 24) & 0xff;
+  if (alpha === 0) return null;
+  const inv = 255 - alpha;
+  const sr = Math.round((((c >>> 16) & 0xff) * alpha) / 255);
+  const sg = Math.round((((c >>> 8) & 0xff) * alpha) / 255);
+  const sb = Math.round(((c & 0xff) * alpha) / 255);
+  const scaled = new Uint8Array(256);
+  for (let d = 0; d < 256; d++) scaled[d] = Math.round((d * inv) / 255);
+  return (fb, start, end) => {
+    for (let i = start; i < end; i++) {
+      const dst = fb[i]!;
+      fb[i] =
+        (((alpha + scaled[dst >>> 24]!) << 24) |
+          ((sr + scaled[(dst >>> 16) & 0xff]!) << 16) |
+          ((sg + scaled[(dst >>> 8) & 0xff]!) << 8) |
+          (sb + scaled[dst & 0xff]!)) >>>
+        0;
+    }
+  };
+}
+
+/** First px on the lo, lo + 1, … lattice (capped at hi) whose pixel centre px + 0.5 is >= bound. */
+function firstCentreAtLeast(lo: number, hi: number, bound: number): number {
+  let px = lo + Math.max(0, Math.ceil(bound - 0.5 - lo));
+  if (px >= hi) px = hi;
+  while (px - 1 >= lo && px - 1 + 0.5 >= bound) px--;
+  while (px < hi && !(px + 0.5 >= bound)) px++;
+  return px;
 }
 
 function fillRoundedRect(
@@ -2111,10 +2446,23 @@ function fillRoundedRect(
   const y0 = Math.max(0, y | 0);
   const x1 = Math.min(fbW, (x | 0) + (w | 0));
   const y1 = Math.min(fbH, (y | 0) + (h | 0));
+  const opaque = color >>> 24 === 0xff;
+  const fillSpan = opaque ? null : constantColorBlender(color);
   for (let py = y0; py < y1; py++) {
-    for (let px = x0; px < x1; px++) {
+    const row = py * pitchPx;
+    // Interior pixels have coverage exactly 1; only edges and corners need analytic coverage.
+    const span = roundedRectFullSpan(py + 0.5, x, y, w, h, radius);
+    const a = span ? firstCentreAtLeast(x0, x1, span[0]) : x1;
+    const b = span ? Math.max(a, firstCentreAtLeast(a, x1, span[1])) : x1;
+    for (let px = x0; px < a; px++) {
       const coverage = roundedRectCoverage(px + 0.5, py + 0.5, x, y, w, h, radius);
-      blendCoverageColor(fb, py * pitchPx + px, color, coverage);
+      blendCoverageColor(fb, row + px, color, coverage);
+    }
+    if (opaque) fb.fill(color >>> 0, row + a, row + b);
+    else fillSpan?.(fb, row + a, row + b);
+    for (let px = b; px < x1; px++) {
+      const coverage = roundedRectCoverage(px + 0.5, py + 0.5, x, y, w, h, radius);
+      blendCoverageColor(fb, row + px, color, coverage);
     }
   }
 }
@@ -2141,17 +2489,24 @@ function fillRoundedStroke(
   const innerW = w - strokeWidth * 2;
   const innerH = h - strokeWidth * 2;
   const innerRadius = Math.max(0, radius - strokeWidth);
+  const hasInner = innerW > 0 && innerH > 0;
+  const strokePixel = (px: number, py: number) => {
+    const sx = px + 0.5;
+    const sy = py + 0.5;
+    const outer = roundedRectCoverage(sx, sy, x, y, w, h, radius);
+    const inner =
+      hasInner && roundedRectCoverage(sx, sy, innerX, innerY, innerW, innerH, innerRadius);
+    blendCoverageColor(fb, py * pitchPx + px, color, outer * (1 - Number(inner)));
+  };
   for (let py = y0; py < y1; py++) {
-    for (let px = x0; px < x1; px++) {
-      const sx = px + 0.5;
-      const sy = py + 0.5;
-      const outer = roundedRectCoverage(sx, sy, x, y, w, h, radius);
-      const inner =
-        innerW > 0 &&
-        innerH > 0 &&
-        roundedRectCoverage(sx, sy, innerX, innerY, innerW, innerH, innerRadius);
-      blendCoverageColor(fb, py * pitchPx + px, color, outer * (1 - Number(inner)));
-    }
+    // Where the inner shape fully covers a pixel the stroke contributes nothing; skip that span.
+    const span = hasInner
+      ? roundedRectFullSpan(py + 0.5, innerX, innerY, innerW, innerH, innerRadius)
+      : null;
+    const a = span ? firstCentreAtLeast(x0, x1, span[0]) : x1;
+    const b = span ? Math.max(a, firstCentreAtLeast(a, x1, span[1])) : x1;
+    for (let px = x0; px < a; px++) strokePixel(px, py);
+    for (let px = b; px < x1; px++) strokePixel(px, py);
   }
 }
 
@@ -2163,6 +2518,19 @@ export const Rect = "rect" as unknown as FunctionComponent<RectProps>;
 export const Text = "text" as unknown as FunctionComponent<TextProps>;
 export const Group = "group" as unknown as FunctionComponent<GroupProps>;
 export const Image = "image" as unknown as FunctionComponent<ImageProps>;
+
+/** A scene node's position in its root's coordinates, including paint offsets (scroll, motion). */
+export function sceneOrigin(node: SceneNode): { x: number; y: number } {
+  const live = (value: LiveNumber | undefined) =>
+    typeof value === "number" ? value : (value?.get() ?? 0);
+  let x = 0,
+    y = 0;
+  for (let at: SceneNode | null = node; at; at = at.parent) {
+    x += at.x + live(at.translateX);
+    y += at.y + live(at.translateY);
+  }
+  return { x, y };
+}
 
 export function measureText(text: string, scale = 1): number {
   return measureNodeText(text, { scale }).width;

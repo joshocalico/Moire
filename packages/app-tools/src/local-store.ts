@@ -10,13 +10,20 @@ export type StoreWriteResult<T> = StoreSnapshot<T> & { readonly cleanup: StoreCl
 export class StorageConflictError extends Error {}
 const MAX_STORE_BYTES = 10 * 1024 * 1024;
 const revision = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-export function loadSnapshot<T>(file: string, parse: (data: unknown) => T[]): StoreSnapshot<T> {
+/** A single JSON document (not a list of records) and the revision it was read at. */
+export type DocumentSnapshot<T> = { readonly value: T | null; readonly revision: string | null };
+export type DocumentWriteResult<T> = {
+  readonly value: T;
+  readonly revision: string;
+  readonly cleanup: StoreCleanup;
+};
+export function loadDocument<T>(file: string, parse: (data: unknown) => T): DocumentSnapshot<T> {
   let fd: number;
   try {
     fd = fs.openSync(file, "r");
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT")
-      return { items: [], revision: null };
+      return { value: null, revision: null };
     throw error;
   }
   const parts: Buffer[] = [];
@@ -35,7 +42,11 @@ export function loadSnapshot<T>(file: string, parse: (data: unknown) => T[]): St
     fs.closeSync(fd);
   }
   const content = Buffer.concat(parts);
-  return { items: parse(JSON.parse(content.toString("utf8"))), revision: revision(content) };
+  return { value: parse(JSON.parse(content.toString("utf8"))), revision: revision(content) };
+}
+export function loadSnapshot<T>(file: string, parse: (data: unknown) => T[]): StoreSnapshot<T> {
+  const loaded = loadDocument(file, parse);
+  return { items: loaded.value ?? [], revision: loaded.revision };
 }
 
 function busy(): never {
@@ -203,14 +214,19 @@ export function retryStoreCleanup(): StoreCleanup {
     ? { kind: "pending", message: cleanupMessage(errors) }
     : { kind: "complete" };
 }
-export function writeSnapshot<T>(
+/**
+ * Publish `value` as the file's new contents if the file is still at `expectedRevision`. The
+ * write is atomic, serialized across processes by a lock beside the file, and validated by
+ * `parse` both before writing and against what is already on disk.
+ */
+export function writeDocument<T>(
   file: string,
-  items: readonly T[],
+  value: T,
   expectedRevision: string | null,
-  parse: (data: unknown) => T[],
-): StoreWriteResult<T> {
+  parse: (data: unknown) => T,
+): DocumentWriteResult<T> {
   file = path.resolve(file);
-  const content = JSON.stringify(items, null, 2) + "\n";
+  const content = JSON.stringify(value, null, 2) + "\n";
   const parsed = parse(JSON.parse(content));
   if (Buffer.byteLength(content, "utf8") > MAX_STORE_BYTES)
     throw new Error("Saved data exceeds 10 MiB; your draft remains here.");
@@ -226,10 +242,10 @@ export function writeSnapshot<T>(
   const lease = claimLock(file);
   let fd: number | null = null;
   let publication:
-    | { kind: "committed"; snapshot: StoreSnapshot<T> }
+    | { kind: "committed"; snapshot: { value: T; revision: string } }
     | { kind: "failed"; error: unknown };
   try {
-    if (loadSnapshot(file, parse).revision !== expectedRevision)
+    if (loadDocument(file, parse).revision !== expectedRevision)
       throw new StorageConflictError(
         "Saved data changed in another window. Reload saved data before retrying; your draft remains here.",
       );
@@ -240,10 +256,10 @@ export function writeSnapshot<T>(
     fs.closeSync(fd);
     fd = null;
     lease.verify();
-    if (loadSnapshot(file, parse).revision !== expectedRevision)
+    if (loadDocument(file, parse).revision !== expectedRevision)
       throw new StorageConflictError("Saved data changed while saving; your draft remains here.");
     fs.renameSync(lease.temporary, file);
-    publication = { kind: "committed", snapshot: { items: parsed, revision: revision(content) } };
+    publication = { kind: "committed", snapshot: { value: parsed, revision: revision(content) } };
   } catch (error) {
     publication = { kind: "failed", error };
   }
@@ -278,4 +294,13 @@ export function writeSnapshot<T>(
       ? { kind: "pending", message: cleanupMessage(cleanupErrors) }
       : { kind: "complete" },
   };
+}
+export function writeSnapshot<T>(
+  file: string,
+  items: readonly T[],
+  expectedRevision: string | null,
+  parse: (data: unknown) => T[],
+): StoreWriteResult<T> {
+  const written = writeDocument<readonly T[]>(file, items, expectedRevision, parse);
+  return { items: written.value, revision: written.revision, cleanup: written.cleanup };
 }

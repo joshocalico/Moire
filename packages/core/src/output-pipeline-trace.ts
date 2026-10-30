@@ -21,9 +21,11 @@ type OutputPipelineEvent =
   | { stage: "gpu"; damagePixels: number }
   | { stage: "submitted"; frame: number; output: number; framebuffer: number }
   | { stage: "scanout"; frame: number; output: number; accepted: boolean };
+// Read once: process.env is a slow native getter and this runs per surface per frame.
+const enabled = process.env.MOIRE_OUTPUT_PIPELINE_TRACE === "1";
 let records = 0;
 export function traceOutputPipeline(event: OutputPipelineEvent): void {
-  if (process.env.MOIRE_OUTPUT_PIPELINE_TRACE !== "1" || records >= 256) return;
+  if (!enabled || records >= 256) return;
   records++;
   console.log(`[output-pipeline] ${JSON.stringify({ record: records, ...event })}`);
 }

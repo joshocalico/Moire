@@ -26,6 +26,8 @@ export type DialogProps = {
   onClose?: () => void;
 };
 
+const absorbPress = () => {};
+
 export function Dialog(props: DialogProps): ReactNode {
   const theme = useWidgetTheme();
   const recipe = theme.recipes.dialog[props.size ?? "medium"];
@@ -56,6 +58,9 @@ export function Dialog(props: DialogProps): ReactNode {
       strokeWidth={recipe.surface.strokeWidth}
       elevation="high"
       clip
+      // A press on the dialog's own background (its text, a text field's margin) must not
+      // fall through to the modal barrier below, which would dismiss the dialog.
+      onPress={absorbPress}
     >
       <Vertical width={props.width} height={props.height} gap={0}>
         <Box width={props.width} height={recipe.metrics.titlebarHeight} flexShrink={0}>

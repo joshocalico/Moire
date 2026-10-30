@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#calendar/*": "./src/*.ts"
+  },
   "description": "Moire Calendar",
   "scripts": {
     "start": "tsx src/main.tsx",

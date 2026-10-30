@@ -1,57 +1,79 @@
 import React from "react";
 import {
-  Group,
   createShellRoot,
   renderShell,
   SoftwareRenderer,
   RetainedSceneRenderer,
+  type RetainedSceneFrame,
 } from "@moire/react-host";
-import { Backdrop, BrandMark, getMotionActivity, type SilkBackdropSource } from "@moire/ui";
+import { getMotionActivity, type SilkBackdropSource } from "@moire/ui";
 import { boundedBootViewport } from "./assets";
+import type { BootScene } from "./scene";
+import { foldScene } from "./scene-fold";
 
-export function BootView({
-  width,
-  height,
-  source,
-}: {
-  width: number;
-  height: number;
-  source: SilkBackdropSource;
-}) {
-  boundedBootViewport(width, height);
-  return (
-    <Group width={width} height={height}>
-      <Backdrop width={width} height={height} source={source} motion={{ kind: "static" }} />
-      <BrandMark
-        x={width * 0.12}
-        y={height * 0.29}
-        width={width * 0.203125}
-        height={height * 0.1075}
-        symbol={false}
-        color={0xffffe5d3}
-      />
-    </Group>
-  );
-}
+export type BootRootOptions = {
+  scene?: BootScene;
+  /** Scene time in seconds (defaults to a frozen clock). */
+  time?: () => number;
+  gpu?: boolean;
+};
 
 /** Own React root; no Application, Wayland window, D-Bus or shell is started. */
-export function createBootRoot(width: number, height: number, source: SilkBackdropSource) {
+export function createBootRoot(
+  width: number,
+  height: number,
+  source: SilkBackdropSource | null,
+  options: BootRootOptions = {},
+) {
   boundedBootViewport(width, height);
   const root = createShellRoot();
   const software = new SoftwareRenderer();
   const retained = new RetainedSceneRenderer();
-  renderShell(root, <BootView width={width} height={height} source={source} />);
+  const time = options.time ?? (() => 0);
+  const gpu = options.gpu ?? false;
+  let scene = options.scene ?? foldScene;
+  let reconciled = false;
+  const mount = () => {
+    const View = scene.View;
+    renderShell(
+      root,
+      <View width={width} height={height} time={time} gpu={gpu} artwork={source} />,
+    );
+    reconciled = true;
+  };
+  mount();
   let closed = false;
+  const live = () => {
+    if (closed) throw new Error("Boot React root is closed");
+  };
   return {
     root,
     source,
+    get scene(): BootScene {
+      return scene;
+    },
+    /** Swap the mounted scene in place (hot reload); the clock keeps running. */
+    setScene(next: BootScene) {
+      live();
+      scene = next;
+      mount();
+    },
     softwareFrame() {
-      if (closed) throw new Error("Boot React root is closed");
+      live();
       return software.render(root.container, { width, height });
     },
-    retainedFrame() {
-      if (closed) throw new Error("Boot React root is closed");
-      return retained.render(root.container, { width, height });
+    /** Full layer graph after a React commit, otherwise a cheap live-number refresh. */
+    retainedFrame(): RetainedSceneFrame {
+      live();
+      const viewport = { width, height };
+      if (reconciled) {
+        reconciled = false;
+        return retained.render(root.container, viewport);
+      }
+      return (
+        retained.renderPresentation(root.container, viewport) ??
+        retained.render(root.container, viewport)
+      );
     },
     motionActivity: getMotionActivity,
     close() {
@@ -61,3 +83,5 @@ export function createBootRoot(width: number, height: number, source: SilkBackdr
     },
   };
 }
+
+export type BootRoot = ReturnType<typeof createBootRoot>;

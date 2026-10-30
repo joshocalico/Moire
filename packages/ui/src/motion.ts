@@ -28,6 +28,8 @@ type TickableMotion = {
   tick(dt: number): boolean;
   isActive(): boolean;
   presentationOnly?: boolean;
+  /** Components subscribed to this value re-render themselves as it changes. */
+  hasSubscribers?(): boolean;
 };
 
 const registry = new Set<TickableMotion>();
@@ -41,6 +43,7 @@ class MotionValueImpl implements MotionValue {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
+  hasSubscribers = (): boolean => this.listeners.size > 0;
   snapshot = (): number => this._value;
   private publish(previous: number): void {
     if (previous !== this._value) for (const listener of this.listeners) listener();
@@ -169,6 +172,7 @@ class TweenValueImpl implements TweenValue {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
+  hasSubscribers = (): boolean => this.listeners.size > 0;
   snapshot = (): number => this.value;
   private publish(previous: number): void {
     if (previous !== this.value) for (const listener of this.listeners) listener();
@@ -454,6 +458,31 @@ export function useDampedValue(target: number, options?: DampedValueOptions): An
   return value;
 }
 
+export type EntranceOptions = {
+  /** Milliseconds; 0 (reduced motion) shows the content settled immediately. */
+  duration: number;
+  /** Distance the content rises through, in pixels. */
+  rise?: number;
+};
+
+export type EntranceValues = Readonly<{ opacity: AnimationValue; translateY: AnimationValue }>;
+
+/**
+ * Fade and settle content in once, on mount. Spread the result onto a Group:
+ * `<Group {...useEntrance({ duration: motion.normalMs, rise: 6 })}>`.
+ */
+export function useEntrance(options: EntranceOptions): EntranceValues {
+  const progress = useAnimatedValue(1, {
+    initialValue: options.duration > 0 ? 0 : 1,
+    duration: options.duration,
+    easing: "ease-out",
+  });
+  const rise = options.rise ?? 0;
+  const translateY = useRef<AnimationValue | null>(null);
+  translateY.current ??= { get: () => Math.round((1 - progress.get()) * rise) };
+  return { opacity: progress, translateY: translateY.current };
+}
+
 export type OscillationOptions = {
   from: number;
   to: number;
@@ -636,6 +665,47 @@ export function useLoop(options: LoopOptions): AnimationValue {
   return value;
 }
 
+class FrameDriverImpl implements TickableMotion {
+  readonly presentationOnly = true;
+  private elapsed = 0;
+  playing = true;
+
+  get(): number {
+    return this.elapsed;
+  }
+
+  tick(dt: number): boolean {
+    if (!this.playing) return false;
+    this.elapsed += Math.max(0, dt);
+    return true;
+  }
+
+  isActive(): boolean {
+    return this.playing;
+  }
+
+  dispose(): void {
+    this.playing = false;
+    registry.delete(this);
+  }
+}
+
+/**
+ * Keep the window presenting every compositor frame while `playing`, without a React commit:
+ * for content drawn outside React each frame (a GPU scene surface). Returns elapsed seconds.
+ */
+export function useFrameDriver(playing = true): AnimationValue {
+  const ref = useRef<FrameDriverImpl | null>(null);
+  if (!ref.current) {
+    ref.current = new FrameDriverImpl();
+    registry.add(ref.current);
+  }
+  const value = ref.current;
+  value.playing = playing;
+  useEffect(() => () => value.dispose(), [value]);
+  return value;
+}
+
 export type MotionFrameResult = {
   active: boolean;
   presentationChanged: boolean;
@@ -676,7 +746,9 @@ export function tickMotionFrame(dt: number): MotionFrameResult {
     if (moving) active = true;
     if (!moving && !changed) continue;
     if (motion.presentationOnly) presentationChanged = true;
-    else requiresReconcile = true;
+    // A subscribed value has already re-rendered its own components (a hover tween); only
+    // values read without a subscription need the whole tree rendered again.
+    else if (!motion.hasSubscribers?.()) requiresReconcile = true;
   }
   return { active, presentationChanged, requiresReconcile };
 }

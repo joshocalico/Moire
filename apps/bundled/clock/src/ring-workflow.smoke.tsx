@@ -17,8 +17,10 @@ import {
   type WidgetTheme,
 } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
-import { ClockApp, RingNotices, type RingNotice } from "./main";
-import { AlarmStore } from "./time";
+import { windowControl } from "@moire/app-tools/testing";
+import { ClockApp } from "./main";
+import { AlarmStore } from "./backend";
+import { RingNotices, type RingNotice } from "./views/notices";
 class RetainedCpuPlatform extends HeadlessPlatform {
   override createWindow(options: Parameters<HeadlessPlatform["createWindow"]>[0]) {
     const native = super.createWindow(options);
@@ -109,7 +111,7 @@ function locateText(
   style: {
     fontSize: number;
     fontWeight?: "regular" | "medium" | "bold";
-    fontFamily?: "mono";
+    fontFamily?: "mono" | "display";
     color: number;
   },
   probeWidth = width,
@@ -517,10 +519,11 @@ try {
       assert.ok(at, `actual Clock control ${name}`);
       click(at);
     };
-    click({ x: 620, y: 32 });
+    const control = (match: { text: string } | { focusId: string }) => windowControl(window, match);
+    click(control({ text: "Stopwatch" }));
     press("Start", "primary");
-    click({ x: 520, y: 32 });
-    text({ x: 60, y: 220 }, "00:01");
+    click(control({ text: "Timer" }));
+    text(control({ focusId: "clock:timer-duration" }), "00:01");
     press("Start Timer", "primary");
     wall += 1000;
     mono += 1000;
@@ -601,18 +604,18 @@ try {
     );
     press("Dismiss");
     press("Dismiss");
-    click({ x: 620, y: 32 });
+    click(control({ text: "Stopwatch" }));
     press("Pause", "primary");
     assert.ok(
       locateText(backend, native.lastFrame!, width, height, theme, "00:00:03.00", {
-        fontSize: 44,
-        fontFamily: "mono",
+        fontSize: 84,
+        fontFamily: "display",
         color: theme.foundations.palette.text,
       }),
       "stopwatch remains independent through notices, resize and storage reload",
     );
-    click({ x: 712, y: 32 });
-    text({ x: 200, y: 140 }, "Draft alarm kept");
+    click(control({ text: "Alarms" }));
+    text(control({ focusId: "clock:alarm-label" }), "Draft alarm kept");
     const next = actor.load(wall);
     actor.write(
       [
@@ -628,11 +631,11 @@ try {
       next.revision,
       wall,
     );
-    press("Add Alarm");
+    press("Add Alarm", "primary");
     key("Escape");
-    press("Add Alarm");
+    press("Add Alarm", "primary");
     key("Enter");
-    press("Add Alarm");
+    press("Add Alarm", "primary");
     assert.ok(store.read(wall).some((alarm) => alarm.label === "Draft alarm kept"));
     assert.ok(store.read(wall).some((alarm) => alarm.id === "more"));
   } finally {

@@ -12,11 +12,13 @@ import { classifyEglExecution, hasOpaqueEglScene, type EglExecution } from "./eg
 import { closeFd } from "./libc";
 import { assertLinux } from "./platform";
 import { canRetireKmsFramebuffer, isKmsFramebufferWritable } from "./kms";
+import { createGles3, type Gles3 } from "./gles3";
 
 const EGL_PLATFORM_GBM_KHR = 0x31d7;
 const EGL_OPENGL_ES_API = 0x30a0;
 const EGL_RENDERABLE_TYPE = 0x3040;
 const EGL_OPENGL_ES2_BIT = 0x0004;
+const EGL_OPENGL_ES3_BIT = 0x0040;
 const EGL_RED_SIZE = 0x3024;
 const EGL_GREEN_SIZE = 0x3023;
 const EGL_BLUE_SIZE = 0x3022;
@@ -123,6 +125,28 @@ function uintOut(call: (out: unknown) => void): number {
   }
 }
 
+/** The EGL context current on this (single JS) thread, shared by every scaler. */
+let currentEglContext: unknown = null;
+
+// koffi type names are process-global: declare the extension prototypes once, so several
+// scalers (a compositor and its in-process greeter client) can coexist.
+let imageProtos: {
+  create: ReturnType<typeof koffi.proto>;
+  destroy: ReturnType<typeof koffi.proto>;
+  imageTargetTexture: ReturnType<typeof koffi.proto>;
+} | null = null;
+function eglImageProtos() {
+  return (imageProtos ??= {
+    create: koffi.proto(
+      "void *MoireEglCreateImage(void *display, void *context, unsigned int target, void *buffer, const int *attributes)",
+    ),
+    destroy: koffi.proto("unsigned int MoireEglDestroyImage(void *display, void *image)"),
+    imageTargetTexture: koffi.proto(
+      "void MoireGlEglImageTargetTexture(unsigned int target, void *image)",
+    ),
+  });
+}
+
 export type EglTransferCounter = { count: number; bytes: number };
 export type EglTransferOperation =
   | "textureUpload"
@@ -130,7 +154,20 @@ export type EglTransferOperation =
   | "dmabufImport"
   | "gpuCopy"
   | "cpuCopy";
-export type EglOutputOptions = { measureTransfers?: boolean };
+export type EglOutputOptions = {
+  measureTransfers?: boolean;
+  /**
+   * Request a GLES 3 context so GPU scene producers can render into the composition (see
+   * `producerGl`). Falls back to GLES 2 when the driver offers no ES3 config.
+   */
+  gles3?: boolean;
+};
+
+/** Scaler-owned render target a producer draws into; composes as an `EglResidentImage` layer. */
+export type EglProducerTarget = {
+  image: EglResidentImage;
+  framebuffer: number;
+};
 
 export type EglOutputInfo = {
   eglVendor: string;
@@ -151,9 +188,25 @@ export type EglScaleOutput = {
   targetHeight: number;
   targetPitch: number;
   target: Uint8Array;
+  /**
+   * Red, green and blue multipliers applied as the output is drawn (night light). Omitted for
+   * captures, so screenshots keep the composed colours.
+   */
+  colorScale?: OutputColorScale;
 };
 
+/** Per-channel multipliers (0–1) for an output's final pass. */
+export type OutputColorScale = readonly [red: number, green: number, blue: number];
+
 export type EglDirectOutput = Omit<EglScaleOutput, "targetPitch" | "target">;
+
+/** The final pass's colour matrix for a scale; null when it changes nothing. */
+export function outputColorMatrix(scale: OutputColorScale | undefined): number[] | null {
+  if (!scale || scale.every((channel) => channel === 1)) return null;
+  const [red, green, blue] = scale.map((channel) => Math.min(1, Math.max(0, channel)));
+  // Rows map straight-alpha RGBA; the fifth column is the offset.
+  return [red!, 0, 0, 0, 0, 0, green!, 0, 0, 0, 0, 0, blue!, 0, 0, 0, 0, 0, 1, 0];
+}
 
 export type EglDirectPresent = {
   framebufferId: number;
@@ -468,6 +521,9 @@ type ClientTargetPool = {
 
 export class EglOutputScaler {
   readonly info: EglOutputInfo;
+  /** GLES major version of the created context. */
+  readonly clientVersion: 2 | 3;
+  private producerBinding: Gles3 | null = null;
 
   get execution(): EglExecution {
     return classifyEglExecution(this.info);
@@ -589,8 +645,18 @@ export class EglOutputScaler {
   private readonly currentClientPool = new Map<string, string>();
   private nextClientTargetId = 1;
   private compositionFrame = 0;
+  /** Size of the logical scene the output pass samples (flat upload or retained scene). */
   private sourceWidth = 0;
   private sourceHeight = 0;
+  /**
+   * Allocated size of `sourceTexture`, the flat frame's upload target. Kept apart from
+   * `sourceWidth`: a retained composition sets that to its scene size without allocating this
+   * texture, and a flat frame after it (the locked frame, the retained fallback) must still
+   * allocate before uploading. A sub-image upload into an unallocated texture fails, and the
+   * output pass then samples an incomplete texture: a black screen.
+   */
+  private sourceTextureWidth = 0;
+  private sourceTextureHeight = 0;
   private sceneWidth = 0;
   private sceneHeight = 0;
   private backdropWidth = 0;
@@ -676,42 +742,52 @@ export class EglOutputScaler {
       throw new Error(`eglBindAPI failed: 0x${Number(eglGetError()).toString(16)}`);
     }
 
-    const configAttrs = new Int32Array([
-      EGL_RENDERABLE_TYPE,
-      EGL_OPENGL_ES2_BIT,
-      EGL_RED_SIZE,
-      8,
-      EGL_GREEN_SIZE,
-      8,
-      EGL_BLUE_SIZE,
-      8,
-      EGL_ALPHA_SIZE,
-      8,
-      EGL_NONE,
-    ]);
-    const configOut = koffi.alloc("void *", 1);
-    const configCount = koffi.alloc("int", 1);
-    let config: unknown;
-    try {
-      if (
-        !Number(eglChooseConfig(this.display, configAttrs, configOut, 1, configCount)) ||
-        (koffi.decode(configCount, "int") as number) < 1
-      ) {
-        throw new Error(`eglChooseConfig failed: 0x${Number(eglGetError()).toString(16)}`);
+    const chooseConfig = (renderable: number): unknown => {
+      const configAttrs = new Int32Array([
+        EGL_RENDERABLE_TYPE,
+        renderable,
+        EGL_RED_SIZE,
+        8,
+        EGL_GREEN_SIZE,
+        8,
+        EGL_BLUE_SIZE,
+        8,
+        EGL_ALPHA_SIZE,
+        8,
+        EGL_NONE,
+      ]);
+      const configOut = koffi.alloc("void *", 1);
+      const configCount = koffi.alloc("int", 1);
+      try {
+        if (
+          !Number(eglChooseConfig(this.display, configAttrs, configOut, 1, configCount)) ||
+          (koffi.decode(configCount, "int") as number) < 1
+        ) {
+          return null;
+        }
+        return koffi.decode(configOut, "void *");
+      } finally {
+        koffi.free(configOut);
+        koffi.free(configCount);
       }
-      config = koffi.decode(configOut, "void *");
-    } finally {
-      koffi.free(configOut);
-      koffi.free(configCount);
-    }
-    const contextAttrs = new Int32Array([EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE]);
-    this.context = eglCreateContext(this.display, config, null, contextAttrs);
-    if (pointerAddress(this.context) === 0n) {
+    };
+    const createContext = (version: 2 | 3): unknown => {
+      const config = chooseConfig(version === 3 ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_ES2_BIT);
+      if (!config) return null;
+      const contextAttrs = new Int32Array([EGL_CONTEXT_CLIENT_VERSION, version, EGL_NONE]);
+      const context = eglCreateContext(this.display, config, null, contextAttrs);
+      return pointerAddress(context) === 0n ? null : context;
+    };
+    const es3 = options.gles3 ? createContext(3) : null;
+    this.clientVersion = es3 ? 3 : 2;
+    this.context = es3 ?? createContext(2);
+    if (!this.context) {
       throw new Error(`eglCreateContext failed: 0x${Number(eglGetError()).toString(16)}`);
     }
     if (!Number(this.eglMakeCurrent(this.display, null, null, this.context))) {
       throw new Error(`surfaceless eglMakeCurrent failed: 0x${Number(eglGetError()).toString(16)}`);
     }
+    currentEglContext = this.context;
 
     const glGetString = this.gl.func(
       "const char *glGetString(unsigned int name)",
@@ -735,19 +811,14 @@ export class EglOutputScaler {
     ) {
       throw new Error("EGL dma-buf image entry points unavailable");
     }
-    this.eglCreateImage = koffi.decode(
-      createImagePtr,
-      koffi.proto(
-        "void *MoireEglCreateImage(void *display, void *context, unsigned int target, void *buffer, const int *attributes)",
-      ),
-    ) as NativeFunction;
+    this.eglCreateImage = koffi.decode(createImagePtr, eglImageProtos().create) as NativeFunction;
     this.eglDestroyImage = koffi.decode(
       destroyImagePtr,
-      koffi.proto("unsigned int MoireEglDestroyImage(void *display, void *image)"),
+      eglImageProtos().destroy,
     ) as NativeFunction;
     this.glEglImageTargetTexture = koffi.decode(
       imageTexturePtr,
-      koffi.proto("void MoireGlEglImageTargetTexture(unsigned int target, void *image)"),
+      eglImageProtos().imageTargetTexture,
     ) as NativeFunction;
 
     this.gbmBoCreate = this.gbm.func(
@@ -1201,6 +1272,7 @@ void main() {
   }
 
   beginFrame(source: Uint8Array, width: number, height: number): void {
+    this.bindContext();
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
     if (source.byteLength < width * height * 4) {
       throw new RangeError("Logical EGL scene buffer is too small");
@@ -1208,7 +1280,9 @@ void main() {
     this.glActiveTexture(GL_TEXTURE0);
     this.glBindTexture(GL_TEXTURE_2D, this.sourceTexture);
     this.outputSourceTexture = this.sourceTexture;
-    if (width !== this.sourceWidth || height !== this.sourceHeight) {
+    this.sourceWidth = width;
+    this.sourceHeight = height;
+    if (width !== this.sourceTextureWidth || height !== this.sourceTextureHeight) {
       this.glTexImage2D(
         GL_TEXTURE_2D,
         0,
@@ -1220,8 +1294,8 @@ void main() {
         GL_UNSIGNED_BYTE,
         source,
       );
-      this.sourceWidth = width;
-      this.sourceHeight = height;
+      this.sourceTextureWidth = width;
+      this.sourceTextureHeight = height;
     } else {
       this.glTexSubImage2D(
         GL_TEXTURE_2D,
@@ -1299,6 +1373,7 @@ void main() {
    * The caller keeps fd ownership on success and failure (EGL EXT import spec).
    */
   snapshotDmabuf(input: EglDmabufSnapshotInput): EglResidentImage {
+    this.bindContext();
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
     const { width, height, format, plane } = input;
     const eglInteger = (value: number, positive: boolean) =>
@@ -1418,6 +1493,7 @@ void main() {
         width,
         height,
         () => {
+          this.bindContext();
           const live = this.residentResource(image);
           const restoreReadback = this.preserveSnapshotState();
           try {
@@ -1435,6 +1511,7 @@ void main() {
         },
         () => {
           if (!this.residentImages.delete(image)) return;
+          this.bindContext();
           this.glDeleteFramebuffers(1, new Uint32Array([resource.framebuffer]));
           this.glDeleteTextures(1, new Uint32Array([resource.texture]));
         },
@@ -2100,6 +2177,7 @@ void main() {
 
   /** Compose retained, revisioned layers into one logical GPU scene. */
   beginComposition(scene: EglCompositionScene): DamageRect | null {
+    this.bindContext();
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
     if (scene.width < 1 || scene.height < 1) {
       throw new RangeError("EGL composition scene has invalid dimensions");
@@ -2295,7 +2373,7 @@ void main() {
     this.glUniform1f(this.opacityLocation, 1);
     this.glUniform1f(this.modeLocation, 0);
     this.glUniform1f(this.hasGeometryLocation, 0);
-    this.glUniform1f(this.hasColorMatrixLocation, 0);
+    this.setColorMatrix(outputColorMatrix(output.colorScale) ?? undefined);
     this.glUniform1f(this.outputSwizzleLocation, directScanout ? 1 : 0);
     this.glUniform1f(this.contentShapeModeLocation, 0);
     this.glDisable(GL_BLEND);
@@ -2657,6 +2735,7 @@ void main() {
     width: number,
     height: number,
   ): EglClientPresent | null {
+    this.bindContext();
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
     const key = `${channel}:${width}x${height}`;
     const previousKey = this.currentClientPool.get(channel);
@@ -2715,6 +2794,7 @@ void main() {
 
   /** Paint a renderer-neutral retained client scene directly into a dma-buf. */
   renderClientComposition(channel: string, scene: EglCompositionScene): EglClientPresent | null {
+    this.bindContext();
     if (this.destroyed) throw new Error("EGL output scaler is destroyed");
     const { width, height } = scene;
     const format = hasOpaqueEglScene(scene) ? DRM_FORMAT_XRGB8888 : DRM_FORMAT_ARGB8888;
@@ -2778,6 +2858,7 @@ void main() {
 
   /** Mark a client target reusable after wl_buffer.release. */
   releaseClientFrame(id: string): void {
+    this.bindContext();
     for (const pool of this.clientTargets.values()) {
       const target = pool.targets.find((candidate) => candidate.id === id);
       if (!target) continue;
@@ -2793,6 +2874,7 @@ void main() {
     width: number;
     height: number;
   } {
+    this.bindContext();
     this.beginComposition(scene);
     const bytes = scene.width * scene.height * 4;
     if (this.clientReadback?.byteLength !== bytes) {
@@ -2814,6 +2896,7 @@ void main() {
 
   /** Retire every target belonging to a destroyed Wayland surface. */
   dropClientChannel(channel: string): void {
+    this.bindContext();
     this.currentClientPool.delete(channel);
     for (const pool of this.clientTargets.values()) {
       if (pool.channel !== channel) continue;
@@ -2825,8 +2908,109 @@ void main() {
     }
   }
 
+  /**
+   * Several scalers may share a process (a compositor and its in-process greeter client), and GL
+   * calls go to whichever context is current: every entry point binds this scaler's own.
+   */
+  private bindContext(): void {
+    if (this.destroyed || currentEglContext === this.context) return;
+    if (!Number(this.eglMakeCurrent(this.display, null, null, this.context)))
+      throw new Error("eglMakeCurrent failed for this EGL output scaler");
+    currentEglContext = this.context;
+  }
+
+  /** WebGL2-shaped binding over this context for GPU scene producers; requires GLES 3. */
+  producerGl(): Gles3 {
+    if (this.destroyed) throw new Error("EGL output scaler is destroyed");
+    if (this.clientVersion !== 3) throw new Error("GPU scene producers require a GLES 3 context");
+    return (this.producerBinding ??= createGles3(this.gl));
+  }
+
+  /** An RGBA target a producer renders into, composed like any resident layer. */
+  createProducerTarget(width: number, height: number): EglProducerTarget {
+    this.bindContext();
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1)
+      throw new RangeError("Invalid producer target size");
+    const gl = this.producerGl();
+    const restore = this.preserveSnapshotState();
+    try {
+      const resource = { texture: gl.createTexture(), framebuffer: gl.createFramebuffer() };
+      this.configureTexture(resource.texture);
+      this.glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        width,
+        height,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        null,
+      );
+      try {
+        this.bindColorTarget(resource.framebuffer, resource.texture);
+      } catch (error) {
+        gl.deleteFramebuffer(resource.framebuffer);
+        gl.deleteTexture(resource.texture);
+        throw error;
+      }
+      const image: EglResidentImage = new EglResidentImage(
+        this,
+        width,
+        height,
+        () => {
+          this.bindContext();
+          const live = this.residentResource(image);
+          const restoreReadback = this.preserveSnapshotState();
+          try {
+            const pixels = new Uint8Array(width * height * 4);
+            this.glBindFramebuffer(GL_FRAMEBUFFER, live.framebuffer);
+            this.glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+            this.noteTransfer("gpuReadback", pixels.byteLength);
+            return pixels;
+          } finally {
+            restoreReadback();
+          }
+        },
+        () => {
+          if (!this.residentImages.delete(image)) return;
+          this.bindContext();
+          this.glDeleteFramebuffers(1, new Uint32Array([resource.framebuffer]));
+          this.glDeleteTextures(1, new Uint32Array([resource.texture]));
+        },
+      );
+      this.residentImages.set(image, resource);
+      return { image, framebuffer: resource.framebuffer };
+    } finally {
+      restore();
+    }
+  }
+
+  /**
+   * Run a producer's GL work against this context, then restore the state composition relies on
+   * (client-side vertex arrays need VAO 0 and no bound array buffer).
+   */
+  produce<T>(draw: (gl: Gles3) => T): T {
+    this.bindContext();
+    const gl = this.producerGl();
+    const restore = this.preserveSnapshotState();
+    try {
+      return draw(gl);
+    } finally {
+      gl.bindVertexArray(0);
+      gl.bindBuffer(0x8892 /* GL_ARRAY_BUFFER */, 0);
+      for (let unit = 7; unit >= 1; unit--) {
+        gl.activeTexture(GL_TEXTURE0 + unit);
+        gl.bindTexture(GL_TEXTURE_2D, 0);
+      }
+      this.glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+      restore();
+    }
+  }
+
   /** Render into a DRM-registered GBM BO without CPU readback. */
   renderOutputDirect(output: EglDirectOutput): EglDirectPresent {
+    this.bindContext();
     const target = this.directTargetFor(output, true);
     this.paintOutput(output, target.texture, target.framebuffer, true);
     // Software GBM renderers do not attach a kernel fence to their CPU work.
@@ -2843,6 +3027,7 @@ void main() {
 
   /** Diagnostic readback for direct-target conformance; not used to present. */
   readDirectOutput(output: EglDirectOutput, pixels: Uint8Array): void {
+    this.bindContext();
     const target = this.directTargetFor(output, false);
     const required = target.width * target.height * 4;
     if (pixels.byteLength < required) {
@@ -2854,6 +3039,7 @@ void main() {
   }
 
   renderOutput(output: EglScaleOutput): void {
+    this.bindContext();
     this.validateOutputBounds(output);
     if (
       output.targetPitch < output.targetWidth * 4 ||
@@ -2914,6 +3100,7 @@ void main() {
     this.destroyed = true;
     try {
       this.eglMakeCurrent(this.display, null, null, this.context);
+      currentEglContext = this.context;
       for (const pool of this.directTargets.values()) {
         for (const target of pool.targets) this.destroyDirectTarget(target);
       }
@@ -2953,6 +3140,7 @@ void main() {
     }
     try {
       this.eglMakeCurrent(this.display, null, null, null);
+      currentEglContext = null;
       this.eglDestroyContext(this.display, this.context);
       this.eglTerminate(this.display);
     } catch {

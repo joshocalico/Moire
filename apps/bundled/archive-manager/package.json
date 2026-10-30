@@ -6,7 +6,7 @@
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../../..",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/model.smoke.ts && tsx src/smoke.ts && tsx src/edit.smoke.ts && tsx src/publication.smoke.ts && tsx src/layout.smoke.tsx && tsx src/workflow.smoke.tsx"
   },
   "dependencies": {
     "@moire/app-tools": "workspace:*",

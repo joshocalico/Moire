@@ -1,210 +1,183 @@
-import React, { useEffect, useRef, useState, type ReactNode } from "react";
-import os from "node:os";
+import React, { type ReactNode } from "react";
+import { Box, Button, getUiScaleFactor, type WindowActions, type WindowSize } from "@moire/ui";
 import {
-  Button,
-  Label,
-  Row,
-  Column,
-  TextField,
-  SearchField,
-  ScrollArea,
-  Pressable,
-  ProgressBar,
-  Surface,
-  usePalette,
-  getUiScaleFactor,
-  type WindowSize,
-} from "@moire/ui";
-import { initialFile, localPath, runApp, startMain } from "@moire/app-tools";
-import { scanUsage, sizeLabel, type UsageScan, type UsageNode } from "./scan";
+  AppFrame,
+  CenteredMessage,
+  FileChooser,
+  TitleActions,
+  ToolButton,
+  appFrameBody,
+  formatBytes,
+  initialFile,
+  runApp,
+  startMain,
+} from "@moire/app-tools";
+import { statusText, tidyPath, visibleItems } from "./model";
+import { useDiskUsage } from "./use-disk-usage";
+import { PlaceBar } from "./place-bar";
+import { Results } from "./results";
+import { StartView } from "./start";
 
-export function DiskUsageApp(props: WindowSize & { initialPath?: string }): ReactNode {
+const TITLE = "Disk Usage";
+const APP_ID = "org.moire.DiskUsage";
+
+export function DiskUsageApp(
+  props: WindowSize & { initialPath?: string; window?: WindowActions | null },
+): ReactNode {
   const ui = getUiScaleFactor();
-  const pal = usePalette(),
-    [location, setLocation] = useState(props.initialPath ?? os.homedir());
-  const [scan, setScan] = useState<UsageScan | null>(null),
-    [trail, setTrail] = useState<UsageNode[]>([]);
-  const [query, setQuery] = useState(""),
-    [status, setStatus] = useState("Choose a folder to explore its allocated storage"),
-    [busy, setBusy] = useState(false);
-  const active = useRef<AbortController | null>(null),
-    disposed = useRef(false);
-  const scanFolder = async () => {
-    active.current?.abort();
-    const controller = new AbortController();
-    active.current = controller;
-    setBusy(true);
-    setStatus("Scanning…");
-    setScan(null);
-    setTrail([]);
-    try {
-      const result = await scanUsage(localPath(location), {
-        signal: controller.signal,
-        onProgress: (entries) => {
-          if (!disposed.current && !controller.signal.aborted)
-            setStatus(`Scanning · ${entries.toLocaleString()} entries`);
-        },
-      });
-      if (disposed.current || controller.signal.aborted) return;
-      setScan(result);
-      setTrail([result.root]);
-      setStatus(
-        `${result.entries.toLocaleString()} entries · ${result.skipped.length} skipped${result.truncated ? " · Partial scan: limit reached" : ""} · symlinks and other filesystems are not followed`,
-      );
-    } catch (error) {
-      if (!disposed.current && !controller.signal.aborted)
-        setStatus(`Scan failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      if (active.current === controller && !disposed.current) setBusy(false);
-    }
-  };
-  useEffect(
-    () => () => {
-      disposed.current = true;
-      active.current?.abort();
-    },
-    [],
-  );
-  const current = trail.at(-1),
-    width = Math.max(1, props.width - 32 * ui),
-    listHeight = Math.max(80 * ui, props.height - 254 * ui);
-  const children = (current?.children ?? []).filter((item) =>
-    item.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
-  );
+  const [state, controls, places] = useDiskUsage(props.initialPath);
+  const { scan, query } = state;
+  const home = places.home;
+  const trail = scan.kind === "ready" ? scan.trail : [];
+  const current = trail.at(-1);
+  const items = visibleItems(state);
+  const selected = items.find((item) => item.path === state.selected) ?? null;
+  const body = appFrameBody({ height: props.height, title: TITLE, controls: !!current });
+  const choose = () => controls.dispatch({ type: "choosing", open: true });
+  const lastRoot =
+    scan.kind === "idle" ? null : scan.kind === "ready" ? scan.result.root.path : scan.root;
+  const picks = places.picks.map((pick) => ({ ...pick, detail: tidyPath(pick.path, home) }));
+  const toolRow = current ? (
+    <PlaceBar
+      width={props.width}
+      trail={trail}
+      home={home}
+      query={query}
+      onGoTo={(depth) => controls.dispatch({ type: "go-to", depth })}
+      onQuery={(value) => controls.dispatch({ type: "query", query: value })}
+    />
+  ) : null;
   return (
-    <Surface width={props.width} height={props.height} fill={pal.bg}>
-      <Column x={16 * ui} y={16 * ui} width={width} height={props.height - 32 * ui} gap={12 * ui}>
-        <Row width={width} height={32 * ui} gap={10 * ui}>
-          <Label
-            width={Math.max(1, width - 100 * ui)}
-            height={32 * ui}
-            text="Disk Usage"
-            fontSize={22}
-            fontWeight="medium"
-          />
-          <Button
-            width={90 * ui}
-            height={32 * ui}
-            label={busy ? "Cancel" : "Scan"}
-            onPress={() => {
-              if (busy) {
-                active.current?.abort();
-                setBusy(false);
-                setStatus("Scan cancelled");
-              } else void scanFolder();
-            }}
-          />
-        </Row>
-        <TextField
-          width={width}
-          height={34 * ui}
-          value={location}
-          onChange={setLocation}
-          onSubmit={() => void scanFolder()}
-          placeholder="Folder path"
-        />
-        <Row width={width} height={32 * ui} gap={10 * ui}>
-          <Button
-            width={70 * ui}
-            height={32 * ui}
-            label="Up"
-            disabled={trail.length < 2}
-            onPress={() => setTrail((items) => items.slice(0, -1))}
-          />
-          <Label
-            width={Math.max(1, width - 80 * ui)}
-            height={32 * ui}
-            text={
-              current
-                ? `${current.name} · ${sizeLabel(current.allocated)} allocated · ${sizeLabel(current.logical)} logical`
-                : "Scan a folder, then open its largest subfolders"
-            }
-            overflow="ellipsis"
-          />
-        </Row>
-        <SearchField
-          width={width}
-          height={32 * ui}
-          value={query}
-          onChange={setQuery}
-          placeholder="Filter this folder"
-        />
-        <ScrollArea
-          width={width}
-          height={listHeight}
-          contentHeight={Math.max(listHeight, children.length * 58 * ui)}
-        >
-          <Column
-            width={width - 12 * ui}
-            height={Math.max(listHeight, children.length * 58 * ui)}
-            gap={4 * ui}
-          >
-            {children.map((item) => (
-              <Pressable
-                key={item.path}
-                width={width - 12 * ui}
-                height={54 * ui}
-                focusId={`usage:${item.path}`}
-                focusable={item.kind === "directory"}
-                disabled={item.kind !== "directory"}
-                onPress={
-                  item.kind !== "directory"
-                    ? undefined
-                    : () => {
-                        setTrail((items) => [...items, item]);
-                        setQuery("");
-                      }
-                }
-              >
-                <Column x={8 * ui} y={5 * ui} width={width - 28 * ui} height={44 * ui} gap={5 * ui}>
-                  <Row width={width - 28 * ui} height={22 * ui} justify="space-between">
-                    <Label
-                      width={Math.max(1, width - 165 * ui)}
-                      height={22 * ui}
-                      text={`${item.kind === "directory" ? "> " : item.kind === "symlink" ? "@ " : ""}${item.name}`}
-                      overflow="ellipsis"
-                    />
-                    <Label
-                      width={120 * ui}
-                      height={22 * ui}
-                      text={sizeLabel(item.allocated)}
-                      horizontalAlign="end"
-                      fontFamily="mono"
-                    />
-                  </Row>
-                  <ProgressBar
-                    width={width - 28 * ui}
-                    height={7 * ui}
-                    value={current?.allocated ? item.allocated / current.allocated : 0}
-                  />
-                </Column>
-              </Pressable>
-            ))}
-            {scan && children.length === 0 && (
-              <Label
-                width={width - 20 * ui}
-                height={40 * ui}
-                text={query ? "No matching entries" : "This folder is empty"}
-                color={pal.muted}
+    <Box width={props.width} height={props.height}>
+      <AppFrame
+        {...props}
+        title={TITLE}
+        icon="disk-usage"
+        subtitle={lastRoot ? tidyPath(lastRoot, home) : undefined}
+        controls={toolRow}
+        status={statusText(state)}
+        statusEnd={current ? `${items.length} shown` : undefined}
+        actions={
+          scan.kind === "scanning" ? (
+            <TitleActions>
+              <Button
+                width={84 * ui}
+                height={32 * ui}
+                label="Cancel"
+                focusId="usage:cancel"
+                onPress={controls.cancel}
               />
-            )}
-          </Column>
-        </ScrollArea>
-        <Label
-          width={width}
-          height={32 * ui}
-          text={status}
-          fontSize={11}
-          color={pal.muted}
-          wrap
-          maxLines={2}
+            </TitleActions>
+          ) : (
+            <TitleActions>
+              {current ? (
+                <ToolButton
+                  icon="forward"
+                  tooltip={
+                    selected ? `Show “${selected.name}” in Files` : "Show this folder in Files"
+                  }
+                  focusId="usage:show"
+                  onPress={() => controls.show(selected?.path ?? current.path)}
+                />
+              ) : null}
+              {lastRoot ? (
+                <ToolButton
+                  icon="restart"
+                  tooltip="Scan again"
+                  focusId="usage:rescan"
+                  onPress={() => controls.scan(lastRoot)}
+                />
+              ) : null}
+              {lastRoot ? (
+                <ToolButton
+                  icon="folder"
+                  tooltip="Choose another folder…"
+                  focusId="usage:choose-other"
+                  onPress={choose}
+                />
+              ) : null}
+            </TitleActions>
+          )
+        }
+      >
+        {scan.kind === "scanning" ? (
+          <CenteredMessage
+            width={props.width}
+            height={body.height}
+            icon="disk-usage"
+            title={`Measuring ${tidyPath(scan.root, home)}`}
+            message={`${scan.entries.toLocaleString()} items · ${formatBytes(scan.bytes)} so far`}
+            action={
+              <Button
+                width={120 * ui}
+                height={36 * ui}
+                label="Cancel scan"
+                focusId="usage:cancel-scan"
+                onPress={controls.cancel}
+              />
+            }
+            actionWidth={120 * ui}
+          />
+        ) : current ? (
+          <Results
+            width={props.width}
+            height={body.height}
+            current={current}
+            items={items}
+            view={state.view}
+            sort={state.sort}
+            selected={state.selected}
+            filtered={!!query.trim()}
+            onView={(view) => controls.dispatch({ type: "view", view })}
+            onSort={(sort) => controls.dispatch({ type: "sort", sort })}
+            onSelect={(item) => controls.dispatch({ type: "select", path: item.path })}
+            onActivate={(item) =>
+              item.kind === "directory"
+                ? controls.dispatch({ type: "enter", node: item })
+                : controls.show(item.path)
+            }
+          />
+        ) : (
+          <StartView
+            width={props.width}
+            height={body.height}
+            title={
+              scan.kind === "failed"
+                ? "Couldn't scan this folder"
+                : scan.kind === "cancelled"
+                  ? "Scan cancelled"
+                  : "See what uses your storage"
+            }
+            message={
+              scan.kind === "failed"
+                ? scan.message
+                : "Choose a folder, or scan one of these, to rank everything in it by the space it takes."
+            }
+            tone={scan.kind === "failed" ? "danger" : undefined}
+            picks={picks}
+            onChoose={choose}
+            onPick={controls.scan}
+          />
+        )}
+      </AppFrame>
+      {state.choosing ? (
+        <FileChooser
+          width={props.width}
+          height={props.height}
+          mode="folder"
+          appId={APP_ID}
+          title="Choose a folder to scan"
+          directory={lastRoot ?? (home || undefined)}
+          onChoose={controls.scan}
+          onCancel={() => controls.dispatch({ type: "choosing", open: false })}
         />
-      </Column>
-    </Surface>
+      ) : null}
+    </Box>
   );
 }
+
 startMain(import.meta.url, () =>
-  runApp("Disk Usage", "org.moire.DiskUsage", (size) => (
-    <DiskUsageApp {...size} initialPath={initialFile() || undefined} />
+  runApp(TITLE, APP_ID, (size, window) => (
+    <DiskUsageApp {...size} window={window} initialPath={initialFile() || undefined} />
   )),
 );

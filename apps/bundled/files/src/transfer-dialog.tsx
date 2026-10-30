@@ -21,9 +21,9 @@ import {
   measureColumnContent,
   type IconName,
 } from "@moire/ui";
-import { formatBytes } from "./format";
-import { inspectionModifiedAt } from "./inspector";
-import type { ConflictChoice, Progress, TransferKind } from "./filesystem";
+import { formatBytes, formatTimestamp } from "./format";
+import { iconFor } from "./model";
+import type { ConflictChoice, Progress, TransferKind } from "@moire/file-operations";
 import {
   transferOutcomeDetail,
   transferOutcomeHeading,
@@ -55,14 +55,7 @@ export function displayTransferPath(file: string): string {
 }
 
 function itemIcon(name: string, kind?: TransferItemMetadata): IconName {
-  if (kind?.state === "available" && kind.kind === "folder") return "folder";
-  const extension = path.extname(name).toLowerCase();
-  if ([".pdf", ".txt", ".md", ".odt", ".doc", ".docx"].includes(extension)) return "document";
-  if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(extension)) return "image";
-  if ([".mp3", ".wav", ".flac", ".ogg", ".opus"].includes(extension)) return "music";
-  if ([".mp4", ".mkv", ".webm", ".mov"].includes(extension)) return "video";
-  if ([".zip", ".tar", ".gz", ".xz", ".7z"].includes(extension)) return "archive";
-  return "file";
+  return iconFor({ name, isDir: kind?.state === "available" && kind.kind === "folder" });
 }
 
 /** Static transfer presentation. Counts and timing come only from real operation receipts. */
@@ -226,7 +219,7 @@ export function TransferDialog(props: {
               />
               <TextBlock
                 width={contentWidth}
-                text={`Modified ${inspectionModifiedAt(item.modified, true)}`}
+                text={`Modified ${formatTimestamp(item.modified, true)}`}
                 fontSize={12}
                 color={pal.muted}
                 wrap

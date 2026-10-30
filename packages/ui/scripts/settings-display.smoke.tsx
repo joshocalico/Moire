@@ -14,6 +14,8 @@ import {
 import { installUiFonts } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
 import { SettingsApp } from "../../../apps/core/settings/src/main";
+import { settingsFixture } from "../../../apps/core/settings/src/testing";
+import { initialRoute } from "../../../apps/core/settings/src/catalog";
 
 await installUiFonts();
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "moire-settings-display-"));
@@ -25,7 +27,7 @@ const saved = {
 process.env.HOME = fixture;
 process.env.XDG_CONFIG_HOME = path.join(fixture, ".config");
 process.env.MOIRE_SETTINGS_TAB = "1";
-type Controller = NonNullable<Parameters<typeof SettingsApp>[0]["display"]>;
+type Controller = NonNullable<Parameters<typeof SettingsApp>[0]["services"]["display"]>;
 const oldMode = "1280x800@60000",
   newMode = "1024x768@60000";
 let actual: Awaited<ReturnType<Controller["getState"]>> = {
@@ -91,13 +93,15 @@ const display: Controller = {
   },
 };
 const root = createShellRoot();
+// MOIRE_SETTINGS_TAB=1 is the old Displays tab: the deep-link shim still opens Displays.
+const settings = settingsFixture(loadSettings());
 const tree = (
   <SettingsApp
     width={640}
     height={1000}
-    initial={loadSettings()}
-    display={display}
-    onQuit={() => {}}
+    {...settings.props}
+    route={initialRoute(process.env)}
+    services={{ ...settings.props.services, display }}
   />
 );
 const refresh = () => renderShell(root, tree);

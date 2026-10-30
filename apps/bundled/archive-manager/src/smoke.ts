@@ -94,7 +94,9 @@ await withFixture(async (directory) => {
     extractArchive(escape, path.join(directory, "escaped")),
     /Unsafe archive path/,
   );
-  await assert.rejects(fs.stat(path.join(directory, "outside")), { code: "ENOENT" });
+  await assert.rejects(fs.stat(path.join(directory, "outside")), {
+    code: "ENOENT",
+  });
   const previousLocale = process.env.LC_ALL;
   process.env.LC_ALL = "C";
   try {

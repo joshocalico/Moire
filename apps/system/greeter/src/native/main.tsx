@@ -16,6 +16,7 @@ import type {
 import { createNativeGreeterController } from "./controller";
 import type { NativeGreeterController, NativeGreeterOutcome } from "./types";
 import { NativeGreeterView } from "./view";
+import { nativeGreeterPersonalization } from "./silk";
 import type { LocalUserProvider } from "./local-users";
 
 export type RunNativeGreeterOptions = Readonly<{
@@ -30,6 +31,11 @@ export type RunNativeGreeterOptions = Readonly<{
   now?: Date;
   /** Staged account-picker entry. Production activation requires its metadata service. */
   users?: LocalUserProvider;
+  /**
+   * "compositor": the compositor draws the backdrop scene beneath a transparent greeter
+   * window (see ./scene). Otherwise the greeter paints its own static backdrop.
+   */
+  backdrop?: "compositor" | "own";
   /** Called after the actual public Window is mounted. It grants no session authority. */
   onMounted?: (window: Window, controller: NativeGreeterController) => void;
 }>;
@@ -70,6 +76,7 @@ function Presentation(
       reducedMotion={props.reducedMotion}
       onReducedMotionChange={props.onReducedMotionChange}
       users={props.options.users}
+      compositorBackdrop={props.options.backdrop === "compositor"}
     />
   );
 }
@@ -98,12 +105,10 @@ export async function runNativeGreeter(
     let reducedMotion =
       options.reducedMotion ??
       discoverPersonalization("linux", { source: "application" }).reducedMotion;
-    const personalization: PersonalizationOverrides = {
-      source: "application",
-      themeFamily: "moire",
-      colorScheme: options.colorScheme ?? "dark",
+    const personalization: PersonalizationOverrides = nativeGreeterPersonalization({
+      colorScheme: options.colorScheme,
       fontScale,
-    };
+    });
     if (
       options.sessionLabel !== undefined &&
       (options.sessionLabel.length > 160 ||

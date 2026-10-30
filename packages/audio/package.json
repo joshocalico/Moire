@@ -1,0 +1,23 @@
+{
+  "name": "@moire/audio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PipeWire for Moire: a native-protocol control client, SPA POD codec, and sound playback and level metering over libpipewire",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx src/pod.smoke.ts && tsx src/control.smoke.ts && tsx src/audio-devices.smoke.ts && tsx src/audio-status.smoke.ts && tsx src/sound.smoke.ts && tsx src/test-devices.smoke.ts"
+  },
+  "dependencies": {
+    "@moire/sys": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

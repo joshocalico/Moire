@@ -8,7 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "smoke": "tsx src/wallpaper-image.smoke.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -16,6 +17,7 @@
     "typescript": "^5.7.2"
   },
   "dependencies": {
+    "@moire/file-formats": "workspace:*",
     "pngjs": "^7.0.0"
   }
 }

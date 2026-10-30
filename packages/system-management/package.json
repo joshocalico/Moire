@@ -9,14 +9,26 @@
     "./network-status": "./src/network-status.ts",
     "./battery-status": "./src/battery-status.ts",
     "./bluetooth-status": "./src/bluetooth-status.ts",
-    "./storage-status": "./src/storage-status.ts"
+    "./storage-status": "./src/storage-status.ts",
+    "./index-status": "./src/index-status.ts",
+    "./settings-service": "./src/settings-service.ts",
+    "./time-settings": "./src/time-settings.ts",
+    "./accounts-settings": "./src/accounts-settings.ts",
+    "./login-settings": "./src/login-settings.ts",
+    "./input-settings": "./src/input-settings.ts",
+    "./power-settings": "./src/power-settings.ts",
+    "./brightness": "./src/brightness.ts",
+    "./password-check": "./src/password-check.ts",
+    "./vpn-config": "./src/vpn-config.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@moire/dbus": "workspace:*"
+    "@moire/dbus": "workspace:*",
+    "@moire/file-operations": "workspace:*",
+    "@moire/prefs": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

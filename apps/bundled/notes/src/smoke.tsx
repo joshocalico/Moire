@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import React from "react";
-import { NotesStore, createNote, filterNotes } from "./store";
+import { NotesStore, createNote } from "./store";
+import { filterNotes } from "./model";
 import { NotesApp } from "./main";
 import { harness, noteAction } from "./testing";
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "moire-notes-smoke-"));
@@ -14,10 +16,14 @@ try {
   book = store.save({ ...book, notes: [first] });
   assert.equal(fs.statSync(store.file).mode & 0o777, 0o600);
   const stale = { ...book };
-  fs.writeFileSync(path.join(fixture, ".write-lock"), "2147483647");
+  // A lock left by a writer that died mid-save is reclaimed rather than blocking Notes forever.
+  const lock = `${store.file}.write-lock`;
+  fs.mkdirSync(lock);
+  fs.writeFileSync(path.join(lock, `2147483647-${randomUUID()}.owner`), "");
   book = store.save({ ...book, notes: [{ ...first, body: "updated" }] });
   assert.throws(() => store.save(stale), /another window/);
   assert.equal(store.load().notes[0]?.body, "updated");
+  assert.equal(fs.existsSync(lock), false, "the stale lock was not reclaimed");
   const app = await harness((size, window) => (
     <NotesApp
       {...size}
@@ -62,11 +68,11 @@ try {
   assert.equal(conflicted.window.isClosed(), false, "save conflict discarded an unsaved draft");
   assert.equal(store.load().notes[0]?.body, "external revision");
   // Explicitly discard the retained draft through the real Reload confirmation.
-  await noteAction(conflicted, 3);
+  await noteAction(conflicted, "reload");
   conflicted.key(28, "Enter");
   await conflicted.settle();
   const count = store.load().notes.length;
-  await noteAction(conflicted, 4);
+  await noteAction(conflicted, "delete");
   conflicted.key(28, "Enter");
   await conflicted.settle();
   assert.equal(

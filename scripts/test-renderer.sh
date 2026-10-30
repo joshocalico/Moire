@@ -41,7 +41,7 @@ if [[ "$(uname -s)" != Linux ]]; then
 fi
 export MOIRE_GPU_METRICS=1
 MOIRE_TEST_CONTENT_SHAPE_EGL=1 run packages/core/src/window-content-shape.smoke.ts
-run packages/ui/src/platforms/wayland/shm-format.native.smoke.ts
+run packages/ui/src/platforms/wayland/shm-format.native.smoke.tsx
 run packages/sys/src/egl-resident.smoke.ts
 run packages/sys/src/egl-capability.native.smoke.ts
 run packages/sys/src/gbm-import.native.smoke.ts

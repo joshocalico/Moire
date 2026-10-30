@@ -1,0 +1,24 @@
+// Networking: Wi-Fi connect, disconnect and forget, VPNs, the radio switches behind airplane
+// mode, and the proxy of profiles the user owns. Moire has no polkit authentication agent, so
+// each allowance is a YES for an active, local session; anything else falls through to the
+// immutable 01-moire-deny-unapproved.rules (docs/settings-redesign.md, "Network & Bluetooth
+// backend").
+polkit.addRule(function(action, subject) {
+  if (subject.user === "root") return;
+  if (subject.local !== true || subject.active !== true) return;
+  // Not granted: settings.modify.system (profiles every user shares, such as the wired
+  // connection NetworkManager creates; changing them stays root's), enable-disable-network,
+  // sleep-wake, hotspots (wifi.share.*), hostname, global DNS, statistics, connectivity checks,
+  // checkpoints and reload.
+  var allowed = [
+    // Activate, deactivate and reapply connections.
+    "org.freedesktop.NetworkManager.network-control",
+    // Add, change and delete profiles whose connection.permissions name only the caller: the
+    // temporary Wi-Fi profiles and imported VPNs Moire creates.
+    "org.freedesktop.NetworkManager.settings.modify.own",
+    "org.freedesktop.NetworkManager.wifi.scan",
+    "org.freedesktop.NetworkManager.enable-disable-wifi",
+    "org.freedesktop.NetworkManager.enable-disable-wwan"
+  ];
+  if (allowed.indexOf(action.id) !== -1) return polkit.Result.YES;
+});

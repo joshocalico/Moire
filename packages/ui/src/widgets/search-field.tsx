@@ -20,11 +20,14 @@ export function SearchField(props: SearchFieldProps): ReactNode {
       trailing={
         canClear
           ? (style) => (
+              // Not a focus stop: pressing it lands on the field underneath, so focus stays
+              // there and typing continues. Keyboard users clear with Ctrl+A, Backspace.
               <IconButton
                 width={style.size}
                 height={style.size}
                 size="small"
                 variant="ghost"
+                focusable={false}
                 icon={(iconStyle) => (
                   <Icon
                     symbolic

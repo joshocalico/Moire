@@ -5,6 +5,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import React from "react";
 import { runTool, PlayerApp, type PlaybackState } from "@moire/app-tools";
 import { withFixture } from "@moire/app-tools/testing";
@@ -16,7 +17,8 @@ import {
   setUiScaleFactor,
 } from "@moire/ui";
 import { MusicApp } from "./main";
-import { MusicLibraryStore, albumsFor, filterTracks, importMusic, probeTrack } from "./library";
+import { MusicLibraryStore, importMusic, probeTrack } from "./library";
+import { albumsFor, filterTracks } from "./model";
 import { musicHarness } from "./testing";
 import type { QueueEntry, MusicPlaybackOptions } from "./controller";
 const captureDirectory = process.env.MOIRE_MUSIC_CAPTURE_DIR ?? "/tmp/moire-music-v0-captures";
@@ -140,10 +142,10 @@ await withFixture(async (directory) => {
       ),
     });
   assert.throws(() => store.save(stale), /another window/);
-  const lock = path.join(store.directory, ".write-lock");
-  await fs.writeFile(lock, "");
-  const old = new Date(Date.now() - 31000);
-  await fs.utimes(lock, old, old);
+  // A lock left by a writer that died mid-save is reclaimed rather than blocking saves forever.
+  const lock = `${store.file}.write-lock`;
+  await fs.mkdir(lock);
+  await fs.writeFile(path.join(lock, `2147483647-${randomUUID()}.owner`), "");
   store.save(saved);
   assert.ok(!fsSync.existsSync(lock), "crashed partial lock was not recovered");
   const before = await fs.readFile(store.file, "utf8");

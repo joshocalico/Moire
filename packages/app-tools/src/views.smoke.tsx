@@ -69,10 +69,16 @@ await withFixture(async (directory) => {
   const root = createShellRoot();
   const tree = <ImageViewerApp width={860} height={620} initialPath={source} />;
   const refresh = () => renderShell(root, tree);
-  const findImage = (node: SceneNode): SceneNode | null =>
-    node.kind === "image"
-      ? node
-      : (node.children.map(findImage).find((value) => value !== null) ?? null);
+  // The viewed bitmap is the largest image node; title bar and tool icons are small rasters too.
+  const findImage = (node: SceneNode): SceneNode | null => {
+    const images: SceneNode[] = [];
+    const walk = (current: SceneNode) => {
+      if (current.kind === "image") images.push(current);
+      current.children.forEach(walk);
+    };
+    walk(node);
+    return images.sort((a, b) => b.width * b.height - a.width * a.height)[0] ?? null;
+  };
   const wait = async (condition: () => boolean) => {
     for (let attempt = 0; attempt < 200 && !condition(); attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -80,45 +86,30 @@ await withFixture(async (directory) => {
     }
     assert.ok(condition(), "real image workflow did not render");
   };
-  const press = (label: string) => {
-    const find = (node: SceneNode, x = 0, y = 0): { x: number; y: number } | null => {
-      x += node.x;
-      y += node.y;
-      if (node.kind === "text" && node.text === label) return { x, y };
-      for (const child of node.children) {
-        const result = find(child, x, y);
-        if (result) return result;
-      }
-      return null;
-    };
-    const position = find(root.container);
-    assert.ok(position, `Missing control ${label}`);
+  const press = (focusId: string) => {
     const hit = collectHits(root.container).find(
-      (hit) =>
-        hit.focusable &&
-        hit.onPress &&
-        position.x >= hit.x &&
-        position.x < hit.x + hit.width &&
-        position.y >= hit.y &&
-        position.y < hit.y + hit.height,
+      (hit) => hit.focusable && hit.onPress && hit.focusId === focusId,
     );
-    assert.ok(hit?.onPress);
+    assert.ok(hit?.onPress, `Missing control ${focusId}`);
     hit.onPress({ x: hit.x + 2, y: hit.y + 2, localX: 2, localY: 2 });
     refresh();
   };
   try {
     refresh();
     await wait(() => findImage(root.container)?.imageWidth === 64);
-    press("Rotate right");
+    press("image:rotate-right");
     await wait(() => findImage(root.container)?.imageWidth === 32);
     assert.equal(findImage(root.container)?.imageHeight, 64);
-    press("100%");
+    press("image:actual");
     assert.equal(findImage(root.container)?.width, 32);
     assert.equal(findImage(root.container)?.height, 64);
-    press("+");
-    assert.ok((findImage(root.container)?.width ?? 0) > 32);
-    press("Fit");
-    assert.ok((findImage(root.container)?.width ?? 0) > 32);
+    press("image:zoom-in");
+    const zoomed = findImage(root.container)?.width ?? 0;
+    assert.ok(zoomed > 32);
+    press("image:fit");
+    // Fit never upscales past 100%, so a small image returns to its natural size.
+    assert.ok((findImage(root.container)?.width ?? 0) < zoomed);
+    assert.equal(findImage(root.container)?.height, 64);
     assert.ok((await fs.stat(source)).size > 0);
   } finally {
     renderShell(root, null);

@@ -50,6 +50,8 @@ export type NavigationSidebarProps = {
   onMove?: (item: NavigationSidebarItem, direction: -1 | 1) => void;
   header?: ReactNode;
   footer?: ReactNode;
+  /** Height the footer needs, separator included; 44 by default. */
+  footerHeight?: number;
   labelCase?: "upper" | "preserve";
   getItemProps?: (
     item: NavigationSidebarItem,
@@ -63,6 +65,9 @@ export type NavigationSidebarProps = {
 const ROW_H = 40;
 const HEADER_H = 26;
 const SECTION_GAP = 8;
+const FOOTER_H = 44;
+/** Rows the list keeps visible before a pinned footer gives way and scrolls with them. */
+const MIN_PINNED_ROWS = 2;
 
 type SidebarRowProps = {
   item: NavigationSidebarItem;
@@ -181,11 +186,23 @@ export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {
   const pal = theme.foundations.palette;
   const pad = theme.foundations.space.md;
   const headerHeight = props.header ? 36 : 0;
-  const footerHeight = props.footer ? 44 : 0;
+  const footerHeight = props.footer ? (props.footerHeight ?? FOOTER_H) : 0;
+  // A footer pinned under a list too short for a couple of rows would crowd the rows out, or be
+  // pushed past the bottom edge; in a short sidebar it scrolls after the rows instead.
+  const pinFooter = props.height - headerHeight - footerHeight >= ROW_H * MIN_PINNED_ROWS;
+  const scrolledFooterHeight = props.footer && !pinFooter ? footerHeight + SECTION_GAP : 0;
   const contentHeight = props.sections.reduce<number>(
     (height, section) =>
       height + (section.label ? HEADER_H : 0) + section.items.length * ROW_H + SECTION_GAP,
-    pad,
+    pad + scrolledFooterHeight,
+  );
+  const footer = (horizontalPadding: number) => (
+    <Inset height={footerHeight} padding={{ horizontal: horizontalPadding }}>
+      <Vertical gap={7}>
+        <Measure height={1}>{({ width }) => <Separator width={width} />}</Measure>
+        <Box flexGrow={1}>{props.footer}</Box>
+      </Vertical>
+    </Inset>
   );
 
   return (
@@ -257,18 +274,12 @@ export function NavigationSidebar(props: NavigationSidebarProps): ReactNode {
                     ))}
                   </Vertical>
                 ))}
+                {props.footer && !pinFooter ? footer(pad / 2) : null}
               </Vertical>
             </ScrollArea>
           )}
         </Measure>
-        {props.footer ? (
-          <Inset height={footerHeight} padding={{ horizontal: pad }}>
-            <Vertical gap={7}>
-              <Measure height={1}>{({ width }) => <Separator width={width} />}</Measure>
-              <Box flexGrow={1}>{props.footer}</Box>
-            </Vertical>
-          </Inset>
-        ) : null}
+        {props.footer && pinFooter ? footer(pad) : null}
       </Vertical>
     </Surface>
   );

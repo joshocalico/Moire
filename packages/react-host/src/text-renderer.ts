@@ -9,6 +9,8 @@ export type TextDrawStyle = {
   fontSize?: number;
   fontWeight?: "regular" | "medium" | "bold" | string;
   fontFamily?: "sans" | "mono" | string;
+  /** Extra advance after each glyph, in pixels (negative tightens). */
+  letterSpacing?: number;
 };
 
 export type TextRenderer = {

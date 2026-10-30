@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PNG } from "pngjs";
+import { resizeImage } from "@moire/file-formats/image";
 import { parseThemeFamily, type ThemeFamily } from "./families";
 export {
   windowControlLayout,
@@ -15,6 +15,11 @@ export {
 } from "./families";
 export type { ThemeFamily } from "./families";
 export { windowChrome } from "./window-chrome";
+export {
+  createWallpaperImageLoader,
+  loadImageFile,
+  type WallpaperImageLoader,
+} from "./wallpaper-image";
 
 export type MoireTokens = {
   bg: string;
@@ -356,12 +361,51 @@ export function invalidateWallpaperCache(): void {
   wallpaperCache = null;
 }
 
-type ImagePixels = { rgba: Uint8Array; width: number; height: number };
+export type ImagePixels = { rgba: Uint8Array; width: number; height: number };
 let wallpaperImagePixels: ImagePixels | null = null;
+let wallpaperPixelsRevision = 0;
 
+/**
+ * The picture scaled down to each output's size, by `width×height|fit`. Downscaling averages
+ * every source pixel (a 24 MP photo nearest-sampled to 1080p shimmers and aliases), so it runs
+ * once per output size rather than per paint; a few entries cover a multi-monitor setup.
+ */
+const fittedWallpapers = new Map<string, ImagePixels>();
+const MAX_FITTED_WALLPAPERS = 4;
+
+/** The decoded wallpaper picture; null paints the theme gradient alone. */
 export function setWallpaperImagePixels(img: ImagePixels | null): void {
   wallpaperImagePixels = img;
+  wallpaperPixelsRevision++;
+  fittedWallpapers.clear();
   invalidateWallpaperCache();
+}
+
+/** Changes whenever the picture does; retained wallpaper layers include it in their keys. */
+export function wallpaperImageRevision(): number {
+  return wallpaperPixelsRevision;
+}
+
+/** `img` at its on-screen size when that is smaller, from the cache. */
+function fittedWallpaper(
+  img: ImagePixels,
+  width: number,
+  height: number,
+  key: string,
+): ImagePixels {
+  if (width >= img.width && height >= img.height) return img;
+  const hit = fittedWallpapers.get(key);
+  if (hit) return hit;
+  const fitted = resizeImage(img, Math.min(img.width, width), Math.min(img.height, height));
+  if (fittedWallpapers.size >= MAX_FITTED_WALLPAPERS)
+    fittedWallpapers.delete(fittedWallpapers.keys().next().value!);
+  fittedWallpapers.set(key, fitted);
+  return fitted;
+}
+
+/** How many fitted copies are cached (for smokes). */
+export function fittedWallpaperCount(): number {
+  return fittedWallpapers.size;
 }
 
 function blitImageCover(
@@ -369,14 +413,12 @@ function blitImageCover(
   pitchPx: number,
   width: number,
   height: number,
-  img: ImagePixels,
+  source: ImagePixels,
   fit: "cover" | "contain" | "fill",
   vignette: number,
 ): void {
-  const sw = img.width;
-  const sh = img.height;
-  let scaleX = width / sw;
-  let scaleY = height / sh;
+  let scaleX = width / source.width;
+  let scaleY = height / source.height;
   if (fit === "cover") {
     const s = Math.max(scaleX, scaleY);
     scaleX = s;
@@ -386,12 +428,25 @@ function blitImageCover(
     scaleX = s;
     scaleY = s;
   }
-  const ox = (width - sw * scaleX) / 2;
-  const oy = (height - sh * scaleY) / 2;
+  // The picture's size on screen; a larger source is averaged down to it once, then sampled ~1:1.
+  const drawnWidth = source.width * scaleX;
+  const drawnHeight = source.height * scaleY;
+  const img = fittedWallpaper(
+    source,
+    Math.max(1, Math.round(drawnWidth)),
+    Math.max(1, Math.round(drawnHeight)),
+    `${width}x${height}|${fit}`,
+  );
+  const sw = img.width;
+  const sh = img.height;
+  scaleX = drawnWidth / sw;
+  scaleY = drawnHeight / sh;
+  const ox = (width - drawnWidth) / 2;
+  const oy = (height - drawnHeight) / 2;
   for (let y = 0; y < height; y++) {
-    const sy = ((y - oy) / scaleY) | 0;
+    const sy = Math.floor((y - oy) / scaleY);
     for (let x = 0; x < width; x++) {
-      const sx = ((x - ox) / scaleX) | 0;
+      const sx = Math.floor((x - ox) / scaleX);
       let r = 0;
       let g = 0;
       let b = 0;
@@ -415,7 +470,7 @@ function blitImageCover(
 }
 
 function wallpaperKey(theme: MoireTheme, w: number, h: number, phaseBucket: number): string {
-  return `${theme.name}|${theme.wallpaper.mode}|${w}x${h}|${phaseBucket}|${JSON.stringify(theme.wallpaper)}`;
+  return `${theme.name}|${theme.wallpaper.mode}|${w}x${h}|${phaseBucket}|${wallpaperPixelsRevision}|${JSON.stringify(theme.wallpaper)}`;
 }
 
 export function paintWallpaper(
@@ -533,22 +588,6 @@ export function loadTheme(themePath?: string): MoireTheme {
     gtkTheme: String(raw.gtkTheme ?? "Moire"),
     tokens,
     wallpaper,
-  };
-}
-
-export type PngImageData = { rgba: Uint8Array; width: number; height: number };
-
-/**
- * Load a PNG file from disk and return raw RGBA pixels.
- * Uses pngjs for synchronous decoding — suitable for compositor startup / prefs reload.
- */
-export function loadPngFile(filePath: string): PngImageData {
-  const buf = fs.readFileSync(filePath);
-  const png = PNG.sync.read(buf);
-  return {
-    rgba: new Uint8Array(png.data.buffer, png.data.byteOffset, png.data.byteLength),
-    width: png.width,
-    height: png.height,
   };
 }
 

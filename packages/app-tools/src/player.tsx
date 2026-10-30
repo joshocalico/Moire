@@ -1,227 +1,202 @@
-import React, { useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Row, Slider, Label, getUiScaleFactor, type WindowSize } from "@moire/ui";
-import { AppFrame, FileHeader, errorText } from "./index";
-import { PlaybackSession, type PlaybackState } from "./playback";
+/** A media player window over an mpv PlaybackSession: open files, a queue, transport controls. */
+import path from "node:path";
+import React, { useReducer, useState, type ReactNode } from "react";
+import {
+  PlaybackBar,
+  ShortcutManager,
+  formatPlaybackTime,
+  type WindowActions,
+  type WindowSize,
+} from "@moire/ui";
+import { FileChooser } from "./file-chooser";
+import { tidyPath } from "./format";
+import {
+  AppFrame,
+  OpenButton,
+  OpenFileState,
+  TitleActions,
+  ToolButton,
+  appFrameBody,
+} from "./frame";
+import { currentEntry, initialQueue, reduceQueue } from "./player-model";
+import { usePlayback, type PlaybackOptions } from "./player-session";
+import { NowPlaying } from "./player-views";
+
+const VIDEO_EXTENSIONS = ["mp4", "mkv", "webm", "mov", "avi", "m4v", "ogv"];
+const AUDIO_EXTENSIONS = ["mp3", "flac", "ogg", "oga", "opus", "wav", "m4a", "aac"];
+
+/** What the file chooser was opened for: a new queue, or more of it. */
+type Choosing = "open" | "add" | null;
+
 export function PlayerApp(
   props: WindowSize & {
     initialPaths?: string[];
     video?: boolean;
-    playbackOptions?: Pick<
-      NonNullable<ConstructorParameters<typeof PlaybackSession>[1]>,
-      "binary" | "extraArgs"
-    >;
+    /** Recent-files key; defaults to the bundled Video Player's id. */
+    appId?: string;
+    playbackOptions?: PlaybackOptions;
+    /** The window the header bar controls; see AppFrame. */
+    window?: WindowActions | null;
   },
 ): ReactNode {
-  const ui = getUiScaleFactor();
-  const [queue, setQueue] = useState(props.initialPaths ?? []),
-    [index, setIndex] = useState(0),
-    [revision, setRevision] = useState(0);
-  const [state, setState] = useState<PlaybackState>({ kind: "idle" }),
-    [session, setSession] = useState<PlaybackSession | null>(null),
-    [error, setError] = useState(""),
-    [ended, setEnded] = useState(false);
-  const autoPlay = useRef(false),
-    options = useRef(props.playbackOptions),
-    activeSession = useRef<PlaybackSession | null>(null);
-  const file = queue[index] ?? "";
-  useEffect(() => {
-    setEnded(false);
-    if (!file) {
-      setSession(null);
-      setState({ kind: "idle" });
-      return;
-    }
-    let alive = true;
-    const shouldPlay = autoPlay.current;
-    const next = new PlaybackSession(
-      (value) => {
-        if (alive) setState(value);
-      },
-      {
-        ...options.current,
-        video: props.video,
-        onEnded: () => {
-          if (!alive || activeSession.current !== next) return;
-          if (index + 1 < queue.length) {
-            autoPlay.current = true;
-            setIndex(index + 1);
-          } else setEnded(true);
-        },
-      },
-    );
-    activeSession.current = next;
-    setSession(next);
-    setError("");
-    void next
-      .open(file)
-      .then(async () => {
-        if (alive && activeSession.current === next && shouldPlay)
-          await next.control(["set_property", "pause", false]);
-      })
-      .catch((error) => {
-        if (alive && activeSession.current === next) setError(errorText(error));
-      });
-    return () => {
-      alive = false;
-      if (activeSession.current === next) activeSession.current = null;
-      void next.close();
-    };
-  }, [file, index, revision, props.video]);
-  const invoke = (command: readonly (string | number | boolean)[]) => {
-    const current = activeSession.current;
-    void current?.control(command).catch((error) => {
-      if (activeSession.current === current) setError(errorText(error));
-    });
-  };
+  const video = !!props.video;
+  const appId = props.appId ?? (video ? "org.moire.VideoPlayer" : "org.moire.AudioPlayer");
+  const [queue, dispatch] = useReducer(reduceQueue, props.initialPaths, initialQueue);
+  const [choosing, setChoosing] = useState<Choosing>(null);
+  const playback = usePlayback(queue, dispatch, {
+    video,
+    appId,
+    playback: props.playbackOptions,
+  });
+  const { state, error } = playback;
+  const entry = currentEntry(queue);
+  const file = entry?.path ?? "";
   const ready = state.kind === "ready";
+  const count = queue.entries.length;
   const status =
     error ||
     (state.kind === "error"
       ? state.message
-      : state.kind === "ready"
-        ? `${state.paused ? "Paused" : "Playing"} · ${Math.floor(state.position)} / ${Math.floor(state.duration)} seconds`
+      : ready
+        ? `${state.paused ? "Paused" : "Playing"} · ${formatPlaybackTime(state.position)} of ${formatPlaybackTime(state.duration)}`
         : state.kind === "opening"
           ? "Starting mpv playback…"
-          : ended
+          : queue.ended
             ? "Playback finished. Press Play to replay, or open another file."
-            : "Open a local media file.");
+            : file
+              ? "Stopped. Press Play to start again."
+              : "Open a local media file.");
+  const title = video ? "Video Player" : "Audio Player";
+  const icon = video ? "video" : "music";
+  const body = appFrameBody({ height: props.height, title });
+  const choose = (chosen: string) => {
+    dispatch({ type: choosing === "add" ? "append" : "replace", paths: [chosen] });
+    setChoosing(null);
+  };
+
   return (
-    <AppFrame
-      {...props}
-      status={status}
-      header={
-        <FileHeader
-          key={file}
-          width={props.width}
-          value={file}
-          onOpen={(value) => {
-            autoPlay.current = false;
-            setQueue([value]);
-            setIndex(0);
-            setRevision((value) => value + 1);
-          }}
-        />
-      }
-      controls={
-        <Row width={props.width} height={44 * ui} padding={6 * ui} gap={6 * ui}>
-          <Button
-            height={32 * ui}
-            width={72 * ui}
-            label={ready && !state.paused ? "Pause" : "Play"}
-            disabled={!ready && !ended}
-            onPress={() => {
-              if (ended) {
-                autoPlay.current = true;
-                setRevision((value) => value + 1);
-              } else invoke(["cycle", "pause"]);
-            }}
-          />
-          <Button
-            height={32 * ui}
-            width={64 * ui}
-            label="Stop"
-            disabled={!session || state.kind === "idle"}
-            onPress={() => {
-              autoPlay.current = false;
-              activeSession.current = null;
-              void session?.close();
-              setSession(null);
-              setEnded(false);
-              setState({ kind: "idle" });
-            }}
-          />
-          <Button
-            height={32 * ui}
-            width={64 * ui}
-            label="Reopen"
-            disabled={!file}
-            onPress={() => {
-              autoPlay.current = false;
-              setRevision((value) => value + 1);
-            }}
-          />
-          <Button
-            height={32 * ui}
-            width={72 * ui}
-            label="Previous"
-            disabled={index === 0}
-            onPress={() => {
-              autoPlay.current = false;
-              setIndex((value) => value - 1);
-            }}
-          />
-          <Button
-            height={32 * ui}
-            width={56 * ui}
-            label="Next"
-            disabled={index >= queue.length - 1}
-            onPress={() => {
-              autoPlay.current = false;
-              setIndex((value) => value + 1);
-            }}
-          />
-          <Label width={44 * ui} height={32 * ui} text="Volume" />
-          <Slider
-            height={32 * ui}
-            width={110 * ui}
-            value={ready ? Math.min(1, state.volume / 100) : 1}
-            disabled={!ready}
-            onChange={(value) => invoke(["set_property", "volume", Math.round(value * 100)])}
-          />
-          {props.video ? (
-            <Button
-              height={32 * ui}
-              width={92 * ui}
-              label="Fullscreen"
-              disabled={!ready}
-              onPress={() => invoke(["cycle", "fullscreen"])}
-            />
-          ) : null}
-        </Row>
-      }
+    <ShortcutManager
+      width={props.width}
+      height={props.height}
+      enabled={!choosing}
+      shortcuts={[{ id: "open", key: "o", ctrl: true, onInvoke: () => setChoosing("open") }]}
     >
-      <Label
-        x={20 * ui}
-        y={20 * ui}
-        width={props.width - 40 * ui}
-        height={58 * ui}
-        text={file || "No file loaded"}
-        fontSize={18}
-        wrap
-        maxLines={2}
-      />
-      <Slider
-        height={32 * ui}
-        x={20 * ui}
-        y={100 * ui}
-        width={props.width - 40 * ui}
-        value={ready && state.duration > 0 ? Math.min(1, state.position / state.duration) : 0}
-        disabled={!ready || state.duration <= 0}
-        step={0.001}
-        onChange={(value) => {
-          if (ready) invoke(["seek", value * state.duration, "absolute+exact"]);
-        }}
-      />
-      <Label
-        x={20 * ui}
-        y={145 * ui}
-        width={props.width - 40 * ui}
-        height={90 * ui}
-        text={
-          props.video
-            ? "Video plays in mpv's Wayland window. Use this panel to control playback, seek and volume."
-            : "Playback starts paused. Press Play to listen. Files passed at launch form a playlist."
+      <AppFrame
+        {...props}
+        title={title}
+        icon={icon}
+        subtitle={file ? path.basename(file) : undefined}
+        status={status}
+        statusEnd={count > 1 ? `${queue.index + 1} of ${count}` : undefined}
+        actions={
+          file ? (
+            <TitleActions>
+              <ToolButton
+                icon="restart"
+                tooltip="Reopen from the start"
+                focusId="player:reopen"
+                onPress={() => dispatch({ type: "restart", play: false })}
+              />
+              {video ? (
+                <ToolButton
+                  icon="fullscreen"
+                  tooltip="Fullscreen video"
+                  focusId="player:fullscreen"
+                  disabled={!ready}
+                  onPress={() => playback.invoke(["cycle", "fullscreen"])}
+                />
+              ) : null}
+              <ToolButton
+                icon="plus"
+                tooltip="Add to queue"
+                focusId="player:add"
+                onPress={() => setChoosing("add")}
+              />
+              <OpenButton focusId="player:open" onPress={() => setChoosing("open")} />
+            </TitleActions>
+          ) : null
         }
-        wrap
-      />
-      <Label
-        x={20 * ui}
-        y={250 * ui}
-        width={props.width - 40 * ui}
-        height={72 * ui}
-        text={status}
-        wrap
-      />
-    </AppFrame>
+      >
+        {file ? (
+          <NowPlaying
+            width={props.width}
+            height={body.height}
+            video={video}
+            entries={queue.entries}
+            index={queue.index}
+            state={state}
+            ended={queue.ended}
+            error={error}
+            onSelect={(index) => dispatch({ type: "select", index, play: true })}
+            onClear={() => dispatch({ type: "clear" })}
+            bar={
+              <PlaybackBar
+                width={props.width}
+                title={path.basename(file)}
+                subtitle={tidyPath(path.dirname(file))}
+                status={state.kind === "opening" ? "Opening…" : undefined}
+                ready={ready}
+                canPlay={ready || queue.ended || state.kind === "idle"}
+                paused={!ready || state.paused}
+                position={ready ? state.position : 0}
+                duration={ready ? state.duration : 0}
+                volume={ready ? Math.min(100, state.volume) : 100}
+                onTogglePause={() => {
+                  if (queue.ended || state.kind === "idle")
+                    dispatch({ type: "restart", play: true });
+                  else playback.invoke(["cycle", "pause"]);
+                }}
+                onPrevious={
+                  queue.index > 0
+                    ? () => dispatch({ type: "select", index: queue.index - 1, play: false })
+                    : undefined
+                }
+                onNext={
+                  queue.index < count - 1
+                    ? () => dispatch({ type: "select", index: queue.index + 1, play: false })
+                    : undefined
+                }
+                onStop={playback.stop}
+                onSeek={(seconds) => {
+                  if (ready) playback.invoke(["seek", seconds, "absolute+exact"]);
+                }}
+                onVolume={(volume) =>
+                  playback.invoke(["set_property", "volume", Math.round(volume)])
+                }
+              />
+            }
+          />
+        ) : (
+          <OpenFileState
+            width={props.width}
+            height={body.height}
+            appId={appId}
+            icon={icon}
+            title={video ? "Open a video" : "Open an audio file"}
+            message={
+              video
+                ? "Video plays in its own window; this one controls playback, seeking and the queue."
+                : "Audio starts paused. Press Play to listen."
+            }
+            error={error}
+            onBrowse={() => setChoosing("open")}
+            onOpen={(value) => dispatch({ type: "replace", paths: [value] })}
+          />
+        )}
+      </AppFrame>
+      {choosing ? (
+        <FileChooser
+          width={props.width}
+          height={props.height}
+          mode="open"
+          title={choosing === "add" ? "Add to queue" : video ? "Open a video" : "Open audio"}
+          appId={appId}
+          accept={video ? VIDEO_EXTENSIONS : AUDIO_EXTENSIONS}
+          directory={file ? path.dirname(file) : undefined}
+          onChoose={choose}
+          onCancel={() => setChoosing(null)}
+        />
+      ) : null}
+    </ShortcutManager>
   );
 }

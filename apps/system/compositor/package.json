@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "tsx src/main.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../../..",
     "build": "tsc -p tsconfig.json",
     "smoke:capture": "tsx src/capture.smoke.ts"
   },

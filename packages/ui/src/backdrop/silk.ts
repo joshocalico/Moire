@@ -228,10 +228,36 @@ function strokeSegment(
   }
 }
 
+export function silkBackdropSize(options: SilkBackdropOptions): { width: number; height: number } {
+  return options.resolution === "high"
+    ? { width: 1920, height: 1200 }
+    : { width: 1280, height: 800 };
+}
+
+/** Publish caller-owned pixels rendered for exactly these options. */
+export function silkBackdropFromPixels(
+  options: SilkBackdropOptions,
+  rgba: Uint8Array,
+): SilkBackdropSource {
+  const { width, height } = silkBackdropSize(options);
+  if (rgba.byteLength !== width * height * 4)
+    throw new Error("Silk backdrop pixels do not match the requested resolution");
+  const palette = options.palette ?? SILK_PALETTES[options.variant];
+  return Object.freeze({
+    variant: options.variant,
+    background: (palette.background | 0xff000000) >>> 0,
+    image: Object.freeze({ rgba, width, height }),
+    metrics: Object.freeze({
+      filaments: SILK_LIMITS.filaments,
+      segments: SILK_LIMITS.filaments * SILK_LIMITS.segmentsPerFilament,
+      bytes: rgba.byteLength,
+    }),
+  });
+}
+
 /** No cache: the caller controls lifetime. Published buffers are never updated in place. */
 export function createSilkBackdrop(options: SilkBackdropOptions): SilkBackdropSource {
-  const width = options.resolution === "high" ? 1920 : 1280;
-  const height = options.resolution === "high" ? 1200 : 800;
+  const { width, height } = silkBackdropSize(options);
   const palette = options.palette ?? SILK_PALETTES[options.variant];
   const rgba = new Uint8Array(width * height * 4);
   const geometry = silkGeometry(options.variant, options.seed);
@@ -286,14 +312,5 @@ export function createSilkBackdrop(options: SilkBackdropOptions): SilkBackdropSo
       );
     }
   }
-  return Object.freeze({
-    variant: options.variant,
-    background: (palette.background | 0xff000000) >>> 0,
-    image: Object.freeze({ rgba, width, height }),
-    metrics: Object.freeze({
-      filaments: SILK_LIMITS.filaments,
-      segments: SILK_LIMITS.filaments * SILK_LIMITS.segmentsPerFilament,
-      bytes: rgba.byteLength,
-    }),
-  });
+  return silkBackdropFromPixels(options, rgba);
 }

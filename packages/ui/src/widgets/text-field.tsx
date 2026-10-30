@@ -39,15 +39,33 @@ export type TextFieldProps = {
   onPress?: (event: HitPointerEvent) => void;
   /** Return true to consume a key before the built-in editor handles it. */
   onKeyDown?: (event: HitKeyEvent) => boolean | void;
+  /** Deliver Tab to `onKeyDown` (for completion) instead of moving focus. */
+  captureTab?: boolean;
   onFocusChange?: (focused: boolean) => void;
   /** Optional controlled visual focus override. */
   focused?: boolean;
   autoFocus?: boolean;
+  /** Stable id for focus restoration and for smokes that find the field (see windowControl). */
+  focusId?: string;
   selectAllOnFocus?: boolean;
   invalid?: boolean;
   disabled?: boolean;
   readOnly?: boolean;
+  /** Paint no field box: a composite field (TokenField) draws one around this editor. */
+  chromeless?: boolean;
 };
+
+/** Fields in this process whose editor holds focus; see `isEditingText`. */
+const editingFields = new Set<string>();
+
+/**
+ * Whether a text field (or a field built on one: SearchField, TokenField) has keyboard focus.
+ * Apps that start a search when you type on a page use it to leave typing in fields alone.
+ * It covers the whole process, which for an app is its window.
+ */
+export function isEditingText(): boolean {
+  return editingFields.size > 0;
+}
 
 function cursorFromX(value: string, localX: number, textX: number, fontSize: number): number {
   const target = Math.max(0, localX - textX);
@@ -111,6 +129,7 @@ export function TextField(props: TextFieldProps): ReactNode {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      editingFields.delete(generatedId);
     };
   }, []);
   const states: WidgetState[] = [];
@@ -136,9 +155,18 @@ export function TextField(props: TextFieldProps): ReactNode {
   const trailingWidth = props.trailing ? trailingStyle.size + recipe.metrics.slotGap : 0;
   const textX = recipe.metrics.paddingX + leadingWidth;
 
+  const previousValue = useRef(props.value);
   useEffect(() => {
-    setCursor((current) => Math.min(current, props.value.length));
-    setAnchor((current) => Math.min(current, props.value.length));
+    // A caret at the end follows a value the owner extends (completion);
+    // otherwise it stays put, clamped to the new length.
+    const followEnd = position.current.cursor === previousValue.current.length;
+    previousValue.current = props.value;
+    setCursor((current) =>
+      followEnd ? props.value.length : Math.min(current, props.value.length),
+    );
+    setAnchor((current) =>
+      followEnd ? props.value.length : Math.min(current, props.value.length),
+    );
   }, [props.value]);
 
   const available = Math.max(1, props.width - textX - trailingWidth - recipe.metrics.paddingX);
@@ -284,15 +312,17 @@ export function TextField(props: TextFieldProps): ReactNode {
         y={0}
         width={props.width}
         height={height}
-        fill={root.fill}
+        fill={props.chromeless ? 0x00000000 : root.fill}
         radius={root.radius}
-        stroke={root.stroke}
-        strokeWidth={root.strokeWidth}
+        stroke={props.chromeless ? undefined : root.stroke}
+        strokeWidth={props.chromeless ? undefined : root.strokeWidth}
         focusable={!props.disabled}
         autoFocus={props.autoFocus}
-        focusId={`text-field:${generatedId}`}
+        focusId={props.focusId ?? `text-field:${generatedId}`}
         onFocusChange={(next) => {
           setInternallyFocused(next);
+          if (next) editingFields.add(generatedId);
+          else editingFields.delete(generatedId);
           if (next) {
             setCursor(props.value.length);
             setAnchor(props.selectAllOnFocus ? 0 : props.value.length);
@@ -300,6 +330,7 @@ export function TextField(props: TextFieldProps): ReactNode {
           props.onFocusChange?.(next);
         }}
         onKeyDown={handleKey}
+        captureTab={props.captureTab}
         onPress={handlePress}
       />
       {props.leading ? (

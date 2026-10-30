@@ -1,616 +1,214 @@
-import { StorageConflictError, retryStoreCleanup } from "@moire/app-tools/local-store";
-import React, { useEffect, useRef, useState, type ReactNode } from "react";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import React, { useState, type ReactNode } from "react";
 import {
-  Application,
-  Button,
-  Checkbox,
   ConfirmationDialog,
-  Dialog,
-  Horizontal,
-  Measure,
-  ScrollColumn,
-  TextBlock,
-  measureColumnContent,
-  useWidgetTheme,
+  Icon,
+  IconButton,
   OverlayHost,
-  Label,
-  ScrollArea,
   SegmentedControl,
-  Surface,
-  TextField,
-  Toolbar,
-  Window,
-  usePalette,
   getUiScaleFactor,
+  useWidgetTheme,
+  type WindowActions,
   type WindowSize,
 } from "@moire/ui";
-import {
-  AlarmStore,
-  durationText,
-  nextAlarm,
-  parseDuration,
-  pauseTimer,
-  remaining,
-  startTimer,
-  stopwatchElapsed,
-  toggleStopwatch,
-  type Alarm,
-  type Countdown,
-  type Stopwatch,
-} from "./time";
+import { AppFrame, appFrameBody, runApp, startMain } from "@moire/app-tools";
+import { useAlarms } from "./alarms";
+import { AlarmStore, CLOCK_APP_ID, settingsCityStore, type CityStore } from "./backend";
+import { useCities, useCountdown, useStopwatch, useTicker } from "./hooks";
+import { durationText, remaining, stopwatchElapsed } from "./time";
+import { AddCityDialog } from "./views/add-city";
+import { AlarmsPanel } from "./views/alarms";
+import { RingNotices, type RingNotice } from "./views/notices";
+import { StopwatchPanel } from "./views/stopwatch";
+import { TimerPanel } from "./views/timer";
+import { WorldPanel } from "./views/world";
 
-export type RingNotice =
-  | { readonly id: string; readonly kind: "timer"; readonly message: string }
-  | {
-      readonly id: string;
-      readonly kind: "alarm";
-      readonly message: string;
-      readonly alarmId: string;
-    };
-
-/** One independently dismissible receipt per due source; controls never share the text viewport. */
-export function RingNotices(
-  props: WindowSize & {
-    notices: readonly RingNotice[];
-    onDismiss: (id: string) => void;
-    onSnooze: (notice: Extract<RingNotice, { kind: "alarm" }>) => void;
-  },
-): ReactNode {
-  const theme = useWidgetTheme();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selectedIndex = Math.max(
-    0,
-    props.notices.findIndex((notice) => notice.id === selectedId),
-  );
-  const notice = props.notices[selectedIndex];
-  if (!notice) return null;
-  const spacing = theme.foundations.space;
-  const width = Math.max(1, props.width - spacing.md * 2);
-  const metrics = theme.recipes.dialog.medium.metrics;
-  const inner = Math.max(1, width - metrics.bodyPaddingX * 2);
-  const footer = (
-    <Horizontal width={inner} wrap gap={spacing.sm} align="center">
-      <Button label="Dismiss" onPress={() => props.onDismiss(notice.id)} />
-      {notice.kind === "alarm" ? (
-        <Button label="Snooze 5m" variant="primary" onPress={() => props.onSnooze(notice)} />
-      ) : null}
-      {props.notices.length > 1 ? (
-        <Button
-          label="Next notice"
-          onPress={() =>
-            setSelectedId(props.notices[(selectedIndex + 1) % props.notices.length]!.id)
-          }
-        />
-      ) : null}
-    </Horizontal>
-  );
-  const body = (
-    <TextBlock width={inner} text={notice.message} fontSize={15} fontWeight="medium" wrap />
-  );
-  const bodyHeight = measureColumnContent({ width: inner, gap: 0, children: body }, theme).height;
-  const footerHeight = measureColumnContent(
-    {
-      width,
-      padding: {
-        top: spacing.sm,
-        right: metrics.bodyPaddingX,
-        bottom: metrics.bodyPaddingBottom,
-        left: metrics.bodyPaddingX,
-      },
-      gap: 0,
-      children: footer,
-    },
-    theme,
-  ).height;
-  const bottom = 44 * getUiScaleFactor();
-  const available = Math.max(1, props.height - bottom - spacing.md);
-  const height = Math.min(
-    available,
-    Math.ceil(metrics.titlebarHeight + metrics.bodyPaddingTop + bodyHeight + footerHeight),
-  );
-  return (
-    <Dialog
-      x={spacing.md}
-      y={Math.max(0, props.height - bottom - height)}
-      width={width}
-      height={height}
-      title={`${notice.kind === "timer" ? "Timer" : "Alarm"} · ${selectedIndex + 1} of ${props.notices.length} notices`}
-      onClose={() => props.onDismiss(notice.id)}
-      footer={footer}
-    >
-      <Measure flexGrow={1} minHeight={1}>
-        {(size) => (
-          <ScrollColumn width={size.width} height={size.height} gap={0} smooth={false}>
-            {body}
-          </ScrollColumn>
-        )}
-      </Measure>
-    </Dialog>
-  );
-}
+type Tab = "world" | "timer" | "stopwatch" | "alarms";
+const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
+  { id: "world", label: "World" },
+  { id: "timer", label: "Timer" },
+  { id: "stopwatch", label: "Stopwatch" },
+  { id: "alarms", label: "Alarms" },
+];
+const TABS_MAX_WIDTH = 440;
+const TOOL_ROW_HEIGHT = 44;
 
 export function ClockApp(
   props: WindowSize & {
     store: AlarmStore;
+    /** World-clock cities; the user's Clock preferences by default. */
+    cityStore?: CityStore;
     wallNow?: () => number;
     monotonicNow?: () => number;
     onRing?: (message: string) => void;
+    /** The window the header bar controls (minimize, maximize, close, move). */
+    window?: WindowActions | null;
   },
 ): ReactNode {
-  const pal = usePalette(),
-    uiScale = getUiScaleFactor(),
+  const theme = useWidgetTheme(),
+    ui = getUiScaleFactor(),
     wallNow = props.wallNow ?? Date.now,
     monotonicNow = props.monotonicNow ?? (() => performance.now());
-  const [loaded, setLoaded] = useState(() => {
-    try {
-      const snapshot = props.store.load(wallNow());
-      return { alarms: [...snapshot.items], revision: snapshot.revision, error: "" };
-    } catch (error) {
-      return { alarms: [], revision: null, error: String(error) };
-    }
-  });
-  const [savedRevision, setSavedRevision] = useState(loaded.revision);
-  const [conflict, setConflict] = useState<{
-    kind: "recovery" | "cleanup";
-    title: string;
-    message: string;
-  } | null>(null);
-  const [alarms, setAlarms] = useState<Alarm[]>(loaded.alarms),
-    [tab, setTab] = useState("time"),
-    [wall, setWall] = useState(wallNow),
-    [mono, setMono] = useState(monotonicNow),
-    [timer, setTimer] = useState<Countdown>({ kind: "idle", durationMs: 300000 }),
-    [watch, setWatch] = useState<Stopwatch>({ kind: "paused", elapsedMs: 0, laps: [] }),
-    [duration, setDuration] = useState("05:00"),
+  const [status, setStatus] = useState("Timers and alarms run while Clock is open");
+  const alarms = useAlarms(props.store, wallNow, setStatus);
+  const world = useCities(props.cityStore ?? settingsCityStore, setStatus);
+  const countdown = useCountdown(monotonicNow, setStatus);
+  const stopwatch = useStopwatch(monotonicNow);
+  const [tab, setTab] = useState<Tab>("world"),
+    [adding, setAdding] = useState(false),
     [alarmTime, setAlarmTime] = useState("07:30"),
     [alarmLabel, setAlarmLabel] = useState("Wake up"),
-    [status, setStatus] = useState(loaded.error || "Timers and alarms run while Clock is open"),
     [notices, setNotices] = useState<RingNotice[]>([]);
-  const live = useRef({ alarms, timer });
-  live.current = { alarms, timer };
-  const persist = (next: Alarm[], message = "Saved alarms") => {
-    if (loaded.error) {
-      setStatus(loaded.error);
-      setConflict({
-        kind: "recovery",
-        title: "Could not save",
-        message: loaded.error,
-      });
-      return false;
-    }
-    try {
-      const saved = props.store.write(next, savedRevision, wallNow());
-      setAlarms([...saved.items]);
-      setSavedRevision(saved.revision);
-      if (saved.cleanup.kind === "pending") {
-        console.warn("[clock] Saved with pending cleanup", saved.cleanup.message);
-        setConflict({
-          kind: "cleanup",
-          title: "Saved; cleanup pending",
-          message:
-            "Your changes are saved. Cleanup of owned temporary files is pending. Retry cleanup does not save another copy; a later save also retries it.",
-        });
-      }
-      setStatus(saved.cleanup.kind === "pending" ? `${message}. Cleanup pending.` : message);
-      return true;
-    } catch (error) {
-      setConflict({
-        kind: "recovery",
-        title: error instanceof StorageConflictError ? "Saved data changed" : "Could not save",
-        message: error instanceof Error ? error.message : String(error),
-      });
-      setStatus(String(error));
-      return false;
-    }
+  const { wall, mono } = useTicker({
+    wallNow,
+    monotonicNow,
+    timer: countdown.timer,
+    alarms: alarms.alarms,
+    onTimerDone: countdown.finish,
+    onAlarmsDue: alarms.setAlarms,
+    onRing: (delivered) => {
+      for (const notice of delivered) props.onRing?.(notice.message);
+      setNotices((pending) => [...pending, ...delivered]);
+    },
+  });
+  const dismiss = (id: string) => setNotices((pending) => pending.filter((item) => item.id !== id));
+  const tabsW = Math.min(TABS_MAX_WIDTH * ui, props.width - 24 * ui);
+  const tabsH = theme.recipes.tabs.medium.metrics.height;
+  const panel = {
+    width: props.width,
+    height: appFrameBody({ height: props.height, title: "Clock", controls: true }).height,
   };
-  const retryCleanup = () => {
-    const cleanup = retryStoreCleanup();
-    if (cleanup.kind === "complete") {
-      setConflict(null);
-      setStatus("Changes saved; storage cleanup finished.");
-    } else {
-      console.warn("[clock] Storage cleanup remains pending", cleanup.message);
-      setConflict({
-        kind: "cleanup",
-        title: "Saved; cleanup pending",
-        message:
-          "Your changes remain saved. Cleanup could not finish. Retry cleanup does not save another copy.",
-      });
-    }
-  };
-  const reloadSaved = () => {
-    try {
-      const snapshot = props.store.load(wallNow());
-      setLoaded({ alarms: [...snapshot.items], revision: snapshot.revision, error: "" });
-      setAlarms([...snapshot.items]);
-      setSavedRevision(snapshot.revision);
-      setStatus("Reloaded saved data. Your current draft is kept; review it before retrying.");
-      setConflict(null);
-    } catch (error) {
-      setStatus(String(error));
-      setConflict({
-        kind: "recovery",
-        title: "Could not reload saved data",
-        message: `${String(error)}. Your draft is still here.`,
-      });
-    }
-  };
-  useEffect(() => {
-    const tick = () => {
-      const now = wallNow();
-      setWall(now);
-      const monotonic = monotonicNow();
-      setMono(monotonic);
-      const current = live.current;
-      const delivered: RingNotice[] = [];
-      if (current.timer.kind === "running" && remaining(current.timer, monotonic) === 0) {
-        live.current = { ...current, timer: { kind: "finished" } };
-        setTimer({ kind: "finished" });
-        delivered.push({ id: randomUUID(), kind: "timer", message: "Timer finished" });
-        props.onRing?.("Timer finished");
-      }
-      const due = current.alarms.filter((alarm) => alarm.enabled && alarm.nextAtMs <= now);
-      if (due.length) {
-        const next = current.alarms.map((alarm) =>
-          due.includes(alarm) ? { ...alarm, nextAtMs: nextAlarm(alarm.time, now) } : alarm,
-        );
-        live.current = { ...live.current, alarms: next };
-        setAlarms(next);
-        for (const alarm of due) {
-          delivered.push({
-            id: randomUUID(),
-            kind: "alarm",
-            message: alarm.label,
-            alarmId: alarm.id,
-          });
-          props.onRing?.(alarm.label);
-        }
-      }
-      if (delivered.length) setNotices((pending) => [...pending, ...delivered]);
-    };
-    tick();
-    const interval = setInterval(tick, 100);
-    return () => clearInterval(interval);
-  }, []);
-  const runTimer = () => {
-    try {
-      const next =
-        timer.kind === "paused"
-          ? startTimer(timer, monotonicNow())
-          : startTimer({ kind: "idle", durationMs: parseDuration(duration) }, monotonicNow());
-      setTimer(next);
-    } catch (error) {
-      setStatus(String(error));
-    }
-  };
-  const addAlarm = () => {
-    try {
-      persist(
-        [
-          ...alarms,
-          {
-            id: randomUUID(),
-            label: alarmLabel.trim() || "Alarm",
-            time: alarmTime,
-            enabled: true,
-            nextAtMs: nextAlarm(alarmTime, wallNow()),
-          },
-        ],
-        `Alarm set for ${alarmTime}`,
-      );
-    } catch (error) {
-      setStatus(String(error));
-    }
-  };
-  const bodyW = Math.max(1, props.width - 40),
-    elapsed = stopwatchElapsed(watch, mono);
+  const timer = countdown.timer;
+  const storage = alarms.notice;
   return (
     <OverlayHost width={props.width} height={props.height}>
-      <Surface width={props.width} height={props.height} fill={pal.bg} clip>
-        <Toolbar width={props.width} height={70}>
-          <Button
-            label="Reload saved"
+      <AppFrame
+        width={props.width}
+        height={props.height}
+        title="Clock"
+        icon="clock"
+        window={props.window}
+        actions={
+          <IconButton
+            icon={(style) => <Icon name="restart" {...style} symbolic />}
+            variant="ghost"
+            tooltip="Reload saved alarms"
+            focusId="clock:reload"
             onPress={() =>
-              setConflict({
+              alarms.setNotice({
                 kind: "recovery",
                 title: "Reload saved data?",
                 message: "Current input is kept. Review it before retrying the save.",
               })
             }
           />
-          <Label flexGrow={1} text="Clock" fontSize={22} fontWeight="bold" />
+        }
+        controls={
           <SegmentedControl
-            width={Math.min(360 * uiScale, Math.max(280, props.width - 130))}
+            x={(props.width - tabsW) / 2}
+            y={Math.max(0, (TOOL_ROW_HEIGHT * ui - tabsH) / 2)}
+            width={tabsW}
             value={tab}
-            options={[
-              { id: "time", label: "Time" },
-              { id: "timer", label: "Timer" },
-              { id: "stopwatch", label: "Stopwatch" },
-              { id: "alarms", label: "Alarms" },
-            ]}
-            onChange={setTab}
+            options={TABS}
+            onChange={(id) => setTab(id as Tab)}
           />
-        </Toolbar>
-        {tab === "time" && (
-          <>
-            <Label
-              x={28}
-              y={120}
-              width={bodyW}
-              text={new Date(wall).toLocaleTimeString()}
-              fontSize={52}
-              fontFamily="mono"
-            />
-            <Label
-              x={28}
-              y={200 + (uiScale - 1) * 32}
-              text={new Date(wall).toLocaleDateString(undefined, {
-                weekday: "long",
-                month: "long",
-                day: "numeric",
-                year: "numeric",
-              })}
-              fontSize={22}
-            />
-            <Label
-              x={28}
-              y={245 + (uiScale - 1) * 32}
-              text={Intl.DateTimeFormat().resolvedOptions().timeZone}
-              color={pal.muted}
-            />
-          </>
+        }
+        status={alarms.loadError || status}
+      >
+        {tab === "world" && (
+          <WorldPanel
+            {...panel}
+            now={wall}
+            cities={world.cities}
+            onAdd={() => setAdding(true)}
+            onRemove={world.remove}
+          />
         )}
         {tab === "timer" && (
-          <>
-            <Label
-              x={24}
-              y={100}
-              text={timer.kind === "finished" ? "Finished" : durationText(remaining(timer, mono))}
-              fontSize={48}
-              fontFamily="mono"
-            />
-            <Label
-              x={24}
-              y={180}
-              text="Duration · minutes:seconds or hours:minutes:seconds"
-              color={pal.muted}
-              fontSize={11}
-            />
-            <TextField
-              x={24}
-              y={205}
-              width={220}
-              value={duration}
-              disabled={timer.kind === "running" || timer.kind === "paused"}
-              onChange={setDuration}
-            />
-            <Button
-              x={24}
-              y={260}
-              width={120 * uiScale}
-              label={
-                timer.kind === "running"
-                  ? "Pause"
-                  : timer.kind === "paused"
-                    ? "Resume"
-                    : "Start Timer"
-              }
-              variant="primary"
-              onPress={() =>
-                timer.kind === "running" ? setTimer(pauseTimer(timer, monotonicNow())) : runTimer()
-              }
-            />
-            <Button
-              x={36 + 120 * uiScale}
-              y={260}
-              width={100 * uiScale}
-              label="Reset"
-              onPress={() => {
-                try {
-                  setTimer({ kind: "idle", durationMs: parseDuration(duration) });
-                } catch (error) {
-                  setStatus(String(error));
-                }
-              }}
-            />
-            <Label
-              x={24}
-              y={315}
-              text="A visible alert appears when the countdown ends."
-              color={pal.muted}
-              fontSize={12}
-            />
-          </>
+          <TimerPanel
+            {...panel}
+            readout={timer.kind === "finished" ? "Finished" : durationText(remaining(timer, mono))}
+            duration={countdown.duration}
+            timer={timer}
+            onDuration={countdown.setDuration}
+            onStartPause={countdown.startPause}
+            onReset={countdown.reset}
+          />
         )}
         {tab === "stopwatch" && (
-          <>
-            <Label
-              x={24}
-              y={100}
-              text={`${durationText(Math.floor(elapsed / 1000) * 1000)}.${String(Math.floor((elapsed % 1000) / 10)).padStart(2, "0")}`}
-              fontSize={44}
-              fontFamily="mono"
-            />
-            <Button
-              x={24}
-              y={180}
-              width={112 * uiScale}
-              label={watch.kind === "running" ? "Pause" : "Start"}
-              variant="primary"
-              onPress={() => setWatch(toggleStopwatch(watch, monotonicNow()))}
-            />
-            <Button
-              x={36 + 112 * uiScale}
-              y={180}
-              width={90 * uiScale}
-              label="Lap"
-              disabled={watch.kind !== "running"}
-              onPress={() =>
-                setWatch({
-                  ...watch,
-                  laps: [...watch.laps, stopwatchElapsed(watch, monotonicNow())],
-                })
-              }
-            />
-            <Button
-              x={48 + 202 * uiScale}
-              y={180}
-              width={90 * uiScale}
-              label="Reset"
-              onPress={() => setWatch({ kind: "paused", elapsedMs: 0, laps: [] })}
-            />
-            <ScrollArea
-              x={24}
-              y={238}
-              width={bodyW}
-              height={Math.max(80, props.height - 290)}
-              contentHeight={Math.max(40, watch.laps.length * 32)}
-            >
-              {watch.laps.map((lap, index) => (
-                <Label
-                  key={index}
-                  y={index * 32}
-                  text={`Lap ${index + 1}     ${durationText(lap)}     +${((lap - (watch.laps[index - 1] ?? 0)) / 1000).toFixed(2)}s`}
-                  fontFamily="mono"
-                />
-              ))}
-            </ScrollArea>
-          </>
+          <StopwatchPanel
+            {...panel}
+            elapsed={stopwatchElapsed(stopwatch.watch, mono)}
+            watch={stopwatch.watch}
+            onToggle={stopwatch.toggle}
+            onLap={stopwatch.lap}
+            onReset={stopwatch.reset}
+          />
         )}
         {tab === "alarms" && (
-          <>
-            <Label x={24} y={92} text="Daily alarms · local time" fontSize={18} />
-            <TextField
-              x={24}
-              y={128}
-              width={120}
-              value={alarmTime}
-              placeholder="HH:MM"
-              onChange={setAlarmTime}
-            />
-            <TextField
-              x={156}
-              y={128}
-              width={Math.max(100, props.width - 200 - 120 * uiScale)}
-              value={alarmLabel}
-              placeholder="Alarm name"
-              onChange={setAlarmLabel}
-            />
-            <Button
-              x={props.width - 28 - 120 * uiScale}
-              y={128}
-              width={120 * uiScale}
-              label="Add Alarm"
-              disabled={!!loaded.error}
-              onPress={addAlarm}
-            />
-            <ScrollArea
-              x={24}
-              y={186}
-              width={bodyW}
-              height={Math.max(80, props.height - 244)}
-              contentHeight={Math.max(60, alarms.length * 76)}
-            >
-              {alarms.map((alarm, index) => (
-                <Surface
-                  key={alarm.id}
-                  y={index * 76}
-                  width={bodyW - 12}
-                  height={68}
-                  fill={pal.panel}
-                >
-                  <Checkbox
-                    x={12}
-                    y={20}
-                    label={`${alarm.time} · ${alarm.label}`}
-                    checked={alarm.enabled}
-                    onChange={(enabled) =>
-                      persist(
-                        alarms.map((item) =>
-                          item.id === alarm.id
-                            ? { ...item, enabled, nextAtMs: nextAlarm(item.time, wallNow()) }
-                            : item,
-                        ),
-                      )
-                    }
-                  />
-                  <Button
-                    x={bodyW - 24 - 84 * uiScale}
-                    y={16}
-                    width={84 * uiScale}
-                    label="Delete"
-                    variant="ghost"
-                    onPress={() => persist(alarms.filter((item) => item.id !== alarm.id))}
-                  />
-                </Surface>
-              ))}
-            </ScrollArea>
-          </>
+          <AlarmsPanel
+            {...panel}
+            alarms={alarms.alarms}
+            time={alarmTime}
+            label={alarmLabel}
+            disabled={!!alarms.loadError}
+            onTime={setAlarmTime}
+            onLabel={setAlarmLabel}
+            onAdd={() => alarms.add(alarmTime, alarmLabel)}
+            onEnable={alarms.setEnabled}
+            onDelete={alarms.remove}
+          />
         )}
-        <RingNotices
+      </AppFrame>
+      {adding ? (
+        <AddCityDialog
           width={props.width}
           height={props.height}
-          notices={notices}
-          onDismiss={(id) => setNotices((pending) => pending.filter((notice) => notice.id !== id))}
-          onSnooze={(notice) => {
-            const target = alarms.find((alarm) => alarm.id === notice.alarmId);
-            if (!target || !target.enabled) {
-              setStatus(
-                "This alarm is no longer enabled. The notice remains available to dismiss.",
-              );
-              return;
-            }
-            if (
-              persist(
-                alarms.map((alarm) =>
-                  alarm.id === target.id ? { ...alarm, nextAtMs: wallNow() + 300000 } : alarm,
-                ),
-              )
-            )
-              setNotices((pending) => pending.filter((item) => item.id !== notice.id));
+          now={wall}
+          existing={world.cities}
+          onAdd={(zone) => {
+            world.add(zone);
+            setAdding(false);
           }}
+          onCancel={() => setAdding(false)}
         />
-        <Label
-          x={20}
-          y={props.height - 28}
-          width={bodyW}
-          text={status}
-          color={pal.muted}
-          fontSize={10}
-          overflow="ellipsis"
-          maxLines={1}
-        />
-      </Surface>
+      ) : null}
+      <RingNotices
+        width={props.width}
+        height={props.height}
+        notices={notices}
+        onDismiss={dismiss}
+        onSnooze={(notice) => {
+          if (alarms.snooze(notice.alarmId)) dismiss(notice.id);
+        }}
+      />
       <ConfirmationDialog
-        open={!!conflict}
+        open={!!storage}
         viewportWidth={props.width}
         viewportHeight={props.height}
-        title={conflict?.title ?? "Saved data changed"}
-        message={conflict?.message ?? ""}
-        confirmLabel={conflict?.kind === "cleanup" ? "Retry" : "Reload saved"}
-        cancelLabel={conflict?.kind === "cleanup" ? "Close" : "Keep draft"}
-        onDismiss={() => setConflict(null)}
-        onConfirm={() => (conflict?.kind === "cleanup" ? retryCleanup() : reloadSaved())}
+        title={storage?.title ?? "Saved data changed"}
+        message={storage?.message ?? ""}
+        confirmLabel={storage?.kind === "cleanup" ? "Retry" : "Reload saved"}
+        cancelLabel={storage?.kind === "cleanup" ? "Close" : "Keep draft"}
+        onDismiss={() => alarms.setNotice(null)}
+        onConfirm={() => (storage?.kind === "cleanup" ? alarms.retryCleanup() : alarms.reload())}
       />
     </OverlayHost>
   );
 }
-export async function main(): Promise<void> {
-  const app = new Application(),
-    window = new Window({ title: "Clock", appId: "org.moire.Clock", width: 760, height: 520 }),
-    store = new AlarmStore();
-  window.setContent((size) => (
-    <ClockApp {...size} store={store} onRing={() => process.stdout.write("\u0007")} />
-  ));
-  window.onClose(() => app.quit());
-  app.addWindow(window);
-  await app.run();
-}
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  void main().catch((error) => {
-    console.error("[clock]", error);
-    process.exitCode = 1;
-  });
+
+startMain(import.meta.url, () => {
+  const store = new AlarmStore();
+  return runApp(
+    "Clock",
+    CLOCK_APP_ID,
+    (size, window) => (
+      <ClockApp
+        {...size}
+        window={window}
+        store={store}
+        onRing={() => process.stdout.write("\u0007")}
+      />
+    ),
+    { width: 760, height: 520 },
+  );
+});

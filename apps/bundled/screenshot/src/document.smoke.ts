@@ -8,7 +8,11 @@ import {
   replaceDocument,
   undoDocument,
 } from "./document";
-const image = { width: 8, height: 8, rgba: new Uint8Array(8 * 8 * 4).fill(255) };
+const image = {
+  width: 8,
+  height: 8,
+  rgba: new Uint8Array(8 * 8 * 4).fill(255),
+};
 let document = replaceDocument(emptyDocument(), image, true);
 assert.equal(isDirty(document), false);
 const saved = document.revision;

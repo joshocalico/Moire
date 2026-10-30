@@ -9,21 +9,26 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
-    "smoke": "tsx src/smoke.ts",
-    "smoke:launcher": "tsx src/launcher-smoke.ts"
+    "smoke": "tsx src/smoke.tsx",
+    "smoke:launcher": "tsx src/launcher-smoke.tsx",
+    "preview": "tsx src/preview/cli.tsx",
+    "visreg": "tsx src/preview/cli.tsx --check"
   },
   "dependencies": {
     "@moire/app-discovery": "workspace:*",
+    "@moire/file-operations": "workspace:*",
     "@moire/prefs": "workspace:*",
     "@moire/react-host": "workspace:*",
+    "@moire/system-management": "workspace:*",
     "@moire/theme": "workspace:*",
     "@moire/ui": "workspace:*",
-    "react": "^19.0.0",
-    "@moire/system-management": "workspace:*"
+    "react": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^19.0.0",
+    "pngjs": "^7.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

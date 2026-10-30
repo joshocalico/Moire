@@ -154,6 +154,8 @@ export type DraggableProps = {
    * same `dropData` value never lights up instead.
    */
   dropData?: unknown;
+  /** The drag ended: dropped anywhere, or cancelled. */
+  onDragEnd?: () => void;
   /** Fired on click (no drag). */
   onPress?: () => void;
   onDoublePress?: () => void;
@@ -163,7 +165,7 @@ export type DraggableProps = {
 
 export type DragSourceOptions = Pick<
   DraggableProps,
-  "width" | "height" | "mimeTypes" | "getPayload" | "label" | "previewIcon"
+  "width" | "height" | "mimeTypes" | "getPayload" | "label" | "previewIcon" | "onDragEnd"
 >;
 
 export type DragSourceController = {
@@ -226,6 +228,7 @@ export function useDragSource(options: DragSourceOptions): DragSourceController 
       setDragging(false);
       down.current = null;
       started.current = false;
+      options.onDragEnd?.();
     };
     dndBridge?.startDrag?.(payload, types, {
       label,
@@ -255,6 +258,7 @@ export function useDragSource(options: DragSourceOptions): DragSourceController 
     onPointerUp() {
       down.current = null;
       if (dragging) setDragging(false);
+      if (started.current) options.onDragEnd?.();
       started.current = false;
     },
     onPointerLeave() {
@@ -361,6 +365,12 @@ export type DropTargetProps = {
   height: number;
   mimeTypes?: string[];
   onDrop?: (payload: unknown, mimeTypes: string[], x: number, y: number) => void;
+  /**
+   * "area" outlines the whole target while a compatible drag is over it.
+   * "none" leaves feedback to the specific drop zones inside it, for a view
+   * where most of the area is not itself a meaningful destination.
+   */
+  feedback?: "area" | "none";
   children?: ReactNode;
 };
 
@@ -390,7 +400,7 @@ export function DropTarget(props: DropTargetProps): ReactNode {
     return activeDrag.mimeTypes.some((t) => mimeTypes.includes(t));
   };
 
-  const showHover = hovered && (!activeDrag || acceptsLocal());
+  const showHover = props.feedback !== "none" && hovered && (!activeDrag || acceptsLocal());
 
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>

@@ -1,0 +1,19 @@
+{
+  "name": "@moire/file-operations",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "File operations, freedesktop Trash, the shared file clipboard and the standard file action menu used by Files and the desktop",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx src/trash.smoke.ts && tsx src/actions.smoke.ts && tsx src/queue.smoke.ts && tsx src/operations.smoke.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

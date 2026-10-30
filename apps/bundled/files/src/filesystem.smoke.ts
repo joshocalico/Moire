@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { FileOperations, readDirectory, sortEntries } from "./filesystem";
+import { FileOperations } from "@moire/file-operations";
+import { readDirectory, sortEntries } from "./filesystem";
 import { FileCatalog, parseTags } from "./catalog";
-import { inspectFiles } from "./inspection";
+import { loadPreview } from "./preview/loaders";
 
 // All writes, including Trash, are confined to a fresh disposable fixture.
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "moire-files-workflow-"));
@@ -39,10 +40,13 @@ try {
   assert.deepEqual(catalog.tags(path.join(destination, path.basename(note))), ["work", "ideas"]);
   const reopened = new FileCatalog(catalogPath);
   await reopened.load();
-  assert.equal(
-    (await reopened.entries("work")).length,
-    2,
-    "tag collections include real items in different folders after restart",
+  // Search's tag: token reads these; both copies, in different folders, keep the tag.
+  assert.deepEqual(
+    [note, path.join(destination, path.basename(note))].map((file) =>
+      reopened.tags(file).includes("work"),
+    ),
+    [true, true],
+    "tags of items in different folders survive a restart",
   );
   await operations.transfer("copy", [note], destination, signal, report, async () => "keep-both");
   assert.equal(
@@ -225,17 +229,18 @@ try {
   assert.equal((await fs.stat(path.join(destination, "readonly"))).mode & 0o777, 0o555);
   await fs.chmod(readonly, 0o700);
   await fs.chmod(path.join(destination, "readonly"), 0o700);
-  const inspected = await inspectFiles(
-    (await readDirectory(source, false)).filter((entry) => entry.name === "large.bin"),
-    source,
+  const previewOf = async (folder: string, name: string) =>
+    loadPreview(
+      (await readDirectory(folder, false)).find((entry) => entry.name === name)!,
+      new AbortController().signal,
+    );
+  assert.equal(
+    (await previewOf(source, "large.bin")).kind,
+    "none",
+    "unknown extensions do not get an invented text preview",
   );
-  assert.equal(inspected.text, undefined, "unknown extensions do not get an invented text preview");
-  const textInspection = await inspectFiles(
-    (await readDirectory(destination, false)).filter((entry) => entry.name === "completed.txt"),
-    destination,
-  );
-  assert.equal(textInspection.text, "Finished before cancellation");
-  assert.ok(textInspection.details.some(([key]) => key === "Permissions"));
+  const textPreview = await previewOf(destination, "completed.txt");
+  assert.ok(textPreview.kind === "text" && textPreview.text === "Finished before cancellation");
   assert.ok(reports.length > 0, "operations must report visible progress");
   console.log(
     "[files/workflow] create, sort, collision choices, rename/undo, Trash/restore, persistent tags, mid-file cancellation, partial recovery, symlinks, metadata passed",

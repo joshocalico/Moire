@@ -1,7 +1,13 @@
+/**
+ * Weather backend: Open-Meteo geocoding and forecasts, and the on-disk cache of saved places.
+ * Measurements stay metric (°C, km/h) here; the model converts them for display, so the cache
+ * never depends on the viewer's units.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+
 export type Place = {
   id: string;
   name: string;
@@ -9,6 +15,20 @@ export type Place = {
   latitude: number;
   longitude: number;
   timeZone: string;
+};
+export type Day = {
+  date: string;
+  min: number;
+  max: number;
+  rain: number;
+  code: number;
+};
+/** One hour of today's forecast; `time` is the place's local time, as Open-Meteo gives it. */
+export type Hour = {
+  time: string;
+  temperature: number;
+  rain: number;
+  code: number;
 };
 export type Forecast = {
   fetchedAt: number;
@@ -18,35 +38,64 @@ export type Forecast = {
   feelsLike: number;
   wind: number;
   code: number;
-  days: Array<{ date: string; min: number; max: number; rain: number; code: number }>;
+  days: Day[];
+  /** Absent in caches written before hourly forecasts were fetched. */
+  hours?: Hour[];
 };
 export type CachedPlace = { place: Place; forecast: Forecast };
+
+/** Why a request failed, so the UI can say what to do about it. */
+export type WeatherErrorKind = "network" | "http" | "invalid" | "query";
+export class WeatherError extends Error {
+  constructor(
+    readonly kind: WeatherErrorKind,
+    message: string,
+  ) {
+    super(message);
+    this.name = "WeatherError";
+  }
+}
+
+/** Hours of the hourly forecast kept from the current hour on. */
+const HOURS_KEPT = 24;
+const REQUEST_TIMEOUT_MS = 10_000;
+
+function invalid(what: string): WeatherError {
+  return new WeatherError("invalid", `Weather service returned ${what}.`);
+}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function record(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) throw new Error("Weather service returned an invalid response.");
+  if (!isRecord(value)) throw invalid("an invalid response");
   return value;
 }
 function text(value: unknown): string {
-  if (typeof value !== "string") throw new Error("Weather service returned invalid text.");
+  if (typeof value !== "string") throw invalid("invalid text");
   return value;
 }
 function number(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value))
-    throw new Error("Weather service returned an invalid measurement.");
+  if (typeof value !== "number" || !Number.isFinite(value)) throw invalid("an invalid measurement");
   return value;
 }
 function list(value: unknown): unknown[] {
-  if (!Array.isArray(value)) throw new Error("Weather service returned an invalid forecast.");
+  if (!Array.isArray(value)) throw invalid("an invalid forecast");
   return value;
 }
-export function parsePlace(value: unknown): Place {
+/** Parallel measurement arrays, checked to line up with `times`. */
+function columns(times: unknown[], ...values: unknown[]): unknown[][] {
+  const lists = values.map(list);
+  if (times.length === 0 || lists.some((column) => column.length !== times.length))
+    throw invalid("forecast measurements that do not align");
+  return lists;
+}
+
+function parsePlace(value: unknown): Place {
   const item = record(value),
     latitude = number(item.latitude),
     longitude = number(item.longitude);
   if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180)
-    throw new Error("Weather service returned invalid coordinates.");
+    throw invalid("invalid coordinates");
   return {
     id: String(item.id ?? `${latitude},${longitude}`),
     name: text(item.name),
@@ -61,69 +110,99 @@ export function parsePlace(value: unknown): Place {
           : "UTC",
   };
 }
+
+function parseHours(hourly: unknown, now: string): Hour[] {
+  const item = record(hourly),
+    times = list(item.time);
+  const [temperatures, rain, codes] = columns(
+    times,
+    item.temperature_2m,
+    item.precipitation_probability,
+    item.weather_code,
+  );
+  // Local ISO times sort as strings; "2026-10-02T12" matches every minute of that hour.
+  const hour = now.slice(0, 13);
+  const first = times.findIndex((time) => text(time) >= hour);
+  if (first < 0) return [];
+  return times.slice(first, first + HOURS_KEPT).map((time, offset) => ({
+    time: text(time),
+    temperature: number(temperatures![first + offset]),
+    // Open-Meteo leaves the chance of rain null beyond its model's horizon.
+    rain: rain![first + offset] === null ? 0 : number(rain![first + offset]),
+    code: number(codes![first + offset]),
+  }));
+}
+
 export function parseForecast(value: unknown, fetchedAt = Date.now()): Forecast {
   const item = record(value),
     current = record(item.current),
     daily = record(item.daily),
-    dates = list(daily.time),
-    min = list(daily.temperature_2m_min),
-    max = list(daily.temperature_2m_max),
-    rain = list(daily.precipitation_probability_max),
-    codes = list(daily.weather_code);
-  if (
-    [min, max, rain, codes].some((values) => values.length !== dates.length) ||
-    dates.length === 0
-  )
-    throw new Error("Forecast daily measurements do not align.");
+    dates = list(daily.time);
+  const [min, max, rain, codes] = columns(
+    dates,
+    daily.temperature_2m_min,
+    daily.temperature_2m_max,
+    daily.precipitation_probability_max,
+    daily.weather_code,
+  );
+  const time = text(current.time);
   return {
     fetchedAt,
     timeZone: text(item.timezone),
-    time: text(current.time),
+    time,
     temperature: number(current.temperature_2m),
     feelsLike: number(current.apparent_temperature),
     wind: number(current.wind_speed_10m),
     code: number(current.weather_code),
     days: dates.map((date, index) => ({
       date: text(date),
-      min: number(min[index]),
-      max: number(max[index]),
-      rain: number(rain[index]),
-      code: number(codes[index]),
+      min: number(min![index]),
+      max: number(max![index]),
+      rain: number(rain![index]),
+      code: number(codes![index]),
     })),
+    ...(item.hourly === undefined ? {} : { hours: parseHours(item.hourly, time) }),
   };
 }
-export function weatherLabel(code: number): string {
-  if (code === 0) return "Clear sky";
-  if (code <= 3) return "Partly cloudy";
-  if (code === 45 || code === 48) return "Fog";
-  if (code >= 51 && code <= 57) return "Drizzle";
-  if (code >= 61 && code <= 67) return "Rain";
-  if (code >= 71 && code <= 77) return "Snow";
-  if (code >= 80 && code <= 82) return "Rain showers";
-  if (code === 85 || code === 86) return "Snow showers";
-  if (code >= 95) return "Thunderstorms";
-  return "Weather conditions unavailable";
-}
+
+type WeatherClientOptions = {
+  forecastURL?: string;
+  geocodingURL?: string;
+  now?: () => number;
+};
 export class WeatherClient {
-  constructor(
-    private readonly options: {
-      forecastURL?: string;
-      geocodingURL?: string;
-      now?: () => number;
-    } = {},
-  ) {}
+  constructor(private readonly options: WeatherClientOptions = {}) {}
   private async request(url: URL, signal?: AbortSignal): Promise<unknown> {
-    const response = await fetch(url, {
-      signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
-        : AbortSignal.timeout(10000),
-    });
+    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      });
+    } catch (error) {
+      // A caller's abort is not a failure to report; let it through unchanged.
+      if (signal?.aborted) throw error;
+      throw new WeatherError(
+        "network",
+        timeout.aborted
+          ? "The weather service did not answer in time."
+          : "Can't reach the weather service. Check your connection.",
+      );
+    }
     if (!response.ok)
-      throw new Error(`Weather service returned HTTP ${response.status}. Try again later.`);
-    return response.json();
+      throw new WeatherError(
+        "http",
+        `Weather service returned HTTP ${response.status}. Try again later.`,
+      );
+    try {
+      return await response.json();
+    } catch {
+      throw invalid("a response that is not JSON");
+    }
   }
   async search(query: string, signal?: AbortSignal): Promise<Place[]> {
-    if (query.trim().length < 2) throw new Error("Enter at least two letters of a place name.");
+    if (query.trim().length < 2)
+      throw new WeatherError("query", "Enter at least two letters of a place name.");
     const url = new URL(
       this.options.geocodingURL ?? "https://geocoding-api.open-meteo.com/v1/search",
     );
@@ -144,12 +223,14 @@ export class WeatherClient {
       longitude: String(place.longitude),
       timezone: "auto",
       current: "temperature_2m,apparent_temperature,weather_code,wind_speed_10m",
+      hourly: "temperature_2m,precipitation_probability,weather_code",
       daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
       forecast_days: "7",
     }).toString();
     return parseForecast(await this.request(url, signal), (this.options.now ?? Date.now)());
   }
 }
+
 function parseCached(value: unknown): CachedPlace {
   const item = record(value),
     place = parsePlace(item.place),
@@ -174,9 +255,23 @@ function parseCached(value: unknown): CachedPlace {
           code: number(day.code),
         };
       }),
+      ...(f.hours === undefined
+        ? {}
+        : {
+            hours: list(f.hours).map((value) => {
+              const hour = record(value);
+              return {
+                time: text(hour.time),
+                temperature: number(hour.temperature),
+                rain: number(hour.rain),
+                code: number(hour.code),
+              };
+            }),
+          }),
     },
   };
 }
+
 export class WeatherCache {
   constructor(
     readonly file = path.join(

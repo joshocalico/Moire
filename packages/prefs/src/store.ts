@@ -6,6 +6,37 @@ import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { parseThemeFamily, type ThemeFamily } from "@moire/theme";
+import {
+  DEFAULT_KEYBOARD_SETTINGS,
+  DEFAULT_POINTER_SETTINGS,
+  normalizeKeyboardSettings,
+  normalizePointerSettings,
+  type KeyboardSettings,
+  type PointerSettings,
+} from "./input";
+import { DEFAULT_REGION_SETTINGS, normalizeRegionSettings, type RegionSettings } from "./region";
+import { DEFAULT_POWER_SETTINGS, normalizePowerSettings, type PowerSettings } from "./power";
+import { normalizeLauncherPins } from "./launcher";
+import {
+  DEFAULT_MANUAL_PROXY,
+  normalizeManualProxy,
+  type ManualProxySettings,
+} from "./network-proxy";
+import {
+  DEFAULT_AUTO_DARK,
+  DEFAULT_NIGHT_LIGHT,
+  normalizeAutoDark,
+  normalizeNightLight,
+  type AutoDarkSettings,
+  type NightLightSettings,
+} from "./daylight";
+import {
+  DEFAULT_DND_SCHEDULE,
+  normalizeDndSchedule,
+  normalizeNotificationRules,
+  type DoNotDisturbSchedule,
+  type NotificationRules,
+} from "./notifications";
 
 export type WallpaperSettings = {
   mode: "atmosphere" | "gradient" | "solid" | "image";
@@ -28,6 +59,8 @@ export type MoireSettings = {
   /** Prefer dark tokens + GTK dark scheme. */
   dark: boolean;
   themeFamily: ThemeFamily;
+  /** Accent colour (`#rrggbb`) over the style's own; null keeps the style's accent. */
+  accent: string | null;
   /** Disable decorative motion in Moire applications sharing this user profile. */
   reducedMotion: boolean;
   /** Desktop notification preference (future toast daemon). */
@@ -38,17 +71,48 @@ export type MoireSettings = {
   displayMode: string | null;
   /** Confirmed layout keyed by EDID identity (connector identity as fallback). */
   displayOutputs: Record<string, DisplayOutputSettings>;
-  /** Last requested sink volume 0..1 (also applied via wpctl/pactl when available). */
+  /** Last requested sink volume 0..1 (the live volume is PipeWire's, set by the management service). */
   volume: number;
   /** Show file icons on the desktop background. */
   showDesktopIcons: boolean;
+  /** The panel as one full-width bar instead of floating islands. */
+  panelFullWidth: boolean;
+  /** Window buttons in the panel show only their icon. */
+  panelIconsOnly: boolean;
   /** Wallpaper override; null means use the bundled theme's wallpaper. */
   wallpaper: WallpaperSettings | null;
+  /** Let the index service crawl Home for search; off deletes the index. */
+  indexingEnabled: boolean;
+  /** Folders (absolute or `~/…`) and name patterns (`*.iso`) the index skips. */
+  indexExcludes: string[];
+  /** Extra folders to index, such as a removable drive's mount point the user opted in. */
+  indexIncludes: string[];
+  /** Layouts, switching, repeat and Caps Lock; applied live by the compositor. */
+  keyboard: KeyboardSettings;
+  /** Pointer speed, scrolling and buttons; applied live by the compositor. */
+  pointer: PointerSettings;
+  /** Clock, first weekday and date order; read by the panel clock and apps. */
+  region: RegionSettings;
+  /** Dim, screen off, lock, suspend, lid, power key and power profile; applied by the compositor. */
+  power: PowerSettings;
+  /** Desktop entry ids the launcher lists first, in this order. */
+  launcherPins: string[];
+  /** Per-app notification rules, keyed by app id (see `notificationAppKey`). */
+  notificationRules: NotificationRules;
+  /** Hours when Do not disturb turns itself on. */
+  doNotDisturbSchedule: DoNotDisturbSchedule;
+  /** Warm the screen in the evening; applied by the compositor at composition. */
+  nightLight: NightLightSettings;
+  /** Switch `dark` on a schedule; the management service flips it at the boundaries. */
+  autoDark: AutoDarkSettings;
+  /** A hand-entered proxy, put in the environment of apps the compositor starts. */
+  proxy: ManualProxySettings;
 };
 
 export const DEFAULT_SETTINGS: MoireSettings = {
   dark: true,
   themeFamily: "moire",
+  accent: null,
   reducedMotion: false,
   notifications: true,
   uiScale: 1,
@@ -56,7 +120,22 @@ export const DEFAULT_SETTINGS: MoireSettings = {
   displayOutputs: {},
   volume: 0.7,
   showDesktopIcons: true,
+  panelFullWidth: false,
+  panelIconsOnly: false,
   wallpaper: null,
+  indexingEnabled: true,
+  indexExcludes: [],
+  indexIncludes: [],
+  keyboard: DEFAULT_KEYBOARD_SETTINGS,
+  pointer: DEFAULT_POINTER_SETTINGS,
+  region: DEFAULT_REGION_SETTINGS,
+  power: DEFAULT_POWER_SETTINGS,
+  launcherPins: [],
+  notificationRules: {},
+  doNotDisturbSchedule: DEFAULT_DND_SCHEDULE,
+  nightLight: DEFAULT_NIGHT_LIGHT,
+  autoDark: DEFAULT_AUTO_DARK,
+  proxy: DEFAULT_MANUAL_PROXY,
 };
 
 export function configDir(): string {
@@ -109,6 +188,10 @@ export function normalizeSettings(value: unknown): MoireSettings {
   return {
     dark: typeof s.dark === "boolean" ? s.dark : DEFAULT_SETTINGS.dark,
     themeFamily: parseThemeFamily(s.themeFamily),
+    accent:
+      typeof s.accent === "string" && /^#[0-9a-f]{6}$/i.test(s.accent)
+        ? s.accent.toLowerCase()
+        : null,
     reducedMotion: s.reducedMotion === true,
     notifications:
       typeof s.notifications === "boolean" ? s.notifications : DEFAULT_SETTINGS.notifications,
@@ -123,8 +206,34 @@ export function normalizeSettings(value: unknown): MoireSettings {
       typeof s.showDesktopIcons === "boolean"
         ? s.showDesktopIcons
         : DEFAULT_SETTINGS.showDesktopIcons,
+    panelFullWidth: s.panelFullWidth === true,
+    panelIconsOnly: s.panelIconsOnly === true,
     wallpaper,
+    indexingEnabled: s.indexingEnabled !== false,
+    indexExcludes: normalizeIndexPaths(s.indexExcludes),
+    indexIncludes: normalizeIndexPaths(s.indexIncludes).filter((entry) => entry.startsWith("/")),
+    keyboard: normalizeKeyboardSettings(s.keyboard),
+    pointer: normalizePointerSettings(s.pointer),
+    region: normalizeRegionSettings(s.region),
+    power: normalizePowerSettings(s.power),
+    launcherPins: normalizeLauncherPins(s.launcherPins),
+    notificationRules: normalizeNotificationRules(s.notificationRules),
+    doNotDisturbSchedule: normalizeDndSchedule(s.doNotDisturbSchedule),
+    nightLight: normalizeNightLight(s.nightLight),
+    autoDark: normalizeAutoDark(s.autoDark),
+    proxy: normalizeManualProxy(s.proxy),
   };
+}
+
+/** A hand-edited list keeps its usable entries; the cap keeps a bad file from costing much. */
+const MAX_INDEX_PATHS = 256;
+function normalizeIndexPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const entries = value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0 && entry.length <= 4096 && !entry.includes("\0"));
+  return [...new Set(entries)].slice(0, MAX_INDEX_PATHS);
 }
 
 function normalizeDisplayOutputs(value: unknown): Record<string, DisplayOutputSettings> {

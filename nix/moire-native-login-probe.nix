@@ -63,7 +63,7 @@ in {
       StandardError = "journal";
     };
   };
-  systemd.services.greetd = {
+  systemd.services.greetd = lib.mkIf config.services.greetd.enable {
     requires = [ "moire-native-keymap-checks.service" ];
     after = [ "moire-native-keymap-checks.service" ];
   };

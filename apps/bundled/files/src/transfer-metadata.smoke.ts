@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { FileCatalog } from "./catalog";
-import { FileOperations, type Progress } from "./filesystem";
+import { FileOperations, type Progress } from "@moire/file-operations";
 import { executeTransfer, transferSourceFolder } from "./transfer-outcome";
 import {
   readTransferConflictMetadata,

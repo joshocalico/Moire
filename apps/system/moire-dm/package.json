@@ -1,0 +1,17 @@
+{
+  "name": "@moire/moire-dm",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Moire's login daemon and its automatic-login settings service (design: docs/moire-dm.md).",
+  "exports": {
+    "./protocol": "./src/protocol.ts"
+  },
+  "scripts": {
+    "typecheck": "node ../compositor/node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@moire/dbus": "workspace:*",
+    "@moire/sys": "workspace:*"
+  }
+}

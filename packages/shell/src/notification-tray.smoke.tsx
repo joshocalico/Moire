@@ -35,6 +35,7 @@ import {
   type NotificationTrayStatus,
   type NoticePresentation,
 } from "./NotificationTrayContent";
+import { bannerNotice } from "./QuickSettings";
 
 await installUiFonts();
 const now = new Date(2026, 9, 3, 14, 0).getTime();
@@ -373,12 +374,28 @@ try {
             timeMs: 1,
           });
           window.tick();
-          for (let settle = 0; window.hasActiveAnimations() && settle < 120; settle++) {
+          // A motion that has settled has only published its last value: the widget re-renders
+          // from it asynchronously and then invalidates the window. With slow frames that last
+          // step is large enough to see, so pump until a whole turn passes with neither motion
+          // nor an invalidation; only then is the frame below the final one.
+          let invalidated = true;
+          const stopWatching = window.onInvalidated(() => {
+            invalidated = true;
+          });
+          for (
+            let settle = 0;
+            (invalidated || window.hasActiveAnimations()) && settle < 240;
+            settle++
+          ) {
+            invalidated = false;
             await new Promise((resolve) => setTimeout(resolve, 16));
             window.tick();
           }
-          assert(!window.hasActiveAnimations(), "pre-wheel pointer feedback settled");
-          window.tick();
+          stopWatching();
+          assert(
+            !invalidated && !window.hasActiveAnimations(),
+            "pre-wheel pointer feedback settled and painted",
+          );
           const wheelBefore = native.lastFrame!.slice();
           native.injectPointer({
             type: "wheel",
@@ -619,4 +636,13 @@ try {
   );
 } finally {
   setUiScaleFactor(1);
+}
+
+// The banner skips notices whose app turned banners off; they still wait in the tray.
+{
+  const quiet = { ...notices[1]!, banner: false };
+  assert.equal(bannerNotice([quiet, notices[0]!])?.id, notices[0]!.id);
+  assert.equal(bannerNotice([quiet]), null);
+  assert.equal(bannerNotice([{ ...notices[0]!, closed: true }]), null);
+  console.log("[notification-tray] banner skips banner-less and closed notices passed");
 }

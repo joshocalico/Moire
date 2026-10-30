@@ -24,6 +24,7 @@ import {
 import { loadSettings } from "@moire/prefs";
 import { FilesApp } from "../../../apps/bundled/files/src/main";
 import { SettingsApp } from "../../../apps/core/settings/src/main";
+import { settingsFixture } from "../../../apps/core/settings/src/testing";
 import { filesLayout } from "../../../apps/bundled/files/src/layout";
 
 await installUiFonts();
@@ -33,10 +34,14 @@ const originalHome = process.env.HOME;
 const originalConfig = process.env.XDG_CONFIG_HOME;
 process.env.HOME = temporary;
 process.env.XDG_CONFIG_HOME = path.join(temporary, ".config");
+// The session file clipboard lives in the runtime directory; keep it in the fixture.
+process.env.XDG_RUNTIME_DIR = path.join(temporary, ".run");
 const fixture = path.join(temporary, "Projects", "Moire");
 fs.mkdirSync(fixture, { recursive: true });
 for (const directory of ["design", "packages", "wallpapers"])
   fs.mkdirSync(path.join(fixture, directory));
+// Properties opens on design/, so its preview has an item to count and measure.
+fs.writeFileSync(path.join(fixture, "design", "brief.md"), "Moire design brief\n");
 fs.writeFileSync(path.join(fixture, "README.md"), "Moire desktop\n");
 fs.writeFileSync(path.join(fixture, "desktop.tsx"), "export const desktop = true;\n");
 fs.copyFileSync(
@@ -51,11 +56,13 @@ function positionedText(
   node: SceneNode,
   x = 0,
   y = 0,
-): Array<{ text: string; x: number; y: number; height: number }> {
+): Array<{ text: string; x: number; y: number; width: number; height: number }> {
   x += node.x;
   y += node.y;
   return [
-    ...(node.kind === "text" ? [{ text: node.text ?? "", x, y, height: node.height }] : []),
+    ...(node.kind === "text"
+      ? [{ text: node.text ?? "", x, y, width: node.width, height: node.height }]
+      : []),
     ...node.children.flatMap((child) => positionedText(child, x, y)),
   ];
 }
@@ -96,30 +103,34 @@ try {
       ]) {
         assert.ok(width && height);
         const root = createShellRoot();
-        renderShell(
-          root,
+        // Wide windows open Properties on a folder, to check the inspector's layout too.
+        const app = (
           <WidgetThemeProvider theme={theme}>
-            <FilesApp width={width} height={height} initialPath={fixture} onQuit={() => {}} />
-          </WidgetThemeProvider>,
+            <FilesApp
+              width={width}
+              height={height}
+              initialPath={fixture}
+              reveal={
+                width >= 960 ? { path: path.join(fixture, "design"), properties: true } : null
+              }
+              onQuit={() => {}}
+            />
+          </WidgetThemeProvider>
         );
+        renderShell(root, app);
         // Directory reads are asynchronous; verify the loaded app, not its
         // intentional first-frame loading state.
         for (
           let attempt = 0;
-          attempt < 100 && !textNodes(root.container).includes("6 items");
+          attempt < 100 && !textNodes(root.container).includes("README.md");
           attempt++
         ) {
           await new Promise((resolve) => setTimeout(resolve, 10));
-          renderShell(
-            root,
-            <WidgetThemeProvider theme={theme}>
-              <FilesApp width={width} height={height} initialPath={fixture} onQuit={() => {}} />
-            </WidgetThemeProvider>,
-          );
+          renderShell(root, app);
         }
         const metrics = filesLayout(width, height, 1);
         for (const hit of collectHits(root.container).filter(
-          (hit) => hit.y < metrics.toolbarH && hit.focusable,
+          (hit) => hit.y < metrics.topH && hit.focusable,
         )) {
           assert.ok(
             hit.x >= 0 && hit.x + hit.width <= width,
@@ -127,7 +138,7 @@ try {
           );
         }
         const toolbarLabels = positionedText(root.container).filter(
-          (node) => node.y < metrics.toolbarH,
+          (node) => node.y < metrics.topH,
         );
         for (const label of [
           "New folder",
@@ -143,36 +154,84 @@ try {
             !toolbarLabels.some((node) => node.text === label),
             `${family}/${scheme}/${width}: file operation ${label} must live in a context menu`,
           );
-        assert.ok(
-          textNodes(root.container).includes("6 items"),
-          "status must report actual item count",
-        );
+        // Short windows fold the title; the All chip still counts the folder's items (the
+        // narrowest window folds every chip into "More").
+        const labels = textNodes(root.container);
+        if (width >= 320)
+          assert.equal(
+            labels[labels.indexOf("All") + 1],
+            "6",
+            "the page must report the actual item count",
+          );
         if (width >= 960) {
-          for (
-            let attempt = 0;
-            attempt < 100 && !textNodes(root.container).includes("Contents");
-            attempt++
-          )
+          // Properties is docked at the right; its heading marks the pane's left edge.
+          const paneLeft = () =>
+            positionedText(root.container).find(
+              (node) => node.text === "Properties" && node.x > width / 2,
+            )?.x ?? width;
+          const pane = () =>
+            positionedText(root.container).filter((node) => node.x >= paneLeft() && node.x < width);
+          // The folder's preview loads asynchronously: the hero counts its items and the
+          // Information card measures its size.
+          const loaded = () => {
+            const text = pane();
+            return (
+              text.some((node) => node.text === "1 item · 0 folders") &&
+              text.some((node) => /^\d+ B in 1 file$/.test(node.text)) &&
+              text.some((node) => node.text === "Sharing & permissions")
+            );
+          };
+          for (let attempt = 0; attempt < 200 && !loaded(); attempt++) {
             await new Promise((resolve) => setTimeout(resolve, 10));
-          const text = positionedText(root.container);
+            renderShell(root, app);
+          }
+          assert.ok(
+            loaded(),
+            `${family}/${scheme}: inspector loads the folder's details: ${pane()
+              .map((node) => node.text)
+              .join(" | ")}`,
+          );
+          const left = paneLeft();
+          assert.ok(
+            left >= width - 400 && left < width - 300,
+            `${family}/${scheme}: inspector docks at the right (left edge ${left})`,
+          );
+          // Hero, title block, then each card's heading and rows, top to bottom, none overlapping.
+          const text = pane();
           const details = [
-            "Selection",
-            "File bytes",
+            "1 item · 0 folders",
+            "design",
+            "Folder · ",
+            "Open in New Tab",
+            "Information",
+            "Kind",
+            "Size",
+            "Tags",
+            "Add tag",
             "Location",
+            "Sharing & permissions",
+            "You",
+            "Group",
+            "Everyone",
+            "History",
+            "Created",
             "Modified",
-            "Accessed",
-            "Metadata changed",
-            "Permissions",
-            "Owner / group",
-            "Contents",
-          ].map((label) => text.find((node) => node.text === label && node.x > width - 240));
+          ].map((label) =>
+            text.find((node) =>
+              label.endsWith(" ") ? node.text.startsWith(label) : node.text === label,
+            ),
+          );
           for (const [index, detail] of details.entries()) {
-            assert.ok(detail, `${family}/${scheme}: inspector detail did not load`);
+            assert.ok(detail, `${family}/${scheme}: inspector detail ${index} did not load`);
+            assert.ok(
+              detail.x + detail.width <= width,
+              `${family}/${scheme}: ${detail.text} runs past the window`,
+            );
             const previous = details[index - 1];
             if (previous)
               assert.ok(
                 detail.y >= previous.y + previous.height,
-                `${family}/${scheme}: nested inspector details overlap at ${previous.text}/${detail.text}`,
+                `${family}/${scheme}: inspector details overlap at ${previous.text}/${detail.text}`,
               );
           }
         }
@@ -191,9 +250,11 @@ try {
             <SettingsApp
               width={width}
               height={height}
-              display={null}
-              initial={{ ...loadSettings(), themeFamily: family, dark: scheme === "dark" }}
-              onQuit={() => {}}
+              {...settingsFixture({
+                ...loadSettings(),
+                themeFamily: family,
+                dark: scheme === "dark",
+              }).props}
             />
           </WidgetThemeProvider>,
         );
@@ -215,7 +276,7 @@ try {
   refresh();
   for (
     let attempt = 0;
-    attempt < 100 && !textNodes(root.container).includes("6 items");
+    attempt < 100 && !textNodes(root.container).includes("README.md");
     attempt++
   ) {
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -235,24 +296,36 @@ try {
   assert.equal(shortcut.onGlobalKeyDown(command), true, "Ctrl+F must focus folder search");
   refresh();
   const search = collectHits(root.container).find(
-    (hit) => hit.autoFocus && hit.focusId?.startsWith("text-field:"),
+    (hit) => hit.autoFocus && hit.focusId === "files:search",
   );
   assert.ok(search?.onKeyDown);
   search.onFocusChange?.(true);
   search.onKeyDown({ ...command, ctrlKey: false, code: 48, key: "b", text: "Botanical" });
   refresh();
+  for (
+    let attempt = 0;
+    attempt < 100 && !textNodes(root.container).includes("Best match");
+    attempt++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    refresh();
+  }
   assert.ok(
-    textNodes(root.container).includes("1 item of 6"),
-    "search must filter actual directory entries",
+    textNodes(root.container).includes("Botanical.png"),
+    "search must find actual directory entries",
   );
   assert.ok(!textNodes(root.container).includes("desktop.tsx"), "unmatched files must disappear");
   const field = collectHits(root.container).find((hit) => hit.focusId === search.focusId);
   assert.ok(field?.onKeyDown);
   field.onKeyDown({ ...command, ctrlKey: false, code: 1, key: "Escape" });
   refresh();
-  assert.ok(textNodes(root.container).includes("6 items"), "Escape must clear the filter");
+  assert.ok(
+    textNodes(root.container).includes("desktop.tsx") &&
+      !textNodes(root.container).includes("Best match"),
+    "Escape must return to the folder",
+  );
   renderShell(root, null);
-  console.log("[desktop/polish-smoke] Ctrl+F, live filename filtering and Escape ok");
+  console.log("[desktop/polish-smoke] Ctrl+F, live filename search and Escape ok");
 } finally {
   if (originalHome == null) delete process.env.HOME;
   else process.env.HOME = originalHome;

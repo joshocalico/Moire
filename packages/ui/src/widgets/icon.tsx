@@ -25,6 +25,10 @@ export const ICON_NAMES = [
   "settings",
   "grid",
   "list",
+  "columns",
+  "sort",
+  "eject",
+  "copy",
   "search",
   "close",
   "plus",
@@ -76,6 +80,17 @@ export const ICON_NAMES = [
   "lock",
   "logout",
   "restart",
+  "keyboard",
+  "mouse",
+  "user",
+  "shield",
+  "accessibility",
+  "apps",
+  "panel",
+  "phone",
+  "gamepad",
+  "airplane",
+  "vpn",
 ] as const;
 export type IconName = (typeof ICON_NAMES)[number];
 

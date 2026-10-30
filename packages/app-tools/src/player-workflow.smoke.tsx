@@ -6,7 +6,8 @@ import net from "node:net";
 import React from "react";
 import { Window, installUiFonts } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
-import { withFixture } from "./testing";
+import { loadRecentFiles } from "./frame";
+import { mountWindow, windowControl, withFixture } from "./testing";
 import { PlayerApp } from "./player";
 
 await installUiFonts();
@@ -127,9 +128,11 @@ process.on('SIGTERM',()=>{record({kind:'closed'});process.exit(0);});
     }
     throw new Error(`Timed out: ${label}`);
   };
-  const click = (x: number) => {
-    native.injectPointer({ type: "down", button: "left", x, y: 60, timeMs: 1 });
-    native.injectPointer({ type: "up", button: "left", x, y: 60, timeMs: 2 });
+  const click = (focusId: string) => {
+    window.tick();
+    const { x, y } = windowControl(window, { focusId });
+    native.injectPointer({ type: "down", button: "left", x, y, timeMs: 1 });
+    native.injectPointer({ type: "up", button: "left", x, y, timeMs: 2 });
   };
   const eof = async (endpoint: string, reason = "eof") => {
     await new Promise<void>((resolve, reject) => {
@@ -192,7 +195,7 @@ process.on('SIGTERM',()=>{record({kind:'closed'});process.exit(0);});
     await eof(final.endpoint);
     await new Promise((resolve) => setTimeout(resolve, 70));
     assert.equal((await loads()).length, 3, "terminal EOF does not reopen or wrap the playlist");
-    click(40);
+    click("playback:pause");
     await wait(async () => (await loads()).length === 4, "Play replays the finished last item");
     const replay = (await loads())[3];
     assert.ok(replay);
@@ -206,14 +209,14 @@ process.on('SIGTERM',()=>{record({kind:'closed'});process.exit(0);});
         ),
       "replay actually resumes playback",
     );
-    click(115);
+    click("playback:stop");
     await wait(
       async () => (await records()).some((row) => row.pid === replay.pid && row.kind === "closed"),
       "Stop closes the actual backend",
     );
     await new Promise((resolve) => setTimeout(resolve, 70));
     assert.equal((await loads()).length, 4, "Stop does not advance the queue");
-    click(185);
+    click("player:reopen");
     await wait(async () => (await loads()).length === 5, "Reopen starts the selected item paused");
     const reopened = (await loads())[4];
     assert.ok(reopened);
@@ -251,6 +254,62 @@ process.on('SIGTERM',()=>{record({kind:'closed'});process.exit(0);});
       "all fixture processes actually exited after teardown acknowledgement",
     );
   }
+  // Building a queue from the file chooser: open one file, add two more, play the third from
+  // the list, then clear the rest. Adding and clearing never interrupt what is playing.
+  const videos = path.join(directory, "Videos");
+  await fs.mkdir(videos);
+  for (const name of ["a.mp4", "b.mp4", "c.mp4"]) await fs.writeFile(path.join(videos, name), name);
+  await fs.writeFile(path.join(videos, "notes.txt"), "not media");
+  const before = (await loads()).length;
+  const queued = await mountWindow((size) => (
+    <PlayerApp {...size} video playbackOptions={{ binary, extraArgs: [`--journal=${journal}`] }} />
+  ));
+  const has = (text: string) => queued.texts().includes(text);
+  const chooseNth = async (n: number) => {
+    await queued.settle();
+    assert.ok(!has("notes.txt"), "the chooser offers only media");
+    for (let step = 0; step < n; step++) queued.key(108, "ArrowDown");
+    queued.key(28, "Enter");
+    await queued.settle();
+  };
+  try {
+    queued.press({ text: "Open…" });
+    await chooseNth(1);
+    await wait(async () => (await loads()).length === before + 1, "Open… plays the chosen file");
+    assert.equal((await loads()).at(-1)?.command?.[1], path.join(videos, "a.mp4"));
+    queued.press({ focusId: "player:add" });
+    await chooseNth(2);
+    queued.press({ focusId: "player:add" });
+    await chooseNth(3);
+    await queued.until(() => has("QUEUE · 3") && has("1 of 3"), "two files were added");
+    assert.equal((await loads()).length, before + 1, "adding doesn't restart playback");
+    queued.press({ focusId: "player:queue:3" });
+    await wait(async () => (await loads()).length === before + 2, "a queued file plays on press");
+    const third = (await loads()).at(-1)!;
+    assert.equal(third.command?.[1], path.join(videos, "c.mp4"));
+    await wait(
+      async () =>
+        (await records()).some(
+          (row) =>
+            row.pid === third.pid &&
+            row.command?.[0] === "set_property" &&
+            row.command?.[2] === false,
+        ),
+      "the pressed file starts playing",
+    );
+    queued.press({ focusId: "player:clear-queue" });
+    await queued.until(() => !has("QUEUE · 3") && !has("3 of 3"), "Clear empties the queue");
+    assert.ok(has("c.mp4"), "the playing file stays");
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    assert.equal((await loads()).length, before + 2, "clearing doesn't restart playback");
+    assert.equal(loadRecentFiles("org.moire.VideoPlayer")[0], path.join(videos, "c.mp4"));
+  } finally {
+    queued.destroy();
+    await wait(
+      async () => (await loads()).every((load) => processExited(load.pid)),
+      "queue sessions exited on close",
+    );
+  }
   await wait(
     async () => (await fs.readdir(path.join(directory, "tmp"))).length === 0,
     "private IPC sockets retired",
@@ -261,7 +320,7 @@ process.on('SIGTERM',()=>{record({kind:'closed'});process.exit(0);});
     "private IPC sockets retired",
   );
   console.log(
-    "[app-tools/player] public Window EOF/automatic play/duplicate paths/final replay/Stop/Reopen/error/teardown passed; Unix IPC fixture only, no audible/video qualification",
+    "[app-tools/player] public Window EOF/automatic play/duplicate paths/final replay/Stop/Reopen/error/teardown, chooser Open…/Add to queue/play from queue/Clear passed; Unix IPC fixture only, no audible/video qualification",
   );
 }).finally(() => {
   if (previousPath === undefined) delete process.env.PATH;

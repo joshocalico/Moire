@@ -3,7 +3,9 @@ import { isDeepStrictEqual } from "node:util";
 import { SessionBus, DbusRemoteError, variant, type DbusDisposer } from "@moire/dbus";
 import {
   BLUETOOTH_UNAVAILABLE,
+  bluetoothDeviceKind,
   bluetoothSupported,
+  parseBluetoothAlias,
   bluetoothTrustBlocksControls,
   parseBluetoothId,
   type BluetoothAdapter,
@@ -15,12 +17,16 @@ import {
   type BluetoothTrustState,
   type BluetoothTrustRequest,
   type BluetoothTrustConsent,
+  type BluetoothPowerChange,
+  type BluetoothForgetRequest,
+  type BluetoothRenameRequest,
 } from "@moire/system-management/bluetooth-status";
 const BLUEZ = "org.bluez",
   MANAGER = "org.freedesktop.DBus.ObjectManager";
 const PROPERTIES = "org.freedesktop.DBus.Properties",
   ADAPTER = BLUEZ + ".Adapter1",
-  DEVICE = BLUEZ + ".Device1";
+  DEVICE = BLUEZ + ".Device1",
+  BATTERY = BLUEZ + ".Battery1";
 export type BluezBluetoothOptions = {
   connect?: () => Promise<SessionBus>;
   policy?: "readonly" | "interactive";
@@ -31,7 +37,15 @@ export type BluezBluetoothOptions = {
   operationTimeoutMs?: number;
   pollMs?: number;
 };
-type Candidate = { device: BluetoothDevice; path: string; powered: boolean };
+type Candidate = { device: BluetoothDevice; path: string; adapter: string; powered: boolean };
+type Radio = { path: string; powered: boolean };
+type DbusCall = {
+  path: string;
+  interface: string;
+  member: string;
+  signature: string;
+  body: unknown[];
+};
 type Identity = { id: BluetoothId; fingerprint: string };
 type Attempt = BluetoothChange & { owner: string; epoch: number; path: string; sent: boolean };
 type TrustConsent = BluetoothTrustRequest & {
@@ -103,7 +117,7 @@ function failed(cause: unknown, sent: boolean): { kind: "error" | "unknown"; mes
       }
     : { kind: "error", message: "Bluetooth device or backend changed before the request" };
 }
-/** Observe an existing owner; independently gate connection and trust. Never pair, scan or change radio power. */
+/** Observe an existing owner; independently gate connection and trust. Never pair or scan; radio power, removal and renaming only on request. */
 export async function createBluezBluetoothAdapter(
   options: BluezBluetoothOptions = {},
 ): Promise<BluetoothAdapter> {
@@ -142,7 +156,8 @@ export async function createBluezBluetoothAdapter(
   let disposal: Promise<void> | null = null;
   const subscriptions: DbusDisposer[] = [],
     identities = new Map<string, Identity>(),
-    candidates = new Map<BluetoothId, Candidate>();
+    candidates = new Map<BluetoothId, Candidate>(),
+    radios = new Map<BluetoothId, Radio>();
   const propertySubscriptions = new Map<string, Promise<DbusDisposer>>();
   const stopProperties = async () => {
     const pending = Array.from(propertySubscriptions.values());
@@ -259,6 +274,20 @@ export async function createBluezBluetoothAdapter(
       if (!adapter) throw new Error("Known Bluetooth device has no adapter");
       const deviceAddress = address(property(props, "Address", "s"));
       const id = identify(nextIdentities, p, "device:" + adapter.id + ":" + deviceAddress);
+      // Icon, Class and Battery1 appear only when the device reports them.
+      const icon = "Icon" in props ? text(property(props, "Icon", "s"), 64) : null;
+      const deviceClass = "Class" in props ? property(props, "Class", "u") : null;
+      const battery =
+        BATTERY in interfaces
+          ? property(dictionary(interfaces[BATTERY], 16), "Percentage", "y")
+          : undefined;
+      if (
+        (deviceClass !== null &&
+          (typeof deviceClass !== "number" || !Number.isInteger(deviceClass))) ||
+        (battery !== undefined &&
+          (typeof battery !== "number" || !Number.isInteger(battery) || battery > 100))
+      )
+        throw new Error("Invalid BlueZ device class or battery");
       const device: BluetoothDevice = {
         id,
         adapterId: adapter.id,
@@ -267,8 +296,10 @@ export async function createBluezBluetoothAdapter(
         paired: true,
         trusted: bool(property(props, "Trusted", "b")),
         connected: bool(property(props, "Connected", "b")),
+        kind: bluetoothDeviceKind(icon, deviceClass as number | null),
+        ...(battery !== undefined ? { battery: battery as number } : {}),
       };
-      next.set(id, { device, path: p, powered: adapter.powered });
+      next.set(id, { device, path: p, adapter: adapterPath, powered: adapter.powered });
       seen.add(p);
     }
     if (next.size > 64) throw new Error("Too many known Bluetooth devices");
@@ -299,7 +330,9 @@ export async function createBluezBluetoothAdapter(
               epoch !== version ||
               message.signature !== "sa{sv}as" ||
               message.body?.length !== 3 ||
-              (message.body[0] !== ADAPTER && message.body[0] !== DEVICE)
+              (message.body[0] !== ADAPTER &&
+                message.body[0] !== DEVICE &&
+                message.body[0] !== BATTERY)
             )
               return;
             // A changed/invalidation event retires consent even if subsequent reads coalesce
@@ -335,6 +368,9 @@ export async function createBluezBluetoothAdapter(
     for (const [p, identity] of nextIdentities) if (seen.has(p)) identities.set(p, identity);
     candidates.clear();
     for (const [id, value] of next) candidates.set(id, value);
+    radios.clear();
+    for (const [p, radio] of adapterPaths)
+      radios.set(radio.id, { path: p, powered: radio.powered });
     if (consent) {
       const selected = candidates.get(consent.id);
       if (
@@ -397,6 +433,7 @@ export async function createBluezBluetoothAdapter(
         if (cause instanceof Changed) refreshAgain = true;
         else {
           candidates.clear();
+          radios.clear();
           retireConsent();
           publish({
             status: {
@@ -489,6 +526,122 @@ export async function createBluezBluetoothAdapter(
     } finally {
       dispatching = false;
     }
+  }
+  /**
+   * Shared shape for power and removal writes: re-resolve the target from fresh
+   * readback, send once, then wait for BlueZ to report the requested outcome.
+   */
+  async function verifiedWrite<T extends { path: string }>(
+    action: string,
+    resolve: () => T | undefined,
+    send: (target: T) => DbusCall,
+    done: (target: T) => boolean,
+  ): Promise<void> {
+    if (disposed || !owner) throw new Error("Bluetooth backend unavailable");
+    if (policy !== "interactive") throw new Error("Bluetooth controls are read-only");
+    if (blocked()) throw new Error("Bluetooth operation is pending or unknown");
+    const selected = resolve();
+    if (!selected) throw new Error("Bluetooth " + action + " target is no longer available");
+    const expected = owner,
+      version = epoch,
+      deadline = performance.now() + operationTimeout;
+    dispatching = true;
+    let sent = false;
+    try {
+      await read(expected, version, deadline);
+      const target = resolve();
+      if (!target || target.path !== selected.path) throw new Changed();
+      if (done(target)) return;
+      current(expected, version);
+      if (!bus) throw new Changed();
+      sent = true;
+      const reply = await bus.call(
+        { destination: expected, ...send(target) },
+        {
+          signal: scope.signal,
+          timeoutMs: Math.min(timeout, Math.max(1, Math.ceil(deadline - performance.now()))),
+        },
+      );
+      current(expected, version);
+      if (reply.signature !== "" || (reply.body?.length ?? 0) !== 0)
+        throw new Error("Invalid BlueZ action reply");
+      while (performance.now() < deadline) {
+        try {
+          await read(expected, version, deadline);
+        } catch (cause) {
+          current(expected, version);
+          if (!(cause instanceof Changed)) throw cause;
+          continue;
+        }
+        if (done(target)) return;
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(50, Math.max(1, deadline - performance.now()))),
+        );
+        current(expected, version);
+      }
+      throw new Error("Bluetooth observation deadline expired");
+    } catch (cause) {
+      throw new Error(failed(cause, sent).message.replace("connection", action));
+    } finally {
+      dispatching = false;
+    }
+  }
+  async function setPowered(change: BluetoothPowerChange): Promise<void> {
+    parseBluetoothId(change.adapterId);
+    if (typeof change.powered !== "boolean") throw new Error("Invalid Bluetooth power request");
+    await verifiedWrite(
+      "power",
+      () => radios.get(change.adapterId),
+      (radio) => ({
+        path: radio.path,
+        interface: PROPERTIES,
+        member: "Set",
+        signature: "ssv",
+        body: [ADAPTER, "Powered", variant("b", change.powered)],
+      }),
+      (radio) => {
+        const actual = radios.get(change.adapterId);
+        if (actual?.path !== radio.path) throw new Changed();
+        return actual.powered === change.powered;
+      },
+    );
+  }
+  async function forgetDevice(request: BluetoothForgetRequest): Promise<void> {
+    parseBluetoothId(request.id);
+    await verifiedWrite(
+      "removal",
+      () => candidates.get(request.id),
+      (device) => ({
+        path: device.adapter,
+        interface: ADAPTER,
+        member: "RemoveDevice",
+        signature: "o",
+        body: [device.path],
+      }),
+      // Identities are bound to the object path, so the device is gone once its id is.
+      (device) => candidates.get(request.id)?.path !== device.path,
+    );
+  }
+  /** Set the name Moire and BlueZ show for a paired device (its Alias). */
+  async function renameDevice(request: BluetoothRenameRequest): Promise<void> {
+    parseBluetoothId(request.id);
+    const name = parseBluetoothAlias(request.name);
+    await verifiedWrite(
+      "rename",
+      () => candidates.get(request.id),
+      (device) => ({
+        path: device.path,
+        interface: PROPERTIES,
+        member: "Set",
+        signature: "ssv",
+        body: [DEVICE, "Alias", variant("s", name)],
+      }),
+      (device) => {
+        const actual = candidates.get(request.id);
+        if (actual?.path !== device.path) throw new Changed();
+        return actual.device.name === name;
+      },
+    );
   }
   async function requestTrust(request: BluetoothTrustRequest): Promise<void> {
     caller(request.caller);
@@ -677,6 +830,9 @@ export async function createBluezBluetoothAdapter(
     },
     refresh,
     setConnected,
+    setPowered,
+    forgetDevice,
+    renameDevice,
     requestTrust,
     confirmTrust,
     cancelTrust,
@@ -691,6 +847,7 @@ export async function createBluezBluetoothAdapter(
       disconnect();
       listeners.clear();
       candidates.clear();
+      radios.clear();
       identities.clear();
       disposal = (async () => {
         await watcher?.().catch(() => {});
@@ -751,6 +908,7 @@ export async function createBluezBluetoothAdapter(
     owner = next;
     identities.clear();
     candidates.clear();
+    radios.clear();
     void Promise.allSettled(subscriptions.splice(0).map((stop) => stop()));
     void stopProperties();
     let operation: BluetoothOperation = state.operation;
@@ -791,9 +949,17 @@ export async function createBluezBluetoothAdapter(
                 member === "InterfacesAdded" ? Object.keys(dictionary(raw, 32)) : raw;
               if (!Array.isArray(affected) || !affected.every((value) => typeof value === "string"))
                 return;
-              if (!affected.includes(ADAPTER) && !affected.includes(DEVICE)) return;
-              identities.delete(p);
-              if (consent?.path === p) retireConsent();
+              if (
+                !affected.includes(ADAPTER) &&
+                !affected.includes(DEVICE) &&
+                !affected.includes(BATTERY)
+              )
+                return;
+              // A battery appearing or going doesn't make the device a different one.
+              if (affected.includes(ADAPTER) || affected.includes(DEVICE)) {
+                identities.delete(p);
+                if (consent?.path === p) retireConsent();
+              }
             } catch {
               return;
             }

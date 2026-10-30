@@ -16,6 +16,15 @@ import {
   fillKmsColor,
   presentKms,
   presentKmsFramebuffer,
+  requestBootRelease,
+  readBootFrame,
+  markBootPresented,
+  publishStageHandoff,
+  readStageHandoff,
+  retainKmsScanout,
+  isKmsScanoutSettled,
+  setKmsOutputPower,
+  STAGE_HANDOFF_DIR,
   presentKmsPixels,
   isKmsPresentationReady,
   setKmsCursor,
@@ -37,10 +46,9 @@ import {
   WaylandSocketServer,
   type WaylandClientConn,
   type WaylandChunk,
-  createXkbKeymapMemfd,
   type KeymapMemfd,
-  XkbKeyboardState,
   type KeyboardModifierMask,
+  type PointerDeviceConfigTarget,
   EvdevKeyboard,
   type EvdevKeyEvent,
   EvdevPointer,
@@ -72,8 +80,19 @@ import {
 import {
   createCompositorOutputRenderer,
   type CompositorOutputRenderer,
+  type CompositorSceneFactory,
+  type CompositorSceneLayer,
   type OutputRenderingFacts,
 } from "./output-renderer";
+
+/** A GPU scene the compositor draws beneath its clients, resolved when first drawn. */
+export type CompositorSceneBackdrop = {
+  create: CompositorSceneFactory;
+  /** Scene time in seconds, read once per drawn frame. */
+  time: () => number;
+  /** Milliseconds until the next frame at scene time `t` (0: every display frame). */
+  frameInterval: (t: number) => number;
+};
 import type {
   CompositionLayer,
   CompositionRect,
@@ -82,6 +101,21 @@ import type {
   WindowContentShape,
 } from "./composition";
 import { blurBackdrop } from "./backdrop";
+import { WindowMotion } from "./window-motion";
+import { IdleInhibitorRegistry } from "./idle-inhibit";
+import { OutputPowerControl } from "./output-power";
+import {
+  SessionLock,
+  type LockAuthenticator,
+  type LockReason,
+  type LockScreenAction,
+  type LockScreenView,
+  type UnlockReason,
+} from "./session-lock";
+import { blitLockBackdrop, lockBackdrop, paintLockFallback } from "./lock-screen-paint";
+import { SecurePromptQueue, type SecurePromptAction, type SecurePromptView } from "./secure-prompt";
+import { paintSecureNoticeFallback, paintSecurePromptFallback } from "./secure-prompt-paint";
+import type { SecurePrompts } from "./secure-prompt-types";
 import { WindowBorderPainter } from "./window-border";
 import {
   contentShapeCoverage,
@@ -121,6 +155,7 @@ import {
   type DmabufBuffer,
   type DmabufPlane,
 } from "./dmabuf-map";
+import { emptyPositioner, placePopupRelative, type PositionerState } from "./xdg-positioner";
 import {
   createDmabufFormatTableMemfd,
   DMABUF_FEEDBACK_FORMAT_COUNT,
@@ -129,20 +164,42 @@ import {
 } from "./dmabuf-feedback";
 import { X11Wm, type XwmWindow } from "./xwm";
 import {
+  activeLayoutFor,
+  applyPointerSettings,
+  keymapChanged,
+  LayoutSwitchDetector,
+  nativeKeyboardBackend,
+  repeatInfoFor,
+  xkbRuleNamesFor,
+  type ActiveKeyboardLayout,
+  type KeyboardBackend,
+  type PointerDeviceSummary,
+  type RepeatInfo,
+  type SeatKeyboardState,
+} from "./seat-input";
+import { NightLightController } from "./night-light";
+import {
   getTheme,
   panelGeometry,
   windowControlLayout,
   windowChrome,
   paintWallpaper,
   hexToArgb,
-  loadPngFile,
+  createWallpaperImageLoader,
   setWallpaperImagePixels,
+  wallpaperImageRevision,
   type MoireTheme,
 } from "@moire/theme";
 import {
+  createInputSettingsWatcher,
   createPrefsWatcher,
+  keyboardLayoutId,
+  loadInputSettings,
   loadRuntimeTheme,
   loadSettings,
+  type InputSettings,
+  type InputSettingsWatcher,
+  type KeyboardSettings,
   type PrefsWatcher,
 } from "@moire/prefs";
 
@@ -226,6 +283,9 @@ const OP = {
   cursor_shape_manager_get_tablet_tool: 2,
   cursor_shape_device_destroy: 0,
   cursor_shape_device_set_shape: 1,
+  idle_inhibit_manager_destroy: 0,
+  idle_inhibit_manager_create_inhibitor: 1,
+  idle_inhibitor_destroy: 0,
   xdg_decoration_manager_destroy: 0,
   xdg_decoration_manager_get_toplevel_decoration: 1,
   xdg_toplevel_decoration_destroy: 0,
@@ -384,6 +444,7 @@ const WL_KEYBOARD_KEY_STATE_PRESSED = 1;
 const WL_POINTER_BUTTON_STATE_RELEASED = 0;
 const WL_POINTER_BUTTON_STATE_PRESSED = 1;
 const WL_POINTER_AXIS_VERTICAL_SCROLL = 0;
+const WL_POINTER_AXIS_HORIZONTAL_SCROLL = 1;
 
 const XDG_TOPLEVEL_STATE_MAXIMIZED = 1;
 const XDG_TOPLEVEL_STATE_FULLSCREEN = 2;
@@ -395,145 +456,51 @@ const XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM = 2;
 const XDG_TOPLEVEL_RESIZE_EDGE_LEFT = 4;
 const XDG_TOPLEVEL_RESIZE_EDGE_RIGHT = 8;
 
-/** xdg_positioner.anchor / gravity (xdg-shell stable). */
-const XDG_ANCHOR_NONE = 0;
-const XDG_ANCHOR_TOP = 1;
-const XDG_ANCHOR_BOTTOM = 2;
-const XDG_ANCHOR_LEFT = 3;
-const XDG_ANCHOR_RIGHT = 4;
-const XDG_ANCHOR_TOP_LEFT = 5;
-const XDG_ANCHOR_BOTTOM_LEFT = 6;
-const XDG_ANCHOR_TOP_RIGHT = 7;
-const XDG_ANCHOR_BOTTOM_RIGHT = 8;
-
-const XDG_CONSTRAINT_SLIDE_X = 1;
-const XDG_CONSTRAINT_SLIDE_Y = 2;
-
 const KEY_ESC = 1;
+const KEY_L = 38;
+/** KEY_POWER, KEY_SLEEP, KEY_SUSPEND: offered to the session's power handler first. */
+const SYSTEM_KEYS: ReadonlySet<number> = new Set([116, 142, 205]);
 
-type PositionerState = {
-  width: number;
-  height: number;
-  anchorX: number;
-  anchorY: number;
-  anchorW: number;
-  anchorH: number;
-  anchor: number;
-  gravity: number;
-  constraintAdjustment: number;
-  offsetX: number;
-  offsetY: number;
-};
-
-function emptyPositioner(): PositionerState {
-  return {
-    width: 0,
-    height: 0,
-    anchorX: 0,
-    anchorY: 0,
-    anchorW: 0,
-    anchorH: 0,
-    anchor: XDG_ANCHOR_NONE,
-    gravity: XDG_ANCHOR_NONE,
-    constraintAdjustment: 0,
-    offsetX: 0,
-    offsetY: 0,
+/** US-layout text for the lock screen when no XKB state exists (portable smokes only). */
+function fallbackKeyText(code: number, shift: boolean, out: Uint8Array): number {
+  const rows: Record<number, string> = {
+    2: "1!",
+    3: "2@",
+    4: "3#",
+    5: "4$",
+    6: "5%",
+    7: "6^",
+    8: "7&",
+    9: "8*",
+    10: "9(",
+    11: "0)",
+    12: "-_",
+    13: "=+",
+    57: "  ",
   };
+  const letters = "qwertyuiop[]..asdfghjkl;'`.\\zxcvbnm,./";
+  let pair = rows[code];
+  if (!pair && code >= 16 && code <= 53) {
+    const char = letters[code - 16];
+    if (char && char !== ".") pair = /[a-z]/.test(char) ? char + char.toUpperCase() : char + char;
+  }
+  if (!pair) return 0;
+  out[0] = pair.charCodeAt(shift ? 1 : 0);
+  return 1;
 }
 
-function xdgAnchorPoint(
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  anchor: number,
-): { x: number; y: number } {
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  switch (anchor) {
-    case XDG_ANCHOR_TOP:
-      return { x: cx, y };
-    case XDG_ANCHOR_BOTTOM:
-      return { x: cx, y: y + h };
-    case XDG_ANCHOR_LEFT:
-      return { x, y: cy };
-    case XDG_ANCHOR_RIGHT:
-      return { x: x + w, y: cy };
-    case XDG_ANCHOR_TOP_LEFT:
-      return { x, y };
-    case XDG_ANCHOR_BOTTOM_LEFT:
-      return { x, y: y + h };
-    case XDG_ANCHOR_TOP_RIGHT:
-      return { x: x + w, y };
-    case XDG_ANCHOR_BOTTOM_RIGHT:
-      return { x: x + w, y: y + h };
-    default:
-      return { x: cx, y: cy };
+/** Darken a composed ARGB frame toward black by `level` (the flat path's idle dim). */
+function dimFrame(fb: Uint32Array, level: number): void {
+  if (level <= 0) return;
+  const keep = Math.max(0, Math.min(256, Math.round((1 - level) * 256)));
+  for (let i = 0; i < fb.length; i++) {
+    const p = fb[i]!;
+    fb[i] =
+      (p & 0xff000000) |
+      (((((p >>> 16) & 0xff) * keep) >>> 8) << 16) |
+      (((((p >>> 8) & 0xff) * keep) >>> 8) << 8) |
+      (((p & 0xff) * keep) >>> 8);
   }
-}
-
-/** Offset from popup top-left to the gravity point. */
-function xdgGravityOffset(w: number, h: number, gravity: number): { dx: number; dy: number } {
-  switch (gravity) {
-    case XDG_ANCHOR_TOP:
-      return { dx: w / 2, dy: 0 };
-    case XDG_ANCHOR_BOTTOM:
-      return { dx: w / 2, dy: h };
-    case XDG_ANCHOR_LEFT:
-      return { dx: 0, dy: h / 2 };
-    case XDG_ANCHOR_RIGHT:
-      return { dx: w, dy: h / 2 };
-    case XDG_ANCHOR_TOP_LEFT:
-      return { dx: 0, dy: 0 };
-    case XDG_ANCHOR_BOTTOM_LEFT:
-      return { dx: 0, dy: h };
-    case XDG_ANCHOR_TOP_RIGHT:
-      return { dx: w, dy: 0 };
-    case XDG_ANCHOR_BOTTOM_RIGHT:
-      return { dx: w, dy: h };
-    default:
-      return { dx: w / 2, dy: h / 2 };
-  }
-}
-
-/** Place popup window-geometry relative to parent window-geometry. */
-function placePopupRelative(
-  pos: PositionerState,
-  outputW: number,
-  outputH: number,
-  parentGeomScreenX: number,
-  parentGeomScreenY: number,
-): { x: number; y: number; w: number; h: number } {
-  const pw = Math.max(1, pos.width);
-  const ph = Math.max(1, pos.height);
-  const anchor = xdgAnchorPoint(pos.anchorX, pos.anchorY, pos.anchorW, pos.anchorH, pos.anchor);
-  const grav = xdgGravityOffset(pw, ph, pos.gravity);
-  let relX = anchor.x - grav.dx + pos.offsetX;
-  let relY = anchor.y - grav.dy + pos.offsetY;
-  let w = pw;
-  let h = ph;
-
-  // Slide into output bounds (parent-relative → screen → clamp → relative).
-  const adj = pos.constraintAdjustment;
-  let screenX = parentGeomScreenX + relX;
-  let screenY = parentGeomScreenY + relY;
-  if (adj & XDG_CONSTRAINT_SLIDE_X) {
-    if (screenX + w > outputW) screenX = outputW - w;
-    if (screenX < 0) screenX = 0;
-  }
-  if (adj & XDG_CONSTRAINT_SLIDE_Y) {
-    if (screenY + h > outputH) screenY = outputH - h;
-    if (screenY < 0) screenY = 0;
-  }
-  // Always soft-clamp so menus stay visible even if client omitted slide flags.
-  if (screenX + w > outputW) screenX = Math.max(0, outputW - w);
-  if (screenY + h > outputH) screenY = Math.max(0, outputH - h);
-  if (screenX < 0) screenX = 0;
-  if (screenY < 0) screenY = 0;
-
-  relX = screenX - parentGeomScreenX;
-  relY = screenY - parentGeomScreenY;
-  return { x: Math.round(relX), y: Math.round(relY), w, h };
 }
 
 /** zxdg_toplevel_decoration_v1 mode — prefer SERVER (React SSD). */
@@ -544,19 +511,6 @@ const XDG_DECORATION_MODE_SERVER = 2;
 const DRAG_WATCHDOG_TIMEOUT_MS = 15_000;
 
 /** SSD titlebar height — keep in sync with @moire/shell TitleBar. */
-function updateWallpaperImage(theme: MoireTheme): void {
-  if (theme.wallpaper.mode !== "image") {
-    setWallpaperImagePixels(null);
-    return;
-  }
-  try {
-    setWallpaperImagePixels(loadPngFile(theme.wallpaper.path));
-  } catch (error) {
-    console.warn("[compositor] wallpaper image load failed:", error);
-    setWallpaperImagePixels(null);
-  }
-}
-
 function ssdTitlebarHeight(): number {
   return getTheme().tokens.titlebarHeight;
 }
@@ -601,6 +555,96 @@ type WlObject = {
   version: number;
   data?: Record<string, unknown>;
 };
+
+const NO_OBJECTS: ReadonlyMap<number, WlObject> = new Map();
+const DEBUG_SURFACE = process.env.MOIRE_DEBUG_SURFACE === "1";
+/** Longest the boot stage's final frame is held waiting for the first client frame. */
+const BOOT_HOLD_MAX_MS = 4000;
+/** At a stage handoff, clients fade off the scene over this long before the frame is kept. */
+const CLIENT_HANDOFF_FADE_MS = 420;
+/** Dissolve from the boot stage's final frame into the first session frame. */
+const BOOT_FADE_MS = 520;
+/**
+ * The ground shared by stages that hand over without a frame (desktop logout → greeter):
+ * the departing stage veils to it, the next seeds its first modeset with it. ARGB.
+ */
+const STAGE_GROUND = 0xff06060a;
+/** Longest wait for a client's first detailed buffer after its first (blank) one. */
+const BOOT_FIRST_CONTENT_MAX_MS = 1500;
+
+function readReducedMotion(): boolean {
+  try {
+    return loadSettings().reducedMotion;
+  } catch {
+    return false;
+  }
+}
+
+/** Mean luma and a detail flag of a BGRA frame, for handoff diagnostics. */
+function frameSummary(pixels: Uint8Array): string {
+  let sum = 0;
+  let min = 255;
+  let max = 0;
+  let count = 0;
+  for (let at = 0; at + 2 < pixels.length; at += 4 * 997) {
+    const luma = (pixels[at]! * 29 + pixels[at + 1]! * 150 + pixels[at + 2]! * 77) >> 8;
+    sum += luma;
+    min = Math.min(min, luma);
+    max = Math.max(max, luma);
+    count++;
+  }
+  return `luma mean ${(sum / Math.max(1, count)).toFixed(1)} range ${min}-${max}`;
+}
+
+/** Whether a buffer shows anything beyond a uniform fill (sparse 16×16 sample). */
+function hasVisibleDetail(content: OwnedPixelSurface): boolean {
+  const { pixels, width, height, stride } = content;
+  if (width < 1 || height < 1 || pixels.byteLength < stride * height) return false;
+  const first = pixels.subarray(0, 4);
+  for (let gy = 0; gy < 16; gy++) {
+    const row = Math.min(height - 1, Math.floor(((gy + 0.5) * height) / 16)) * stride;
+    for (let gx = 0; gx < 16; gx++) {
+      const at = row + Math.min(width - 1, Math.floor(((gx + 0.5) * width) / 16)) * 4;
+      for (let c = 0; c < 3; c++) if (Math.abs(pixels[at + c]! - first[c]!) > 6) return true;
+    }
+  }
+  return false;
+}
+/** Logs key codes and routing only, never text, so secrets stay out of journals. */
+const DEBUG_KEYS = process.env.MOIRE_DEBUG_KEYS === "1";
+
+/** Client object table with an interface index, so per-frame lookups avoid scanning every object. */
+class WlObjectTable extends Map<number, WlObject> {
+  private readonly byIface = new Map<string, Map<number, WlObject>>();
+
+  override set(id: number, object: WlObject): this {
+    const previous = super.get(id);
+    if (previous && previous.iface !== object.iface) this.byIface.get(previous.iface)?.delete(id);
+    super.set(id, object);
+    let index = this.byIface.get(object.iface);
+    if (!index) {
+      index = new Map();
+      this.byIface.set(object.iface, index);
+    }
+    index.set(id, object);
+    return this;
+  }
+
+  override delete(id: number): boolean {
+    const previous = super.get(id);
+    if (previous) this.byIface.get(previous.iface)?.delete(id);
+    return super.delete(id);
+  }
+
+  override clear(): void {
+    this.byIface.clear();
+    super.clear();
+  }
+
+  ofIface(iface: string): ReadonlyMap<number, WlObject> {
+    return this.byIface.get(iface) ?? NO_OBJECTS;
+  }
+}
 
 type SurfaceState = {
   /** Last-good display can survive failure; rendering authority needs a successful latest attach. */
@@ -794,10 +838,18 @@ type ShellRasterSurface = {
   revision: number;
   x: number;
   y: number;
+  /** What changed since the previous read; omitted when the whole surface may have. */
+  damage?: readonly CompositionRect[];
 };
 
 export type CompositorShell = {
   onClientFocus?(): void;
+  /** The active keyboard layout changed (switch shortcut, or new prefs). */
+  setKeyboardLayout?(layout: ActiveKeyboardLayout): void;
+  /** The layout switch shortcut fired; the held Super was a chord, not a launcher press. */
+  onLayoutShortcut?(): void;
+  /** The compositor used the held Super for its own chord (Super+L locks). */
+  onSuperChord?(): void;
   setPrimaryOutput?(output: { x: number; y: number; width: number; height: number }): void;
   paint(fb: Uint32Array, pitchPx: number, width: number, height: number): void;
   chromeRaster?(width: number, height: number): ShellRasterSurface | null;
@@ -832,6 +884,10 @@ export type CompositorShell = {
   onSsdPointerMotion?(ev: { x: number; y: number; inside: boolean }): boolean;
   onPointerAxis?(ev: { x: number; y: number; deltaY: number }): boolean;
   setTasks?(tasks: TaskWindowInfo[]): void;
+  /** The panel's glass shapes in output coordinates, blurred behind the chrome. */
+  panelMaterial?(): readonly (CompositionRect & { radius: number })[];
+  /** A window's taskbar button in output coordinates, where it minimizes to. */
+  taskAnchor?(clientId: number, surfaceId: number): CompositionRect | null;
   /** Desktop icon clicks when no client surface is under the cursor. */
   onDesktopPointerButton?(ev: {
     timeMs: number;
@@ -899,7 +955,62 @@ export type CompositorShell = {
   cancelDesktopDrag?(x?: number, y?: number): void;
   /** Polled unconditionally by the drag watchdog — see `cancelDesktopDrag`. */
   checkDesktopDragWatchdog?(): void;
+  /** The session locked or unlocked. The shell is not drawn while locked; it drops drafts. */
+  setLocked?(locked: boolean): void;
+  /**
+   * The lock screen for one output, in output-local coordinates. Null or a throw makes the
+   * compositor draw its own prompt instead; the session stays locked either way.
+   */
+  lockRaster?(view: LockScreenView, width: number, height: number): ShellRasterSurface | null;
+  /** Pointer input on the lock screen (output-local); a power action to run, if any. */
+  onLockPointer?(ev: {
+    x: number;
+    y: number;
+    button?: number;
+    value?: number;
+  }): LockScreenAction | null;
+  /**
+   * A secure prompt (or the verification key's notice) took or released the seat. The shell is
+   * not drawn and gets no input meanwhile, so it drops held modifiers and pointer grabs.
+   */
+  setSecurePromptOpen?(open: boolean): void;
+  /**
+   * The secure prompt for one output, in output-local coordinates. Null or a throw makes the
+   * compositor draw its own text-free prompt instead; a failure never answers the request.
+   */
+  securePromptRaster?(
+    view: SecurePromptView,
+    width: number,
+    height: number,
+  ): ShellRasterSurface | null;
+  /** Pointer input on the secure prompt (output-local); the choice made, if any. */
+  onSecurePromptPointer?(ev: {
+    x: number;
+    y: number;
+    button?: number;
+    value?: number;
+  }): SecurePromptAction | null;
+  /** "No system password request is open", drawn for the verification key. */
+  secureNoticeRaster?(width: number, height: number): ShellRasterSurface | null;
 };
+
+/** What the lock screen needs from the session: who is locked, the password check, power. */
+export type SessionLockEnvironment = {
+  user: { name: string; username: string };
+  authenticate: LockAuthenticator;
+  /** Power actions logind allows without authentication. */
+  power?: () => { suspend: boolean; powerOff: boolean; reboot?: boolean };
+  runPowerAction?: (action: LockScreenAction) => void;
+};
+
+/** A locked composite never takes longer than this to be counted as presented. */
+const LOCK_PRESENT_TIMEOUT_MS = 10_000;
+/** While locked, clients get frame callbacks and buffer releases this often, never drawn. */
+const LOCKED_CLIENT_TICK_MS = 1000;
+/** How long the verification key's "no request is open" notice stays up. */
+const SECURE_NOTICE_MS = 2500;
+/** How long a verified prompt's badge stays lit. */
+const SECURE_PROMPT_PULSE_MS = 1200;
 
 /** Seat clipboard selection (wl_data_device.set_selection). */
 type ClipboardSelection = {
@@ -1075,6 +1186,93 @@ function outputLogicalHeight(output: DisplayOutput): number {
 export class CompositorServer {
   private socket: WaylandSocketServer | null = null;
   private kms: KmsOutput | null = null;
+  private sceneBackdropProvider: (() => CompositorSceneBackdrop | null) | null = null;
+  private sceneBackdrop: CompositorSceneBackdrop | null = null;
+  private sceneLayer: CompositorSceneLayer | null = null;
+  private sceneLayerFailed = false;
+  private sceneFrameTimer: NodeJS.Timeout | null = null;
+  /** Until this CLOCK_MONOTONIC ms, the boot stage's frame stays up (0: not holding). */
+  private bootHoldUntilMs = 0;
+  private bootHoldTimer: NodeJS.Timeout | null = null;
+  private bootPresented = false;
+  private bootFrame: { pixels: Uint8Array; width: number; height: number } | null = null;
+  private bootFadeStartedMs = 0;
+  private bootFirstContentMs = 0;
+  /** The display belongs to the next stage now; never present another frame. */
+  private displayHandedOff = false;
+  /** Handing off: clients dissolve from this CLOCK_MONOTONIC ms (0: not fading). */
+  private clientFadeStartedMs = 0;
+  /** Desktop window open, close, minimize and restore motion on the retained scene. */
+  private readonly windowMotion = new WindowMotion({
+    enabled: () => !!this.shell && !this.reducedMotion,
+    fate: (key) => {
+      const window = this.windowForMotionKey(key);
+      return window?.surface.mapped && window.surface.minimized ? "minimized" : "closed";
+    },
+    taskAnchor: (key) => {
+      const window = this.windowForMotionKey(key);
+      return window
+        ? (this.shell?.taskAnchor?.(window.session.clientId, window.surface.id) ?? null)
+        : null;
+    },
+  });
+  private reducedMotion = readReducedMotion();
+  /** Handing off with a veil: the stage ground covers everything from this ms (0: none). */
+  private veilStartedMs = 0;
+  /**
+   * The session lock. While locked, composition draws only the lock (never a client surface)
+   * and input reaches only the lock; see `compositeLocked` and the input handlers.
+   */
+  readonly sessionLock = new SessionLock({ changed: () => this.markDirty() });
+  private lockEnvironment: SessionLockEnvironment | null = null;
+  private lockClientTimer: NodeJS.Timeout | null = null;
+  /** Keys held when the lock began; only these may be reported to a client on unlock. */
+  private keysAtLock = new Set<number>();
+  /** Keys pressed while locked; their releases after unlock are swallowed too. */
+  private readonly lockSwallowedKeys = new Set<number>();
+  private lockFrameKey = "";
+  private lockBackdropCache: { key: string; pixels: Uint32Array } | null = null;
+  private lockUiFailure: string | null = null;
+  private lockOutputIndex = -1;
+  /**
+   * Secure prompts (polkit, later the keyring). While one is up the frame is the obscured
+   * wallpaper and the prompt, with no client surface, and input reaches only the prompt; see
+   * `compositePrompt` and `promptKey`. Requesters get `securePrompts`, never the queue.
+   */
+  private readonly securePromptQueue = new SecurePromptQueue({
+    changed: () => this.markDirty(),
+    shown: () => this.syncPromptSeat(),
+    flood: (requester) => {
+      for (const listener of [...this.securePromptFloodListeners])
+        listener(requester?.name || "A program");
+    },
+  });
+  /** Ask the user a compositor-owned question. A pre-login (greeter) compositor refuses all. */
+  readonly securePrompts: SecurePrompts = {
+    request: (request) =>
+      this.managedSeat?.mode === "greeter"
+        ? { result: Promise.resolve({ outcome: "refused" }), cancel() {} }
+        : this.securePromptQueue.request(request),
+  };
+  private readonly securePromptFloodListeners = new Set<(program: string) => void>();
+  /** A prompt or the verification notice owns the seat (never while locked). */
+  private promptSeatCut = false;
+  /** Keys held when the prompt took the seat; only these may be reported to a client after. */
+  private keysAtPrompt = new Set<number>();
+  private promptFrameKey = "";
+  /** Why the shell's view is not used for `promptUiSubject` (one prompt, or the notice). */
+  private promptUiFailure: string | null = null;
+  private promptUiSubject = "";
+  private secureNoticeTimer: NodeJS.Timeout | null = null;
+  private promptPulseTimer: NodeJS.Timeout | null = null;
+  private readonly veilPixel = (() => {
+    const pixel = new Uint8Array(4);
+    new DataView(pixel.buffer).setUint32(0, STAGE_GROUND, true);
+    return pixel;
+  })();
+  /** Smoothed scene-backdrop draw time; slow (software) GL lowers the scene's frame rate. */
+  private sceneDrawMs = 0;
+  private readonly bootCheckedRevision = new WeakMap<object, number>();
   /** Active outputs arranged in one logical desktop coordinate space. */
   private outputs: DisplayOutput[] = [];
   private outputStages = new Map<number, Buffer>();
@@ -1090,7 +1288,22 @@ export class CompositorServer {
   private globals: { name: number; iface: string; version: number }[] = [];
   private outputGlobalNames: number[] = [];
   private keymap: KeymapMemfd | null = null;
-  private xkbKeyboardState: XkbKeyboardState | null = null;
+  private xkbKeyboardState: SeatKeyboardState | null = null;
+  /** Native XKB in production; smokes substitute a fake when libxkbcommon is absent. */
+  protected keyboardBackend: KeyboardBackend = nativeKeyboardBackend;
+  private inputSettings: InputSettings = loadInputSettings();
+  private inputSettingsWatcher: InputSettingsWatcher | null = null;
+  private readonly layoutSwitch = new LayoutSwitchDetector(
+    this.inputSettings.keyboard.switchShortcut,
+  );
+  private activeLayout: ActiveKeyboardLayout = activeLayoutFor(
+    this.inputSettings.keyboard.layouts,
+    0,
+    null,
+  );
+  private readonly layoutListeners = new Set<(layout: ActiveKeyboardLayout) => void>();
+  private readonly pointerDeviceListeners = new Set<(devices: PointerDeviceSummary[]) => void>();
+  private pointerDevicesKey = "[]";
   private evdev: KeyboardInput | null = null;
   private fatalError: Error | null = null;
   private readonly fatalErrorListeners = new Set<(error: Error) => void>();
@@ -1244,6 +1457,13 @@ export class CompositorServer {
   private retainedWallpaper: Buffer | null = null;
   private retainedWallpaperKey = "";
   private retainedWallpaperRevision = 0;
+  /** Decodes the theme's wallpaper picture off the frame loop; repaints when it lands. */
+  private readonly wallpaperImages = createWallpaperImageLoader((image) => {
+    setWallpaperImagePixels(image);
+    this.markDirty();
+  });
+  /** Wakes the loop when the retained atmosphere wallpaper reaches its next phase bucket. */
+  private wallpaperPhaseTimer: NodeJS.Timeout | null = null;
   private readonly retainedEffectPixel = new Uint8Array(4);
   private profileFrames = 0;
   private profileSceneMs = 0;
@@ -1304,6 +1524,28 @@ export class CompositorServer {
   private displayRefreshTimer: NodeJS.Timeout | null = null;
   private lastMissingOutputLogMs = 0;
   private readonly displayChangeListeners = new Set<() => void>();
+  /** zwp_idle_inhibitor_v1 objects; they count only while their surface is visible. */
+  readonly idleInhibitors = new IdleInhibitorRegistry<ClientSession>();
+  /** DPMS and the idle dim overlay, driven by the session's idle controller. */
+  private readonly nightLight = new NightLightController();
+  readonly outputPower = new OutputPowerControl<KmsOutput>({
+    outputs: () => this.outputs.map((output) => output.kms),
+    setPower: (kms, on) => {
+      try {
+        return setKmsOutputPower(kms, on);
+      } catch (error) {
+        console.warn(`[output] DPMS ${on ? "on" : "off"} failed on ${kms.connectorName}:`, error);
+        return false;
+      }
+    },
+    settled: (kms) => isKmsScanoutSettled(kms),
+    now: monotonicMs,
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    repaint: () => this.markDirty(),
+  });
+  private readonly userActivityListeners = new Set<() => void>();
+  private systemKeyHandler: ((code: number, value: number) => boolean) | null = null;
+  private readonly dimPixel = new Uint8Array([0, 0, 0, 255]);
 
   constructor(
     private readonly runtimeDir: string,
@@ -1345,6 +1587,18 @@ export class CompositorServer {
       name: this.nextGlobalName++,
       iface: moireSurfaceStateManagerV1.name,
       version: moireSurfaceStateManagerV1.version,
+    });
+    // First listener: the seat is cut off from clients before anyone else hears of the lock.
+    this.sessionLock.onLockedChanged((locked) => {
+      if (locked) {
+        // The lock ends the visible prompt and holds the rest: no prompt is drawn over it.
+        this.securePromptQueue.setLocked(true);
+        this.endSecureNotice();
+        this.enterLockedSeat();
+      } else {
+        this.leaveLockedSeat();
+        this.securePromptQueue.setLocked(false);
+      }
     });
   }
 
@@ -1647,12 +1901,185 @@ export class CompositorServer {
     return path.join(this.runtimeDir, this.displayName);
   }
 
+  /**
+   * Draw a GPU scene as the backdrop beneath all clients (the greeter continuing the boot
+   * scene). Set before start(): the renderer then creates a GLES 3 context. The provider is
+   * resolved at the first composite, after any boot handoff, and may decline with null.
+   */
+  setSceneBackdrop(provider: (() => CompositorSceneBackdrop | null) | null): void {
+    this.sceneBackdropProvider = provider;
+    this.sceneBackdrop = null;
+    this.sceneLayer?.destroy();
+    this.sceneLayer = null;
+    this.sceneLayerFailed = false;
+  }
+
+  /**
+   * Hand the display to the next stage (greeter → desktop): publish the frame on screen and
+   * leave it there after this process exits, so the next compositor dissolves out of it.
+   * Call with only the scene showing (UI faded out): the frame is world-readable.
+   */
+  async handOffDisplay(
+    scene: string,
+    options: {
+      /**
+       * Fade everything (shell included) to the stage ground instead of fading only clients
+       * off the scene. Nothing private is then left on screen, and no frame is published.
+       */
+      veil?: boolean;
+    } = {},
+  ): Promise<boolean> {
+    const kms = this.kms;
+    if (!kms) return false;
+    // Fade every client off the still-running scene (or veil the whole screen), so the next
+    // stage receives the bare scene regardless of when the clients' own teardown reaches us.
+    if (options.veil) this.veilStartedMs = monotonicMs();
+    else this.clientFadeStartedMs = monotonicMs();
+    while (monotonicMs() - this.clientFadeStartedMs < CLIENT_HANDOFF_FADE_MS + 40) {
+      this.markDirty();
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    // Freeze the screen: no further frames (the closing greeter window would otherwise queue
+    // one), then let any flip in flight land so the frame captured is the frame shown.
+    this.displayHandedOff = true;
+    if (this.sceneFrameTimer) {
+      clearTimeout(this.sceneFrameTimer);
+      this.sceneFrameTimer = null;
+    }
+    const deadline = monotonicMs() + 250;
+    while (!isKmsScanoutSettled(kms) && monotonicMs() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 4));
+    try {
+      if (options.veil) {
+        const retention = retainKmsScanout(kms);
+        console.log(
+          `[stage-handoff] ${scene}: veiled; ` +
+            (retention.retained
+              ? "scanout retained"
+              : `scanout not retained (${retention.reason})`),
+        );
+        return retention.retained;
+      }
+      const frame = this.readPrimaryOutput();
+      const published = publishStageHandoff(
+        {
+          pid: process.pid,
+          scene,
+          width: frame.width,
+          height: frame.height,
+          startedAtMs: 0,
+          sceneSeconds: this.sceneBackdrop?.time() ?? 0,
+          releasedAtMs: monotonicMs(),
+        },
+        frame,
+      );
+      const retention = retainKmsScanout(kms);
+      console.log(
+        `[stage-handoff] ${scene}: frame ${published ? "published" : "unpublished"} ` +
+          `(${frameSummary(frame.pixels)}), ` +
+          (retention.retained
+            ? "scanout retained"
+            : `scanout not retained (${retention.reason}); the screen blanks until the next stage`),
+      );
+      return published && retention.retained;
+    } catch (error) {
+      console.warn("[stage-handoff] failed:", error);
+      return false;
+    }
+  }
+
+  /** Whether a scene backdrop set before start() can be drawn by this session's renderer. */
+  get sceneBackdropAvailable(): boolean {
+    return (
+      this.sceneBackdropProvider !== null &&
+      !this.sceneLayerFailed &&
+      this.outputRenderer?.supportsSceneLayers === true
+    );
+  }
+
+  /** The scene layer for this frame, drawn at the current scene time; null: use the wallpaper. */
+  private sceneBackdropLayer(width: number, height: number): CompositorSceneLayer | null {
+    if (!this.sceneBackdropProvider || this.sceneLayerFailed || !this.outputRenderer) return null;
+    try {
+      this.sceneBackdrop ??= this.sceneBackdropProvider();
+      const backdrop = this.sceneBackdrop;
+      if (!backdrop) return null;
+      const current = this.sceneLayer;
+      if (current && (current.source.width !== width || current.source.height !== height)) {
+        current.destroy();
+        this.sceneLayer = null;
+      }
+      this.sceneLayer ??=
+        this.outputRenderer.createSceneLayer?.(width, height, backdrop.create) ?? null;
+      if (!this.sceneLayer) {
+        this.sceneLayerFailed = true;
+        return null;
+      }
+      const t = backdrop.time();
+      const drawStarted = monotonicMs();
+      this.sceneLayer.draw(t);
+      const drawn = monotonicMs() - drawStarted;
+      this.sceneDrawMs = this.sceneDrawMs ? this.sceneDrawMs * 0.9 + drawn * 0.1 : drawn;
+      if (!this.sceneFrameTimer) {
+        // A slow (software) renderer must leave the CPU to input and UI: never spend more than
+        // about a third of the time drawing the backdrop.
+        const interval = Math.max(backdrop.frameInterval(t), this.sceneDrawMs * 3);
+        this.sceneFrameTimer = setTimeout(() => {
+          this.sceneFrameTimer = null;
+          this.markDirty();
+        }, interval);
+      }
+      return this.sceneLayer;
+    } catch (error) {
+      console.warn("[scene] backdrop unavailable; using the wallpaper:", error);
+      this.sceneLayerFailed = true;
+      this.sceneLayer?.destroy();
+      this.sceneLayer = null;
+      return null;
+    }
+  }
+
   async start(cardPath?: string): Promise<void> {
     if (this.fatalError) throw this.fatalError;
     fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
     const displaySettings = loadSettings();
     const requestedMode = process.env.MOIRE_MODE ?? displaySettings.displayMode ?? undefined;
-    this.kms = openKmsOutput(cardPath, requestedMode, undefined, this.managedSeat?.devices);
+    // A live boot stage holds the display until this moment; its final frame seeds the modeset
+    // and stays up until the first frame showing a client, so the takeover is invisible.
+    const handoffEnabled = process.env.MOIRE_BOOT_HANDOFF !== "0";
+    const live = handoffEnabled ? await requestBootRelease() : null;
+    // Without a live boot stage, a previous stage (the greeter) may have left its frame.
+    const stage = handoffEnabled && !live ? readStageHandoff() : null;
+    const boot = live ?? stage;
+    const bootFrame = live
+      ? readBootFrame(live, live.width, live.height)
+      : stage
+        ? readBootFrame(stage, stage.width, stage.height, STAGE_HANDOFF_DIR)
+        : null;
+    this.bootFrame = bootFrame;
+    if (boot) {
+      console.log(
+        `[boot-handoff] released ${boot.scene} at t=${boot.sceneSeconds.toFixed(2)}s` +
+          (bootFrame ? ` with its final frame (${frameSummary(bootFrame.pixels)})` : ""),
+      );
+      this.bootHoldUntilMs = monotonicMs() + BOOT_HOLD_MAX_MS;
+    }
+    // A scene stage with no predecessor frame (the greeter after logout, whose desktop veiled to
+    // the stage ground) starts from that ground and dissolves into its scene.
+    const groundStart = !bootFrame && this.sceneBackdropProvider !== null;
+    this.kms = openKmsOutput(
+      cardPath,
+      requestedMode,
+      undefined,
+      this.managedSeat?.devices,
+      bootFrame ?? (groundStart ? { fill: STAGE_GROUND } : undefined),
+    );
+    if (groundStart) {
+      const ground = new Uint8Array(this.kms.width * this.kms.height * 4);
+      new Uint32Array(ground.buffer).fill(STAGE_GROUND);
+      this.bootFrame = { pixels: ground, width: this.kms.width, height: this.kms.height };
+      this.bootHoldUntilMs = monotonicMs() + BOOT_HOLD_MAX_MS;
+    }
     this.readiness = new LinuxReadinessDispatcher("compositor");
     this.outputs = [{ kms: this.kms, x: 0, y: 0, scale120: 120, primary: true }];
     const connected = this.managedSeat
@@ -1701,12 +2128,15 @@ export class CompositorServer {
         version: CORE_GLOBALS.wl_output,
       });
     }
-    this.outputRenderer = createCompositorOutputRenderer(this.kms.fd);
+    this.outputRenderer = createCompositorOutputRenderer(this.kms.fd, undefined, {
+      gles3: this.sceneBackdropProvider !== null,
+    });
     for (const output of this.outputs)
       this.observeOutputAvailability(output.kms.connectorId, output.kms.availability);
     console.log(
       `[renderer] ${this.outputRenderer.id}: ${this.outputRenderer.detail} capabilities=${JSON.stringify(this.outputRenderer.capabilities)}`,
     );
+    this.theme = this.seatTheme(this.theme);
     const bootBg = hexToArgb(this.theme.tokens.bg);
     for (const output of this.outputs) {
       await fillKmsColor(
@@ -1719,7 +2149,7 @@ export class CompositorServer {
         this.readiness,
       );
     }
-    updateWallpaperImage(this.theme);
+    this.wallpaperImages.setTheme(this.theme);
     console.log(`[theme] ${this.theme.name} wallpaper=${this.theme.wallpaper.mode}`);
     console.log(
       `[output] layout ${this.outputs.map(({ kms, x, y }) => `${kms.connectorName}:${kms.currentModeId}@${x},${y}`).join(" ")}`,
@@ -1741,8 +2171,9 @@ export class CompositorServer {
       this.displayProbeTimer.unref?.();
     }
     this.prefsWatcher = createPrefsWatcher((theme) => {
-      this.theme = theme;
-      updateWallpaperImage(theme);
+      this.theme = this.seatTheme(theme);
+      this.reducedMotion = readReducedMotion();
+      this.wallpaperImages.setTheme(theme);
       this.shell?.invalidateChrome?.();
       this.markDirty();
     });
@@ -1767,12 +2198,8 @@ export class CompositorServer {
       }
     }
 
-    try {
-      this.keymap = createXkbKeymapMemfd();
-      console.log(`[seat] keymap memfd size=${this.keymap.size}`);
-    } catch (err) {
-      console.warn("[seat] keymap unavailable:", err);
-    }
+    this.keymap = this.compileKeymap(this.inputSettings.keyboard);
+    this.inputSettingsWatcher = createInputSettingsWatcher((next) => this.applyInputSettings(next));
 
     this.startKeyboardInput(
       new EvdevKeyboard(
@@ -1791,6 +2218,10 @@ export class CompositorServer {
     this.pointerDev.on("absolute", (ev: EvdevPointerAbsolute) => this.onPointerAbsolute(ev));
     this.pointerDev.on("button", (ev: EvdevPointerButton) => this.onPointerButton(ev));
     this.pointerDev.on("axis", (ev: EvdevPointerAxis) => this.onPointerAxis(ev));
+    this.pointerDev.on("device", (target: PointerDeviceConfigTarget) =>
+      this.configurePointerDevice(target),
+    );
+    this.pointerDev.on("deviceRemoved", () => this.notifyPointerDevices());
     this.pointerDev.start();
 
     if (this.kms) {
@@ -1836,6 +2267,7 @@ export class CompositorServer {
         for (const [serial, pair] of this.xwayPendingBySerial) {
           if (pair.session === session) this.xwayPendingBySerial.delete(serial);
         }
+        this.idleInhibitors.retireSession(session);
         session.destroy();
       });
     });
@@ -1871,6 +2303,647 @@ export class CompositorServer {
     this.loop();
   }
 
+  /**
+   * Compile the configured layouts. A keymap XKB rejects (a layout removed from
+   * xkeyboard-config, say) falls back to the system default rather than leaving no keyboard.
+   */
+  private compileKeymap(keyboard: KeyboardSettings): KeymapMemfd | null {
+    try {
+      const map = this.keyboardBackend.createKeymap(xkbRuleNamesFor(keyboard));
+      console.log(
+        `[seat] keymap layouts=${keyboard.layouts.length} caps=${keyboard.capsLock} size=${map.size}`,
+      );
+      return map;
+    } catch (err) {
+      console.warn("[seat] configured keymap failed; using the default:", err);
+    }
+    try {
+      return this.keyboardBackend.createKeymap();
+    } catch (err) {
+      console.warn("[seat] keymap unavailable:", err);
+      return null;
+    }
+  }
+
+  /** Apply changed keyboard/pointer prefs live. Called by the prefs watcher; public for smokes. */
+  applyInputSettings(next: InputSettings): void {
+    const previous = this.inputSettings;
+    this.inputSettings = next;
+    this.layoutSwitch.setShortcut(next.keyboard.switchShortcut);
+    if (keymapChanged(previous.keyboard, next.keyboard)) this.replaceKeymap();
+    else this.refreshActiveLayout();
+    const repeat = repeatInfoFor(next.keyboard);
+    const before = repeatInfoFor(previous.keyboard);
+    if (repeat.rate !== before.rate || repeat.delay !== before.delay)
+      for (const client of this.clients) client.keyboardRepeatInfo(repeat);
+    if (JSON.stringify(previous.pointer) !== JSON.stringify(next.pointer))
+      for (const target of this.pointerDev?.configTargets() ?? [])
+        this.configurePointerDevice(target);
+  }
+
+  private replaceKeymap(): void {
+    const keyboard = this.inputSettings.keyboard;
+    const map = this.compileKeymap(keyboard);
+    if (!map) return;
+    let state: SeatKeyboardState | null = null;
+    try {
+      // Before keyboard input starts there is no state yet; startKeyboardInput builds it.
+      state = this.xkbKeyboardState ? this.keyboardBackend.createState(map) : null;
+    } catch (err) {
+      console.warn("[seat] new keymap state failed; keeping the old keymap:", err);
+      closeFd(map.fd);
+      return;
+    }
+    const oldMap = this.keymap;
+    this.xkbKeyboardState?.close();
+    this.keymap = map;
+    this.xkbKeyboardState = state;
+    // Stay on the layout the user was typing with if it is still configured.
+    const keep = keyboard.layouts.findIndex(
+      (ref) => keyboardLayoutId(ref) === this.activeLayout.id,
+    );
+    if (keep > 0) state?.setLayoutIndex(keep);
+    for (const client of this.clients) client.keyboardKeymap(map);
+    this.focused?.keyboardModifiers(this.keyboardModifierMask());
+    if (oldMap) {
+      try {
+        closeFd(oldMap.fd);
+      } catch {
+        // Clients received their own descriptors.
+      }
+    }
+    this.refreshActiveLayout();
+  }
+
+  private configurePointerDevice(target: PointerDeviceConfigTarget): void {
+    const result = applyPointerSettings(this.inputSettings.pointer, target);
+    console.log(
+      `[seat] pointer ${result.device.name} kind=${result.device.kind} config=${JSON.stringify(result.applied)}${result.unsupported.length ? ` unsupported=${result.unsupported.join(",")}` : ""}`,
+    );
+    this.notifyPointerDevices();
+  }
+
+  /**
+   * Open pointer devices as Settings sees them. A pad counts as a touchpad only when the
+   * multitouch driver runs it, so Settings never offers touchpad options nothing would honour.
+   */
+  pointerDevices(): PointerDeviceSummary[] {
+    return (this.pointerDev?.configTargets() ?? []).map((target) => ({
+      name: target.info.name,
+      kind: target.supports("tap") ? "touchpad" : "mouse",
+      clickpad: target.supports("clickMethod"),
+    }));
+  }
+
+  onPointerDevicesChanged(listener: (devices: PointerDeviceSummary[]) => void): () => void {
+    this.pointerDeviceListeners.add(listener);
+    return () => {
+      this.pointerDeviceListeners.delete(listener);
+    };
+  }
+
+  private notifyPointerDevices(): void {
+    const devices = this.pointerDevices();
+    const key = JSON.stringify(devices);
+    if (key === this.pointerDevicesKey) return;
+    this.pointerDevicesKey = key;
+    for (const listener of this.pointerDeviceListeners) {
+      try {
+        listener(devices);
+      } catch (error) {
+        console.warn("[seat] pointer device listener failed:", error);
+      }
+    }
+  }
+
+  repeatInfo(): RepeatInfo {
+    return repeatInfoFor(this.inputSettings.keyboard);
+  }
+
+  /** The layout clients are currently typing with. */
+  keyboardLayout(): ActiveKeyboardLayout {
+    return this.activeLayout;
+  }
+
+  onKeyboardLayoutChanged(listener: (layout: ActiveKeyboardLayout) => void): () => void {
+    this.layoutListeners.add(listener);
+    return () => {
+      this.layoutListeners.delete(listener);
+    };
+  }
+
+  /** Lock the next configured layout (the switch shortcut), or a given one. */
+  cycleKeyboardLayout(index?: number): ActiveKeyboardLayout {
+    const state = this.xkbKeyboardState;
+    if (!state) return this.activeLayout;
+    const count = state.layoutCount();
+    if (count < 2) return this.activeLayout;
+    const target = index ?? (state.snapshot().group + 1) % count;
+    const mask = state.setLayoutIndex(Math.max(0, Math.min(count - 1, target)));
+    if (mask) this.focused?.keyboardModifiers(mask);
+    this.refreshActiveLayout();
+    return this.activeLayout;
+  }
+
+  private refreshActiveLayout(): void {
+    const state = this.xkbKeyboardState;
+    const index = state ? state.snapshot().group : 0;
+    const next = activeLayoutFor(
+      this.inputSettings.keyboard.layouts,
+      index,
+      state?.layoutName(index) ?? null,
+    );
+    if (JSON.stringify(next) === JSON.stringify(this.activeLayout)) return;
+    this.activeLayout = next;
+    this.shell?.setKeyboardLayout?.(next);
+    for (const listener of this.layoutListeners) {
+      try {
+        listener(next);
+      } catch (err) {
+        console.warn("[seat] layout listener failed:", err);
+      }
+    }
+  }
+
+  /** Any key, pointer or touch input, before routing; the idle policy's activity signal. */
+  onUserActivity(listener: () => void): () => void {
+    this.userActivityListeners.add(listener);
+    return () => {
+      this.userActivityListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Power, sleep and suspend keys go to this handler instead of clients when it returns true.
+   * The compositor's exclusive grab means logind never sees these keys from grabbed devices.
+   */
+  setSystemKeyHandler(handler: ((code: number, value: number) => boolean) | null): void {
+    this.systemKeyHandler = handler;
+  }
+
+  /** Connected clients by the kernel's peer pid; Xwayland is one client for every X11 app. */
+  clientProcesses(): { pid: number; xwayland: boolean }[] {
+    return [...this.clients].flatMap((client) =>
+      client.peerPid === null ? [] : [{ pid: client.peerPid, xwayland: client.isXwayland }],
+    );
+  }
+
+  /** Visible surfaces holding an idle inhibitor, by client app id (or "application"). */
+  idleInhibitorReasons(): string[] {
+    // Nothing a client shows is visible behind the lock, so nothing holds a locked screen awake.
+    if (this.sessionLock.locked) return [];
+    return this.idleInhibitors
+      .active(
+        (session) => this.clients.has(session),
+        (session, surfaceId) => !this.surfaceIsHidden(session, surfaceId),
+      )
+      .map(
+        ({ session }) =>
+          session.surfaces().find((surface) => surface.appId)?.appId ?? "application",
+      );
+  }
+
+  /** Who is locked and how their password is checked. Without it the lock still holds. */
+  setLockEnvironment(environment: SessionLockEnvironment | null): void {
+    this.lockEnvironment = environment;
+    this.sessionLock.setAuthenticator(environment?.authenticate ?? null);
+    this.sessionLock.touch();
+  }
+
+  get locked(): boolean {
+    return this.sessionLock.locked;
+  }
+
+  /** Lock and unlock, after the seat has been cut off from (or returned to) clients. */
+  onLockChanged(listener: (locked: boolean, reason: string) => void): () => void {
+    return this.sessionLock.onLockedChanged(listener);
+  }
+
+  /**
+   * Lock now. From this call on no composite draws a client surface and no input reaches a
+   * client. Resolves once a locked frame has been presented (or no output can show one), so a
+   * caller about to suspend knows the screen no longer shows the session.
+   */
+  lockSession(reason: LockReason): Promise<boolean> {
+    if (this.sessionLock.lock(reason)) console.log(`[lock] locked (${reason})`);
+    if (!this.lockFramePossible()) this.sessionLock.markPresented(this.sessionLock.epoch);
+    this.markDirty();
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        // Still locked; the frame is only unconfirmed (a stalled flip). logind's own delay
+        // limit bounds a waiting suspend independently of this.
+        console.warn("[lock] locked frame not confirmed in time");
+        resolve(this.sessionLock.locked);
+      }, LOCK_PRESENT_TIMEOUT_MS);
+      timer.unref?.();
+      void this.sessionLock.whenPresented().then((presented) => {
+        clearTimeout(timer);
+        resolve(presented || this.sessionLock.locked);
+      });
+    });
+  }
+
+  /** logind's Unlock (`loginctl unlock-session`): only the session owner or root can send it. */
+  unlockSession(reason: UnlockReason): boolean {
+    const unlocked = this.sessionLock.unlock(reason);
+    if (unlocked) console.log(`[lock] unlocked (${reason})`);
+    return unlocked;
+  }
+
+  /** The view the lock UI draws; never the password, only its length. */
+  lockScreenView(): LockScreenView {
+    const entry = this.sessionLock.entry();
+    const layout = this.activeLayout;
+    return {
+      ...entry,
+      user: this.lockEnvironment?.user ?? { name: "", username: "" },
+      // XKB's Lock modifier is core modifier 1.
+      capsLock: (this.keyboardModifierMask().locked & 2) !== 0,
+      layout:
+        layout.count > 1
+          ? { label: (layout.layout || layout.id).slice(0, 3).toUpperCase(), name: layout.name }
+          : null,
+      power: { suspend: false, powerOff: false, reboot: false, ...this.lockEnvironment?.power?.() },
+      reducedMotion: this.reducedMotion,
+    };
+  }
+
+  /** False when no output could show a frame now (off, handed off, or none presentable). */
+  private lockFramePossible(): boolean {
+    return (
+      !this.displayHandedOff &&
+      this.outputPower.presenting &&
+      !!this.outputRenderer &&
+      this.outputs.some((output) => isKmsPresentationReady(output.kms))
+    );
+  }
+
+  private enterLockedSeat(): void {
+    this.keysAtLock = new Set(this.pressedKeys);
+    this.lockSwallowedKeys.clear();
+    this.lockFrameKey = "";
+    this.lockUiFailure = null;
+    this.lockOutputIndex = -1;
+    this.cutClientInput();
+    try {
+      this.shell?.cancelDesktopDrag?.();
+      this.shell?.setLocked?.(true);
+    } catch (error) {
+      console.error("[lock] shell:", error instanceof Error ? error.message : error);
+    }
+    this.startHiddenClientTick();
+    this.markDirty();
+  }
+
+  /** Every route by which a client could still be acting on input ends now. */
+  private cutClientInput(): void {
+    if (this.drag) this.cancelDrag();
+    if (this.grab) this.endGrab();
+    this.dismissGrabbedPopups();
+    this.focused?.keyboardLeave();
+    this.pointerFocus = null;
+    for (const client of this.clients) client.pointerLeave();
+    this.clearClientCursor();
+    this.hoverEdges = 0;
+  }
+
+  private startHiddenClientTick(): void {
+    if (this.lockClientTimer) clearInterval(this.lockClientTimer);
+    this.lockClientTimer = setInterval(() => this.tickLockedClients(), LOCKED_CLIENT_TICK_MS);
+    this.lockClientTimer.unref?.();
+  }
+
+  /** Clients may use the seat again: held-back selections, then focus for the focused window. */
+  private returnSeatToClients(heldBefore: ReadonlySet<number>): void {
+    for (const client of this.clients) {
+      client.sendSelection(this.selection);
+      client.sendPrimarySelection(this.primarySelection);
+    }
+    const target = this.focusedToplevel;
+    const surface = target?.session.surfaceById(target.surfaceId);
+    if (target && surface?.mapped && !target.session.isHidden(surface)) {
+      this.focused = target.session;
+      target.session.keyboardEnter(
+        target.surfaceId,
+        [...this.pressedKeys].filter(
+          (code) => heldBefore.has(code) && !this.lockSwallowedKeys.has(code),
+        ),
+      );
+    }
+  }
+
+  private leaveLockedSeat(): void {
+    if (this.lockClientTimer) clearInterval(this.lockClientTimer);
+    this.lockClientTimer = null;
+    this.lockBackdropCache = null;
+    // Keys pressed on the lock screen (the Enter that unlocked) never reach a client, nor do
+    // their releases.
+    for (const code of this.pressedKeys)
+      if (!this.keysAtLock.has(code)) this.lockSwallowedKeys.add(code);
+    try {
+      this.shell?.setLocked?.(false);
+    } catch (error) {
+      console.error("[lock] shell:", error instanceof Error ? error.message : error);
+    }
+    // Selection offers were held back while locked.
+    this.returnSeatToClients(this.keysAtLock);
+    this.keysAtLock.clear();
+    this.markDirty();
+  }
+
+  /** Clients behind the lock or a prompt are never drawn, but are kept alive at a low rate. */
+  private tickLockedClients(): void {
+    if (!this.seatProtected) return;
+    for (const client of this.clients)
+      for (const surface of client.surfaces())
+        if (surface.frameCallbacks.length || surface.releaseBuffers.length)
+          client.finishSurfaceFrame(surface);
+    // Their pixels were not presented: discard any presentation feedback.
+    this.finishPresentationFeedback();
+  }
+
+  /** A key while locked: it goes to the password, the layout switch, or nowhere. */
+  private lockKey(ev: EvdevKeyEvent): void {
+    if (ev.value === 0) {
+      this.pressedKeys.delete(ev.code);
+      this.keysAtLock.delete(ev.code);
+    } else this.pressedKeys.add(ev.code);
+    const layoutSwitch = this.layoutSwitch.handle(ev, this.pressedKeys);
+    if (layoutSwitch.cycle) this.cycleKeyboardLayout();
+    const text = new Uint8Array(16);
+    try {
+      const modifiers = this.keyboardModifiers();
+      // The verification key (Super+Escape) changes nothing on the lock screen.
+      const verification = ev.code === KEY_ESC && modifiers.meta;
+      if (!layoutSwitch.consume && !verification && ev.value !== 0) {
+        const state = this.xkbKeyboardState;
+        const length = state?.keyText
+          ? state.keyText(ev.code, text)
+          : fallbackKeyText(ev.code, modifiers.shift, text);
+        this.sessionLock.key(ev.code, ev.value, text.subarray(0, length), modifiers);
+      }
+    } finally {
+      text.fill(0);
+      // No client is told about modifiers while locked; caps lock and the layout show on the lock.
+      if (this.xkbKeyboardState?.update(ev)) this.sessionLock.touch();
+    }
+  }
+
+  /** Locked, or a secure prompt (or its notice) is up: no input reaches a client. */
+  get seatProtected(): boolean {
+    return this.sessionLock.locked || this.promptSeatCut;
+  }
+
+  /** A secure prompt is on screen. */
+  get securePromptOpen(): boolean {
+    return this.securePromptQueue.visible;
+  }
+
+  /** A requester kept asking after being cancelled; `program` is its advisory name. */
+  onSecurePromptFlood(listener: (program: string) => void): () => void {
+    this.securePromptFloodListeners.add(listener);
+    return () => {
+      this.securePromptFloodListeners.delete(listener);
+    };
+  }
+
+  /** The view the prompt UI draws; never the answer, only its length. Null when none is up. */
+  securePromptView(): SecurePromptView | null {
+    const entry = this.securePromptQueue.entry();
+    if (!entry) return null;
+    const layout = this.activeLayout;
+    return {
+      ...entry,
+      pulsing: this.promptPulseTimer !== null,
+      capsLock: (this.keyboardModifierMask().locked & 2) !== 0,
+      layout:
+        layout.count > 1
+          ? { label: (layout.layout || layout.id).slice(0, 3).toUpperCase(), name: layout.name }
+          : null,
+      reducedMotion: this.reducedMotion,
+    };
+  }
+
+  /** The prompt layer takes or releases the seat as prompts, the notice and the lock change. */
+  private syncPromptSeat(): void {
+    const wanted =
+      !this.sessionLock.locked &&
+      (this.securePromptQueue.visible || this.secureNoticeTimer !== null);
+    if (wanted && !this.promptSeatCut) this.enterPromptSeat();
+    else if (!wanted && this.promptSeatCut) this.leavePromptSeat();
+    else this.markDirty();
+  }
+
+  private enterPromptSeat(): void {
+    this.promptSeatCut = true;
+    // A prompt nobody can see would only time out: wake a dark screen for it.
+    this.noteUserActivity();
+    this.keysAtPrompt = new Set(this.pressedKeys);
+    this.promptFrameKey = "";
+    this.promptUiFailure = null;
+    this.promptUiSubject = "";
+    this.lockOutputIndex = -1;
+    this.cutClientInput();
+    try {
+      this.shell?.cancelDesktopDrag?.();
+      this.shell?.setSecurePromptOpen?.(true);
+    } catch (error) {
+      console.error("[secure-prompt] shell:", error instanceof Error ? error.message : error);
+    }
+    this.startHiddenClientTick();
+    this.markDirty();
+  }
+
+  private leavePromptSeat(): void {
+    this.promptSeatCut = false;
+    if (this.lockClientTimer) clearInterval(this.lockClientTimer);
+    this.lockClientTimer = null;
+    this.lockBackdropCache = null;
+    // Keys pressed on the prompt (the Enter that submitted) never reach a client, nor do their
+    // releases.
+    for (const code of this.pressedKeys)
+      if (!this.keysAtPrompt.has(code)) this.lockSwallowedKeys.add(code);
+    try {
+      this.shell?.setSecurePromptOpen?.(false);
+    } catch (error) {
+      console.error("[secure-prompt] shell:", error instanceof Error ? error.message : error);
+    }
+    // Locking ended the prompt: the seat goes to the lock, not back to clients.
+    if (!this.sessionLock.locked) this.returnSeatToClients(this.keysAtPrompt);
+    this.keysAtPrompt.clear();
+    this.markDirty();
+  }
+
+  /**
+   * The verification key, Super+Escape. No client ever sees it, so no client can answer it: a
+   * real prompt lights its badge, and with none open the compositor says so. Nothing while
+   * locked, and nothing to verify before login.
+   */
+  private verifySecurePrompt(): void {
+    if (this.sessionLock.locked) return;
+    if (this.securePromptQueue.verify()) {
+      if (this.promptPulseTimer) clearTimeout(this.promptPulseTimer);
+      this.promptPulseTimer = setTimeout(() => {
+        this.promptPulseTimer = null;
+        this.markDirty();
+      }, SECURE_PROMPT_PULSE_MS);
+      this.promptPulseTimer.unref?.();
+      this.markDirty();
+      return;
+    }
+    if (this.managedSeat?.mode === "greeter") return;
+    if (this.secureNoticeTimer) clearTimeout(this.secureNoticeTimer);
+    this.secureNoticeTimer = setTimeout(() => this.endSecureNotice(), SECURE_NOTICE_MS);
+    this.secureNoticeTimer.unref?.();
+    this.syncPromptSeat();
+  }
+
+  private endSecureNotice(): void {
+    if (!this.secureNoticeTimer) return;
+    clearTimeout(this.secureNoticeTimer);
+    this.secureNoticeTimer = null;
+    this.syncPromptSeat();
+  }
+
+  /** A key while a prompt is up: it goes to the answer, the layout switch, or nowhere. */
+  private promptKey(ev: EvdevKeyEvent): void {
+    if (ev.value === 0) {
+      this.pressedKeys.delete(ev.code);
+      this.keysAtPrompt.delete(ev.code);
+    } else this.pressedKeys.add(ev.code);
+    const layoutSwitch = this.layoutSwitch.handle(ev, this.pressedKeys);
+    if (layoutSwitch.cycle) this.cycleKeyboardLayout();
+    const text = new Uint8Array(16);
+    try {
+      if (layoutSwitch.consume) return;
+      const modifiers = this.keyboardModifiers();
+      const chord = modifiers.meta && !modifiers.ctrl && !modifiers.alt && !modifiers.shift;
+      if (chord && ev.code === KEY_ESC) {
+        if (ev.value === 1) this.verifySecurePrompt();
+        return;
+      }
+      // Super+L still locks, which ends the prompt: a looping requester cannot hold the desktop.
+      if (chord && ev.code === KEY_L && this.lockEnvironment) {
+        if (ev.value === 1) void this.lockSession("shortcut");
+        return;
+      }
+      if (!this.securePromptQueue.visible) {
+        // Only the notice is up: any key puts it away.
+        if (ev.value === 1) this.endSecureNotice();
+        return;
+      }
+      let length = 0;
+      if (ev.value !== 0) {
+        const state = this.xkbKeyboardState;
+        length = state?.keyText
+          ? state.keyText(ev.code, text)
+          : fallbackKeyText(ev.code, modifiers.shift, text);
+      }
+      this.securePromptQueue.key(ev.code, ev.value, text.subarray(0, length), modifiers);
+    } finally {
+      text.fill(0);
+      // No client is told about modifiers meanwhile; caps lock and the layout show on the prompt.
+      if (this.xkbKeyboardState?.update(ev)) this.securePromptQueue.touch();
+    }
+  }
+
+  /** Pointer input while a prompt is up: only the prompt UI sees it. */
+  private promptPointer(button?: { code: number; value: number }): void {
+    const output = this.lockOutput();
+    if (!output) return;
+    const index = this.outputs.indexOf(output);
+    if (index !== this.lockOutputIndex) {
+      this.lockOutputIndex = index;
+      this.markDirty();
+    }
+    if (!this.securePromptQueue.visible) {
+      if (button?.value === 1) this.endSecureNotice();
+      return;
+    }
+    this.securePromptQueue.activity();
+    if (this.promptUiFailure) return;
+    let action: SecurePromptAction | null = null;
+    try {
+      action =
+        this.shell?.onSecurePromptPointer?.({
+          x: this.cursorX - output.x,
+          y: this.cursorY - output.y,
+          ...(button ? { button: button.code, value: button.value } : {}),
+        }) ?? null;
+    } catch (error) {
+      this.promptUiFailed(error);
+    }
+    if (action) this.securePromptQueue.action(action);
+  }
+
+  /** The shell's prompt view failed: the compositor draws its own for the rest of this prompt. */
+  private promptUiFailed(error: unknown): void {
+    if (this.promptUiFailure) return;
+    this.promptUiFailure = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[secure-prompt] prompt UI failed; using the compositor's prompt: ${this.promptUiFailure}`,
+    );
+    this.markDirty();
+  }
+
+  /** The output the lock UI is on: the one under the pointer, else the primary. */
+  private lockOutput(): DisplayOutput | null {
+    // Only an output that can show a frame can carry the UI; a dark or handed-off one would
+    // leave every presented output black.
+    const ready = this.outputs.filter((output) => isKmsPresentationReady(output.kms));
+    const candidates = ready.length > 0 ? ready : this.outputs;
+    const under = candidates.find(
+      (output) =>
+        this.cursorX >= output.x &&
+        this.cursorY >= output.y &&
+        this.cursorX < output.x + outputLogicalWidth(output) &&
+        this.cursorY < output.y + outputLogicalHeight(output),
+    );
+    return under ?? candidates.find((output) => output.primary) ?? candidates[0] ?? null;
+  }
+
+  /** Pointer input while locked: only the lock UI sees it, never a client or the shell chrome. */
+  private lockPointer(button?: { code: number; value: number }): void {
+    const output = this.lockOutput();
+    if (!output) return;
+    const index = this.outputs.indexOf(output);
+    if (index !== this.lockOutputIndex) {
+      this.lockOutputIndex = index;
+      this.markDirty();
+    }
+    let action: LockScreenAction | null = null;
+    try {
+      action =
+        this.shell?.onLockPointer?.({
+          x: this.cursorX - output.x,
+          y: this.cursorY - output.y,
+          ...(button ? { button: button.code, value: button.value } : {}),
+        }) ?? null;
+    } catch (error) {
+      this.lockUiFailed(error);
+    }
+    if (!action) return;
+    const allowed = this.lockEnvironment?.power?.();
+    if (
+      (action === "suspend" && allowed?.suspend) ||
+      (action === "reboot" && allowed?.reboot) ||
+      (action === "power-off" && allowed?.powerOff)
+    )
+      this.lockEnvironment?.runPowerAction?.(action);
+  }
+
+  /** The shell's lock UI failed: the compositor draws its own prompt for the rest of this lock. */
+  private lockUiFailed(error: unknown): void {
+    if (this.lockUiFailure) return;
+    this.lockUiFailure = error instanceof Error ? error.message : String(error);
+    console.error(`[lock] lock UI failed; using the compositor's prompt: ${this.lockUiFailure}`);
+    this.markDirty();
+  }
+
+  private noteUserActivity(): void {
+    for (const listener of this.userActivityListeners) listener();
+  }
+
   /** Main owns outer D-Bus/Xwayland shutdown and the nonzero process exit. */
   onFatalError(listener: (error: Error) => void): () => void {
     this.fatalErrorListeners.add(listener);
@@ -1882,11 +2955,18 @@ export class CompositorServer {
   protected startKeyboardInput(keyboard: KeyboardInput): void {
     if (this.fatalError) throw this.fatalError;
     const keymap = this.getKeymap();
-    if (keymap) this.xkbKeyboardState = new XkbKeyboardState(keymap);
+    if (keymap) {
+      this.xkbKeyboardState = this.keyboardBackend.createState(keymap);
+      this.refreshActiveLayout();
+    }
     this.evdev = keyboard;
     keyboard.setInputFixtureTrace?.(this.inputFixtureTrace);
     keyboard.on("key", (ev: EvdevKeyEvent) => {
-      if (this.evdev === keyboard) this.onKey(ev);
+      if (this.evdev !== keyboard) return;
+      // Touchpads ignore touches that land while typing (disable-while-typing); other pointer
+      // devices need not track typing.
+      this.pointerDev?.noteKeyboard?.(ev);
+      this.onKey(ev);
     });
     keyboard.on("exclusiveFailure", (error: Error) => {
       if (this.evdev !== keyboard || this.fatalError) return;
@@ -1925,6 +3005,11 @@ export class CompositorServer {
       /* Diagnostic teardown is isolated. */
     }
     this.running = false;
+    this.securePromptQueue.dispose();
+    if (this.secureNoticeTimer) clearTimeout(this.secureNoticeTimer);
+    this.secureNoticeTimer = null;
+    if (this.promptPulseTimer) clearTimeout(this.promptPulseTimer);
+    this.promptPulseTimer = null;
     this.pressedKeys.clear();
     this.compositeWakeResolver?.();
     this.compositeWakeResolver = null;
@@ -1946,6 +3031,11 @@ export class CompositorServer {
       clearTimeout(this.pendingDisplayLayout.timer);
       this.pendingDisplayLayout = null;
     }
+    if (this.wallpaperPhaseTimer) {
+      clearTimeout(this.wallpaperPhaseTimer);
+      this.wallpaperPhaseTimer = null;
+    }
+    this.wallpaperImages.dispose();
     if (this.dragWatchdog) {
       clearInterval(this.dragWatchdog);
       this.dragWatchdog = null;
@@ -1977,6 +3067,10 @@ export class CompositorServer {
       // A direct renderer target may currently be scanned out. Restore each
       // output's durable dumb FB before the renderer unregisters its GBM BOs.
       for (const output of this.outputs) {
+        // A handed-off scanout belongs to the next stage (CLOSEFB'd, kernel-owned): showing the
+        // dumb buffer here would replace it with black, and RmFB of that buffer then disables
+        // the plane until the next compositor's first frame.
+        if (output.kms.retainedScanout) continue;
         try {
           presentKms(output.kms);
         } catch {
@@ -2023,6 +3117,7 @@ export class CompositorServer {
     if (this.managedSeat?.mode === "greeter" && shell)
       throw new Error("Greeter cannot attach a desktop shell");
     this.shell = shell;
+    shell?.setKeyboardLayout?.(this.activeLayout);
   }
 
   /**
@@ -2221,6 +3316,16 @@ export class CompositorServer {
   }
 
   capturePrimaryOutput(): {
+    width: number;
+    height: number;
+    pixels: Uint8Array;
+  } {
+    // No capture of the screen while a secure prompt is on it.
+    if (this.promptSeatCut) throw new Error("Display capture unavailable");
+    return this.readPrimaryOutput();
+  }
+
+  private readPrimaryOutput(): {
     width: number;
     height: number;
     pixels: Uint8Array;
@@ -2854,7 +3959,8 @@ export class CompositorServer {
 
   forwardPrimarySelectionReceive(mime: string, fd: number): void {
     const selection = this.primarySelection;
-    if (!selection) {
+    // Nothing is pasted while the session is locked or a prompt is up.
+    if (!selection || this.seatProtected) {
       try {
         closeFd(fd);
       } catch {
@@ -2881,7 +3987,8 @@ export class CompositorServer {
   /** Source client writes clipboard bytes into `fd` (from offer.receive). */
   forwardSelectionReceive(mime: string, fd: number): void {
     const sel = this.selection;
-    if (!sel) {
+    // Nothing is pasted while the session is locked or a prompt is up.
+    if (!sel || this.seatProtected) {
       try {
         closeFd(fd);
       } catch {
@@ -2907,6 +4014,11 @@ export class CompositorServer {
     iconId: number | null,
     serial: number,
   ): void {
+    // No drag starts behind the lock (a client has no input, so no valid serial, anyway).
+    if (this.seatProtected) {
+      sourceSession.sendDataSourceCancelled(sourceId);
+      return;
+    }
     if (this.drag) this.cancelDrag();
     this.dragReturn = null;
     const mimes = sourceSession.dataSourceMimes(sourceId);
@@ -3412,7 +4524,7 @@ export class CompositorServer {
     surf.popupGrabbed = false;
     surf.xdgPopupId = null;
     if (surf.role === "popup") surf.role = "none";
-    surf.content?.destroy();
+    this.retireSurfaceContent(surf.content);
     surf.content = null;
     this.unregisterPopup(session, surfaceId);
   }
@@ -3553,6 +4665,16 @@ export class CompositorServer {
     console.log(`[wm] restored surface=${surfaceId}`);
   }
 
+  /** Taskbar close: ask the toplevel to close, as its titlebar close button does. */
+  closeTask(clientId: number, surfaceId: number): void {
+    const entry = this.stack.find(
+      (candidate) => candidate.session.clientId === clientId && candidate.surfaceId === surfaceId,
+    );
+    const surf = entry?.session.surfaceById(surfaceId);
+    if (!entry || !surf || surf.role !== "toplevel") return;
+    entry.session.requestClose(surf);
+  }
+
   /** Taskbar activation: restore, focus, or minimize the selected toplevel. */
   toggleTask(clientId: number, surfaceId: number): void {
     const entry = this.stack.find(
@@ -3646,6 +4768,27 @@ export class CompositorServer {
   }
 
   private onKey(ev: EvdevKeyEvent): void {
+    this.noteUserActivity();
+    if (SYSTEM_KEYS.has(ev.code) && this.systemKeyHandler?.(ev.code, ev.value)) return;
+    if (this.sessionLock.locked) {
+      this.lockKey(ev);
+      return;
+    }
+    if (this.promptSeatCut) {
+      this.promptKey(ev);
+      return;
+    }
+    if (ev.value !== 1 && this.lockSwallowedKeys.has(ev.code)) {
+      // A key pressed on the lock screen: its repeat and release stay off the clients too.
+      if (ev.value === 0) {
+        this.lockSwallowedKeys.delete(ev.code);
+        this.pressedKeys.delete(ev.code);
+        const modifiers = this.xkbKeyboardState?.update(ev);
+        if (modifiers) this.focused?.keyboardModifiers(modifiers);
+      }
+      return;
+    }
+    this.lockSwallowedKeys.delete(ev.code);
     try {
       this.routeKey(ev);
     } finally {
@@ -3663,11 +4806,52 @@ export class CompositorServer {
     if (ev.value === 0) this.pressedKeys.delete(ev.code);
     else this.pressedKeys.add(ev.code);
     this.observeKeyRoute(ev, "translated");
+    const layoutSwitch = this.layoutSwitch.handle(ev, this.pressedKeys);
+    if (layoutSwitch.cycle) {
+      this.cycleKeyboardLayout();
+      this.shell?.onLayoutShortcut?.();
+    }
+    if (layoutSwitch.consume) {
+      this.observeKeyRoute(ev, "shell");
+      return;
+    }
     const KEY_TAB = 15;
     const modifiers = this.keyboardModifiers();
     if (modifiers.alt && ev.code === KEY_TAB && ev.value === 1) {
       this.cycleToplevel(modifiers.shift);
       this.observeKeyRoute(ev, "alt-tab");
+      return;
+    }
+    // Super+L locks; the compositor owns it so no client or shell state can intercept it. Only a
+    // desktop session that can check a password (has a lock environment) offers it.
+    if (
+      this.lockEnvironment &&
+      ev.code === KEY_L &&
+      ev.value === 1 &&
+      modifiers.meta &&
+      !modifiers.ctrl &&
+      !modifiers.alt &&
+      !modifiers.shift
+    ) {
+      this.observeKeyRoute(ev, "shell");
+      this.shell?.onSuperChord?.();
+      void this.lockSession("shortcut");
+      return;
+    }
+    // Super+Escape is the verification key: the compositor answers it and no client or shell
+    // sees the Escape, its repeats or its release.
+    if (
+      ev.code === KEY_ESC &&
+      ev.value === 1 &&
+      modifiers.meta &&
+      !modifiers.ctrl &&
+      !modifiers.alt &&
+      !modifiers.shift
+    ) {
+      this.observeKeyRoute(ev, "shell");
+      this.shell?.onSuperChord?.();
+      this.lockSwallowedKeys.add(ev.code);
+      this.verifySecurePrompt();
       return;
     }
 
@@ -3710,10 +4894,15 @@ export class CompositorServer {
       }
     }
     this.focused?.keyboardKey(ev);
+    if (DEBUG_KEYS)
+      console.log(
+        `[keys] compositor code=${ev.code} value=${ev.value} t=${ev.timeMs} client=${this.focused?.clientId ?? "none"}`,
+      );
     this.observeKeyRoute(ev, this.focused ? "client" : "no-focus");
   }
 
   private onPointerMotion(ev: EvdevPointerMotion): void {
+    this.noteUserActivity();
     const kms = this.getKmsSize();
     const nx = Math.max(0, Math.min(kms.width - 1, this.cursorX + ev.dx));
     const ny = Math.max(0, Math.min(kms.height - 1, this.cursorY + ev.dy));
@@ -3733,6 +4922,14 @@ export class CompositorServer {
       ) {
         this.markDirty();
       }
+    }
+    if (this.sessionLock.locked) {
+      this.lockPointer();
+      return;
+    }
+    if (this.promptSeatCut) {
+      this.promptPointer();
+      return;
     }
     if (this.drag) {
       this.updateSsdPointerHover(false);
@@ -3793,6 +4990,7 @@ export class CompositorServer {
   }
 
   private onPointerAbsolute(ev: EvdevPointerAbsolute): void {
+    this.noteUserActivity();
     const kms = this.getKmsSize();
     const nx = Math.max(0, Math.min(kms.width - 1, Math.round(ev.x * (kms.width - 1))));
     const ny = Math.max(0, Math.min(kms.height - 1, Math.round(ev.y * (kms.height - 1))));
@@ -3810,6 +5008,14 @@ export class CompositorServer {
       ) {
         this.markDirty();
       }
+    }
+    if (this.sessionLock.locked) {
+      this.lockPointer();
+      return;
+    }
+    if (this.promptSeatCut) {
+      this.promptPointer();
+      return;
     }
     if (this.drag) {
       this.updateSsdPointerHover(false);
@@ -3921,10 +5127,19 @@ export class CompositorServer {
   }
 
   private onPointerButton(ev: EvdevPointerButton): void {
+    this.noteUserActivity();
     this.observePointerRoute(ev, "button", "translated");
     if (ev.value === 0) this.pointerButtonsDown.delete(ev.code);
     else this.pointerButtonsDown.add(ev.code);
     this.markDirty();
+    if (this.sessionLock.locked) {
+      this.lockPointer({ code: ev.code, value: ev.value });
+      return;
+    }
+    if (this.promptSeatCut) {
+      this.promptPointer({ code: ev.code, value: ev.value });
+      return;
+    }
     if (this.drag) {
       console.log(
         `[dnd] button code=${ev.code} value=${ev.value} at ${this.cursorX},${this.cursorY}`,
@@ -4171,6 +5386,8 @@ export class CompositorServer {
   }
 
   private onPointerAxis(ev: EvdevPointerAxis): void {
+    this.noteUserActivity();
+    if (this.seatProtected) return;
     this.observePointerRoute(ev, "axis", "translated");
     this.scrollTrace.write({
       stage: "axis",
@@ -4184,7 +5401,9 @@ export class CompositorServer {
     // leaving launcher/menu scrolling queued until the idle liveness timeout.
     this.markDirty();
     const popupBlocksShell = !!this.hitTestPopup(this.cursorX, this.cursorY);
+    // The shell scrolls vertically only; sideways touchpad scrolling goes to clients.
     const consumed =
+      ev.axis !== "horizontal" &&
       !popupBlocksShell &&
       (this.shell?.onPointerAxis?.({
         x: this.cursorX,
@@ -5269,7 +6488,15 @@ export class CompositorServer {
   private async loop(): Promise<void> {
     while (this.running) {
       this.prefsWatcher?.poll();
-      if (this.shell?.needsRepaint?.()) this.markDirty();
+      this.inputSettingsWatcher?.poll();
+      this.followNightLight();
+      if (
+        this.shell?.needsRepaint?.() ||
+        // Window motion is not drawn behind the lock or a prompt; it resumes after.
+        (this.windowMotion.active && !this.seatProtected) ||
+        this.outputPower.animating()
+      )
+        this.markDirty();
       if (this.needsComposite) {
         const budget = this.frameBudgetMs();
         const now = monotonicMs();
@@ -5298,6 +6525,12 @@ export class CompositorServer {
         await this.waitForCompositeWork(1_000);
       }
     }
+  }
+
+  /** Night light's schedule and fade; the renderer scales each presented output by it. */
+  private followNightLight(): void {
+    if (this.nightLight.tick(Date.now())) this.markDirty();
+    this.outputRenderer?.setOutputColorScale?.(this.nightLight.scale());
   }
 
   private frameBudgetMs(): number {
@@ -5513,8 +6746,10 @@ export class CompositorServer {
 
   private canUseRetainedComposition(renderer: CompositorOutputRenderer): boolean {
     if (!renderer.capabilities.retainedLayers || !renderer.beginComposition) return false;
+    // A shell-less session (the greeter) has no chrome to lose: compose its clients on the GPU.
+    if (!this.shell) return true;
     if (
-      !this.shell?.desktopRaster ||
+      !this.shell.desktopRaster ||
       !this.shell.chromeRaster ||
       !this.shell.ssdRaster ||
       (((this.drag != null && this.drag.iconId == null) ||
@@ -5527,6 +6762,10 @@ export class CompositorServer {
   }
 
   private finishPresentationFeedback(feedback?: KmsPresentationFeedback): void {
+    if (feedback && !this.bootPresented) {
+      this.bootPresented = true;
+      markBootPresented();
+    }
     const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0];
     const mode = primary?.kms.modes.find((candidate) => candidate.id === primary.kms.currentModeId);
     const refreshNs = mode?.refreshMilliHz
@@ -5673,6 +6912,32 @@ export class CompositorServer {
   }
 
   private outputPipelineFrame = 0;
+  /**
+   * Atmosphere pixels only change per @moire/theme phase bucket (20 per 60s
+   * period), so wake at the next bucket instead of recompositing every frame.
+   */
+  private scheduleWallpaperPhaseWake(): void {
+    if (this.theme.wallpaper.mode !== "atmosphere" || this.wallpaperPhaseTimer) return;
+    const bucketMs = 60000 / 20;
+    this.wallpaperPhaseTimer = setTimeout(
+      () => {
+        this.wallpaperPhaseTimer = null;
+        if (this.running) this.markDirty();
+      },
+      bucketMs - (Date.now() % bucketMs) + 1,
+    );
+    this.wallpaperPhaseTimer.unref();
+  }
+
+  /**
+   * Pre-login output never shows the user's desktop wallpaper: the greeter owns its own
+   * backdrop, and anything it does not cover (first frame, handoff) is the neutral ground.
+   */
+  private seatTheme(theme: MoireTheme): MoireTheme {
+    if (this.managedSeat?.mode !== "greeter") return theme;
+    return { ...theme, wallpaper: { mode: "solid", color: theme.tokens.bg } };
+  }
+
   private async compositeRetained(
     renderer: CompositorOutputRenderer,
     frameStartedMs: number,
@@ -5684,7 +6949,8 @@ export class CompositorServer {
     let z = 0;
     const wallPhase = (Date.now() / 60000) % 1;
     const phaseBucket = Math.floor(wallPhase * 20);
-    const wallpaperKey = `${this.theme.name}:${width}x${height}:${phaseBucket}:${JSON.stringify(this.theme.wallpaper)}`;
+    this.wallpaperImages.ensureSize(width, height);
+    const wallpaperKey = `${this.theme.name}:${width}x${height}:${phaseBucket}:${wallpaperImageRevision()}:${JSON.stringify(this.theme.wallpaper)}`;
     if (
       !this.retainedWallpaper ||
       this.retainedWallpaper.byteLength !== width * height * 4 ||
@@ -5706,21 +6972,24 @@ export class CompositorServer {
       this.retainedWallpaperKey = wallpaperKey;
       this.retainedWallpaperRevision++;
     }
+    const sceneBackdrop = this.sceneBackdropLayer(width, height);
     layers.push({
-      id: "wallpaper",
+      id: sceneBackdrop ? "scene-backdrop" : "wallpaper",
       z: z++,
-      source: {
-        pixels: this.retainedWallpaper,
-        width,
-        height,
-        stride: width * 4,
-        revision: this.retainedWallpaperRevision,
-      },
+      source: sceneBackdrop
+        ? sceneBackdrop.source
+        : {
+            pixels: this.retainedWallpaper,
+            width,
+            height,
+            stride: width * 4,
+            revision: this.retainedWallpaperRevision,
+          },
       destination: { x: 0, y: 0, width, height },
       blendMode: "copy",
       sampling: "nearest",
     });
-    if (this.theme.wallpaper.mode === "atmosphere") this.markDirty();
+    this.scheduleWallpaperPhaseWake();
     const wallpaperFinishedMs = monotonicMs();
 
     const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0]!;
@@ -5749,9 +7018,12 @@ export class CompositorServer {
 
     let painted = 0;
     this.shell?.beginSsdFrame?.();
+    const motionNow = monotonicMs();
+    this.windowMotion.beginFrame();
     for (const entry of this.stack) {
       const client = entry.session;
       client.layout();
+      const windowLayersStart = layers.length;
       const top = client.surfaceById(entry.surfaceId);
       if (top?.mapped && !client.isHidden(top) && this.usesSsd(top)) {
         const size = this.contentSize(top);
@@ -5789,7 +7061,7 @@ export class CompositorServer {
       for (const surface of client.paintTree(entry.surfaceId)) {
         client.updateSurfaceOutputs(surface);
         if (surface.mapped && surface.content && !client.isHidden(surface)) {
-          layers.push(this.surfacePaintLayer(client, surface, false, z++));
+          layers.push(this.fadingClientLayer(this.surfacePaintLayer(client, surface, false, z++)));
           traceOutputPipeline({
             stage: "scene",
             frame: pipelineFrame,
@@ -5841,42 +7113,45 @@ export class CompositorServer {
           }
         }
       }
+      this.windowMotion.present(
+        `${client.clientId}:${entry.surfaceId}`,
+        layers,
+        windowLayersStart,
+        motionNow,
+      );
     }
+    z = this.windowMotion.endFrame(layers, z, motionNow);
     const windowsFinishedMs = monotonicMs();
 
     this.ssdWindows = this.collectSsdWindows();
     const chrome = this.shell?.chromeRaster?.(width, height);
     if (chrome) {
       if (renderer.capabilities.backdropBlur) {
-        const panel = panelGeometry(
+        // The shell reports its glass shapes (floating islands or one bar); older shells
+        // leave the theme's panel band.
+        const theme = panelGeometry(
           outputLogicalWidth(primary),
           outputLogicalHeight(primary),
           this.theme,
         );
-        layers.push({
-          id: "shell:panel-material",
-          z: z++,
-          source: {
-            pixels: this.retainedEffectPixel,
-            width: 1,
-            height: 1,
-            stride: 4,
-            revision: 1,
-          },
-          destination: {
-            x: primary.x + panel.x,
-            y: primary.y + panel.y,
-            width: panel.width,
-            height: panel.height,
-          },
-          cornerRadius: panel.radius,
-          effects: [
-            {
-              kind: "backdrop-blur",
-              radius: 18,
-              saturation: 1.08,
+        const shapes = this.shell?.panelMaterial?.() ?? [
+          { ...theme, x: primary.x + theme.x, y: primary.y + theme.y },
+        ];
+        shapes.forEach((shape, index) => {
+          layers.push({
+            id: `shell:panel-material:${index}`,
+            z: z++,
+            source: {
+              pixels: this.retainedEffectPixel,
+              width: 1,
+              height: 1,
+              stride: 4,
+              revision: 1,
             },
-          ],
+            destination: { x: shape.x, y: shape.y, width: shape.width, height: shape.height },
+            cornerRadius: shape.radius,
+            effects: [{ kind: "backdrop-blur", radius: 18, saturation: 1.08 }],
+          });
         });
       }
       layers.push({
@@ -5889,6 +7164,8 @@ export class CompositorServer {
           width: chrome.width,
           height: chrome.height,
         },
+        // Only what moved is re-uploaded (a launcher glide, not the whole output).
+        damage: chrome.damage,
       });
     }
     const chromeFinishedMs = monotonicMs();
@@ -5899,14 +7176,37 @@ export class CompositorServer {
       if (!surface?.mapped || !surface.content || client.isHidden(surface)) continue;
       this.layoutPopup(client, surface);
       client.updateSurfaceOutputs(surface);
-      layers.push(this.surfacePaintLayer(client, surface, true, z++));
+      layers.push(this.fadingClientLayer(this.surfacePaintLayer(client, surface, true, z++)));
       client.finishSurfaceFrame(surface);
       painted++;
     }
     const dragLayer = this.retainedDragLayer(z++);
     if (dragLayer) layers.push(dragLayer);
+    const bootFade = this.bootFadeLayer(z++, width, height);
+    if (bootFade) layers.push(bootFade);
+    if (this.veilStartedMs) {
+      const u = Math.min(1, (monotonicMs() - this.veilStartedMs) / CLIENT_HANDOFF_FADE_MS);
+      layers.push({
+        id: "handoff-veil",
+        z: z++,
+        source: { pixels: this.veilPixel, width: 1, height: 1, stride: 4, revision: 1 },
+        destination: { x: 0, y: 0, width, height },
+        opacity: u * u * (3 - 2 * u),
+        sampling: "nearest",
+      });
+    }
     const cursor = this.retainedCursorLayer(z++);
     if (cursor) layers.push(cursor);
+    const dim = this.outputPower.dimLevel();
+    if (dim > 0)
+      layers.push({
+        id: "idle-dim",
+        z: z++,
+        source: { pixels: this.dimPixel, width: 1, height: 1, stride: 4, revision: 1 },
+        destination: { x: 0, y: 0, width, height },
+        opacity: dim,
+        sampling: "nearest",
+      });
     const sceneFinishedMs = monotonicMs();
 
     const scene: CompositionScene = {
@@ -6017,10 +7317,448 @@ export class CompositorServer {
     }
   }
 
+  /**
+   * While a boot frame is on screen, keep it there until a client has mapped content (or the
+   * bound elapses): a bare background between boot and the first window reads as a blank.
+   */
+  private holdingBootFrame(): boolean {
+    if (this.bootHoldUntilMs === 0) return false;
+    // A shell paints its own content: dissolve into it as soon as it can be composed on the GPU
+    // (its early flat frames are a bare fill, and only the retained path carries the dissolve).
+    if (this.shell) {
+      const renderer = this.outputRenderer;
+      if (!renderer || !this.canUseRetainedComposition(renderer)) {
+        if (monotonicMs() < this.bootHoldUntilMs) {
+          this.scheduleBootHoldCheck();
+          return true;
+        }
+      }
+      this.bootHoldUntilMs = 0;
+      this.bootFadeStartedMs = this.bootFrame ? monotonicMs() : 0;
+      return false;
+    }
+    // A toolkit's first buffers often just map the window (a uniform fill); release on the
+    // first buffer with visible detail, or a bounded moment after the first buffer.
+    let mapped = false;
+    let detailed = false;
+    for (const client of this.clients)
+      for (const surface of client.surfaces()) {
+        if (!surface.mapped || !surface.content) continue;
+        mapped = true;
+        if (this.bootCheckedRevision.get(surface) === surface.revision) continue;
+        this.bootCheckedRevision.set(surface, surface.revision);
+        if (hasVisibleDetail(surface.content)) detailed = true;
+      }
+    const now = monotonicMs();
+    if (mapped && this.bootFirstContentMs === 0) this.bootFirstContentMs = now;
+    const ready =
+      detailed ||
+      (this.bootFirstContentMs > 0 && now - this.bootFirstContentMs >= BOOT_FIRST_CONTENT_MAX_MS);
+    if (ready || now >= this.bootHoldUntilMs) {
+      this.bootHoldUntilMs = 0;
+      this.bootFadeStartedMs = this.bootFrame ? monotonicMs() : 0;
+      return false;
+    }
+    // Keep clients drawing while held: their content is snapshotted, so frames may complete.
+    for (const client of this.clients)
+      for (const surface of client.surfaces())
+        if (surface.frameCallbacks.length || surface.releaseBuffers.length)
+          client.finishSurfaceFrame(surface);
+    this.scheduleBootHoldCheck();
+    return true;
+  }
+
+  private scheduleBootHoldCheck(): void {
+    if (this.bootHoldTimer) return;
+    this.bootHoldTimer = setTimeout(() => {
+      this.bootHoldTimer = null;
+      this.markDirty();
+    }, 50);
+  }
+
+  /** The window a motion key (`client:surface`) names, while its client is connected. */
+  private windowForMotionKey(key: string) {
+    const [clientId, surfaceId] = key.split(":").map(Number);
+    const entry = this.stack.find(
+      (candidate) => candidate.session.clientId === clientId && candidate.surfaceId === surfaceId,
+    );
+    const surface = entry?.session.surfaceById(surfaceId!);
+    return entry && surface ? { session: entry.session, surface } : null;
+  }
+
+  /**
+   * Let go of a surface's pixels. A window motion may still be drawing a closing window from
+   * them, in which case they are released when that motion ends.
+   */
+  retireSurfaceContent(content: OwnedPixelSurface | null | undefined): void {
+    if (!content) return;
+    if (this.windowMotion.retains(content)) this.windowMotion.defer(content);
+    else content.destroy();
+  }
+
+  /** During a stage handoff, client layers dissolve off the scene. */
+  private fadingClientLayer(layer: CompositionLayer): CompositionLayer {
+    if (this.clientFadeStartedMs === 0) return layer;
+    const u = Math.min(1, (monotonicMs() - this.clientFadeStartedMs) / CLIENT_HANDOFF_FADE_MS);
+    const keep = 1 - u * u * (3 - 2 * u);
+    return { ...layer, opacity: (layer.opacity ?? 1) * keep };
+  }
+
+  /** The boot stage's final frame, dissolving over the first frames of this session. */
+  private bootFadeLayer(z: number, width: number, height: number): CompositionLayer | null {
+    const frame = this.bootFrame;
+    if (!frame || this.bootFadeStartedMs === 0) return null;
+    const u = Math.min(1, (monotonicMs() - this.bootFadeStartedMs) / BOOT_FADE_MS);
+    if (u >= 1 || frame.width !== width || frame.height !== height) {
+      this.bootFrame = null;
+      this.bootFadeStartedMs = 0;
+      return null;
+    }
+    // Keep frames coming until the dissolve completes.
+    setImmediate(() => this.markDirty());
+    return {
+      id: "boot-handoff",
+      z,
+      source: {
+        pixels: frame.pixels,
+        width,
+        height,
+        stride: width * 4,
+        revision: 1,
+      },
+      destination: { x: 0, y: 0, width, height },
+      opacity: 1 - u * u * (3 - 2 * u),
+      sampling: "nearest",
+    };
+  }
+
+  /**
+   * The only frame drawn while locked: black on every output, and on one (under the pointer,
+   * else the primary) the obscured wallpaper, the lock UI and the cursor. Built from the theme's
+   * wallpaper, the shell's lock raster (or the compositor's own prompt) and the compositor's
+   * cursor; no client surface, popup, cursor image or drag icon is read. Drawn flat on every
+   * renderer, and only when something on it changed.
+   */
+  private async compositeLocked(): Promise<void> {
+    const renderer = this.outputRenderer;
+    const output = this.lockOutput();
+    if (!renderer || !output) return;
+    const epoch = this.sessionLock.epoch;
+    const kms = this.getKmsSize();
+    const rect = {
+      x: output.x,
+      y: output.y,
+      width: outputLogicalWidth(output),
+      height: outputLogicalHeight(output),
+    };
+    const view = this.lockScreenView();
+    let raster: ShellRasterSurface | null = null;
+    if (!this.lockUiFailure && this.shell?.lockRaster) {
+      try {
+        raster = this.shell.lockRaster(view, rect.width, rect.height);
+        if (
+          raster &&
+          (raster.width <= 0 ||
+            raster.height <= 0 ||
+            raster.pixels.byteLength < raster.stride * raster.height)
+        )
+          throw new Error("invalid lock raster");
+      } catch (error) {
+        raster = null;
+        this.lockUiFailed(error);
+      }
+    } else if (!this.shell?.lockRaster && !this.lockUiFailure) {
+      this.lockUiFailed(new Error(this.shell ? "the shell has no lock UI" : "no shell"));
+    }
+    const cursorInScene = !this.syncHardwareCursor();
+    const dim = this.outputPower.dimLevel();
+    const key = [
+      epoch,
+      kms.width,
+      kms.height,
+      rect.x,
+      rect.y,
+      rect.width,
+      rect.height,
+      this.theme.name,
+      raster ? `${raster.id}:${raster.revision}:${raster.x}:${raster.y}` : `own:${view.revision}`,
+      cursorInScene ? `${this.cursorX | 0},${this.cursorY | 0}` : "plane",
+      dim.toFixed(3),
+      this.visibilityOutputEpoch(),
+    ].join("|");
+    if (key === this.lockFrameKey) return;
+    const stageSize = kms.width * kms.height * 4;
+    if (!this.stage || this.stage.byteLength !== stageSize) this.stage = Buffer.alloc(stageSize);
+    const stage = this.stage;
+    const fb = new Uint32Array(stage.buffer, stage.byteOffset, stage.byteLength >>> 2);
+    try {
+      fb.fill(0xff000000);
+      blitLockBackdrop(fb, kms.width, kms.width, kms.height, rect, this.obscuredBackdrop(rect));
+      if (raster)
+        this.blitArgb(
+          fb,
+          kms.width,
+          kms.width,
+          kms.height,
+          rect.x + raster.x,
+          rect.y + raster.y,
+          raster.pixels,
+          raster.width,
+          raster.height,
+          raster.stride,
+        );
+      else paintLockFallback(fb, kms.width, kms.width, kms.height, rect, view);
+      if (cursorInScene) this.drawCursor(fb, kms.width, kms.width, kms.height);
+    } catch (error) {
+      // Still a locked frame: plain black and the compositor's prompt, never stale content.
+      console.error("[lock] locked frame:", error instanceof Error ? error.message : error);
+      fb.fill(0xff000000);
+      try {
+        paintLockFallback(fb, kms.width, kms.width, kms.height, rect, view);
+      } catch {
+        /* black is enough */
+      }
+    }
+    dimFrame(fb, dim);
+    // Every output that could take the frame did (or none could): this lock is on screen.
+    if (await this.presentProtectedStage(renderer, stage, kms, "lock")) {
+      this.lockFrameKey = key;
+      this.sessionLock.markPresented(epoch);
+    }
+  }
+
+  /** The obscured wallpaper behind the lock and the secure prompt, cached per size and theme. */
+  private obscuredBackdrop(rect: { width: number; height: number }): Uint32Array {
+    const backdropKey = `${this.theme.name}:${JSON.stringify(this.theme.wallpaper)}:${wallpaperImageRevision()}:${rect.width}x${rect.height}`;
+    if (this.lockBackdropCache?.key !== backdropKey) {
+      const wallpaper = new Uint32Array(rect.width * rect.height);
+      paintWallpaper(wallpaper, rect.width, rect.width, rect.height, this.theme, 0);
+      // A light theme draws dark text: lighten the backdrop instead of darkening it.
+      const bg = hexToArgb(this.theme.tokens.bg);
+      const light = ((bg >>> 16) & 255) + ((bg >>> 8) & 255) + (bg & 255) > 384;
+      this.lockBackdropCache = {
+        key: backdropKey,
+        pixels: lockBackdrop(wallpaper, rect.width, rect.height, light),
+      };
+    }
+    return this.lockBackdropCache.pixels;
+  }
+
+  /**
+   * Present a flat stage that holds no client pixel (the lock, a secure prompt) on every output
+   * that can take a frame. True when each of them did.
+   */
+  private async presentProtectedStage(
+    renderer: CompositorOutputRenderer,
+    stage: Buffer,
+    kms: { width: number; height: number },
+    tag: string,
+  ): Promise<boolean> {
+    const outputEpoch = this.beginVisibilityPresentation();
+    renderer.beginFrame({
+      pixels: stage,
+      width: kms.width,
+      height: kms.height,
+      stride: kms.width * 4,
+    });
+    const presented = await Promise.all(
+      this.outputs
+        .filter((candidate) => isKmsPresentationReady(candidate.kms))
+        .map((candidate) => {
+          const physical = candidate.kms;
+          let target = this.outputStages.get(physical.connectorId);
+          if (!target || target.byteLength !== physical.size) {
+            target = Buffer.alloc(physical.size);
+            this.outputStages.set(physical.connectorId, target);
+          }
+          const rendered = renderer.renderOutput({
+            geometry: {
+              id: physical.connectorName,
+              x: candidate.x,
+              y: candidate.y,
+              width: outputLogicalWidth(candidate),
+              height: outputLogicalHeight(candidate),
+            },
+            pixels: target,
+            physicalWidth: physical.width,
+            physicalHeight: physical.height,
+            pitch: physical.pitch,
+          });
+          const presentation =
+            rendered.framebufferId != null
+              ? presentKmsFramebuffer(
+                  physical,
+                  rendered.framebufferId,
+                  this.readiness ?? undefined,
+                  () => this.markDirty(),
+                )
+              : presentKmsPixels(physical, target, this.readiness ?? undefined, () =>
+                  this.markDirty(),
+                );
+          return presentation.then(
+            () => ({ connectorId: physical.connectorId, success: true }),
+            (error: unknown) => {
+              console.error(`[${tag}] presentation ${physical.connectorName}:`, error);
+              return { connectorId: physical.connectorId, success: false };
+            },
+          );
+        }),
+    );
+    // No client surface was in this frame: every observed surface reads as not visible.
+    this.completeVisibilityPresentation(
+      outputEpoch,
+      { width: kms.width, height: kms.height, clearColor: 0, layers: [] },
+      this.visibilityOutputs(),
+      presented,
+    );
+    this.finishPresentationFeedback();
+    return presented.every((result) => result.success);
+  }
+
+  /** The compositor's own prompt (or notice), for when the shell's view is missing or failed. */
+  private paintPromptFallback(
+    fb: Uint32Array,
+    kms: { width: number; height: number },
+    rect: { x: number; y: number; width: number; height: number },
+    view: SecurePromptView | null,
+  ): void {
+    if (view) paintSecurePromptFallback(fb, kms.width, kms.width, kms.height, rect, view);
+    else paintSecureNoticeFallback(fb, kms.width, kms.width, kms.height, rect);
+  }
+
+  /**
+   * The only frame drawn while a secure prompt (or the verification key's notice) is up: black
+   * on every output, and on one (under the pointer, else the primary) the obscured wallpaper,
+   * the prompt and the cursor. Like the locked frame it reads no client surface, popup, cursor
+   * image or drag icon, so nothing a client draws can sit beside, under or over the prompt.
+   *
+   * Fail closed: the shell's view, else the compositor's own text-free prompt, else the request
+   * ends as "failed". No path here answers a request.
+   */
+  private async compositePrompt(): Promise<void> {
+    const renderer = this.outputRenderer;
+    const output = this.lockOutput();
+    const view = this.securePromptView();
+    if (!renderer || !output) {
+      this.promptDrawFailed(view, "no output can show it");
+      return;
+    }
+    const kms = this.getKmsSize();
+    const rect = {
+      x: output.x,
+      y: output.y,
+      width: outputLogicalWidth(output),
+      height: outputLogicalHeight(output),
+    };
+    // A view that failed for one prompt is tried again for the next.
+    const subject = view ? `prompt:${view.id}` : "notice";
+    if (subject !== this.promptUiSubject) {
+      this.promptUiSubject = subject;
+      this.promptUiFailure = null;
+    }
+    const bridge = view ? this.shell?.securePromptRaster : this.shell?.secureNoticeRaster;
+    let raster: ShellRasterSurface | null = null;
+    if (!this.promptUiFailure && bridge) {
+      try {
+        raster = view
+          ? this.shell!.securePromptRaster!(view, rect.width, rect.height)
+          : this.shell!.secureNoticeRaster!(rect.width, rect.height);
+        if (
+          raster &&
+          (raster.width <= 0 ||
+            raster.height <= 0 ||
+            raster.pixels.byteLength < raster.stride * raster.height)
+        )
+          throw new Error("invalid prompt raster");
+      } catch (error) {
+        raster = null;
+        this.promptUiFailed(error);
+      }
+    } else if (!bridge && !this.promptUiFailure) {
+      this.promptUiFailed(new Error(this.shell ? "the shell has no prompt UI" : "no shell"));
+    }
+    const cursorInScene = !this.syncHardwareCursor();
+    const dim = this.outputPower.dimLevel();
+    const key = [
+      subject,
+      kms.width,
+      kms.height,
+      rect.x,
+      rect.y,
+      rect.width,
+      rect.height,
+      this.theme.name,
+      raster
+        ? `${raster.id}:${raster.revision}:${raster.x}:${raster.y}`
+        : `own:${view?.revision ?? 0}:${view?.pulsing ?? false}`,
+      cursorInScene ? `${this.cursorX | 0},${this.cursorY | 0}` : "plane",
+      dim.toFixed(3),
+      this.visibilityOutputEpoch(),
+    ].join("|");
+    if (key === this.promptFrameKey) return;
+    const stageSize = kms.width * kms.height * 4;
+    if (!this.stage || this.stage.byteLength !== stageSize) this.stage = Buffer.alloc(stageSize);
+    const stage = this.stage;
+    const fb = new Uint32Array(stage.buffer, stage.byteOffset, stage.byteLength >>> 2);
+    try {
+      fb.fill(0xff000000);
+      blitLockBackdrop(fb, kms.width, kms.width, kms.height, rect, this.obscuredBackdrop(rect));
+      if (raster)
+        this.blitArgb(
+          fb,
+          kms.width,
+          kms.width,
+          kms.height,
+          rect.x + raster.x,
+          rect.y + raster.y,
+          raster.pixels,
+          raster.width,
+          raster.height,
+          raster.stride,
+        );
+      else this.paintPromptFallback(fb, kms, rect, view);
+      if (cursorInScene) this.drawCursor(fb, kms.width, kms.width, kms.height);
+    } catch (error) {
+      // Plain black and the compositor's prompt; if even that cannot be drawn, nobody can see
+      // the question, so it is not left open.
+      console.error("[secure-prompt] frame:", error instanceof Error ? error.message : error);
+      fb.fill(0xff000000);
+      try {
+        this.paintPromptFallback(fb, kms, rect, view);
+      } catch {
+        this.promptDrawFailed(view, "the compositor's prompt failed");
+        return;
+      }
+    }
+    dimFrame(fb, dim);
+    if (await this.presentProtectedStage(renderer, stage, kms, "secure-prompt"))
+      this.promptFrameKey = key;
+  }
+
+  /** Nothing can draw the prompt: the request ends as "failed" (never granted). */
+  private promptDrawFailed(view: SecurePromptView | null, reason: string): void {
+    console.error(`[secure-prompt] code=draw-failed (${reason})`);
+    this.promptFrameKey = "";
+    if (view) this.securePromptQueue.drawFailed();
+    else this.endSecureNotice();
+  }
+
   /** Paint wallpaper + all mapped surfaces into the KMS dumb buffer. */
   async composite(): Promise<void> {
     if (this.outputs.length === 0) {
       this.invalidateSurfaceVisibility();
+      return;
+    }
+    // Outputs off (idle): inactive CRTCs cannot flip, and clients wait for the screen to wake.
+    if (this.holdingBootFrame() || this.displayHandedOff || !this.outputPower.presenting) return;
+    // Locked: a separate scene that never reads a client surface.
+    if (this.sessionLock.locked) {
+      await this.compositeLocked();
+      return;
+    }
+    // A secure prompt: likewise its own scene, with no client surface in it.
+    if (this.promptSeatCut) {
+      await this.compositePrompt();
       return;
     }
     const frameStartedMs = monotonicMs();
@@ -6050,12 +7788,10 @@ export class CompositorServer {
     // Wallpaper from theme (atmosphere / gradient / image) — cached in @moire/theme.
     const pitchPx = kms.width;
     const wallPhase = (Date.now() / 60000) % 1; // ~60s period
+    this.wallpaperImages.ensureSize(kms.width, kms.height);
     paintWallpaper(fb, pitchPx, kms.width, kms.height, this.theme, wallPhase);
     const wallpaperFinishedMs = monotonicMs();
-    // Keep atmosphere drifting even when otherwise idle.
-    if (this.theme.wallpaper.mode === "atmosphere") {
-      this.markDirty();
-    }
+    this.scheduleWallpaperPhaseWake();
 
     try {
       const primary = this.outputs.find((output) => output.primary) ?? this.outputs[0]!;
@@ -6261,6 +7997,7 @@ export class CompositorServer {
         this.flatVisibilityOverlay(visibilityLayers, "flat-drag", kms.width, kms.height);
       this.paintDragPreview(fb, pitchPx, kms.width, kms.height);
       this.drawCursor(fb, pitchPx, kms.width, kms.height);
+      dimFrame(fb, this.outputPower.dimLevel());
       const sceneFinishedMs = monotonicMs();
       const renderer = this.outputRenderer;
       if (!renderer) throw new Error("Compositor output renderer is unavailable");
@@ -6427,7 +8164,7 @@ type ClientTransport = Pick<WaylandClientConn, "peerPid" | "send" | "close"> & {
 };
 
 export class ClientSession {
-  private objects = new Map<number, WlObject>();
+  private objects = new WlObjectTable();
   private buf = Buffer.alloc(0);
   private pendingFds: number[] = [];
   private serial = 1;
@@ -6470,8 +8207,8 @@ export class ClientSession {
 
   surfaces(): SurfaceState[] {
     const out: SurfaceState[] = [];
-    for (const obj of this.objects.values()) {
-      if (obj.iface === "wl_surface" && obj.data?.surface) {
+    for (const obj of this.objects.ofIface("wl_surface").values()) {
+      if (obj.data?.surface) {
         out.push(obj.data.surface as SurfaceState);
       }
     }
@@ -6700,7 +8437,7 @@ export class ClientSession {
     for (const obj of this.objects.values()) {
       if (obj.iface === "wl_surface") {
         const surface = obj.data?.surface as SurfaceState | undefined;
-        surface?.content?.destroy();
+        this.server.retireSurfaceContent(surface?.content);
         if (surface) surface.content = null;
       }
       if (obj.iface === "wl_shm_pool" && obj.data?.pool) {
@@ -6731,7 +8468,9 @@ export class ClientSession {
   }
 
   keyboardEnter(surfaceId: number, pressedKeys = this.server.keyboardPressedKeys()): void {
-    if (this.keyboardId == null) return;
+    // Locked or behind a prompt: no client gains keyboard focus. Seat-level backstop for every
+    // focus path.
+    if (this.keyboardId == null || this.server.seatProtected) return;
     // Never leave keyboard on a grabbing popup without popup_done — if focus
     // is moving to a normal surface, end this client's grabs first.
     const target = this.surfaceById(surfaceId);
@@ -6784,7 +8523,8 @@ export class ClientSession {
   }
 
   keyboardModifiers(mask: KeyboardModifierMask): void {
-    if (this.keyboardId == null || this.focusedSurfaceId == null) return;
+    if (this.keyboardId == null || this.focusedSurfaceId == null || this.server.seatProtected)
+      return;
     this.send(this.keyboardId, EV.keyboard_modifiers, (b) => {
       b.uint(this.serial++)
         .uint(mask.depressed)
@@ -6794,9 +8534,29 @@ export class ClientSession {
     });
   }
 
+  /** A new keymap after a layout or option change; clients rebuild their XKB state. */
+  keyboardKeymap(map: KeymapMemfd): void {
+    if (this.keyboardId == null) return;
+    this.send(this.keyboardId, EV.keyboard_keymap, (b) => {
+      b.uint(WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1).fd(map.fd).uint(map.size);
+    });
+  }
+
+  keyboardRepeatInfo(repeat: RepeatInfo): void {
+    if (this.keyboardId == null) return;
+    if ((this.objects.get(this.keyboardId)?.version ?? 0) < 4) return;
+    this.send(this.keyboardId, EV.keyboard_repeat_info, (b) =>
+      b.int(repeat.rate).int(repeat.delay),
+    );
+  }
+
   keyboardKey(ev: EvdevKeyEvent): void {
-    if (this.keyboardId == null || this.focusedSurfaceId == null) return;
-    // value 2 = repeat — still send as pressed
+    if (this.keyboardId == null || this.focusedSurfaceId == null || this.server.seatProtected)
+      return;
+    // wl_keyboard has no repeat state: clients repeat from repeat_info. Forwarding
+    // kernel autorepeat as extra presses double-repeats in GTK/Qt/Xwayland and turns
+    // one lost key-up (e.g. from a VM host) into an unbounded character flood.
+    if (ev.value === 2) return;
     const state = ev.value === 0 ? WL_KEYBOARD_KEY_STATE_RELEASED : WL_KEYBOARD_KEY_STATE_PRESSED;
     const serial = this.serial++;
     this.send(this.keyboardId, EV.keyboard_key, (b) => {
@@ -6808,7 +8568,7 @@ export class ClientSession {
   }
 
   pointerEnter(surfaceId: number, sx: number, sy: number): void {
-    if (this.pointerId == null) return;
+    if (this.pointerId == null || this.server.seatProtected) return;
     if (this.pointerSurfaceId === surfaceId) {
       // Already entered (e.g. ghost-fed Xwayland) — refresh position.
       this.send(this.pointerId, EV.pointer_motion, (b) => {
@@ -6843,7 +8603,8 @@ export class ClientSession {
   }
 
   pointerMotion(timeMs: number, sx: number, sy: number): void {
-    if (this.pointerId == null || this.pointerSurfaceId == null) return;
+    if (this.pointerId == null || this.pointerSurfaceId == null || this.server.seatProtected)
+      return;
     this.send(this.pointerId, EV.pointer_motion, (b) => {
       b.uint(timeMs >>> 0)
         .fixed(sx)
@@ -6853,7 +8614,8 @@ export class ClientSession {
   }
 
   pointerButton(ev: EvdevPointerButton): number | null {
-    if (this.pointerId == null || this.pointerSurfaceId == null) return null;
+    if (this.pointerId == null || this.pointerSurfaceId == null || this.server.seatProtected)
+      return null;
     const state =
       ev.value === 0 ? WL_POINTER_BUTTON_STATE_RELEASED : WL_POINTER_BUTTON_STATE_PRESSED;
     const serial = this.serial++;
@@ -6869,12 +8631,14 @@ export class ClientSession {
   }
 
   pointerAxis(ev: EvdevPointerAxis): void {
-    if (this.pointerId == null || this.pointerSurfaceId == null) return;
-    // Linux wheel up (+) → Wayland axis negative (scroll up)
+    if (this.pointerId == null || this.pointerSurfaceId == null || this.server.seatProtected)
+      return;
+    // Linux wheel up (+) → Wayland axis negative (scroll up); REL_HWHEEL right (+) → positive.
+    const horizontal = ev.axis === "horizontal";
     this.send(this.pointerId, EV.pointer_axis, (b) => {
       b.uint(ev.timeMs >>> 0)
-        .uint(WL_POINTER_AXIS_VERTICAL_SCROLL)
-        .fixed(-ev.value * 10);
+        .uint(horizontal ? WL_POINTER_AXIS_HORIZONTAL_SCROLL : WL_POINTER_AXIS_VERTICAL_SCROLL)
+        .fixed(horizontal ? ev.value * 10 : -ev.value * 10);
     });
     this.send(this.pointerId, EV.pointer_frame, () => {});
   }
@@ -7097,6 +8861,20 @@ export class ClientSession {
       case "xwayland_surface_v1":
         this.handleXwaylandSurface(obj, opcode, r);
         break;
+      case "zwp_idle_inhibit_manager_v1":
+        if (opcode === OP.idle_inhibit_manager_create_inhibitor) {
+          const id = r.newId();
+          const surfaceId = r.object();
+          this.objects.set(id, { id, iface: "zwp_idle_inhibitor_v1", version: 1 });
+          this.server.idleInhibitors.create(this, id, surfaceId);
+        } else if (opcode === OP.idle_inhibit_manager_destroy) this.destroyObject(objectId);
+        break;
+      case "zwp_idle_inhibitor_v1":
+        if (opcode === OP.idle_inhibitor_destroy) {
+          this.server.idleInhibitors.destroy(this, objectId);
+          this.destroyObject(objectId);
+        }
+        break;
       default:
         console.warn(`[wl] unhandled ${obj.iface} id=${objectId} opcode=${opcode}`);
         break;
@@ -7174,8 +8952,7 @@ export class ClientSession {
   }
 
   globalAdded(global: { name: number; iface: string; version: number }): void {
-    for (const object of this.objects.values()) {
-      if (object.iface !== "wl_registry") continue;
+    for (const object of this.objects.ofIface("wl_registry").values()) {
       this.send(object.id, EV.registry_global, (b) => {
         b.uint(global.name).string(global.iface).uint(global.version);
       });
@@ -7183,8 +8960,7 @@ export class ClientSession {
   }
 
   globalRemoved(globalName: number): void {
-    for (const object of this.objects.values()) {
-      if (object.iface !== "wl_registry") continue;
+    for (const object of this.objects.ofIface("wl_registry").values()) {
       this.send(object.id, EV.registry_global_remove, (b) => {
         b.uint(globalName);
       });
@@ -7405,35 +9181,32 @@ export class ClientSession {
   }
 
   outputChanged(): void {
-    for (const object of this.objects.values()) {
-      if (object.iface === "wl_output") {
-        this.sendOutputEvents(object.id, object.data?.output as DisplayOutput | undefined);
-      } else if (object.iface === "zxdg_output_v1") {
-        const output = object.data?.output as DisplayOutput | undefined;
-        if (output) this.sendXdgOutputEvents(object.id, output);
-      }
+    for (const object of this.objects.ofIface("wl_output").values()) {
+      this.sendOutputEvents(object.id, object.data?.output as DisplayOutput | undefined);
+    }
+    for (const object of this.objects.ofIface("zxdg_output_v1").values()) {
+      const output = object.data?.output as DisplayOutput | undefined;
+      if (output) this.sendXdgOutputEvents(object.id, output);
     }
     this.updateAllSurfaceOutputs();
   }
 
   updateSurfaceOutputs(surface: SurfaceState): void {
-    const available = [...this.objects.values()]
-      .filter((object) => object.iface === "wl_output")
-      .flatMap((object) => {
-        const output = object.data?.output as DisplayOutput | undefined;
-        return output
-          ? [
-              {
-                id: String(object.id),
-                objectId: object.id,
-                x: output.x,
-                y: output.y,
-                width: outputLogicalWidth(output),
-                height: outputLogicalHeight(output),
-              },
-            ]
-          : [];
-      });
+    const available = [...this.objects.ofIface("wl_output").values()].flatMap((object) => {
+      const output = object.data?.output as DisplayOutput | undefined;
+      return output
+        ? [
+            {
+              id: String(object.id),
+              objectId: object.id,
+              x: output.x,
+              y: output.y,
+              width: outputLogicalWidth(output),
+              height: outputLogicalHeight(output),
+            },
+          ]
+        : [];
+    });
     const desired =
       surface.mapped && surface.content && !this.isHidden(surface)
         ? new Set(
@@ -7477,8 +9250,8 @@ export class ClientSession {
 
   outputRemoved(output: DisplayOutput): void {
     const removedIds = new Set(
-      [...this.objects.values()]
-        .filter((object) => object.iface === "wl_output" && object.data?.output === output)
+      [...this.objects.ofIface("wl_output").values()]
+        .filter((object) => object.data?.output === output)
         .map((object) => object.id),
     );
     for (const surface of this.surfaces()) {
@@ -7590,7 +9363,8 @@ export class ClientSession {
       }
       // repeat_info is since v4 — only send if the client bound that version.
       if (ver >= 4) {
-        this.send(id, EV.keyboard_repeat_info, (b) => b.int(40).int(400));
+        const repeat = this.server.repeatInfo();
+        this.send(id, EV.keyboard_repeat_info, (b) => b.int(repeat.rate).int(repeat.delay));
       }
     } else if (opcode === OP.seat_get_touch) {
       const id = r.newId();
@@ -7669,9 +9443,8 @@ export class ClientSession {
   }
 
   private updateSurfacePreferredScale(surface: SurfaceState): void {
-    for (const object of this.objects.values()) {
-      if (object.iface === "wp_fractional_scale_v1" && object.data?.surfaceId === surface.id)
-        this.sendPreferredScale(object.id, surface.id);
+    for (const object of this.objects.ofIface("wp_fractional_scale_v1").values()) {
+      if (object.data?.surfaceId === surface.id) this.sendPreferredScale(object.id, surface.id);
     }
   }
 
@@ -8048,6 +9821,7 @@ export class ClientSession {
     actions: number,
   ): void {
     void actions; // already sent via createDndOffer
+    if (this.server.seatProtected) return;
     this.send(deviceId, EV.data_device_enter, (b) =>
       b.uint(serial).object(surfaceId).fixed(x).fixed(y).object(offerId),
     );
@@ -8112,6 +9886,8 @@ export class ClientSession {
    * Announce seat selection on one device (or all). Pass null to clear.
    */
   sendSelection(sel: ClipboardSelection | null, onlyDeviceId?: number): void {
+    // Locked: no new clipboard offers; the current selection is re-offered on unlock.
+    if (sel && this.server.seatProtected) return;
     const devices = onlyDeviceId ? [onlyDeviceId] : [...this.dataDeviceIds];
     for (const deviceId of devices) {
       if (!this.objects.has(deviceId)) continue;
@@ -8174,6 +9950,7 @@ export class ClientSession {
   }
 
   sendPrimarySelection(selection: PrimarySelection | null, onlyDeviceId?: number): void {
+    if (selection && this.server.seatProtected) return;
     const devices = onlyDeviceId ? [onlyDeviceId] : [...this.primaryDeviceIds];
     for (const deviceId of devices) {
       if (!this.objects.has(deviceId)) continue;
@@ -8541,12 +10318,8 @@ export class ClientSession {
       surface.pendingPresentationFeedbacks = [];
       // xwayland_shell serial is double-buffered — apply on every commit,
       // including the buffer-less association commit from Xwayland.
-      for (const o of this.objects.values()) {
-        if (
-          o.iface === "xwayland_surface_v1" &&
-          o.data?.wlSurfaceId === surface.id &&
-          o.data.pendingSerial != null
-        ) {
+      for (const o of this.objects.ofIface("xwayland_surface_v1").values()) {
+        if (o.data?.wlSurfaceId === surface.id && o.data.pendingSerial != null) {
           const serial = o.data.pendingSerial as bigint;
           o.data.pendingSerial = null;
           this.server.noteXwaylandSerial(this, surface.id, serial);
@@ -8594,7 +10367,7 @@ export class ClientSession {
             }
             surface.content = content;
             sourceAccepted = true;
-            previous?.destroy();
+            this.server.retireSurfaceContent(previous);
             surface.stride = content.stride;
             surface.opaque =
               buf.kind === "shm"
@@ -8625,8 +10398,8 @@ export class ClientSession {
             });
             surface.bufferWidth = buf.width;
             surface.bufferHeight = buf.height;
-            const viewport = [...this.objects.values()].find(
-              (item) => item.iface === "wp_viewport" && item.data?.surfaceId === surface.id,
+            const viewport = [...this.objects.ofIface("wp_viewport").values()].find(
+              (item) => item.data?.surfaceId === surface.id,
             );
             const destination = viewport?.data?.destination as [number, number] | undefined;
             surface.width =
@@ -8664,7 +10437,7 @@ export class ClientSession {
               // Nested grab: ensure parent chain is laid out above siblings.
               this.server.raisePopup(this, surface.id);
             }
-            if (surface.role !== "cursor" && process.env.MOIRE_DEBUG_SURFACE === "1") {
+            if (surface.role !== "cursor" && DEBUG_SURFACE) {
               console.log(
                 `[surface] commit mapped id=${surface.id} ${surface.width}x${surface.height} @ ${surface.x},${surface.y} role=${surface.role} kind=${buf.kind} deco=${surface.decoration} x11=${surface.x11Wid} title=${JSON.stringify(surface.title)}`,
               );
@@ -8694,7 +10467,7 @@ export class ClientSession {
         // Explicit attach(null) unmaps the surface and leaves every output.
         surface.bufferAttached = false;
         surface.mapped = false;
-        surface.content?.destroy();
+        this.server.retireSurfaceContent(surface.content);
         surface.content = null;
         surface.opaque = false;
         surface.revision++;
@@ -8730,7 +10503,7 @@ export class ClientSession {
       this.finishSurfaceFrame(surface);
       surface.presentationReady = false;
       this.clearSurfaceOutputs(surface);
-      surface.content?.destroy();
+      this.server.retireSurfaceContent(surface.content);
       surface.content = null;
       this.server.retireSurfaceObservations(this, surface.id);
       this.server.surfaceTransfers.removeSurface(this.clientId, surface.id);

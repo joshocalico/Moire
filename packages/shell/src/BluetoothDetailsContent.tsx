@@ -5,6 +5,8 @@ import {
   Column,
   ContentCard,
   FocusScope,
+  Horizontal,
+  Icon,
   TextBlock,
   TextField,
   getUiScaleFactor,
@@ -22,6 +24,7 @@ import type {
   DesktopBluetooth,
 } from "@moire/system-management/bluetooth-status";
 import {
+  BLUETOOTH_KIND_PRESENTATION,
   bluetoothPairingBlocksConnections,
   bluetoothTrustBlocksControls,
   parseBluetoothInput,
@@ -638,7 +641,8 @@ function content(props: BluetoothDetailsContentProps, theme: WidgetTheme): React
           !uncertainPair &&
           !trustBlocked &&
           !!props.onBluetoothChange;
-        const detail = `${device.address} · ${adapter?.name || "Bluetooth adapter"}`;
+        const kind = BLUETOOTH_KIND_PRESENTATION[device.kind ?? "other"];
+        const detail = `${kind.label} · ${device.address} · ${adapter?.name || "Bluetooth adapter"}`;
         const restriction = !adapter?.powered
           ? "Radio off · Connection actions unavailable"
           : !device.trusted
@@ -651,16 +655,25 @@ function content(props: BluetoothDetailsContentProps, theme: WidgetTheme): React
         const inner = Math.max(0, width - 20 * ui);
         return (
           <ContentCard key={device.id} width={width} padding={10 * ui} gap={6 * ui}>
-            <TextBlock
-              width={inner}
-              text={device.name || "Unnamed paired device"}
-              fontSize={14}
-              wrap
-            />
+            <Horizontal width={inner} height={20 * ui} gap={8 * ui} align="center">
+              <Icon name={kind.icon} size={16 * ui} color={palette.muted} symbolic />
+              <TextBlock
+                width={Math.max(0, inner - 24 * ui)}
+                text={device.name || "Unnamed paired device"}
+                fontSize={14}
+                maxLines={1}
+              />
+            </Horizontal>
             <TextBlock width={inner} text={detail} fontSize={11} color={palette.muted} wrap />
             <TextBlock
               width={inner}
-              text={device.connected ? "Connected" : "Disconnected"}
+              text={
+                device.connected
+                  ? device.battery !== undefined
+                    ? `Connected · ${device.battery}% battery`
+                    : "Connected"
+                  : "Disconnected"
+              }
               fontSize={12}
               color={device.connected ? palette.accentLine : palette.muted}
               wrap

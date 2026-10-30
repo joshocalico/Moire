@@ -113,8 +113,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="moire-aarch64-native-login-probe-c62.iso")
     parser.add_argument("--desktop", action="store_true", help="Build the authenticated native desktop checkpoint")
+    parser.add_argument("--dm", choices=["greetd", "moire-dm"],
+                        help="Login daemon for the desktop image (docs/moire-dm.md); moire-dm is the default, greetd rolls back")
     args = parser.parse_args()
+    if args.dm and not args.desktop:
+        parser.error("--dm selects the desktop image's login daemon; pass --desktop too")
+    dm = (args.dm or "moire-dm") if args.desktop else None
     checkpoint = "c63-native-desktop" if args.desktop else "c62-native-login-probe"
+    if dm == "greetd":
+        checkpoint += "-greetd"
     image_base = "moire-aarch64-native-desktop" if args.desktop else "moire-aarch64-native-login-probe"
     expression = "nix/moire-native-desktop-image.nix" if args.desktop else "nix/moire-native-login-probe-image.nix"
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*\.iso", args.output):
@@ -230,6 +237,12 @@ source_dir=$(mktemp -d /var/tmp/moire-native-source.XXXXXXXX)
 tar -xzf /tmp/moire-native-source/source.tgz -C "$source_dir"
 cd "$source_dir"
 df -h /nix
+# Each checkpoint adds a full image closure to the dedicated builder; reclaim unreferenced
+# store paths when space runs low rather than failing at the final ISO write.
+if [ "$(df --output=avail -B1G /nix | tail -1 | tr -d ' ')" -lt 12 ]; then
+  nix-collect-garbage >/dev/null
+  df -h /nix
+fi
 nix build --impure --file nix/moire-native-login-probe-image.nix --out-link /var/tmp/moire-native-login-result --max-jobs 2 --cores 4 -L
 image=/var/tmp/moire-native-login-result/iso/moire-aarch64-native-login-probe.iso
 test -f "$image"
@@ -240,6 +253,8 @@ echo "MOIRE_NATIVE_IMAGE_SHA=$(sha256sum "$image" | cut -d ' ' -f1)"
 dd if="$image" of=/dev/vdb bs=4M conv=fsync status=progress
 echo MOIRE_NATIVE_BUILD_DONE
 '''
+        if dm:
+            expression += " --argstr dmBackend " + dm
         guest = guest.replace("nix/moire-native-login-probe-image.nix", expression).replace(
             "iso/moire-aarch64-native-login-probe.iso", "iso/" + image_base + ".iso")
         if first:
@@ -279,6 +294,8 @@ echo MOIRE_NATIVE_BUILD_DONE
             "sha256": expected, "qemuExit": exit_code, "fallbacksPreserved": True,
             "checkpoint": checkpoint, "graphicalAcceptance": "pending",
             "evidence": str(evidence)}
+        if dm:
+            result["loginBackend"] = dm
         result_text = json.dumps(result, indent=2) + "\n"
         (evidence / "result.json").write_text(result_text)
         with receipt.open("x") as stream:

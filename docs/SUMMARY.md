@@ -9,10 +9,16 @@ Use this file as a sidebar / SUMMARY for Markdown site generators (Docsify, mdBo
 - [Files & desktop overview](files-and-desktop.md)
 - [Files, desktop & UI completeness plan](files-desktop-ui-plan.md)
 - [Freedesktop MIME & actions](freedesktop-mime-and-actions.md)
+- [Desktop portals](portals.md)
 - [Network controls](network-controls.md)
 - [Battery status](battery-status.md)
+- [Audio (PipeWire)](audio.md)
 - [Known Bluetooth devices](bluetooth-controls.md)
 - [Removable drives](removable-drives.md)
+- [Lock screen](lock-screen.md)
+- [moire-dm login daemon (proposal)](moire-dm.md)
+- [Polkit authentication agent (proposal)](polkit-agent.md)
+- [Keyring: Secret Service (proposal)](secret-service.md)
 
 ## Architecture
 

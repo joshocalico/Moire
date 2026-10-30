@@ -5,16 +5,12 @@ import path from "node:path";
 import React from "react";
 import { Window, installUiFonts } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
+import { wallClock } from "@moire/app-tools";
+import { windowControl } from "@moire/app-tools/testing";
+import { monthDays, moveMonth } from "./dates";
+import { CalendarStore, eventFromDraft } from "./events";
 import { CalendarApp } from "./main";
-import {
-  CalendarStore,
-  dayEvents,
-  eventFromDraft,
-  localDateTime,
-  monthDays,
-  moveMonth,
-  zonedTimestamp,
-} from "./events";
+import { dayOccurrences, zonedTimestamp } from "./model";
 
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "moire-calendar-")),
   backend = new HeadlessPlatform(),
@@ -29,7 +25,7 @@ try {
     "2024-11-03T05:30:00.000Z",
   );
   assert.equal(
-    localDateTime(zonedTimestamp("2026-10-02", "09:00", "Australia/Adelaide"), "Australia/Adelaide")
+    wallClock(zonedTimestamp("2026-10-02", "09:00", "Australia/Adelaide"), "Australia/Adelaide")
       .time,
     "09:00",
   );
@@ -43,7 +39,7 @@ try {
     notes: "",
   });
   store.write([seeded], store.load().revision);
-  assert.equal(dayEvents(store.read(), "2026-10-02", "Australia/Adelaide").length, 1);
+  assert.equal(dayOccurrences(store.read(), "2026-10-02", "Australia/Adelaide").length, 1);
   store.write([], store.load().revision);
   await backend.connect();
   window.setContent((size) => (
@@ -56,7 +52,14 @@ try {
   assert.ok(native);
   const mods = { shift: false, ctrl: false, alt: false, meta: false };
   const key = (code: number, key: string, text?: string, ctrl = false) => {
-    native.injectKey({ type: "down", code, key, text, modifiers: { ...mods, ctrl }, timeMs: 1 });
+    native.injectKey({
+      type: "down",
+      code,
+      key,
+      text,
+      modifiers: { ...mods, ctrl },
+      timeMs: 1,
+    });
     window.tick();
     window.tick();
   };
@@ -73,7 +76,9 @@ try {
     "Team planning",
     "New event saves through actual focused fields and shortcut",
   );
-  click(500, 217);
+  // The agenda card opens its event for editing.
+  const card = windowControl(window, { text: "Team planning" });
+  click(card.x, card.y);
   key(30, "a", undefined, true);
   key(30, "a", "Revised planning");
   key(31, "s", undefined, true);

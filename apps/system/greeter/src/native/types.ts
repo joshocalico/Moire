@@ -1,4 +1,4 @@
-/** Greeter frontend state only. Authentication and session lifecycle belong to stock greetd. */
+/** Greeter frontend state only. Authentication and session lifecycle belong to the login daemon (greetd or moire-dm). */
 import { randomUUID } from "node:crypto";
 import type {
   NativeGreetdClient,

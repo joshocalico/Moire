@@ -3,13 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#weather/model": "./src/model.ts",
+    "#weather/weather": "./src/weather.ts"
+  },
   "description": "Moire Weather",
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "smoke": "tsx src/smoke.tsx"
+    "smoke": "tsx src/smoke.tsx && tsx src/clear-saved.smoke.tsx"
   },
   "dependencies": {
+    "@moire/app-tools": "workspace:*",
     "@moire/ui": "workspace:*",
     "react": "^19.0.0"
   },

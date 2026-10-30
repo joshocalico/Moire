@@ -95,7 +95,8 @@ try {
                 clientId: 1,
                 surfaceId: index + 1,
                 title: `Window ${index + 1}`,
-                appId: "moire.editor",
+                // Distinct applications, so each window keeps its own slot.
+                appId: `moire.fixture${index + 1}`,
                 focused: index === 0,
                 minimized: false,
               })),

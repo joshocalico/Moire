@@ -154,20 +154,99 @@ function insideRoundedRect(
   return dx * dx + dy * dy <= radius * radius;
 }
 
-function distanceToSegment(
-  px: number,
-  py: number,
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-): number {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const lengthSq = dx * dx + dy * dy;
-  const t =
-    lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
-  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+/**
+ * Stroke geometry for one polyline: per segment its endpoints plus a bounding
+ * box grown by the half stroke width. Boxes carry a small slack so float
+ * rounding can never reject a sample the exact distance test would accept.
+ */
+type StrokeTable = {
+  /** [ax, ay, bx, by, minX, minY, maxX, maxY] per segment. */
+  segments: Float64Array;
+  half: number;
+  /** Squared distances clearly inside/outside the stroke; between them, defer to Math.hypot. */
+  inner: number;
+  outer: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+const REJECT_SLACK = 1e-6;
+const EDGE_TOLERANCE = 1e-12;
+const strokeTables = new WeakMap<VectorShape, StrokeTable>();
+
+function strokeTable(shape: Extract<VectorShape, { kind: "polyline" }>): StrokeTable {
+  const cached = strokeTables.get(shape);
+  if (cached) return cached;
+  const half = shape.strokeWidth / 2;
+  const reach = half + REJECT_SLACK;
+  // A negative width never covers a sample (distance <= half is always false).
+  const count = half < 0 ? 0 : shape.closed ? shape.points.length : shape.points.length - 1;
+  const segments = new Float64Array(count * 8);
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (let index = 0; index < count; index++) {
+    const a = shape.points[index]!;
+    const b = shape.points[(index + 1) % shape.points.length]!;
+    const minX = Math.min(a.x, b.x) - reach;
+    const minY = Math.min(a.y, b.y) - reach;
+    const maxX = Math.max(a.x, b.x) + reach;
+    const maxY = Math.max(a.y, b.y) + reach;
+    segments.set([a.x, a.y, b.x, b.y, minX, minY, maxX, maxY], index * 8);
+    left = Math.min(left, minX);
+    top = Math.min(top, minY);
+    right = Math.max(right, maxX);
+    bottom = Math.max(bottom, maxY);
+  }
+  const halfSq = half * half;
+  const table = {
+    segments,
+    half,
+    inner: halfSq * (1 - EDGE_TOLERANCE),
+    outer: halfSq * (1 + EDGE_TOLERANCE),
+    left,
+    top,
+    right,
+    bottom,
+  };
+  strokeTables.set(shape, table);
+  return table;
+}
+
+/**
+ * Same decision as `Math.hypot(distance to segment) <= half` for every segment:
+ * bounding boxes skip far segments and squared distances settle all samples
+ * except those within a relative 1e-12 of the stroke edge, which use Math.hypot.
+ */
+function withinStroke(table: StrokeTable, px: number, py: number): boolean {
+  if (px < table.left || px > table.right || py < table.top || py > table.bottom) return false;
+  const segments = table.segments;
+  for (let index = 0; index < segments.length; index += 8) {
+    if (
+      px < segments[index + 4]! ||
+      py < segments[index + 5]! ||
+      px > segments[index + 6]! ||
+      py > segments[index + 7]!
+    )
+      continue;
+    const ax = segments[index]!;
+    const ay = segments[index + 1]!;
+    const dx = segments[index + 2]! - ax;
+    const dy = segments[index + 3]! - ay;
+    const lengthSq = dx * dx + dy * dy;
+    const t =
+      lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
+    const ex = px - (ax + dx * t);
+    const ey = py - (ay + dy * t);
+    const distanceSq = ex * ex + ey * ey;
+    if (distanceSq < table.inner) return true;
+    if (distanceSq > table.outer) continue;
+    if (Math.hypot(ex, ey) <= table.half) return true;
+  }
+  return false;
 }
 
 function insidePolygon(x: number, y: number, points: Array<{ x: number; y: number }>): boolean {
@@ -193,12 +272,12 @@ function contains(shape: VectorShape, x: number, y: number): boolean {
   }
   if (shape.fill && shape.closed && insidePolygon(x, y, shape.points)) return true;
   if (!shape.stroke || shape.points.length < 2) return false;
-  const segmentCount = shape.closed ? shape.points.length : shape.points.length - 1;
-  for (let index = 0; index < segmentCount; index++) {
-    const a = shape.points[index]!;
-    const b = shape.points[(index + 1) % shape.points.length]!;
-    if (distanceToSegment(x, y, a.x, a.y, b.x, b.y) <= shape.strokeWidth / 2) return true;
-  }
+  return withinStroke(strokeTable(shape), x, y);
+}
+
+function covers(shapes: readonly VectorShape[], x: number, y: number): boolean {
+  for (let index = 0; index < shapes.length; index++)
+    if (contains(shapes[index]!, x, y)) return true;
   return false;
 }
 
@@ -223,7 +302,7 @@ export function loadSvgIconSync(filePath: string, size: number, color: number): 
         for (let sx = 0; sx < samples; sx++) {
           const x = artwork.minX + ((px + (sx + 0.5) / samples) / pixelSize) * artwork.width;
           const y = artwork.minY + ((py + (sy + 0.5) / samples) / pixelSize) * artwork.height;
-          if (artwork.shapes.some((shape) => contains(shape, x, y))) covered += 1;
+          if (covers(artwork.shapes, x, y)) covered += 1;
         }
       }
       const offset = (py * pixelSize + px) * 4;

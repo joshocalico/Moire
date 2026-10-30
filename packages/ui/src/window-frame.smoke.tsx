@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { collectHits, createShellRoot, renderShell } from "@moire/react-host";
-import { Button, Window, WindowFrame, installUiFonts, setUiScaleFactor } from "./index";
+import {
+  Button,
+  Window,
+  WindowControls,
+  WindowFrame,
+  WindowMoveArea,
+  installUiFonts,
+  setUiScaleFactor,
+  windowControlSize,
+} from "./index";
 import { HeadlessPlatform } from "./platforms/headless/index";
 
 await installUiFonts();
@@ -105,6 +114,38 @@ for (const scale of [1, 1.5]) {
   window.destroy();
   backend.disconnect();
   renderShell(root, null);
+}
+// A titlebar an app draws itself reuses the same controls and move gesture.
+{
+  const backend = new HeadlessPlatform();
+  await backend.connect();
+  const window = new Window({ title: "Custom bar", width: 480, height: 200, decorated: false });
+  const size = windowControlSize();
+  window.setContent(
+    <>
+      <WindowMoveArea width={480} height={48} actions={window} />
+      <WindowControls x={480 - size * 3} y={9} actions={window} />
+    </>,
+  );
+  window.mount(backend);
+  await Promise.resolve();
+  window.tick();
+  const native = backend.getWindows()[0]!;
+  const press = (x: number, y: number, timeMs: number) => {
+    native.injectPointer({ type: "down", x, y, button: "left", timeMs });
+    native.injectPointer({ type: "up", x, y, button: "left", timeMs: timeMs + 1 });
+    window.tick();
+  };
+  press(40, 20, 1);
+  assert.equal(native.moveRequests, 1, "a custom bar's empty space starts a native move");
+  press(40, 20, 2);
+  assert.equal(window.isMaximized(), true, "double-clicking a custom bar maximizes");
+  press(480 - size * 2.5, 9 + size / 2, 3);
+  assert.equal(native.minimizeRequests, 1, "standalone controls minimize");
+  press(480 - size / 2, 9 + size / 2, 4);
+  assert.equal(window.isClosed(), true, "standalone controls close");
+  window.destroy();
+  backend.disconnect();
 }
 setUiScaleFactor(1);
 console.log(

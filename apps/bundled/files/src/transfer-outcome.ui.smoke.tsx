@@ -22,6 +22,8 @@ const previous = {
 };
 process.env.HOME = fixture;
 process.env.XDG_CONFIG_HOME = path.join(fixture, ".config");
+// The session file clipboard lives in the runtime directory; keep it in the fixture.
+process.env.XDG_RUNTIME_DIR = path.join(fixture, ".run");
 process.env.XDG_DATA_HOME = path.join(fixture, ".local", "share");
 const backend = new HeadlessPlatform();
 const window = new Window({
@@ -174,7 +176,8 @@ try {
   await settle();
   await capture("all-skipped-notice");
   assert.equal(
-    paints("No items moved. 1 item skipped.", palette.text),
+    // The operation card paints outcomes at 12px.
+    !!findText("No items moved. 1 item skipped.", palette.text, 12),
     true,
     "actual Files terminal notice must state zero completed and real Skip",
   );
@@ -235,7 +238,8 @@ try {
   await settle();
   await capture("show-in-folder-real-navigation");
   assert.ok(
-    findText("only (2).txt", palette.text, 13),
+    // Rows name their file in the medium weight.
+    findText("only (2).txt", palette.text, 13, "medium"),
     "Show in folder navigates to the retained destination and paints the actual numbered result",
   );
   key(139, "ContextMenu");

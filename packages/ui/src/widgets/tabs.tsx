@@ -1,6 +1,6 @@
 /** Recipe-driven tabs with slots, pointer feedback, and keyboard navigation. */
 import React, { useId, useState, type ReactNode } from "react";
-import { Group, Rect, type HitKeyEvent } from "@moire/react-host";
+import { Group, Rect, type HitKeyEvent, type HitPointerEvent } from "@moire/react-host";
 import {
   resolveStatefulStyle,
   useWidgetTheme,
@@ -13,6 +13,8 @@ import { Box, Horizontal, Inset, Measure, registerIntrinsicSize } from "./layout
 import { TextBlock } from "./primitives";
 import { IconButton } from "./icon-button";
 import { Icon } from "./icon";
+import { DropZone } from "./dnd";
+import { getUiScaleFactor } from "#ui/font";
 
 export type TabSlot = ReactNode | ((style: WidgetIconStyle) => ReactNode);
 
@@ -22,6 +24,8 @@ export type TabItem = {
   leading?: TabSlot;
   disabled?: boolean;
   closable?: boolean;
+  /** Accept drops onto this tab; exposed through `hitTestDropData`, highlighted while hovered. */
+  dropData?: unknown;
 };
 
 export type TabsProps = {
@@ -37,6 +41,8 @@ export type TabsProps = {
   variant?: "standard" | "titlebar";
   onClose?: (index: number) => void;
   onAdd?: () => void;
+  /** Secondary click or the Menu key on a tab. */
+  onContextMenu?: (index: number, event: HitPointerEvent) => void;
 };
 
 function normalizeTab(tab: string | TabItem, index: number): TabItem {
@@ -47,8 +53,20 @@ function renderSlot(slot: TabSlot, style: WidgetIconStyle): ReactNode {
   return typeof slot === "function" ? slot(style) : slot;
 }
 
+/**
+ * Recipes give icon sizes and spacing at UI scale 1; labels already grow with the scale (fonts
+ * scale), so leading icons and the room around them must grow too.
+ */
+function scaledIcon(style: WidgetIconStyle, ui: number): WidgetIconStyle {
+  return { ...style, size: Math.round(style.size * ui) };
+}
+
 export function Tabs(props: TabsProps): ReactNode {
   const recipe = useWidgetTheme().recipes.tabs[props.size ?? "medium"];
+  const ui = getUiScaleFactor();
+  const paddingX = Math.round(recipe.metrics.paddingX * ui);
+  const gap = Math.round(recipe.metrics.gap * ui);
+  const actionIcon = Math.round(16 * ui);
   const generatedId = useId();
   const [focused, setFocused] = useState<number | null>(null);
   const height = props.height ?? recipe.metrics.height;
@@ -134,7 +152,7 @@ export function Tabs(props: TabsProps): ReactNode {
             width={actionWidth}
             height={height}
             variant="ghost"
-            icon={<Icon symbolic name="back" size={16} />}
+            icon={<Icon symbolic name="back" size={actionIcon} />}
             disabled={previous < 0}
             onPress={() => props.onChange?.(previous)}
             tooltip="Previous tabs"
@@ -151,7 +169,7 @@ export function Tabs(props: TabsProps): ReactNode {
           const paintStates: WidgetState[] =
             !recipe.titlebar && selected ? [...states.slice(1), "selected"] : states;
           const style = resolveStatefulStyle(header.tab, ...paintStates);
-          const icon = resolveStatefulStyle(header.icon, ...states);
+          const icon = scaledIcon(resolveStatefulStyle(header.icon, ...states), ui);
           const label = resolveStatefulStyle(header.label, ...states);
           return (
             <Group
@@ -193,13 +211,19 @@ export function Tabs(props: TabsProps): ReactNode {
                   else setFocused((current) => (current === index ? null : current));
                 }}
                 onKeyDown={(event) => handleKey(event, index)}
+                onContextMenu={
+                  props.onContextMenu ? (event) => props.onContextMenu?.(index, event) : undefined
+                }
               />
+              {tab.dropData !== undefined ? (
+                <DropZone width={tabWidth} height={height} id={tab.dropData} />
+              ) : null}
               <Inset
                 width={Math.max(1, tabWidth - (closable ? actionWidth : 0))}
                 height={height}
-                padding={{ horizontal: recipe.metrics.paddingX }}
+                padding={{ horizontal: paddingX }}
               >
-                <Horizontal gap={recipe.metrics.gap} align="center">
+                <Horizontal gap={gap} align="center">
                   {tab.leading ? (
                     <Box width={icon.size} height={icon.size}>
                       {renderSlot(tab.leading, icon)}
@@ -222,7 +246,7 @@ export function Tabs(props: TabsProps): ReactNode {
                   width={actionWidth}
                   height={height}
                   variant="ghost"
-                  icon={<Icon symbolic name="close" size={14} />}
+                  icon={<Icon symbolic name="close" size={Math.round(14 * ui)} />}
                   tooltip={`Close ${tab.label}`}
                   disabled={props.disabled || tab.disabled}
                   onPress={() => props.onClose?.(index)}
@@ -237,7 +261,7 @@ export function Tabs(props: TabsProps): ReactNode {
             width={actionWidth}
             height={height}
             variant="ghost"
-            icon={<Icon symbolic name="forward" size={16} />}
+            icon={<Icon symbolic name="forward" size={actionIcon} />}
             disabled={next < 0}
             onPress={() => props.onChange?.(next)}
             tooltip="Next tabs"
@@ -249,7 +273,7 @@ export function Tabs(props: TabsProps): ReactNode {
             width={actionWidth}
             height={height}
             variant="ghost"
-            icon={<Icon symbolic name="plus" size={16} />}
+            icon={<Icon symbolic name="plus" size={actionIcon} />}
             tooltip="New folder tab"
             disabled={props.disabled}
             onPress={props.onAdd}
@@ -283,7 +307,7 @@ export function Tabs(props: TabsProps): ReactNode {
           const hovered = resolveStatefulStyle(recipe.tab, "hover");
           const pressed = resolveStatefulStyle(recipe.tab, "pressed");
           const label = resolveStatefulStyle(recipe.label, ...states);
-          const icon = resolveStatefulStyle(recipe.icon, ...states);
+          const icon = scaledIcon(resolveStatefulStyle(recipe.icon, ...states), ui);
 
           return (
             <Measure key={tab.id} flexGrow={1} minWidth={1}>
@@ -315,9 +339,9 @@ export function Tabs(props: TabsProps): ReactNode {
                   <Inset
                     width={tabWidth}
                     height={height - recipe.metrics.indicatorHeight}
-                    padding={{ horizontal: recipe.metrics.paddingX }}
+                    padding={{ horizontal: paddingX }}
                   >
-                    <Horizontal gap={recipe.metrics.gap} justify="center" align="center">
+                    <Horizontal gap={gap} justify="center" align="center">
                       {tab.leading ? (
                         <Box width={icon.size} height={icon.size}>
                           {renderSlot(tab.leading, icon)}

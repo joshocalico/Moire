@@ -2,16 +2,21 @@ import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { CompositorServer } from "@moire/core";
-import { openLogindSeat, type LogindSeat } from "@moire/sys";
+import {
+  holdDisplayAcrossExit,
+  lastBootRelease,
+  monotonicMs,
+  openLogindSeat,
+  type LogindSeat,
+} from "@moire/sys";
 import { SessionBus } from "@moire/dbus";
 import { createLocalUserProvider } from "./local-users";
 // oxlint-disable-next-line import/no-relative-parent-imports -- The installed trusted entry reuses the frozen native frontend.
 import { runNativeGreeter } from "../../greeter/src/native/main";
-// oxlint-disable import/no-relative-parent-imports -- The installed session command is a build-time constant.
-import {
-  connectNativeGreetd,
-  fixedSessionCommand,
-} from "../../display-manager/src/native-greetd-client";
+// oxlint-disable-next-line import/no-relative-parent-imports -- Greeter scene ships with its entry.
+import { greeterSceneBackdrop } from "../../greeter/src/native/scene";
+// oxlint-disable-next-line import/no-relative-parent-imports -- The greeter picks greetd or moire-dm by its session's socket variable.
+import { connectLoginClient, loginBackend } from "../../greeter/src/native/login-client";
 
 /** Invoked only by the packaged entry with its immutable fixed probe executable. */
 export async function runPreLogin(
@@ -20,14 +25,15 @@ export async function runPreLogin(
   discoverLocalUsers = false,
 ): Promise<0 | 1> {
   const runtime = process.env.XDG_RUNTIME_DIR;
-  const socket = process.env.GREETD_SOCK;
-  if (!runtime || !path.isAbsolute(runtime) || !socket || process.getuid?.() === 0)
-    throw new Error("A non-root greetd runtime is required");
+  const backend = loginBackend(process.env);
+  if (!runtime || !path.isAbsolute(runtime) || !backend || process.getuid?.() === 0)
+    throw new Error("A non-root greetd or moire-dm runtime is required");
   const display = "moire-greeter";
   let seat: LogindSeat | undefined;
   let server: CompositorServer | undefined;
   let accountBus: SessionBus | undefined;
   let retired = false;
+  let handedOff = false;
   let setupComplete = false;
   let status: 0 | 1 = 1;
   const retire = (revoked = false) => {
@@ -46,7 +52,8 @@ export async function runPreLogin(
       errors.push(error);
     }
     try {
-      seat?.setGraphics(false);
+      // A handed-off frame stays on screen only while the VT stays in graphics mode.
+      if (!handedOff) seat?.setGraphics(false);
     } catch (error) {
       errors.push(error);
     }
@@ -132,6 +139,15 @@ export async function runPreLogin(
       clientPid: process.pid,
     });
     server.onFatalError(stop);
+    // The compositor draws the greeter's backdrop, continuing the boot scene where the boot
+    // stage released the display (resolved at the first frame, after that handoff).
+    server.setSceneBackdrop(() => {
+      const boot = lastBootRelease();
+      const fresh = boot && monotonicMs() - boot.releasedAtMs < 30_000;
+      return greeterSceneBackdrop(
+        fresh ? () => boot.sceneSeconds + (monotonicMs() - boot.releasedAtMs) / 1000 : undefined,
+      );
+    });
     console.log("[pre-login] stage=start-compositor");
     await server.start(`/dev/dri/${cards[0]}`);
     process.env.WAYLAND_DISPLAY = display;
@@ -143,19 +159,20 @@ export async function runPreLogin(
     // Detailed setup diagnostics stop before connecting to the credential transport.
     setupComplete = true;
     console.log("[pre-login] stage=connect-login-service");
-    const client = await connectNativeGreetd({
-      session: fixedSessionCommand(sessionExecutable),
-      socketPath: socket,
-      timeoutMs: 30000,
-    });
+    const client = await connectLoginClient(backend, sessionExecutable, 30000);
     console.log(`[pre-login] owner=${process.pid} display=ready authority=frontend-only`);
     const result = await runNativeGreeter({
       client,
       platform: "wayland",
       sessionLabel,
+      backdrop: server.sceneBackdropAvailable ? "compositor" : "own",
       users: accountBus ? createLocalUserProvider(accountBus) : undefined,
     });
     status = result.exitCode;
+    // Signed in over the scene: leave its frame on screen for the desktop to dissolve out of.
+    if (status === 0 && server.sceneBackdropAvailable)
+      handedOff = await server.handOffDisplay("greeter");
+    if (handedOff) holdDisplayAcrossExit(server.getKms().fd);
   } catch (error) {
     if (!setupComplete) console.error("[pre-login] setup failed before authentication", error);
     throw error;

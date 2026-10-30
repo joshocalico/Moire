@@ -1,0 +1,24 @@
+{
+  "name": "@moire/index-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Session service that indexes Home for Files search",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "smoke": "tsx src/main.ts --check && tsx src/service.smoke.ts && tsx src/watcher.smoke.ts && tsx src/dbus.smoke.ts && tsx ../../bundled/files/src/search/search.smoke.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@moire/dbus": "workspace:*",
+    "@moire/file-formats": "workspace:*",
+    "@moire/file-operations": "workspace:*",
+    "@moire/prefs": "workspace:*",
+    "@moire/system-management": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

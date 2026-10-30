@@ -19,7 +19,7 @@ const args=process.argv.slice(2);
 const endpoint=args.find(value=>value.startsWith('--input-ipc-server=')).split('=').slice(1).join('=');
 const mode=args.find(value=>value.startsWith('--fixture=')).slice('--fixture='.length);
 const marker=path.join(path.dirname(fileURLToPath(import.meta.url)),mode+'.json');
-let loaded=false,restarted=false;
+let loaded=false,restarted=false,position=0;
 net.createServer(socket=>{
   let input='';
   socket.on('data',chunk=>{
@@ -40,9 +40,11 @@ net.createServer(socket=>{
         if(command[1]==='loaded'){loaded=true;send({event:'file-loaded'});}
         if(command[1]==='restart'){restarted=true;send({event:'playback-restart'});}
         if(command[1]==='eof')send({event:'end-file',reason:'eof'});
+      }else if(command[0]==='seek'){
+        position=command[1];reply();
       }else if(command[0]==='get_property'){
         if(!loaded||!restarted)send({request_id:request.request_id,error:'property unavailable'});
-        else reply({'pause':true,'duration':3,'time-pos':0,'volume':100}[command[1]]);
+        else reply({'pause':true,'duration':3,'time-pos':position,'volume':100}[command[1]]);
       }
     }
   });
@@ -100,6 +102,10 @@ net.createServer(socket=>{
     assert.ok(state?.kind === "ready");
     assert.equal(state.duration, 3);
     assert.equal(await session.command(["get_property", "duration"]), 3);
+    await session.seek(1.5);
+    const sought = states.at(-1);
+    assert.ok(sought?.kind === "ready");
+    assert.equal(sought.position, 1.5, "the position follows a seek");
     await session.command(["fixture", "eof"]);
     const eofDeadline = Date.now() + 5_000;
     while (states.at(-1)?.kind !== "idle" && Date.now() < eofDeadline)
@@ -147,5 +153,5 @@ net.createServer(socket=>{
   );
 });
 console.log(
-  "[app-tools/playback] actual IPC startup/load/restart ordering, EOF, decode error, disconnect, backend exit and close during opening passed",
+  "[app-tools/playback] actual IPC startup/load/restart ordering, seek, EOF, decode error, disconnect, backend exit and close during opening passed",
 );

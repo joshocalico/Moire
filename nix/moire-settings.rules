@@ -1,0 +1,21 @@
+// Settings: date & time and one's own account. Every allowance here is a YES for an active,
+// local session; anything else falls through to the immutable 01-moire-deny-unapproved.rules.
+// Administrator actions (other users' accounts, automatic login) are not here: they ask for an
+// administrator's password, in 00-moire-admin.rules (docs/settings-redesign.md, "Time, region &
+// accounts backend"; docs/polkit-agent.md).
+polkit.addRule(function(action, subject) {
+  if (subject.user === "root") return;
+  if (subject.local !== true || subject.active !== true) return;
+  // Any active local user: their own name and avatar (AccountsService picks this action only
+  // when the target account is the caller's), the time zone and network time. Not granted:
+  // change-own-password (AccountsService would not check the current password; Moire uses
+  // passwd, whose PAM stack does), set-time and set-local-rtc.
+  var ownOrClock = [
+    "org.freedesktop.accounts.change-own-user-data",
+    "org.freedesktop.timedate1.set-timezone",
+    "org.freedesktop.timedate1.set-ntp"
+  ];
+  if (ownOrClock.indexOf(action.id) !== -1) return polkit.Result.YES;
+  // AccountsService's automatic login (set-login-option) is not granted anywhere: it would edit
+  // GDM's configuration. Moire's own is org.moire.dm.set-autologin, in 00-moire-admin.rules.
+});

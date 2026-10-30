@@ -1,11 +1,11 @@
 import {
   operationError,
+  TransferCancelledError,
   type FileOperations,
   type Progress,
   type ResolveConflict,
   type TransferKind,
-} from "./filesystem";
-import { TransferCancelledError } from "./transfer";
+} from "@moire/file-operations";
 import path from "node:path";
 
 export type TransferRequest = {

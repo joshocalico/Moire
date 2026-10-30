@@ -10,7 +10,7 @@ import React, {
   useState,
   type ReactNode,
 } from "react";
-import { Group, Rect } from "@moire/react-host";
+import { Group, Rect, sceneOrigin, type SceneNode } from "@moire/react-host";
 import { requestActiveWindowRedraw } from "#ui/window";
 import { useTween } from "#ui/motion";
 import { useWidgetTheme } from "#ui/widget-theme";
@@ -23,6 +23,8 @@ type OverlayRender = () => ReactNode;
 type OverlayController = {
   mount(id: string, render: OverlayRender): void;
   unmount(id: string): void;
+  /** Where a scene node sits in the top layer, and the layer's size, for anchored content. */
+  locate(node: SceneNode): { x: number; y: number; width: number; height: number } | null;
 };
 
 type OverlayStore = {
@@ -81,13 +83,22 @@ export function OverlayHost(props: OverlayHostProps): ReactNode {
     });
     requestActiveWindowRedraw();
   }, []);
-  const controller = useMemo(() => ({ mount, unmount }), [mount, unmount]);
+  const layer = useRef<SceneNode | null>(null);
+  const size = useRef({ width: props.width, height: props.height });
+  size.current = { width: props.width, height: props.height };
+  const locate = useCallback((node: SceneNode) => {
+    if (!layer.current) return null;
+    const at = sceneOrigin(node),
+      origin = sceneOrigin(layer.current);
+    return { x: at.x - origin.x, y: at.y - origin.y, ...size.current };
+  }, []);
+  const controller = useMemo(() => ({ mount, unmount, locate }), [mount, unmount, locate]);
   return (
     <OverlayContext.Provider value={controller}>
       <Group width={props.width} height={props.height}>
         {props.children}
       </Group>
-      <Group width={props.width} height={props.height}>
+      <Group ref={layer} width={props.width} height={props.height}>
         {[...entries.entries()].map(([id, render]) => (
           <React.Fragment key={id}>{render()}</React.Fragment>
         ))}
@@ -99,6 +110,11 @@ export function OverlayHost(props: OverlayHostProps): ReactNode {
 export type OverlayPortalProps = {
   children?: ReactNode;
 };
+
+/** The nearest OverlayHost, for content that places itself relative to a trigger. */
+export function useOverlayHost(): OverlayController | null {
+  return useContext(OverlayContext);
+}
 
 /** Register content with the nearest OverlayHost top layer. */
 export function OverlayPortal(props: OverlayPortalProps): ReactNode {
@@ -167,7 +183,11 @@ export type PopoverProps = {
   children?: ReactNode;
 };
 
-function popoverPosition(props: PopoverProps): { x: number; y: number; fromY: number } {
+function popoverPosition(props: PopoverProps): {
+  x: number;
+  y: number;
+  fromY: number;
+} {
   const gap = 7;
   const placement = props.placement ?? "bottom-start";
   const below = placement.startsWith("bottom");

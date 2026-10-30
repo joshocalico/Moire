@@ -1,5 +1,5 @@
 { lib, stdenv, nodejs_22, nodejs-slim_22, pnpm, pnpmConfigHook, autoPatchelfHook, makeWrapper,
-  libdrm, pnpmDeps }:
+  libdrm, libgbm, libglvnd, pnpmDeps }:
 
 let
   src = lib.cleanSourceWith {
@@ -20,7 +20,8 @@ let
         && !(lib.hasSuffix ".pyc" name)
         && name != ".env" && !(lib.hasPrefix ".env." name);
   };
-  ffiLibraries = [ libdrm stdenv.cc.cc.lib ];
+  # GBM/EGL/GLES (through glvnd → /run/opengl-driver) drive the animated scene.
+  ffiLibraries = [ libdrm libgbm libglvnd stdenv.cc.cc.lib ];
   # pnpm/npm are build-only. The cached standalone Node output runs the bundle.
   runtimeNode = nodejs-slim_22;
 in stdenv.mkDerivation {
@@ -41,6 +42,12 @@ in stdenv.mkDerivation {
     makeWrapper ${runtimeNode}/bin/node $out/bin/moire-boot \
       --add-flags "$out/lib/moire-boot/src/entry/guardian.mjs" \
       --set MOIRE_BOOT_RENDERER "$out/lib/moire-boot/src/entry/renderer.mjs" \
+      --set MOIRE_BOOT_ARTWORK "$out/share/moire-boot/silk-fold.rgba" \
+      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath ffiLibraries}
+    # Standalone animated stage run directly by systemd; hands the display to the compositor.
+    makeWrapper ${runtimeNode}/bin/node $out/bin/moire-boot-stage \
+      --add-flags "$out/lib/moire-boot/src/entry/renderer.mjs" \
+      --set MOIRE_BOOT_STANDALONE 1 \
       --set MOIRE_BOOT_ARTWORK "$out/share/moire-boot/silk-fold.rgba" \
       --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath ffiLibraries}
     makeWrapper ${runtimeNode}/bin/node $out/bin/moire-boot-smoke \
@@ -80,7 +87,7 @@ in stdenv.mkDerivation {
     runHook postInstallCheck
   '';
   meta = {
-    description = "Precompiled Moire React static boot stage with independent guardian";
+    description = "Precompiled Moire React boot stage (animated GLES scene, static fallback)";
     platforms = [ "aarch64-linux" ];
   };
 }

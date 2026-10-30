@@ -1,4 +1,4 @@
-import { EglOutputScaler, type EglCompositionScene } from "@moire/sys";
+import { EglOutputScaler, type EglCompositionScene, type OutputColorScale } from "@moire/sys";
 import { copySceneToOutputScaled, type OutputGeometry } from "./display-layout";
 import {
   orderedCompositionLayers,
@@ -9,6 +9,7 @@ import {
 } from "./composition";
 import type { DmabufBuffer } from "./dmabuf-map";
 import { traceOutputPipeline } from "./output-pipeline-trace";
+import { scaleOutputColors } from "./night-light";
 
 export type OutputRenderPreference = "auto" | "software" | "egl";
 
@@ -35,6 +36,28 @@ export type OutputRenderResult = {
 
 export type EglPresentPreference = "auto" | "readback" | "direct";
 
+/**
+ * A GPU scene the compositor draws itself, beneath its clients (the greeter's backdrop).
+ * Structurally a @moire/ui SceneSurfaceFactory.
+ */
+export type CompositorSceneFactory = (
+  gl: never,
+  options: { width: number; height: number; bgra: boolean },
+) => { render(t: number, framebuffer: unknown): void; destroy(): void };
+
+/** A scene drawn into a compositor-owned texture, composed like any surface. */
+export type CompositorSceneLayer = {
+  readonly source: OwnedPixelSurface;
+  /** Draw scene time `t`; the next composition shows it. */
+  draw(t: number): void;
+  destroy(): void;
+};
+
+export type OutputRendererOptions = {
+  /** Create a GLES 3 context so compositor scenes (createSceneLayer) can be drawn. */
+  gles3?: boolean;
+};
+
 export interface CompositorOutputRenderer {
   readonly id: "software" | "egl";
   readonly capabilities: CompositionCapabilities;
@@ -48,7 +71,20 @@ export interface CompositorOutputRenderer {
   ): OwnedPixelSurface | null;
   /** Retained GPU scene path. Undefined only for the flattened software oracle. */
   beginComposition?(scene: CompositionScene): void;
+  /** Whether createSceneLayer can succeed (an EGL renderer with a GLES 3 context). */
+  readonly supportsSceneLayers?: boolean;
+  /** Null when this renderer cannot draw GPU scenes (software, or no GLES 3). */
+  createSceneLayer?(
+    width: number,
+    height: number,
+    create: CompositorSceneFactory,
+  ): CompositorSceneLayer | null;
   renderOutput(target: OutputRenderTarget): OutputRenderResult;
+  /**
+   * Multipliers every presented output is drawn with from now on (night light); null for none.
+   * Captures are never scaled: a screenshot shows the composed colours. Test fixtures may omit it.
+   */
+  setOutputColorScale?(scale: OutputColorScale | null): void;
   /** Read the latest composed output in tight BGRA, without changing scanout. */
   captureOutput(target: Omit<OutputRenderTarget, "pixels" | "pitch">): Uint8Array;
   destroy(): void;
@@ -71,12 +107,13 @@ class SoftwareOutputRenderer implements CompositorOutputRenderer {
   };
   readonly detail = "deterministic CPU crop/scale";
   private scene: PixelSurface | null = null;
+  private colorScale: OutputColorScale | null = null;
 
   beginFrame(scene: PixelSurface): void {
     this.scene = scene;
   }
 
-  renderOutput(target: OutputRenderTarget): OutputRenderResult {
+  private copyOutput(target: OutputRenderTarget): void {
     if (!this.scene) throw new Error("Software output frame was not begun");
     copySceneToOutputScaled(
       this.scene.pixels,
@@ -88,12 +125,29 @@ class SoftwareOutputRenderer implements CompositorOutputRenderer {
       target.physicalHeight,
       target.pitch,
     );
+  }
+
+  renderOutput(target: OutputRenderTarget): OutputRenderResult {
+    this.copyOutput(target);
+    // The target is rewritten whole every frame, so scaling it in place never compounds.
+    if (this.colorScale)
+      scaleOutputColors(
+        target.pixels,
+        target.physicalWidth,
+        target.physicalHeight,
+        target.pitch,
+        this.colorScale,
+      );
     return {};
+  }
+
+  setOutputColorScale(scale: OutputColorScale | null): void {
+    this.colorScale = scale;
   }
 
   captureOutput(target: Omit<OutputRenderTarget, "pixels" | "pitch">): Uint8Array {
     const pixels = new Uint8Array(target.physicalWidth * target.physicalHeight * 4);
-    this.renderOutput({ ...target, pixels, pitch: target.physicalWidth * 4 });
+    this.copyOutput({ ...target, pixels, pitch: target.physicalWidth * 4 });
     return pixels;
   }
 
@@ -112,7 +166,16 @@ type CompositionScaler = Pick<
   | "renderOutput"
   | "renderOutputDirect"
   | "destroy"
->;
+> &
+  // Only GLES 3 outputs draw scene layers; fixtures and GLES 2 scalers may omit them.
+  Partial<SceneProducer>;
+type SceneProducer = Pick<EglOutputScaler, "clientVersion" | "createProducerTarget" | "produce">;
+
+function sceneProducer(scaler: CompositionScaler): SceneProducer | null {
+  return scaler.clientVersion === 3 && scaler.createProducerTarget && scaler.produce
+    ? (scaler as SceneProducer)
+    : null;
+}
 
 export class EglCompositorOutputRenderer implements CompositorOutputRenderer {
   readonly id = "egl" as const;
@@ -148,6 +211,7 @@ export class EglCompositorOutputRenderer implements CompositorOutputRenderer {
   }
 
   private captureReady = false;
+  private colorScale: OutputColorScale | null = null;
   private activePresentation: "readback" | "direct" | null;
   private readonly residentSources = new WeakMap<
     PixelSurface,
@@ -170,6 +234,63 @@ export class EglCompositorOutputRenderer implements CompositorOutputRenderer {
           ? "readback scanout"
           : "automatic presentation probe";
     return `${this.scaler.info.glRenderer}; ${this.scaler.info.glVersion}; ${presentation}`;
+  }
+
+  get supportsSceneLayers(): boolean {
+    return !this.destroyed && sceneProducer(this.scaler) !== null;
+  }
+
+  createSceneLayer(
+    width: number,
+    height: number,
+    create: CompositorSceneFactory,
+  ): CompositorSceneLayer | null {
+    const scaler = this.destroyed ? null : sceneProducer(this.scaler);
+    if (!scaler) return null;
+    const target = scaler.createProducerTarget(width, height);
+    let instance: ReturnType<CompositorSceneFactory>;
+    try {
+      instance = scaler.produce((gl) => create(gl as never, { width, height, bgra: true }));
+    } catch (error) {
+      target.image.destroy();
+      throw error;
+    }
+    let pixels: Uint8Array | undefined;
+    let revision = 0;
+    let destroyed = false;
+    const destroy = () => {
+      if (destroyed) return;
+      destroyed = true;
+      try {
+        scaler.produce(() => instance.destroy());
+      } finally {
+        target.image.destroy();
+      }
+    };
+    const source: OwnedPixelSurface = {
+      storage: "gpu",
+      width,
+      height,
+      stride: width * 4,
+      get revision() {
+        return revision;
+      },
+      get pixels() {
+        return (pixels ??= target.image.readbackPixels());
+      },
+      destroy,
+    };
+    this.residentSources.set(source, target.image);
+    return {
+      source,
+      draw(t: number) {
+        if (destroyed) return;
+        scaler.produce(() => instance.render(t, target.framebuffer));
+        revision++;
+        pixels = undefined;
+      },
+      destroy,
+    };
   }
 
   beginFrame(scene: PixelSurface): void {
@@ -297,6 +418,7 @@ export class EglCompositorOutputRenderer implements CompositorOutputRenderer {
       height: target.geometry.height,
       targetWidth: target.physicalWidth,
       targetHeight: target.physicalHeight,
+      colorScale: this.colorScale ?? undefined,
     };
     if (this.activePresentation !== "readback") {
       try {
@@ -325,6 +447,10 @@ export class EglCompositorOutputRenderer implements CompositorOutputRenderer {
       target: target.pixels,
     });
     return { rendering: this.rendering("readback") };
+  }
+
+  setOutputColorScale(scale: OutputColorScale | null): void {
+    this.colorScale = scale;
   }
 
   captureOutput(target: Omit<OutputRenderTarget, "pixels" | "pitch">): Uint8Array {
@@ -358,10 +484,11 @@ class AutoCompositorOutputRenderer implements CompositorOutputRenderer {
   private active: CompositorOutputRenderer;
   private scene: PixelSurface | null = null;
   private retainedFrame = false;
+  private colorScale: OutputColorScale | null = null;
 
-  constructor(drmFd: number) {
+  constructor(drmFd: number, options: OutputRendererOptions = {}) {
     try {
-      this.active = new EglCompositorOutputRenderer(new EglOutputScaler(drmFd));
+      this.active = new EglCompositorOutputRenderer(new EglOutputScaler(drmFd, options));
     } catch (error) {
       console.warn("[renderer] EGL unavailable; falling back to software:", error);
       this.active = new SoftwareOutputRenderer();
@@ -389,7 +516,13 @@ class AutoCompositorOutputRenderer implements CompositorOutputRenderer {
     console.warn("[renderer] EGL frame failed; switching to software:", error);
     this.active.destroy();
     this.active = new SoftwareOutputRenderer();
+    this.active.setOutputColorScale?.(this.colorScale);
     if (this.scene) this.active.beginFrame(this.scene);
+  }
+
+  setOutputColorScale(scale: OutputColorScale | null): void {
+    this.colorScale = scale;
+    this.active.setOutputColorScale?.(scale);
   }
 
   beginFrame(scene: PixelSurface): void {
@@ -407,6 +540,18 @@ class AutoCompositorOutputRenderer implements CompositorOutputRenderer {
     onReadback?: (bytes: number) => void,
   ): OwnedPixelSurface | null {
     return this.active.snapshotDmabuf?.(buffer, onReadback) ?? null;
+  }
+
+  get supportsSceneLayers(): boolean {
+    return this.active.supportsSceneLayers === true;
+  }
+
+  createSceneLayer(
+    width: number,
+    height: number,
+    create: CompositorSceneFactory,
+  ): CompositorSceneLayer | null {
+    return this.active.createSceneLayer?.(width, height, create) ?? null;
   }
 
   beginComposition(scene: CompositionScene): void {
@@ -469,8 +614,9 @@ export function resolveEglPresentPreference(
 export function createCompositorOutputRenderer(
   drmFd: number,
   preference = resolveOutputRenderPreference(),
+  options: OutputRendererOptions = {},
 ): CompositorOutputRenderer {
   if (preference === "software") return new SoftwareOutputRenderer();
-  if (preference === "auto") return new AutoCompositorOutputRenderer(drmFd);
-  return new EglCompositorOutputRenderer(new EglOutputScaler(drmFd));
+  if (preference === "auto") return new AutoCompositorOutputRenderer(drmFd, options);
+  return new EglCompositorOutputRenderer(new EglOutputScaler(drmFd, options));
 }

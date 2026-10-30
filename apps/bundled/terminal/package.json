@@ -6,7 +6,8 @@
   "description": "Moire native terminal emulator",
   "scripts": {
     "start": "tsx src/main.tsx",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx src/working-directory.smoke.ts"
   },
   "dependencies": {
     "@moire/prefs": "workspace:*",

@@ -7,15 +7,25 @@ import { Rect, SoftwareRenderer, createShellRoot, renderShell } from "@moire/rea
 import { Window, installUiFonts } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
 import { ScreenshotApp } from "./main";
-import { applyEdits, cropImage, readPNG, savePNG } from "./capture";
+import { applyEdits, cropImage } from "./image";
+import { readPNG, savePNG } from "./backend";
+import { scratchHome } from "./testing";
+const sandbox = scratchHome();
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "moire-screenshot-")),
   backend = new HeadlessPlatform(),
-  window = new Window({ title: "screenshot workflows", width: 980, height: 720 }),
+  window = new Window({
+    title: "screenshot workflows",
+    width: 980,
+    height: 720,
+  }),
   root = createShellRoot();
 try {
   await installUiFonts();
   renderShell(root, <Rect width={100} height={100} fill={0xff336699} />);
-  const frame = new SoftwareRenderer().render(root.container, { width: 100, height: 100 });
+  const frame = new SoftwareRenderer().render(root.container, {
+    width: 100,
+    height: 100,
+  });
   const rgba = new Uint8Array(frame.pixels.length);
   for (let i = 0; i < rgba.length; i += 4) {
     rgba[i] = frame.pixels[i + 2] ?? 0;
@@ -67,9 +77,27 @@ try {
   const native = backend.getWindows()[0];
   assert.ok(native);
   const mods = { shift: false, ctrl: false, alt: false, meta: false };
-  native.injectPointer({ type: "down", x: 350, y: 210, button: "left", timeMs: 1 });
-  native.injectPointer({ type: "move", x: 520, y: 420, button: "left", timeMs: 2 });
-  native.injectPointer({ type: "up", x: 520, y: 420, button: "left", timeMs: 3 });
+  native.injectPointer({
+    type: "down",
+    x: 350,
+    y: 210,
+    button: "left",
+    timeMs: 1,
+  });
+  native.injectPointer({
+    type: "move",
+    x: 520,
+    y: 420,
+    button: "left",
+    timeMs: 2,
+  });
+  native.injectPointer({
+    type: "up",
+    x: 520,
+    y: 420,
+    button: "left",
+    timeMs: 3,
+  });
   window.tick();
   const click = (x: number, y: number) => {
     native.injectPointer({ type: "down", x, y, button: "left", timeMs: 1 });
@@ -85,7 +113,14 @@ try {
     modifiers: { ...mods, ctrl: true },
     timeMs: 1,
   });
-  native.injectKey({ type: "down", code: 30, key: "a", text: output, modifiers: mods, timeMs: 2 });
+  native.injectKey({
+    type: "down",
+    code: 30,
+    key: "a",
+    text: output,
+    modifiers: mods,
+    timeMs: 2,
+  });
   click(900, 650);
   for (let i = 0; i < 50; i++) {
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -109,4 +144,5 @@ try {
   backend.disconnect();
   renderShell(root, null);
   await fs.rm(fixture, { recursive: true, force: true });
+  sandbox.restore();
 }

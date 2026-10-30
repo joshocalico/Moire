@@ -1,15 +1,23 @@
 import React, { type ReactNode } from "react";
 import { Group, type HitRegion } from "@moire/react-host";
 import {
-  Button,
-  Label,
+  Box,
+  Column,
+  Horizontal,
+  Icon,
+  IconButton,
   Surface,
+  TextBlock,
+  applicationIcon,
+  measureWrappedText,
   ScrollArea,
   FocusScope,
   getUiScaleFactor,
+  Entrance,
   useWidgetTheme,
+  OverlayHost,
 } from "@moire/ui";
-import { panelGeometry, themePalette } from "@moire/theme";
+import { panelGeometry } from "@moire/theme";
 import type {
   DesktopStatusState,
   DesktopStatusClient,
@@ -55,7 +63,12 @@ export type DesktopControlActions = Pick<
       | "cancelBluetoothTrust"
     >
   >;
-export type PopupAnchor = { x: number; y: number; width: number; height: number };
+export type PopupAnchor = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 export const QUICK_SETTINGS_SCOPE = "quick-settings";
 export const NOTIFICATIONS_SCOPE = "notifications";
 export function scrollQuickControlIntoView(scrollY: number, hit: HitRegion): number {
@@ -66,7 +79,7 @@ export function scrollQuickControlIntoView(scrollY: number, hit: HitRegion): num
   if (hit.y + hit.height > bottom) return scrollY + hit.y + hit.height - bottom;
   return scrollY;
 }
-/** Shared static shell popup. Motion admission remains the existing renderer's responsibility. */
+/** Placement for the shell popups that rise out of the panel (Quick Settings, notifications, hidden windows). */
 export function desktopPopupGeometry(
   screenW: number,
   screenH: number,
@@ -100,32 +113,41 @@ export function DesktopPopup(props: {
     props.naturalHeight,
   );
   return (
-    <Group width={props.screenW} height={props.screenH}>
+    // Tooltips inside the popup paint in this host's top layer, above the popup's later rows,
+    // and stay above the panel.
+    <OverlayHost width={props.screenW} height={geometry.panel.y}>
       <Group width={props.screenW} height={geometry.panel.y} onPress={props.onDismiss} />
-      <Surface
+      {/* Rises out of the panel it belongs to; reduced motion opens settled. */}
+      <Entrance
         x={geometry.x}
         y={geometry.y}
         width={geometry.width}
         height={geometry.height}
-        fill={palette.panel}
-        radius={12 * getUiScaleFactor()}
-        stroke={palette.accentLine}
-        strokeWidth={1}
-        elevation="high"
-        clip
-        onPress={() => {}}
+        rise={8 * getUiScaleFactor()}
       >
-        <FocusScope
-          id={props.scope}
+        <Surface
           width={geometry.width}
           height={geometry.height}
-          trap
-          onEscape={props.onDismiss}
+          fill={palette.panel}
+          radius={16 * getUiScaleFactor()}
+          stroke={palette.borderSubtle}
+          strokeWidth={1}
+          elevation="high"
+          clip
+          onPress={() => {}}
         >
-          {props.children}
-        </FocusScope>
-      </Surface>
-    </Group>
+          <FocusScope
+            id={props.scope}
+            width={geometry.width}
+            height={geometry.height}
+            trap
+            onEscape={props.onDismiss}
+          >
+            {props.children}
+          </FocusScope>
+        </Surface>
+      </Entrance>
+    </OverlayHost>
   );
 }
 export type QuickSettingsProps = Omit<
@@ -135,6 +157,11 @@ export type QuickSettingsProps = Omit<
   Pick<
     QuickSettingsDetailsProps,
     | "onLogout"
+    | "onLock"
+    | "onPowerAction"
+    | "powerConfirm"
+    | "onPowerConfirm"
+    | "onPowerCancel"
     | "wifiSelection"
     | "wifiPassword"
     | "onWifiSelect"
@@ -192,7 +219,7 @@ export function QuickSettings(props: QuickSettingsProps): ReactNode {
   const geometry = desktopPopupGeometry(props.screenW, props.screenH, props.anchor, natural);
   // Keep the scroll rail and clipped text inside the rounded frame's straight
   // edges. Translate the content back so its measured allocation is unchanged.
-  const frameInset = Math.min(12 * getUiScaleFactor(), geometry.height / 2);
+  const frameInset = Math.min(16 * getUiScaleFactor(), geometry.height / 2);
   const bluetooth = props.state.kind === "ready" ? props.state.snapshot.bluetooth : undefined;
   const interactionScope =
     props.view === "bluetooth" && props.state.kind === "ready"
@@ -249,66 +276,123 @@ export function QuickSettings(props: QuickSettingsProps): ReactNode {
   );
 }
 
+/** The newest open notice whose app allows banners; the rest wait in the tray. */
+export function bannerNotice<Notice extends { closed: boolean; banner?: boolean }>(
+  notices: readonly Notice[],
+): Notice | null {
+  return notices.find((item) => !item.closed && item.banner !== false) ?? null;
+}
+
 export function NotificationBanner(props: {
   screenW: number;
   state: DesktopStatusState;
   onDismiss(id: number, revision: number): void;
 }): ReactNode {
+  const theme = useWidgetTheme();
   if (props.state.kind !== "ready" || props.state.snapshot.doNotDisturb) return null;
-  const notice = props.state.snapshot.notices.find((item) => !item.closed);
+  const notice = bannerNotice(props.state.snapshot.notices);
   if (!notice) return null;
-  const width = Math.min(360, Math.max(0, props.screenW - 24));
-  const palette = themePalette();
+  const palette = theme.foundations.palette;
+  const ui = getUiScaleFactor();
+  const pad = 14 * ui;
+  const iconSize = 20 * ui;
+  const width = Math.min(360 * ui, Math.max(0, props.screenW - 24 * ui));
+  const textWidth = Math.max(0, width - pad * 2 - iconSize - 12 * ui);
+  const summaryHeight = notice.summary
+    ? measureWrappedText(notice.summary, textWidth, {
+        fontSize: 14,
+        fontWeight: "medium",
+      }).lineHeight
+    : 0;
+  const body = notice.body
+    ? measureWrappedText(notice.body, textWidth, { fontSize: 12 })
+    : { lines: [], lineHeight: 0 };
+  const bodyHeight = Math.min(2, body.lines.length) * body.lineHeight;
+  const headerHeight = 24 * ui;
+  const height =
+    pad * 2 +
+    headerHeight +
+    (summaryHeight ? 6 * ui + summaryHeight : 0) +
+    (bodyHeight ? 4 * ui + bodyHeight : 0);
+  const x = props.screenW - width - 12 * ui;
   return (
-    <Surface
-      x={props.screenW - width - 12}
-      y={12}
+    // Keyed per notice, so each new one drops in from the top edge.
+    <Entrance
+      key={`${notice.id}:${notice.revision}`}
+      x={x}
+      y={12 * ui}
       width={width}
-      height={132}
-      fill={palette.panel}
-      stroke={palette.borderSubtle}
-      strokeWidth={1}
-      radius={palette.radiusLg}
-      elevation="high"
+      height={height}
+      rise={-10 * ui}
     >
-      <Label
-        x={16}
-        y={12}
-        width={width - 90}
-        height={18}
-        text={notice.appName || "Application"}
-        color={palette.muted}
-        fontSize={11}
-        overflow="ellipsis"
-      />
-      <Label
-        x={16}
-        y={38}
-        width={width - 32}
-        height={22}
-        text={notice.summary}
-        fontSize={14}
-        overflow="ellipsis"
-      />
-      <Label
-        x={16}
-        y={68}
-        width={width - 32}
-        height={48}
-        text={notice.body}
-        fontSize={12}
-        wrap
-        overflow="ellipsis"
-      />
-      <Button
-        x={width - 74}
-        y={8}
-        width={62}
-        height={28}
-        label="Close"
-        focusId={`notice:close:${notice.id}:${notice.revision}`}
-        onPress={() => props.onDismiss(notice.id, notice.revision)}
-      />
-    </Surface>
+      <Surface
+        width={width}
+        height={height}
+        fill={palette.panel}
+        stroke={palette.borderSubtle}
+        strokeWidth={1}
+        radius={14 * ui}
+        elevation="high"
+      >
+        <Horizontal x={pad} y={pad} width={width - pad * 2} gap={12 * ui} align="start">
+          <Box width={iconSize} height={headerHeight} flexShrink={0}>
+            <Icon
+              y={(headerHeight - iconSize) / 2}
+              symbolic
+              name={applicationIcon(notice.appName)}
+              size={iconSize}
+              color={palette.accent}
+            />
+          </Box>
+          <Column width={textWidth} gap={0}>
+            <Horizontal width={textWidth} height={headerHeight} align="center" gap={8 * ui}>
+              <TextBlock
+                flexGrow={1}
+                text={notice.appName || "Application"}
+                color={palette.muted}
+                fontSize={12}
+                overflow="ellipsis"
+                maxLines={1}
+              />
+              <IconButton
+                icon={(style) => <Icon name="close" {...style} />}
+                variant="ghost"
+                size="small"
+                tooltip="Dismiss notification"
+                focusId={`notice:close:${notice.id}:${notice.revision}`}
+                onPress={() => props.onDismiss(notice.id, notice.revision)}
+              />
+            </Horizontal>
+            {summaryHeight ? (
+              <Box width={textWidth} height={6 * ui + summaryHeight}>
+                <TextBlock
+                  y={6 * ui}
+                  width={textWidth}
+                  text={notice.summary}
+                  fontSize={14}
+                  fontWeight="medium"
+                  overflow="ellipsis"
+                  maxLines={1}
+                />
+              </Box>
+            ) : null}
+            {bodyHeight ? (
+              <Box width={textWidth} height={4 * ui + bodyHeight}>
+                <TextBlock
+                  y={4 * ui}
+                  width={textWidth}
+                  text={notice.body}
+                  fontSize={12}
+                  color={palette.muted}
+                  wrap
+                  maxLines={2}
+                  overflow="ellipsis"
+                />
+              </Box>
+            ) : null}
+          </Column>
+        </Horizontal>
+      </Surface>
+    </Entrance>
   );
 }

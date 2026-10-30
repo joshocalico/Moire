@@ -1,0 +1,6 @@
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <line x1="7" y1="5" x2="7" y2="19"/>
+  <polyline points="3.5,8.5 7,5 10.5,8.5"/>
+  <line x1="17" y1="5" x2="17" y2="19"/>
+  <polyline points="13.5,15.5 17,19 20.5,15.5"/>
+</svg>

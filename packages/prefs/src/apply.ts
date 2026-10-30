@@ -25,11 +25,29 @@ export function bundledThemePath(dark: boolean): string {
 }
 
 export function themeForSettings(settings: MoireSettings): MoireTheme {
-  return applyThemeFamily(
+  const theme = applyThemeFamily(
     loadTheme(bundledThemePath(settings.dark)),
     settings.themeFamily,
     settings.dark,
   );
+  return settings.accent ? withAccent(theme, settings.accent) : theme;
+}
+
+/**
+ * The person's accent over a style's: buttons, selection, focus and the accent line. Apps read
+ * these tokens from the active theme, so one write recolours the shell and every app.
+ */
+function withAccent(theme: MoireTheme, accent: string): MoireTheme {
+  return {
+    ...theme,
+    tokens: {
+      ...theme.tokens,
+      accent,
+      accentLine: accent,
+      focusRing: accent,
+      selection: `${accent}66`,
+    },
+  };
 }
 
 function settingsWallpaperToSpec(wp: WallpaperSettings, theme: MoireTheme): WallpaperSpec {
@@ -107,80 +125,23 @@ gtk-decoration-layout=close,minimize,maximize:
   }
 }
 
-export function readSystemVolume(): number | null {
-  if (commandExists("wpctl")) {
-    try {
-      const out = execFileSync("wpctl", ["get-volume", "@DEFAULT_AUDIO_SINK@"], {
-        encoding: "utf8",
-      });
-      // "Volume: 0.70" or "Volume: 0.70 [MUTED]"
-      const m = out.match(/Volume:\s*([0-9.]+)/);
-      if (m) return Math.min(1, Math.max(0, Number(m[1])));
-    } catch {
-      // ignore
-    }
-  }
-  if (commandExists("pactl")) {
-    try {
-      const out = execFileSync("pactl", ["get-sink-volume", "@DEFAULT_SINK@"], {
-        encoding: "utf8",
-      });
-      const m = out.match(/(\d+)%/);
-      if (m) return Math.min(1, Math.max(0, Number(m[1]) / 100));
-    } catch {
-      // ignore
-    }
-  }
-  return null;
-}
-
-export function applyVolume(volume: number): { ok: boolean; detail: string } {
-  const pct = Math.round(Math.min(1, Math.max(0, volume)) * 100);
-  if (commandExists("wpctl")) {
-    try {
-      execFileSync("wpctl", ["get-volume", "@DEFAULT_AUDIO_SINK@"], {
-        stdio: "ignore",
-      });
-    } catch {
-      return { ok: false, detail: "wpctl: no default audio sink" };
-    }
-    try {
-      execFileSync("wpctl", ["set-volume", "@DEFAULT_AUDIO_SINK@", `${pct}%`], { stdio: "ignore" });
-      return { ok: true, detail: `wpctl ${pct}%` };
-    } catch (err) {
-      return { ok: false, detail: `wpctl failed: ${String(err)}` };
-    }
-  }
-  if (commandExists("pactl")) {
-    try {
-      execFileSync("pactl", ["set-sink-volume", "@DEFAULT_SINK@", `${pct}%`], { stdio: "ignore" });
-      return { ok: true, detail: `pactl ${pct}%` };
-    } catch (err) {
-      return { ok: false, detail: `pactl failed: ${String(err)}` };
-    }
-  }
-  return {
-    ok: false,
-    detail: "no wpctl/pactl (volume saved; install PipeWire for live apply)",
-  };
-}
-
 export type ApplyResult = {
   settings: MoireSettings;
   theme: MoireTheme;
-  volume: { ok: boolean; detail: string };
 };
 
-/** Persist settings and apply to theme file, GTK, and audio. */
+/**
+ * Persist settings and apply them to the theme file and GTK. Live volume belongs to the
+ * management service, which talks to PipeWire (`@moire/audio`).
+ */
 export function applySettings(settings: MoireSettings): ApplyResult {
   saveSettings(settings);
   const theme = writeActiveTheme(settings);
   applyGtkAppearance(settings.dark, settings.uiScale);
-  const volume = applyVolume(settings.volume);
   console.log(
-    `[prefs] applied dark=${settings.dark} scale=${settings.uiScale} notifs=${settings.notifications} volume=${volume.detail}`,
+    `[prefs] applied dark=${settings.dark} scale=${settings.uiScale} notifs=${settings.notifications}`,
   );
-  return { settings, theme, volume };
+  return { settings, theme };
 }
 
 function commandExists(bin: string): boolean {

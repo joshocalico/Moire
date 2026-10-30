@@ -22,9 +22,10 @@ import { CalendarApp } from "../../../apps/bundled/calendar/src/main";
 import { ClockApp } from "../../../apps/bundled/clock/src/main";
 import { ColorsApp } from "../../../apps/bundled/colors/src/main";
 import { CalendarStore, eventFromDraft } from "../../../apps/bundled/calendar/src/events";
-import { AlarmStore } from "../../../apps/bundled/clock/src/time";
+import { AlarmStore } from "../../../apps/bundled/clock/src/backend";
 import { PaletteStore } from "../../../apps/bundled/colors/src/palettes";
 import { retryStoreCleanup, StorageConflictError } from "./local-store";
+import { windowControl } from "./testing";
 import syncFs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -243,12 +244,16 @@ function controls(backend: HeadlessPlatform, window: Window) {
     window.tick();
     window.tick();
   };
-  const text = (x: number, y: number, value: string) => {
-    click({ x, y });
+  /** Press the control with this focusId or painted label (layout-independent). */
+  const press = (match: { focusId: string } | { text: string }) =>
+    click(windowControl(window, match));
+  /** Replace the text of the field with this focusId. */
+  const text = (focusId: string, value: string) => {
+    press({ focusId });
     key("a", true);
     key("a", false, value);
   };
-  return { native, key, click, text };
+  return { native, key, click, press, text };
 }
 const temp = await fs.mkdtemp(path.join(os.tmpdir(), "moire-publication-cleanup-"));
 const now = Date.parse("2026-10-03T00:00:00Z");
@@ -560,10 +565,10 @@ try {
         <ClockApp {...size} store={clock} wallNow={() => now} monotonicNow={() => 1000} />
       ),
       draft: (ui) => {
-        ui.click({ x: 712, y: 32 });
-        ui.text(200, 140, "Published alarm");
+        ui.press({ text: "Alarms" });
+        ui.text("clock:alarm-label", "Published alarm");
       },
-      commit: (_ui, _window, press) => press("Add Alarm"),
+      commit: (ui) => ui.press({ focusId: "clock:add-alarm" }),
       ids: () => clock.read(now).map((x) => x.id),
       cleanRetry: (ui) => ui.key("Escape"),
     },
@@ -573,8 +578,8 @@ try {
       width: 840,
       height: 680,
       render: (size) => <ColorsApp {...size} store={colors} />,
-      draft: (ui) => ui.text(120, 132, "Published palette"),
-      commit: (_ui, _window, press) => press("Create Palette"),
+      draft: (ui) => ui.text("colors:palette-name", "Published palette"),
+      commit: (ui) => ui.press({ focusId: "colors:new-palette" }),
       ids: () => colors.read().map((x) => x.id),
       cleanRetry: (ui) => ui.key("Escape"),
     },

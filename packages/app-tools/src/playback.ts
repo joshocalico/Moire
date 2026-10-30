@@ -299,6 +299,10 @@ export class PlaybackSession {
     await this.command(command);
     await this.poll();
   }
+  /** Jump to `seconds` from the start; the published position follows. */
+  async seek(seconds: number): Promise<void> {
+    await this.control(["seek", Math.max(0, seconds), "absolute"]);
+  }
   private async release(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;

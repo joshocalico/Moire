@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import React from "react";
 import { installUiFonts, Window, type ContextMenuAction } from "@moire/ui";
+import { flattenFileMenu } from "@moire/file-operations";
 import { HeadlessPlatform, notifyDrop } from "@moire/ui/testing";
+import type { SceneNode } from "@moire/react-host";
 import { FilesApp } from "./main";
 
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "moire-files-tabs-"));
@@ -15,6 +17,8 @@ const environment = {
 };
 process.env.HOME = fixture;
 process.env.XDG_CONFIG_HOME = path.join(fixture, ".config");
+// The session file clipboard lives in the runtime directory; keep it in the fixture.
+process.env.XDG_RUNTIME_DIR = path.join(fixture, ".run");
 process.env.XDG_DATA_HOME = path.join(fixture, ".local", "share");
 const backend = new HeadlessPlatform();
 const window = new Window({
@@ -116,29 +120,30 @@ try {
       context();
       if (
         title === expected &&
-        actions.find((action) => action.id === "moire.background:select-all")?.disabled !== true
+        actions.find((action) => action.id === "select-all")?.disabled !== true
       )
         return;
     }
     assert.fail(`Expected ${expected}, received ${title}`);
   };
-  const location = async (directory: string) => {
+  const location = async (directory: string, expected = path.basename(directory)) => {
     key(38, "l", { ctrl: true });
     for (const character of directory) key(20, character, { text: character });
     key(28, "Enter");
-    await expectContext(path.basename(directory));
+    await expectContext(expected);
     await settle();
   };
   const invoke = (id: string) => {
-    const action = actions.find((entry) => entry.id === id);
+    const action = flattenFileMenu(actions).find((entry) => entry.id === id);
     assert.ok(action, `Missing ${id}`);
     assert.notEqual(action.disabled, true);
-    action.onPress();
+    action.onPress?.();
     window.tick();
   };
   await expectContext("source");
-  const sortByName = actions.find((action) => action.id === "sort-name");
-  assert.ok(sortByName);
+  // Sort By ▸ Reverse Order flips the current name order.
+  const reverseOrder = flattenFileMenu(actions).find((action) => action.id === "sort-reverse");
+  assert.ok(reverseOrder);
   key(102, "Home");
   key(28, "Enter");
   await expectContext("Alpha");
@@ -167,9 +172,21 @@ try {
   assert.equal(title, "beta.txt", "restored collection focus receives arrows");
   key(15, "Tab", { ctrl: true });
   await expectContext("source");
-  key(30, "a", { ctrl: true });
-  context();
-  assert.equal(title, "zeta.txt", "other tab keeps its independent search");
+  // The other tab still shows its own search, with its results.
+  const painted = (): string[] => {
+    const found: string[] = [];
+    const walk = (node: SceneNode) => {
+      if (node.kind === "text" && node.text) found.push(node.text);
+      node.children.forEach(walk);
+    };
+    walk((window as unknown as { root: { container: SceneNode } }).root.container);
+    return found;
+  };
+  for (let i = 0; i < 50 && !painted().includes("Best match"); i++) await settle();
+  assert.ok(
+    painted().includes("Best match") && painted().includes("zeta.txt"),
+    "other tab keeps its independent search",
+  );
   await location(source);
   key(47, "v", { ctrl: true });
   await waitIdle();
@@ -214,7 +231,8 @@ try {
   invoke("trash");
   await waitIdle();
   await settle();
-  await location(path.join(fixture, ".local", "share", "Trash", "files"));
+  // Trash is shown by name, not as its storage folder.
+  await location(path.join(fixture, ".local", "share", "Trash", "files"), "Trash");
   key(30, "a", { ctrl: true });
   context();
   assert.equal(title, "2 Items");
@@ -230,7 +248,7 @@ try {
   key(103, "ArrowUp");
   context();
   assert.equal(title, "item-1198.txt", "revealed row owns real keyboard focus");
-  sortByName.onPress();
+  reverseOrder.onPress?.();
   await settle();
   context();
   assert.equal(title, "item-1198.txt", "sort retains path identity");

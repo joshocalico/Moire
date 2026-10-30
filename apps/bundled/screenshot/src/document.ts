@@ -1,5 +1,5 @@
 import type { ImageData } from "@moire/ui";
-import { applyEdits, type Edit } from "./capture";
+import { applyEdits, type Edit } from "./image";
 
 type Revision = { revision: number; edits: readonly Edit[] };
 /** Revisions identify edit states, so undoing to the saved state is clean again. */
@@ -10,7 +10,14 @@ export type ScreenshotDocument = Revision & {
   undo: readonly Revision[];
 };
 export function emptyDocument(): ScreenshotDocument {
-  return { original: null, edits: [], revision: 0, nextRevision: 1, savedRevision: 0, undo: [] };
+  return {
+    original: null,
+    edits: [],
+    revision: 0,
+    nextRevision: 1,
+    savedRevision: 0,
+    undo: [],
+  };
 }
 export function replaceDocument(
   previous: ScreenshotDocument,

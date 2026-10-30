@@ -19,7 +19,7 @@ import {
   type WidgetTheme,
 } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
-import { FileOperations } from "./filesystem";
+import { FileOperations } from "@moire/file-operations";
 import { executeTransfer, transferOutcomeNotice, transferRequest } from "./transfer-outcome";
 const sourceRoot = process.env.MOIRE_TEST_ROOT;
 const { TransferDialog }: typeof import("./transfer-dialog") = sourceRoot

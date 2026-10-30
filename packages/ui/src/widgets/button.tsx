@@ -45,6 +45,7 @@ export type ButtonProps = {
   autoFocus?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
+  onHoverChange?: (hovered: boolean) => void;
   onPress?: (event?: HitPointerEvent) => void;
 };
 
@@ -150,6 +151,7 @@ export function Button(props: ButtonProps): ReactNode {
           props.onFocusChange?.(next);
         }}
         onKeyDown={handleKey}
+        onHoverChange={props.onHoverChange}
         onPress={props.onPress}
       />
       {!explicitFill && recipe.rim ? (

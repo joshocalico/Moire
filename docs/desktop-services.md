@@ -35,9 +35,9 @@ without activating a live network backend. Native C36 screenshots confirm the wi
 hidden unsupported rows and shared rounded frames at one scale/theme. Broader
 appearance and physical input qualification remain open.
 
-The service reads local interface addresses and uses an existing `wpctl` or
-`pactl` backend for volume, mute and output identity. Missing tools or an absent
-server produce an unavailable state. Capability metadata distinguishes an absent
+The service reads local interface addresses and talks to PipeWire directly over its
+native protocol for volume, mute and output identity ([audio](audio.md)). An absent
+PipeWire or WirePlumber produces an unavailable state. Capability metadata distinguishes an absent
 backend from transient loading or failure: unsupported hardware rows are hidden,
 while a known supported control stays visible through temporary failures.
 Network remains visible. Typed Linux interface transport gives wired connections
@@ -132,10 +132,10 @@ longer than the former ten-second generic deadline. Actual audio-server readback
 is an explicit opt-in gate:
 
 ```sh
-MOIRE_TEST_LIVE_AUDIO=1 node --import ./apps/system/compositor/node_modules/tsx/dist/loader.mjs packages/prefs/src/audio-status.smoke.ts
+MOIRE_TEST_LIVE_AUDIO=1 node --import ./apps/system/compositor/node_modules/tsx/dist/loader.mjs packages/audio/src/live-audio.smoke.ts
 ```
 
-Do not count the normal CLI protocol fixtures as that live audio gate. Before
+Do not count the fake-PipeWire fixtures as that live audio gate. Before
 any next image review, coordinate one graphics guest with Recovery, preserve C33,
 verify the installed source/package, exercise native controls and notifications,
 and test suspend/resume only after a supported backend exists. The

@@ -6,10 +6,10 @@ cd "$ROOT"
 LOADER="$ROOT/apps/system/compositor/node_modules/tsx/dist/loader.mjs"
 [[ -f "$LOADER" ]] || { echo 'Install workspace dependencies before testing.' >&2; exit 1; }
 run() { node --import "$LOADER" "$@"; }
-for app in editor notes calculator characters dictionary help calendar clock colors weather screenshot disk-usage; do
+for app in editor notes calculator characters dictionary help calendar clock colors weather screenshot; do
   run "apps/bundled/$app/src/smoke.tsx"
 done
-for app in image-viewer music archive-manager document-viewer video-player font-viewer sound-recorder; do
+for app in image-viewer music archive-manager document-viewer video-player font-viewer sound-recorder disk-usage; do
   run "apps/bundled/$app/src/smoke.ts"
 done
 run apps/bundled/archive-manager/src/publication.smoke.ts
@@ -17,7 +17,7 @@ run apps/bundled/archive-manager/src/layout.smoke.tsx
 run apps/bundled/weather/src/clear-saved.smoke.tsx
 run apps/bundled/screenshot/src/document.smoke.ts
 run apps/bundled/screenshot/src/lifecycle.smoke.tsx
-run apps/bundled/screenshot/src/gesture.smoke.mjs
+run apps/bundled/screenshot/src/gesture.smoke.tsx
 run apps/bundled/screenshot/src/input-trace.smoke.tsx
 run apps/bundled/music/src/import.smoke.ts
 run apps/bundled/font-viewer/src/workflow.smoke.tsx
@@ -26,7 +26,7 @@ run apps/bundled/calendar/src/close.smoke.tsx
 run packages/app-tools/src/publication-cleanup.smoke.tsx
 for app in calendar clock colors; do
   run packages/app-tools/src/persistence-process.smoke.mjs "$app"
-  run packages/app-tools/src/persistence-window.smoke.mjs "$app"
+  run packages/app-tools/src/persistence-window.smoke.tsx "$app"
 done
 run packages/app-tools/src/playback.smoke.ts
 run packages/app-tools/src/player-workflow.smoke.tsx
@@ -53,15 +53,24 @@ run packages/ui/src/tabs-titlebar.smoke.tsx
 run packages/ui/src/platforms/wayland/window-role.smoke.ts
 run apps/system/management-service/src/identity.smoke.ts
 run packages/dbus/src/signals.smoke.ts
-run packages/prefs/src/audio-status.smoke.ts
+run packages/audio/src/pod.smoke.ts
+run packages/audio/src/control.smoke.ts
+run packages/audio/src/audio-status.smoke.ts
+run packages/audio/src/audio-devices.smoke.ts
+run packages/audio/src/sound.smoke.ts
+run packages/sys/src/pipewire-stream.smoke.ts
 run apps/system/management-service/src/notifications.smoke.ts
 run apps/system/management-service/src/desktop-controls.smoke.ts
 run apps/system/management-service/src/network-manager.smoke.ts
 run apps/system/management-service/src/upower-battery.smoke.ts
 run apps/system/management-service/src/shutdown.smoke.ts
+run apps/system/index-service/src/service.smoke.ts
+run apps/system/index-service/src/watcher.smoke.ts
+run apps/system/index-service/src/dbus.smoke.ts
+run apps/bundled/files/src/search/search.smoke.ts
 run packages/app-discovery/src/portal-client.smoke.ts
 run apps/core/process-manager/src/smoke.tsx
-run packages/shell/src/focus-smoke.ts
+run packages/shell/src/focus-smoke.tsx
 run packages/ui/src/slider-commit.smoke.tsx
 run packages/ui/src/text-field-password.smoke.tsx
 run packages/shell/src/volume-intent.smoke.ts
@@ -76,7 +85,10 @@ run packages/shell/src/panel-status.smoke.tsx
 run packages/shell/src/task-overflow.smoke.tsx
 run packages/shell/src/quick-settings.smoke.tsx
 run packages/shell/src/popup-frame.smoke.tsx
-run packages/shell/src/smoke.ts
+run packages/shell/src/smoke.tsx
+run packages/shell/src/panel-modes.smoke.tsx
+run packages/shell/src/taskbar-groups.smoke.tsx
+run packages/shell/src/preview/cli.tsx --check
 run apps/bundled/files/src/filesystem.smoke.ts
 run apps/bundled/files/src/cut-clipboard.smoke.tsx
 run apps/bundled/files/src/transfer-outcome.smoke.ts
@@ -91,7 +103,12 @@ node --import "$LOADER" apps/bundled/files/src/keyboard.smoke.tsx --list
 run apps/bundled/files/src/tabs.smoke.tsx
 run apps/bundled/files/src/inspector.smoke.tsx
 run apps/bundled/files/src/uris.smoke.tsx
-run apps/bundled/files/src/panes.smoke.tsx
+run apps/bundled/files/src/rail.smoke.tsx
+run apps/bundled/files/src/overview.smoke.tsx
+run apps/bundled/files/src/folder-page.smoke.tsx
+run apps/bundled/files/src/columns.smoke.tsx
+run apps/bundled/files/src/search-page.smoke.tsx
+run apps/bundled/files/src/sheets.smoke.tsx
 run apps/bundled/files/src/timestamp.smoke.tsx
 run packages/ui/src/widgets/files-adoption.smoke.tsx
 run apps/bundled/notes/src/rich-document.smoke.tsx
@@ -130,7 +147,8 @@ run packages/ui/src/icon-adoption.smoke.tsx
 run packages/ui/scripts/integration-input.smoke.tsx
 run packages/ui/scripts/settings-display.smoke.tsx
 run packages/core/src/capture.smoke.ts
-run packages/core/src/window-work-area.smoke.mjs
+run packages/core/src/window-work-area.smoke.tsx
+run packages/core/src/window-motion.smoke.ts
 run packages/core/src/keyboard-focus.smoke.mjs
 run apps/system/compositor/src/capture.smoke.ts
 run packages/core/src/spawn.smoke.ts

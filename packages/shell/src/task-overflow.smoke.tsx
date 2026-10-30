@@ -42,7 +42,8 @@ try {
             clientId: 1,
             surfaceId: index + 1,
             title: `Document ${index + 1}`,
-            appId: "moire.editor",
+            // Distinct applications: one window each crowds the panel (one app would group).
+            appId: `moire.fixture${index + 1}`,
             focused: false,
             minimized: true,
           }));

@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
-    "smoke": "tsx src/open-with.smoke.ts"
+    "smoke": "tsx src/open-with.smoke.ts && tsx src/terminal.smoke.ts && tsx src/names.smoke.ts"
   },
   "dependencies": {
     "@moire/dbus": "workspace:*"

@@ -9,6 +9,8 @@ import {
   parseDesktopBluetooth,
   parseBluetoothPairing,
   BLUETOOTH_PAIRING_DISABLED,
+  bluetoothDeviceKind,
+  parseBluetoothAlias,
   type DesktopBluetooth,
 } from "./bluetooth-status";
 
@@ -180,8 +182,58 @@ for (const value of [
   { ...consent, operation: { kind: "success" } },
 ])
   assert.throws(() => parseBluetoothTrust(value));
+// Device kind: BlueZ's icon name first, then the Class of Device's major and minor classes.
+const kinds: [string | null, number | null, string][] = [
+  ["audio-headphones", null, "headphones"],
+  ["audio-headset", null, "headset"],
+  ["audio-card", null, "speaker"],
+  ["input-mouse", null, "mouse"],
+  ["input-gaming", null, "gamepad"],
+  ["input-tablet", null, "tablet"],
+  ["phone", null, "phone"],
+  ["computer", null, "computer"],
+  ["printer", null, "printer"],
+  ["camera-video", null, "camera"],
+  [null, null, "other"],
+  [null, 0x5a020c, "phone"],
+  [null, 0x3c010c, "computer"],
+  [null, 0x240404, "headset"],
+  [null, 0x240418, "headphones"],
+  [null, 0x240414, "speaker"],
+  [null, 0x002540, "keyboard"],
+  [null, 0x002580, "mouse"],
+  [null, 0x0025c0, "keyboard"],
+  [null, 0x002508, "gamepad"],
+  [null, 0x002514, "tablet"],
+  [null, 0x040680, "printer"],
+  [null, 0x040620, "camera"],
+  [null, 0x000704, "watch"],
+  [null, 0x001f00, "other"],
+  ["unknown-icon", null, "other"],
+];
+for (const [icon, deviceClass, expected] of kinds)
+  assert.equal(
+    bluetoothDeviceKind(icon, deviceClass),
+    expected,
+    `${icon} ${deviceClass?.toString(16)}`,
+  );
+// The icon wins over the class when both are present.
+assert.equal(bluetoothDeviceKind("input-keyboard", 0x002580), "keyboard");
+const described = { ...device, kind: "headphones", battery: 80 };
+assert.deepEqual(
+  parseDesktopBluetooth({ ...state, status: { ...ready, devices: [described] } }).status,
+  { ...ready, devices: [described] },
+);
+for (const bad of [{ kind: "toaster" }, { battery: 101 }, { battery: -1 }, { battery: 4.5 }])
+  assert.throws(() =>
+    parseDesktopBluetooth({ ...state, status: { ...ready, devices: [{ ...device, ...bad }] } }),
+  );
+assert.equal(parseBluetoothAlias("  Desk mouse "), "Desk mouse");
+for (const bad of ["", "   ", "x".repeat(65), "tab\there", 7])
+  assert.throws(() => parseBluetoothAlias(bad));
 console.log(
   JSON.stringify({
+    deviceKindCases: kinds.length,
     actualExitCode: 0,
     malformedStatusCases: invalidStatus.length,
     malformedOperationCases: invalidOperation.length,

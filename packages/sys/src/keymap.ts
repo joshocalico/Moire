@@ -37,16 +37,40 @@ export type KeymapMemfd = {
   size: number;
 };
 
-/** Build a default (evdev/pc105/us) keymap in a sealed memfd. */
-export function createXkbKeymapMemfd(): KeymapMemfd {
+/** RMLVO names for xkb_keymap_new_from_names; comma-separated lists, one entry per layout. */
+export type XkbRuleNames = {
+  rules: string;
+  model: string;
+  layout: string;
+  variant: string;
+  options: string;
+};
+
+let ruleNamesType: unknown = null;
+function declareRuleNames(): void {
+  ruleNamesType ??= koffi.struct("xkb_rule_names", {
+    rules: "const char *",
+    model: "const char *",
+    layout: "const char *",
+    variant: "const char *",
+    options: "const char *",
+  });
+}
+
+/**
+ * Build a keymap in a memfd. Without names, XKB's system defaults (evdev/pc105/us, or the
+ * XKB_DEFAULT_* environment) are used, exactly as before configurable layouts existed.
+ */
+export function createXkbKeymapMemfd(names?: XkbRuleNames): KeymapMemfd {
   assertLinux("xkb keymap");
   const lib = getXkb();
   const libc = getLibc();
 
   const xkb_context_new = lib.func("void *xkb_context_new(int flags)");
   const xkb_context_unref = lib.func("void xkb_context_unref(void *context)");
+  declareRuleNames();
   const xkb_keymap_new_from_names = lib.func(
-    "void *xkb_keymap_new_from_names(void *context, void *names, int flags)",
+    "void *xkb_keymap_new_from_names(void *context, const xkb_rule_names *names, int flags)",
   );
   const xkb_keymap_get_as_string = lib.func(
     "void *xkb_keymap_get_as_string(void *keymap, int format)",
@@ -65,8 +89,13 @@ export function createXkbKeymapMemfd(): KeymapMemfd {
   let strPtr: unknown;
   try {
     // NULL names → system defaults
-    keymapPtr = xkb_keymap_new_from_names(ctx, null, XKB_KEYMAP_COMPILE_NO_FLAGS);
-    if (!keymapPtr) throw new Error("xkb_keymap_new_from_names failed");
+    keymapPtr = xkb_keymap_new_from_names(ctx, names ?? null, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    if (!keymapPtr)
+      throw new Error(
+        names
+          ? `xkb_keymap_new_from_names failed for layout=${names.layout} variant=${names.variant} options=${names.options}`
+          : "xkb_keymap_new_from_names failed",
+      );
 
     strPtr = xkb_keymap_get_as_string(keymapPtr, XKB_KEYMAP_FORMAT_TEXT_V1);
     if (!strPtr) throw new Error("xkb_keymap_get_as_string failed");

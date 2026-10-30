@@ -75,6 +75,8 @@ const output: KmsOutput = {
 // deliberately disabled, while both real compositor scene builders still run.
 Object.assign(server, {
   outputs: [{ kms: output, x: 0, y: 0, scale120: 120, primary: true }],
+  // Flat/retained parity: windows show settled rather than mid-entrance.
+  reducedMotion: true,
   syncHardwareCursor: () => false,
   cursorX: -100,
   cursorY: -100,

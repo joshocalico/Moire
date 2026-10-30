@@ -199,4 +199,6 @@ export const CORE_GLOBALS = {
    * Intended for the Xwayland client only.
    */
   xwayland_shell_v1: 1,
+  /** Video players and presentations keep the screen awake while their surface is visible. */
+  zwp_idle_inhibit_manager_v1: 1,
 } as const;

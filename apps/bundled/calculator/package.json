@@ -3,23 +3,25 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Calculate arithmetic expressions",
+  "imports": {
+    "#calculator/*": "./src/*.ts"
+  },
+  "description": "Calculate arithmetic and scientific expressions",
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "smoke": "tsx src/smoke.tsx"
+    "smoke": "tsx src/model.smoke.ts && tsx src/smoke.tsx"
   },
   "dependencies": {
+    "@moire/app-tools": "workspace:*",
     "@moire/ui": "workspace:*",
-    "@moire/prefs": "workspace:*",
     "react": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "@moire/react-host": "workspace:*"
+    "typescript": "^5.7.2"
   },
   "exports": {
     ".": "./src/main.tsx",

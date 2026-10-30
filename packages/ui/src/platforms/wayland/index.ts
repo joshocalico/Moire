@@ -63,20 +63,17 @@ import {
   truncateFd,
   type InputFixtureTrace,
   type EglClientPresent,
+  type EglCompositionLayer,
+  type EglProducerTarget,
   type WaylandChunk,
 } from "@moire/sys";
-import { createElement } from "react";
 import {
-  createShellRoot,
-  rasterize,
-  renderShell,
-  Group,
-  Rect,
-  Text,
-  type RetainedClip,
-  type RetainedSceneFrame,
-} from "@moire/react-host";
-import { themePalette } from "#ui/theme";
+  hasSceneSurfaces,
+  sceneSurfaceEntry,
+  setSceneSurfaceSupport,
+  type SceneSurfaceInstance,
+} from "#ui/scene/surface";
+import { rasterize, type RetainedClip, type RetainedSceneFrame } from "@moire/react-host";
 import {
   type DndCapable,
   type PlatformBackend,
@@ -103,9 +100,7 @@ import {
   type DragPreviewSpec,
 } from "#ui/widgets/dnd";
 import { updateActiveWindowDropHover, clearActiveWindowDropHover } from "#ui/window";
-import { Icon } from "#ui/widgets/icon";
-import { GridItem } from "#ui/widgets/grid";
-import { ListItem } from "#ui/widgets/list";
+import { createDragIconRoot } from "./drag-icon";
 import { WaylandKeyboard } from "./keyboard";
 import type { KeymapAvailability } from "./keymap-types";
 import { classifyShmFrame, validateShmFrame, type ShmFrame } from "./shm-format";
@@ -246,6 +241,16 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private surfaceStateManagerId = 0;
   private surfaceStateVersion = 0;
   private eglPresenter: EglOutputScaler | null = null;
+  private readonly sceneSurfaces = new Map<
+    string,
+    {
+      instance: SceneSurfaceInstance;
+      target: EglProducerTarget;
+      width: number;
+      height: number;
+      create: unknown;
+    }
+  >();
   private eglFd = -1;
   private eglTransport: "dmabuf" | "readback" | "software" = "software";
   private renderNode: string | undefined;
@@ -509,91 +514,12 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
    * Moire's compositor applies it only while painting this role-less surface.
    */
   private createDragIconSurface(label: string, preview?: DragPreviewSpec): number {
-    const pal = themePalette();
-    const root = createShellRoot();
-    const icon = preview?.icon;
     const chipW = Math.max(24, Math.round(preview?.width ?? 96));
     const chipH = Math.max(24, Math.round(preview?.height ?? 40));
     const hotspotX = Math.max(0, Math.min(chipW, Math.round(preview?.hotspotX ?? 0)));
     const hotspotY = Math.max(0, Math.min(chipH, Math.round(preview?.hotspotY ?? 0)));
 
-    if (icon) {
-      const listLike = chipW > chipH * 2;
-      const iconSize = listLike
-        ? Math.max(16, Math.min(24, chipH - 12))
-        : Math.max(24, Math.min(56, chipH - 38));
-      renderShell(
-        root,
-        createElement(
-          Group,
-          { x: 0, y: 0, width: chipW, height: chipH, opacity: 0.68 },
-          listLike
-            ? createElement(ListItem, {
-                width: chipW,
-                height: chipH,
-                title: label,
-                selected: true,
-                interactive: false,
-                leading: createElement(Icon, {
-                  name: icon.name,
-                  size: iconSize,
-                  color: icon.color,
-                }),
-              })
-            : createElement(GridItem, {
-                width: chipW,
-                height: chipH,
-                label,
-                iconSize,
-                selected: true,
-                interactive: false,
-                icon: createElement(Icon, {
-                  name: icon.name,
-                  size: iconSize,
-                  color: icon.color,
-                }),
-              }),
-        ),
-      );
-    } else {
-      const text = label.length > 26 ? label.slice(0, 25) + "…" : label;
-      const padX = 12;
-      renderShell(
-        root,
-        createElement(
-          Group,
-          { x: 0, y: 0, width: chipW, height: chipH },
-          createElement(Rect, {
-            x: 0,
-            y: 0,
-            width: chipW,
-            height: chipH,
-            fill: (pal.surface & 0x00ffffff) | 0xf2000000,
-          }),
-          createElement(Rect, {
-            x: 0,
-            y: 0,
-            width: chipW,
-            height: 1,
-            fill: pal.rimLight,
-          }),
-          createElement(Rect, {
-            x: 0,
-            y: 0,
-            width: 3,
-            height: chipH,
-            fill: pal.accentLine,
-          }),
-          createElement(Text, {
-            x: padX,
-            y: 11,
-            text,
-            color: pal.text,
-            fontSize: 13,
-          }),
-        ),
-      );
-    }
+    const root = createDragIconRoot({ label, width: chipW, height: chipH, icon: preview?.icon });
     const { pixels } = rasterize(root.container, chipW, chipH);
     const stride = chipW * 4;
     const size = stride * chipH;
@@ -1057,6 +983,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     }
     this.retireKeyboard();
     this.releasePendingInputFds();
+    this.destroySceneSurfaces();
     this.eglPresenter?.destroy();
     this.eglPresenter = null;
     this.eglTransport = "software";
@@ -1071,6 +998,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private tryCreateEglPresenter(): void {
     const mode = (process.env.MOIRE_UI_ACCELERATION ?? "auto").trim().toLowerCase();
     if (mode === "software" || mode === "shm" || mode === "off") {
+      setSceneSurfaceSupport(false);
       this.fallbackReason = `acceleration disabled by MOIRE_UI_ACCELERATION=${mode}`;
       return;
     }
@@ -1082,7 +1010,9 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
       try {
         const fd = openPath(candidate, O_RDWR | O_CLOEXEC);
         try {
-          this.eglPresenter = new EglOutputScaler(fd);
+          // GLES 3 only when a GPU scene surface is registered; plain UI stays on GLES 2.
+          this.eglPresenter = new EglOutputScaler(fd, { gles3: hasSceneSurfaces() });
+          setSceneSurfaceSupport(this.eglPresenter.clientVersion === 3);
           this.eglTransport = "dmabuf";
           this.eglFd = fd;
           this.renderNode = candidate;
@@ -1094,13 +1024,15 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
         } catch (error) {
           closeFd(fd);
           lastError = error;
+          console.warn(`[ui/wayland] EGL presenter on ${candidate} failed:`, error);
         }
       } catch (error) {
-        lastError = error;
+        lastError ??= error;
       }
     }
     const detail = lastError instanceof Error ? lastError.message : String(lastError);
     this.fallbackReason = detail;
+    setSceneSurfaceSupport(false);
     if (mode === "dmabuf" || mode === "egl" || mode === "on") {
       console.warn(`[ui/wayland] requested dmabuf acceleration unavailable: ${detail}`);
     } else {
@@ -1129,11 +1061,83 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     }
   }
 
+  /** Draw each scene surface placeholder into its target and substitute the resident image. */
+  private composeSceneSurfaces(channel: string, scene: RetainedSceneFrame): RetainedSceneFrame {
+    const presenter = this.eglPresenter;
+    if (!presenter || !scene.layers.some((layer) => layer.surface)) return scene;
+    try {
+      const layers = scene.layers.map((layer): EglCompositionLayer => {
+        const entry = layer.surface ? sceneSurfaceEntry(layer.surface) : undefined;
+        if (!layer.surface || !entry) return layer;
+        const width = Math.max(1, Math.round(layer.destination.width));
+        const height = Math.max(1, Math.round(layer.destination.height));
+        const key = `${channel}:${layer.surface}`;
+        let live = this.sceneSurfaces.get(key);
+        if (
+          live &&
+          (live.width !== width || live.height !== height || live.create !== entry.create)
+        ) {
+          this.destroySceneSurface(key);
+          live = undefined;
+        }
+        if (!live) {
+          const target = presenter.createProducerTarget(width, height);
+          try {
+            const instance = presenter.produce((gl) =>
+              entry.create(gl, { width, height, bgra: true }),
+            );
+            live = { instance, target, width, height, create: entry.create };
+            this.sceneSurfaces.set(key, live);
+          } catch (error) {
+            target.image.destroy();
+            throw error;
+          }
+        }
+        const drawn = live;
+        presenter.produce(() => drawn.instance.render(entry.time(), drawn.target.framebuffer));
+        return {
+          ...layer,
+          pixels: drawn.target.image,
+          sourceWidth: width,
+          sourceHeight: height,
+          sourceStride: width * 4,
+          revision: undefined,
+        };
+      });
+      return { ...scene, layers: layers as RetainedSceneFrame["layers"] };
+    } catch (error) {
+      // A surface that cannot draw must not take the window down: views fall back to their
+      // static equivalent on the next reconcile.
+      console.warn("[ui/wayland] scene surface failed; using static content:", error);
+      setSceneSurfaceSupport(false);
+      this.destroySceneSurfaces();
+      return scene;
+    }
+  }
+
+  private destroySceneSurface(key: string): void {
+    const live = this.sceneSurfaces.get(key);
+    if (!live) return;
+    this.sceneSurfaces.delete(key);
+    try {
+      this.eglPresenter?.produce(() => live.instance.destroy());
+    } catch {
+      // The context may already be lost; its resources go with it.
+    } finally {
+      live.target.image.destroy();
+    }
+  }
+
+  private destroySceneSurfaces(): void {
+    for (const key of this.sceneSurfaces.keys()) this.destroySceneSurface(key);
+  }
+
   renderClientComposition(
     channel: string,
-    scene: RetainedSceneFrame,
+    retained: RetainedSceneFrame,
   ): ClientCompositionPresent | null {
     if (!this.eglPresenter || this.eglTransport === "software") return null;
+    const scene = this.composeSceneSurfaces(channel, retained);
     if (this.eglTransport === "dmabuf") {
       try {
         const frame = this.eglPresenter.renderClientComposition(channel, scene);
@@ -1209,6 +1213,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   }
 
   dropClientChannel(channel: string): void {
+    for (const key of this.sceneSurfaces.keys())
+      if (key.startsWith(`${channel}:`)) this.destroySceneSurface(key);
     this.eglPresenter?.dropClientChannel(channel);
   }
 

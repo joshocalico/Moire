@@ -14,6 +14,9 @@ import {
   type BluetoothPromptRequest,
   type BluetoothTrustRequest,
   type BluetoothTrustConsent,
+  type BluetoothId,
+  type BluetoothPowerChange,
+  type BluetoothForgetRequest,
 } from "@moire/system-management/bluetooth-status";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -22,12 +25,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionBus } from "@moire/dbus";
+import { airplaneState } from "./airplane-mode";
 import {
+  AudioControl,
+  createAudioDevicesAdapter,
   createAudioStatusAdapter,
+  PipeWireError,
+  type AudioSnapshot,
+  type InputMeterState,
   type AudioReady,
   type AudioStatus,
   type AudioStatusAdapter,
-} from "@moire/prefs";
+} from "@moire/audio";
+import { FakePipeWireServer } from "@moire/audio/testing";
 import {
   DESKTOP_STATUS_BUS,
   DESKTOP_STATUS_INTERFACE,
@@ -53,6 +63,23 @@ import {
   type BatteryAdapter,
 } from "@moire/system-management/battery-status";
 
+/** A fake PipeWire with two outputs, two inputs and one app playing, for the devices adapter. */
+async function soundFixture() {
+  const fake = FakePipeWireServer.standard(await FakePipeWireServer.start());
+  const control = new AudioControl({ socketPath: fake.path });
+  const meter = {
+    started: 0,
+    stopped: 0,
+    state: { kind: "off" } as InputMeterState,
+    callbacks: null as null | {
+      onLevel: (level: number) => void;
+      onState: (state: InputMeterState) => void;
+    },
+  };
+  /** Alerts the notification service asked for. */
+  const alerts: number[] = [];
+  return { fake, control, meter, alerts };
+}
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 async function until(check: () => boolean, label: string) {
   const deadline = performance.now() + 4000;
@@ -65,7 +92,7 @@ class AudioFixture implements AudioStatusAdapter {
   state: AudioStatus = {
     kind: "ready",
     sink: {
-      backend: "wpctl",
+      backend: "pipewire",
       id: "4",
       identity: "fixture:4",
       name: "Fixture",
@@ -166,6 +193,54 @@ class BluetoothFixture implements BluetoothAdapter {
         ),
       },
       operation: { kind: "idle" },
+    });
+  }
+  powerRequests: BluetoothPowerChange[] = [];
+  forgotten: BluetoothId[] = [];
+  private interactive() {
+    if (this.state.status.kind !== "ready" || this.state.status.policy !== "interactive")
+      throw new Error("Bluetooth is read-only");
+    return this.state.status;
+  }
+  async setPowered(request: BluetoothPowerChange) {
+    const status = this.interactive();
+    if (!status.adapters.some((adapter) => adapter.id === request.adapterId))
+      throw new Error("Bluetooth adapter is no longer available");
+    this.powerRequests.push(request);
+    this.publish({
+      ...this.state,
+      status: {
+        ...status,
+        adapters: status.adapters.map((adapter) =>
+          adapter.id === request.adapterId ? { ...adapter, powered: request.powered } : adapter,
+        ),
+      },
+    });
+  }
+  renamed: { id: BluetoothId; name: string }[] = [];
+  async renameDevice(request: { id: BluetoothId; name: string }) {
+    const status = this.interactive();
+    if (!status.devices.some((device) => device.id === request.id))
+      throw new Error("Bluetooth device is no longer available");
+    this.renamed.push(request);
+    this.publish({
+      ...this.state,
+      status: {
+        ...status,
+        devices: status.devices.map((device) =>
+          device.id === request.id ? { ...device, name: request.name } : device,
+        ),
+      },
+    });
+  }
+  async forgetDevice(request: BluetoothForgetRequest) {
+    const status = this.interactive();
+    if (!status.devices.some((device) => device.id === request.id))
+      throw new Error("Bluetooth device is no longer available");
+    this.forgotten.push(request.id);
+    this.publish({
+      ...this.state,
+      status: { ...status, devices: status.devices.filter((device) => device.id !== request.id) },
     });
   }
   trustCaller = "";
@@ -399,6 +474,9 @@ class WifiFixture implements WifiAdapter {
   reads = 0;
   scans = 0;
   cancellations = 0;
+  toggles: boolean[] = [];
+  disconnects = 0;
+  forgotten: string[] = [];
   disposed = false;
   subscribe(listener: () => void) {
     this.listeners.add(listener);
@@ -433,6 +511,70 @@ class WifiFixture implements WifiAdapter {
     );
     this.cancellations++;
     this.publish({ ...this.state, operation: { kind: "idle" } });
+  }
+  private interactive() {
+    if (this.state.kind !== "ready" || this.state.policy !== "interactive")
+      throw new Error("Network controls unavailable or read-only");
+    return this.state;
+  }
+  async setEnabled(enabled: boolean) {
+    const state = this.interactive();
+    if (!state.canToggle) throw new Error("Wi-Fi radio control is not permitted");
+    this.toggles.push(enabled);
+    this.publish({ ...state, enabled });
+  }
+  async disconnect() {
+    const state = this.interactive();
+    if (state.connection.kind !== "active" || state.connection.transport !== "wifi")
+      throw new Error("No Wi-Fi connection is active");
+    this.disconnects++;
+    this.publish({ ...state, connection: { kind: "none" } });
+  }
+  radios: { wifi?: boolean; wwan?: boolean }[] = [];
+  async setRadios(request: { wifi?: boolean; wwan?: boolean }) {
+    const state = this.interactive();
+    if (!state.canToggle) throw new Error("Wi-Fi radio control is not permitted");
+    this.radios.push(request);
+    this.publish({
+      ...state,
+      enabled: request.wifi ?? state.enabled,
+      ...(state.wwan
+        ? { wwan: { ...state.wwan, enabled: request.wwan ?? state.wwan.enabled } }
+        : {}),
+    });
+  }
+  hidden: unknown[] = [];
+  async connectHidden(request: unknown) {
+    this.interactive();
+    this.hidden.push(request);
+  }
+  vpnCalls: string[] = [];
+  async activateVpn(id: string) {
+    this.vpnCalls.push(`activate:${id}`);
+  }
+  async deactivateVpn(id: string) {
+    this.vpnCalls.push(`deactivate:${id}`);
+  }
+  async removeVpn(id: string) {
+    this.vpnCalls.push(`remove:${id}`);
+  }
+  async importVpn(request: { kind: string; name: string; password: string }) {
+    this.vpnCalls.push(`import:${request.kind}:${request.name}`);
+  }
+  async setProxy(request: { method: string; pacUrl: string; password?: string }) {
+    this.vpnCalls.push(
+      `proxy:${request.method}:${request.pacUrl}${request.password ? `:${request.password}` : ""}`,
+    );
+  }
+  async forget(id: string) {
+    const state = this.interactive();
+    if (!state.accessPoints.some((ap) => ap.id === id && ap.saved))
+      throw new Error("Network access point changed");
+    this.forgotten.push(id);
+    this.publish({
+      ...state,
+      accessPoints: state.accessPoints.map((ap) => (ap.id === id ? { ...ap, saved: false } : ap)),
+    });
   }
   async dispose() {
     this.disposed = true;
@@ -492,6 +634,7 @@ try {
   const battery = new BatteryFixture();
   const bluetooth = new BluetoothFixture();
   const pairing = new PairingFixture();
+  const sound = await soundFixture();
   let dnd = false,
     policyWrites = 0,
     network: readonly DesktopNetwork[] = [
@@ -503,6 +646,27 @@ try {
     battery,
     bluetooth,
     bluetoothPairing: pairing,
+    audioDevices: createAudioDevicesAdapter({ control: sound.control }),
+    alertSound: () => sound.alerts.push(Date.now()),
+    inputMeter: (callbacks) => {
+      sound.meter.callbacks = callbacks;
+      return {
+        get state() {
+          return sound.meter.state;
+        },
+        start() {
+          sound.meter.started++;
+          sound.meter.state = { kind: "on" };
+          callbacks.onState(sound.meter.state);
+        },
+        stop() {
+          if (sound.meter.state.kind !== "on") return;
+          sound.meter.stopped++;
+          sound.meter.state = { kind: "off" };
+          callbacks.onState(sound.meter.state);
+        },
+      };
+    },
     pollMs: 0,
     network: () => network,
     readDoNotDisturb: () => dnd,
@@ -684,6 +848,69 @@ try {
   }, "Bluetooth disconnect observed");
   const disconnected = bluetooth.state;
   assert(disconnected.status.kind === "ready");
+  const powerIntent = () => ({ owner: serverName, revision: status().revision });
+  const staleBluetooth = status().revision;
+  await observer.setBluetoothPowered({ ...powerIntent(), adapterId, powered: false });
+  await until(() => {
+    const current = status();
+    return (
+      !current.updating &&
+      current.bluetooth.status.kind === "ready" &&
+      current.bluetooth.status.adapters[0]?.powered === false
+    );
+  }, "Bluetooth power off observed");
+  await observer.setBluetoothPowered({ ...powerIntent(), adapterId, powered: true });
+  await until(() => !status().updating, "Bluetooth power on settled");
+  assert.deepEqual(bluetooth.powerRequests, [
+    { adapterId, powered: false },
+    { adapterId, powered: true },
+  ]);
+  await assert.rejects(
+    observer.setBluetoothPowered({
+      ...powerIntent(),
+      adapterId: parseBluetoothId("adapter:missing"),
+      powered: false,
+    }),
+    /no longer available/,
+  );
+  await assert.rejects(
+    client.call({
+      destination: serverName,
+      path: DESKTOP_STATUS_PATH,
+      interface: DESKTOP_STATUS_INTERFACE,
+      member: "SetBluetoothPowered",
+      signature: "usb",
+      body: [staleBluetooth, adapterId, false],
+    }),
+    /changed/,
+  );
+  await assert.rejects(
+    client.call({
+      destination: serverName,
+      path: DESKTOP_STATUS_PATH,
+      interface: DESKTOP_STATUS_INTERFACE,
+      member: "ForgetBluetoothDevice",
+      signature: "us",
+      body: [status().revision, "device:missing"],
+    }),
+    /no longer available/,
+  );
+  await until(() => !status().updating, "unknown Bluetooth forget settled");
+  assert.equal(bluetooth.powerRequests.length, 2, "stale revision cannot change radio power");
+  await observer.forgetBluetoothDevice({ ...powerIntent(), id: deviceId });
+  await until(() => {
+    const current = status();
+    return (
+      !current.updating &&
+      current.bluetooth.status.kind === "ready" &&
+      current.bluetooth.status.devices.length === 0
+    );
+  }, "Bluetooth device forgotten");
+  assert.deepEqual(bluetooth.forgotten, [deviceId]);
+  await assert.rejects(
+    observer.forgetBluetoothDevice({ ...powerIntent(), id: deviceId }),
+    /no longer available/,
+  );
   bluetooth.publish({ ...disconnected, status: { ...disconnected.status, policy: "readonly" } });
   await until(() => {
     const current = status().bluetooth.status;
@@ -711,6 +938,33 @@ try {
     /read-only/,
   );
   assert.equal(bluetooth.requests.length, requestsBeforeReadonly);
+  await assert.rejects(
+    observer.setBluetoothPowered({ ...powerIntent(), adapterId, powered: false }),
+    /unavailable/,
+  );
+  await assert.rejects(
+    observer.forgetBluetoothDevice({ ...powerIntent(), id: deviceId }),
+    /unavailable/,
+  );
+  for (const [member, signature, value] of [
+    ["SetBluetoothPowered", "usb", [adapterId, false]],
+    ["ForgetBluetoothDevice", "us", [deviceId]],
+  ] as const) {
+    await assert.rejects(
+      client.call({
+        destination: serverName,
+        path: DESKTOP_STATUS_PATH,
+        interface: DESKTOP_STATUS_INTERFACE,
+        member,
+        signature,
+        body: [status().revision, ...value],
+      }),
+      /read-only/,
+    );
+    await until(() => !status().updating, "read-only Bluetooth refusal settled");
+  }
+  assert.equal(bluetooth.powerRequests.length, 2);
+  assert.deepEqual(bluetooth.forgotten, [deviceId]);
   await observer.refreshBluetooth();
   bluetooth.publish(BLUETOOTH_UNAVAILABLE);
   await until(
@@ -718,7 +972,7 @@ try {
     "Bluetooth missing backend truthful",
   );
   console.log(
-    "[desktop-controls] Bluetooth private adapter/service/client: parser, observation, stale revision, read-only, pending timeout and late readback passed",
+    "[desktop-controls] Bluetooth private adapter/service/client: parser, observation, stale revision, read-only, pending timeout, late readback, power and forget passed",
   );
   const pairState = () => {
     const current = status().bluetooth.pairing;
@@ -1072,6 +1326,15 @@ try {
     { ...readyWifi, accessPoints: [readyWifi.accessPoints[0], readyWifi.accessPoints[0]] },
     { ...readyWifi, operation: { kind: "connecting", ssid: "Fixture", cancellable: "yes" } },
     { ...readyWifi, connection: { kind: "active", name: "Fixture", transport: "Internet" } },
+    { ...readyWifi, canToggle: "yes" },
+    {
+      ...readyWifi,
+      policy: "readonly",
+      canConnect: false,
+      canScan: false,
+      canToggle: true,
+    },
+    { ...readyWifi, accessPoints: [{ ...readyWifi.accessPoints[0], saved: "yes" }] },
   ])
     assert.throws(() => parseDesktopWifi(malformed));
   const capturedNetworkRevision = status().revision;
@@ -1113,20 +1376,236 @@ try {
   await observer.cancelWifi();
   await until(() => !status().updating, "owned cancellation settled");
   assert.equal(wifi.cancellations, 1);
+  const controllableWifi: Extract<DesktopWifi, { kind: "ready" }> = {
+    ...readyWifi,
+    canToggle: true,
+    connection: { kind: "active", name: "Fixture Wi-Fi", transport: "wifi" },
+    accessPoints: [{ ...readyWifi.accessPoints[0]!, saved: true }],
+  };
+  const beforeControls = status().revision;
+  wifi.publish(controllableWifi);
+  await until(() => {
+    const observed = status().wifi;
+    return observed.kind === "ready" && observed.canToggle === true;
+  }, "Wi-Fi toggle capability reaches client");
+  const observedWifi = status().wifi;
+  assert(observedWifi.kind === "ready" && observedWifi.accessPoints[0]?.saved === true);
+  await assert.rejects(
+    client.call({
+      destination: serverName,
+      path: DESKTOP_STATUS_PATH,
+      interface: DESKTOP_STATUS_INTERFACE,
+      member: "SetWifiEnabled",
+      signature: "ub",
+      body: [beforeControls, false],
+    }),
+    /changed/,
+  );
+  assert.deepEqual(wifi.toggles, [], "stale revision cannot toggle the radio");
+  await observer.setWifiEnabled(false);
+  await until(() => !status().updating, "Wi-Fi disable settled");
+  await observer.setWifiEnabled(true);
+  await until(() => !status().updating, "Wi-Fi enable settled");
+  assert.deepEqual(wifi.toggles, [false, true]);
+  await observer.disconnectWifi();
+  await until(() => !status().updating, "Wi-Fi disconnect settled");
+  assert.equal(wifi.disconnects, 1);
+  const afterDisconnect = status().wifi;
+  assert(afterDisconnect.kind === "ready" && afterDisconnect.connection.kind === "none");
+  await assert.rejects(observer.disconnectWifi(), /No Wi-Fi connection is active/);
+  await until(() => !status().updating, "refused disconnect settled");
+  await observer.forgetWifi("fixture-ap");
+  await until(() => !status().updating, "Wi-Fi forget settled");
+  assert.deepEqual(wifi.forgotten, ["fixture-ap"]);
+  await assert.rejects(observer.forgetWifi("unknown-ap"), /changed/);
+  await until(() => !status().updating, "unknown forget settled");
+  assert.deepEqual(wifi.forgotten, ["fixture-ap"]);
+  const optional = {
+    setEnabled: wifi.setEnabled,
+    disconnect: wifi.disconnect,
+    forget: wifi.forget,
+  };
+  for (const key of Object.keys(optional))
+    Object.defineProperty(wifi, key, { value: undefined, configurable: true });
+  await assert.rejects(observer.setWifiEnabled(false), /unavailable/);
+  await until(() => !status().updating, "missing toggle settled");
+  await assert.rejects(observer.disconnectWifi(), /unavailable/);
+  await until(() => !status().updating, "missing disconnect settled");
+  await assert.rejects(observer.forgetWifi("fixture-ap"), /unavailable/);
+  await until(() => !status().updating, "missing forget settled");
+  for (const key of Object.keys(optional)) Reflect.deleteProperty(wifi, key);
+  assert.deepEqual(wifi.toggles, [false, true]);
   wifi.publish({ ...readyWifi, policy: "readonly", canConnect: false, canScan: false });
   await until(() => {
     const observed = status().wifi;
     return observed.kind === "ready" && observed.policy === "readonly";
   }, "read-only policy publication");
+  for (const attempt of [
+    () => observer.setWifiEnabled(false),
+    () => observer.disconnectWifi(),
+    () => observer.forgetWifi("fixture-ap"),
+  ]) {
+    await assert.rejects(attempt(), /read-only/);
+    await until(() => !status().updating, "read-only Wi-Fi refusal settled");
+  }
+  assert.deepEqual(wifi.toggles, [false, true]);
+  assert.equal(wifi.disconnects, 1);
+  assert.deepEqual(wifi.forgotten, ["fixture-ap"]);
   const reads = wifi.reads;
   await observer.refreshWifi();
   await until(() => !status().updating, "read-only status refresh settled");
   assert.equal(wifi.scans, 1, "read-only refresh never calls radio scan");
   assert.equal(wifi.reads, reads + 1);
+  // Airplane mode: every radio off, then Wi‑Fi on and Bluetooth back as it was.
+  const savedBluetooth = bluetooth.state;
+  const twoRadios = parseBluetoothId("adapter:two");
+  bluetooth.publish({
+    status: {
+      kind: "ready",
+      policy: "interactive",
+      adapters: [
+        { id: adapterId, name: "Private Bluetooth", powered: true },
+        { id: twoRadios, name: "Second radio", powered: false },
+      ],
+      devices: [],
+    },
+    operation: { kind: "idle" },
+  });
+  // A wired-only computer has no radio for airplane mode to switch.
+  const wiredOnly = { ...controllableWifi, adapters: 0, accessPoints: [] };
+  assert.equal(airplaneState(wiredOnly, BLUETOOTH_UNAVAILABLE, true), undefined);
+  assert.equal(
+    airplaneState(
+      { ...wiredOnly, wwan: { enabled: true, hardwareEnabled: true, canToggle: true, modems: 0 } },
+      BLUETOOTH_UNAVAILABLE,
+      true,
+    ),
+    undefined,
+    "a WWAN switch without a modem isn't a radio",
+  );
+  assert.notEqual(
+    airplaneState(
+      { ...wiredOnly, wwan: { enabled: true, hardwareEnabled: true, canToggle: true, modems: 1 } },
+      BLUETOOTH_UNAVAILABLE,
+      true,
+    ),
+    undefined,
+  );
+  assert.notEqual(airplaneState(controllableWifi, BLUETOOTH_UNAVAILABLE, true), undefined);
+  wifi.publish({
+    ...controllableWifi,
+    wwan: { enabled: true, hardwareEnabled: true, canToggle: true },
+  });
+  await until(() => status().airplane?.canToggle === true, "airplane mode offered");
+  assert.equal(status().airplane?.active, false);
+  const powerBefore = bluetooth.powerRequests.length;
+  await observer.setAirplaneMode(true);
+  await until(() => status().airplane?.active === true && !status().updating, "airplane on");
+  assert.deepEqual(wifi.radios.at(-1), { wifi: false, wwan: false });
+  assert.deepEqual(bluetooth.powerRequests.slice(powerBefore), [{ adapterId, powered: false }]);
+  await observer.setAirplaneMode(false);
+  await until(() => status().airplane?.active === false && !status().updating, "airplane off");
+  assert.deepEqual(wifi.radios.at(-1), { wifi: true, wwan: true });
+  assert.deepEqual(
+    bluetooth.powerRequests.slice(powerBefore),
+    [
+      { adapterId, powered: false },
+      { adapterId, powered: true },
+    ],
+    "only the radio that was on comes back",
+  );
+  wifi.publish({ ...controllableWifi, canToggle: false });
+  await until(() => status().airplane?.canToggle === false, "airplane mode not permitted");
+  await assert.rejects(observer.setAirplaneMode(true), /can't be changed/);
+  await until(() => !status().updating, "refused airplane settled");
+  // Hidden networks, VPN and proxy requests are validated on both sides, then passed on.
+  wifi.publish(controllableWifi);
+  await until(() => {
+    const observed = status().wifi;
+    return observed.kind === "ready" && observed.canToggle === true;
+  }, "Wi-Fi controls again");
+  await observer.connectHiddenWifi({ ssid: "Attic", security: "open", password: "" });
+  await until(() => !status().updating, "hidden join settled");
+  assert.deepEqual(wifi.hidden, [{ ssid: "Attic", security: "open", password: "" }]);
+  await assert.rejects(
+    client.call({
+      destination: serverName,
+      path: DESKTOP_STATUS_PATH,
+      interface: DESKTOP_STATUS_INTERFACE,
+      member: "ConnectHiddenWifi",
+      signature: "usss",
+      body: [status().revision, "", "open", ""],
+    }),
+    /network name/,
+  );
+  await until(() => !status().updating, "invalid hidden join settled");
+  assert.equal(wifi.hidden.length, 1);
+  const vpnId = "6f1f8a3c-1111-4c3a-9a00-000000000001";
+  await observer.activateVpn(vpnId.toUpperCase());
+  await until(() => !status().updating, "VPN activate settled");
+  await observer.deactivateVpn(vpnId);
+  await until(() => !status().updating, "VPN deactivate settled");
+  await observer.removeVpn(vpnId);
+  await until(() => !status().updating, "VPN remove settled");
+  await assert.rejects(observer.activateVpn("/org/freedesktop/x"), /VPN identity/);
+  await observer.importVpn({
+    kind: "wireguard",
+    name: "Lab",
+    config: "[Interface]",
+    username: "",
+    password: "",
+  });
+  await until(() => !status().updating, "VPN import settled");
+  await observer.setProxy({ method: "auto", pacUrl: "http://wpad/wpad.dat" });
+  await until(() => !status().updating, "proxy settled");
+  // The Wi‑Fi password for a user's copy of a shared profile crosses the bus.
+  await observer.setProxy({ method: "none", pacUrl: "", password: "fixture-pass-12" });
+  await until(() => !status().updating, "proxy copy settled");
+  await assert.rejects(observer.setProxy({ method: "auto", pacUrl: "gopher://x" }), /http/);
+  assert.deepEqual(wifi.vpnCalls, [
+    `activate:${vpnId}`,
+    `deactivate:${vpnId}`,
+    `remove:${vpnId}`,
+    "import:wireguard:Lab",
+    "proxy:auto:http://wpad/wpad.dat",
+    "proxy:none::fixture-pass-12",
+  ]);
+  // Renaming a Bluetooth device.
+  bluetooth.publish(savedBluetooth);
+  await until(() => status().bluetooth.status.kind === savedBluetooth.status.kind, "BT restored");
+  bluetooth.publish(knownBluetooth);
+  await until(() => {
+    const current = status().bluetooth.status;
+    return (
+      current.kind === "ready" && current.devices.length === 1 && current.policy === "interactive"
+    );
+  }, "known device for rename");
+  await assert.rejects(
+    observer.renameBluetoothDevice({
+      owner: serverName,
+      revision: status().revision,
+      id: deviceId,
+      name: " ",
+    }),
+    /1 to 64/,
+  );
+  await observer.renameBluetoothDevice({
+    owner: serverName,
+    revision: status().revision,
+    id: deviceId,
+    name: "Desk mouse",
+  });
+  await until(() => {
+    const current = status().bluetooth.status;
+    return current.kind === "ready" && current.devices[0]?.name === "Desk mouse";
+  }, "rename observed");
+  assert.deepEqual(bluetooth.renamed, [{ id: deviceId, name: "Desk mouse" }]);
+  bluetooth.publish(savedBluetooth);
+  wifi.publish({ ...readyWifi, policy: "readonly", canConnect: false, canScan: false });
   wifi.publish(WIFI_UNAVAILABLE);
   await until(() => status().wifi.kind === "unavailable", "network unsupported again");
   console.log(
-    "[desktop-controls] Wi-Fi wire/client, stale request, transient activation, cancellation, read-only refresh and secret exclusion passed",
+    "[desktop-controls] Wi-Fi wire/client, stale request, transient activation, cancellation, radio toggle, disconnect, forget, airplane mode, hidden join, VPN, proxy, Bluetooth rename, read-only refusal and secret exclusion passed",
   );
   const initialAudio = audio.state;
   const transientAudio: AudioStatus[] = [
@@ -1171,6 +1650,96 @@ try {
         return current.audio.kind === "ready" && current.audio.muted && !current.updating;
       })(),
     "mute round trip",
+  );
+  console.log("[desktop-controls] sound devices");
+  await until(() => status().sound?.kind === "ready", "sound devices read");
+  const soundReady = () => {
+    const current = status().sound;
+    assert.equal(current?.kind, "ready");
+    if (current?.kind !== "ready") throw new Error("sound not ready");
+    return current;
+  };
+  assert.deepEqual(
+    soundReady().outputs.map((item) => [item.id, item.name, item.isDefault]),
+    [
+      ["52", "Speakers", true],
+      ["61", "Headset", false],
+    ],
+  );
+  assert.deepEqual(soundReady().input, { id: "53", volume: 1, muted: false });
+  assert.deepEqual(
+    soundReady().streams.map((item) => [item.id, item.app, item.volume]),
+    [["74", "Firefox", 0.9]],
+  );
+  await observer.setDefaultSoundDevice("output", "61");
+  await until(() => soundReady().outputs[1]!.isDefault && !status().updating, "output switched");
+  assert.equal(
+    sound.fake.metadata.get("default.configured.audio.sink")?.value,
+    JSON.stringify({ name: "bluez_output.headset" }),
+  );
+  await observer.setDefaultSoundDevice("input", "62");
+  await until(() => soundReady().input?.id === "62" && !status().updating, "input switched");
+  await observer.setInputMute(false);
+  await until(() => soundReady().input?.muted === false && !status().updating, "input unmuted");
+  await observer.setInputVolume(0.3);
+  await until(() => soundReady().input?.volume === 0.3 && !status().updating, "input volume");
+  await observer.setStreamVolume("74", 0.25);
+  await until(() => soundReady().streams[0]!.volume === 0.25 && !status().updating, "app volume");
+  await observer.setStreamMute("74", true);
+  await until(() => soundReady().streams[0]!.muted && !status().updating, "app muted");
+  await assert.rejects(observer.setDefaultSoundDevice("output", "99"), /no longer connected/);
+  await assert.rejects(observer.setStreamVolume("74", 2), /between 0 and 1/);
+  await assert.rejects(
+    client.call({
+      destination: serverName,
+      path: DESKTOP_STATUS_PATH,
+      interface: DESKTOP_STATUS_INTERFACE,
+      member: "SetDefaultSoundDevice",
+      signature: "uss",
+      body: [status().revision, "output", "52 --evil"],
+    }),
+    /Invalid sound device identity/,
+  );
+  // The meter is a lease held by its caller: levels arrive as a signal, and it stops when the
+  // caller leaves.
+  const levels: number[] = [];
+  const removeLevels = observer.onInputLevel((level) => levels.push(level));
+  await observer.startInputMeter();
+  await until(() => soundReady().meter.kind === "on", "meter on");
+  await sleep(50);
+  sound.meter.callbacks!.onLevel(0.42);
+  await until(() => levels.includes(0.42), "input level signal");
+  await observer.stopInputMeter();
+  await until(() => soundReady().meter.kind === "off", "meter off");
+  const meterBus = await connect();
+  const meterClient = await observeDesktopStatus(meterBus, () => {});
+  await until(() => meterClient.state.kind === "ready", "meter client ready");
+  await meterClient.startInputMeter();
+  await until(() => soundReady().meter.kind === "on", "second caller meter on");
+  await meterClient.dispose();
+  meterBus.close();
+  await until(() => soundReady().meter.kind === "off", "meter stops when its caller leaves");
+  removeLevels();
+  assert.deepEqual(
+    parseDesktopStatus(JSON.stringify({ ...status(), sound: undefined })).sound,
+    undefined,
+    "a service without sound devices still parses",
+  );
+  assert.throws(
+    () =>
+      parseDesktopStatus(
+        JSON.stringify({
+          ...status(),
+          sound: {
+            ...soundReady(),
+            streams: Array.from({ length: 33 }, (_, i) => ({
+              ...soundReady().streams[0]!,
+              id: String(i),
+            })),
+          },
+        }),
+      ),
+    /Invalid sound list/,
   );
   console.log("[desktop-controls] external and stale");
   const stale = status().revision;
@@ -1246,6 +1815,7 @@ try {
     "Notify reaches desktop observer",
   );
   const notice = status().notices.find((item) => item.id === id)!;
+  assert.equal(sound.alerts.length, 1, "a new notification plays the alert");
   assert.equal(notice.body, "Actual document");
   assert.deepEqual(notice.actions, [], "default passive presenter exposes no action controls");
   assert.equal(notice.closedAt, null);
@@ -1266,6 +1836,7 @@ try {
     () => status().notices.some((item) => item.id === id && item.revision !== notice.revision),
     "replacement publication",
   );
+  assert.equal(sound.alerts.length, 1, "a replacement is silent");
   await assert.rejects(observer.dismiss(id, notice.revision), /changed|closed/);
   await until(() => !status().updating, "rejected dismiss completes");
   const replacement = status().notices.find((item) => item.id === id && !item.closed)!;
@@ -1439,6 +2010,8 @@ try {
   await controls.dispose();
   assert.equal(battery.disposed, true, "desktop service disposes its battery observer");
   controls = null;
+  sound.control.close();
+  await sound.fake.close();
   server.close();
   await until(() => observer.state.kind === "unavailable", "owner loss revokes readiness");
   const newServer = await connect(),
@@ -1448,6 +2021,7 @@ try {
   controls = await attachDesktopControls(newServer, {
     notificationActions: true,
     audio: nextAudio,
+    alertSound: () => {},
     wifi: new WifiFixture(),
     battery: new BatteryFixture(),
     bluetooth: new BluetoothFixture(),
@@ -1676,42 +2250,51 @@ try {
     pollDnd = false,
     pollPolicyWrites = 0;
   let pollOutcome: "ready" | "unavailable" | "error" = "ready";
-  const slowAudio = createAudioStatusAdapter({
-    execute: async (command, args, signal) => {
-      if (command === "wpctl") return { kind: "missing" };
+  // A PipeWire that answers slowly and can be made to fail, behind the production adapter.
+  const slowSnapshot = (): AudioSnapshot => ({
+    nodes: [
+      {
+        id: 7,
+        serial: "107",
+        name: "slow-output",
+        description: "Slow observed output",
+        kind: "sink",
+        app: null,
+        media: null,
+        volume: pollVolume / 100,
+        muted: false,
+        channels: 2,
+        deviceId: null,
+        profileDevice: null,
+      },
+    ],
+    devices: [],
+    defaultSink: "slow-output",
+    defaultSource: null,
+    hasDefaults: true,
+  });
+  const slowControl = {
+    async read(signal?: AbortSignal): Promise<AudioSnapshot> {
       await sleep(12);
-      if (signal.aborted) {
+      if (signal?.aborted) {
         cancelledReads++;
-        return { kind: "cancelled" };
+        throw new PipeWireError("cancelled", "Audio request cancelled.");
       }
       if (pollOutcome !== "ready") {
         unreadyReads++;
-        return pollOutcome === "unavailable"
-          ? { kind: "missing" }
-          : { kind: "failed", exitCode: 1, message: "Observed audio server failure" };
+        throw pollOutcome === "unavailable"
+          ? new PipeWireError("unavailable", "PipeWire isn't running (ENOENT).")
+          : new PipeWireError("error", "Observed audio server failure");
       }
-      switch (args[0]) {
-        case "get-default-sink":
-          return { kind: "ok", stdout: "slow-output\n" };
-        case "--format=json":
-          return {
-            kind: "ok",
-            stdout: JSON.stringify([
-              { index: 7, name: "slow-output", description: "Slow observed output" },
-            ]),
-          };
-        case "get-sink-volume":
-          return { kind: "ok", stdout: `Volume: front-left: 32768 / ${pollVolume}% / -6.00 dB\n` };
-        case "get-sink-mute":
-          completedReads++;
-          return { kind: "ok", stdout: "Mute: no\n" };
-        default:
-          throw new Error(`Unexpected delayed backend command ${args[0]}`);
-      }
+      completedReads++;
+      return slowSnapshot();
     },
-  });
+    close() {},
+  } as unknown as AudioControl;
+  const slowAudio = createAudioStatusAdapter({ control: slowControl });
   controls = await attachDesktopControls(pollServer, {
     audio: slowAudio,
+    alertSound: () => {},
     wifi: new WifiFixture(),
     bluetooth: new BluetoothFixture(),
     battery: new BatteryFixture(),

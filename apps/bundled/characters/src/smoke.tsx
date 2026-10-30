@@ -9,7 +9,7 @@ assert.equal(findCharacters("u+03c0")[0]?.glyph, "π");
 assert.equal(unicodeCode("©"), "U+00A9");
 const app = await harness((size) => <CharactersApp {...size} />, 620, 650);
 app.text("copyright");
-app.click(44, 240);
+app.click(44, 230);
 app.click(564, 26);
 await app.settle();
 assert.equal(
@@ -17,16 +17,16 @@ assert.equal(
   "©",
   "actual character selection and Copy did not reach headless clipboard",
 );
-app.click(100, 84);
+app.click(100, 78);
 app.key(30, "a", { ctrl: true });
 app.key(14, "Backspace");
-app.click(100, 128);
+app.click(514, 78);
 await app.settle();
 app.key(108, "ArrowDown");
 app.key(108, "ArrowDown");
 app.key(28, "Enter");
 await app.settle();
-app.click(44, 240);
+app.click(44, 230);
 app.click(564, 26);
 await app.settle();
 assert.equal(

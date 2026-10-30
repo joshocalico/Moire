@@ -17,6 +17,7 @@ import {
   type NotificationScheduler,
   type NotificationTransport,
 } from "./notifications";
+import { DEFAULT_NOTIFICATION_RULE, type NotificationRule } from "@moire/prefs";
 
 class Clock implements NotificationScheduler {
   value = 1000;
@@ -64,6 +65,8 @@ class Transport implements NotificationTransport {
 function request(body: unknown[], sender = ":1.10", member = "Notify"): DbusMethodContext {
   return {
     body,
+    fds: [],
+    keepFd: () => -1,
     message: {
       type: 1,
       serial: 1,
@@ -552,5 +555,79 @@ async function privateBusCases() {
   }
 }
 
+/** Per-app rules: dropped, banner-less and history-less apps, read at each arrival. */
+async function ruleCases() {
+  const clock = new Clock(),
+    transport = new Transport();
+  const presented: NotificationEntry[] = [];
+  const rules: Record<string, Partial<NotificationRule>> = {
+    Muted: { allow: false },
+    "org.moire.Quiet": { banners: false, sound: false },
+    Fleeting: { history: false },
+  };
+  const chimes: string[] = [];
+  const service = createNotificationService(transport, {
+    scheduler: clock,
+    present: (entry) => presented.push(entry),
+    rule: (appId) => ({ ...DEFAULT_NOTIFICATION_RULE, ...rules[appId] }),
+    sound: (entry) => chimes.push(entry.appId),
+  });
+  const notify = async (appName: string, hints: Record<string, unknown> = {}, replaces = 0) => {
+    const args = argumentsFor({ hints, replaces, timeout: 0 });
+    args[0] = appName;
+    const result = await service.descriptor.methods.Notify!.handler(request(args));
+    return result.body?.[0] as number;
+  };
+
+  const dropped = await notify("Muted");
+  assert(dropped > 0, "a refused notification still gets an id");
+  assert.equal(service.snapshot().active.length, 0, "a refused app shows nothing");
+  assert.deepEqual(transport.signals.at(-1)?.body, [dropped, 2], "the sender hears it closed");
+
+  // The desktop-entry hint names the app; its rule wins over the app name.
+  await notify("Quiet app", { "desktop-entry": variant("s", "org.moire.Quiet.desktop") });
+  const quiet = service.snapshot().active[0]!;
+  assert.equal(quiet.appId, "org.moire.Quiet");
+  assert.equal(quiet.banner, false);
+  assert.equal(quiet.sound, false);
+  assert.equal(presented.length, 0, "no banner is presented for a banner-less app");
+
+  const fleeting = await notify("Fleeting");
+  assert.equal(presented.length, 1, "an allowed app still gets its banner");
+  assert(service.dismiss(fleeting));
+  assert(
+    !service.snapshot().history.some((item) => item.notification.id === fleeting),
+    "a history-less app isn't kept once closed",
+  );
+  assert(service.dismiss(quiet.id));
+  assert.equal(service.snapshot().history[0]?.notification.id, quiet.id);
+
+  // Sound: new notifications of apps with Sound on chime; replacements, quiet apps, the
+  // suppress-sound hint and Do not disturb don't.
+  assert.deepEqual(chimes, ["Fleeting"], "the refused and the quiet app made no sound");
+  const loud = await notify("Loud");
+  await notify("Loud", {}, loud);
+  await notify("Hushed", { "suppress-sound": variant("b", true) });
+  await assert.rejects(
+    Promise.resolve().then(() => notify("Bad", { "suppress-sound": variant("s", "yes") })),
+    /suppress-sound/,
+  );
+  service.setDoNotDisturb(true);
+  await notify("Loud");
+  service.setDoNotDisturb(false);
+  assert.deepEqual(chimes, ["Fleeting", "Loud"]);
+
+  // Turning an app off later closes a replacement of its open notification.
+  const open = await notify("Later");
+  rules.Later = { allow: false };
+  assert.equal(await notify("Later", {}, open), open);
+  assert(!service.snapshot().active.some((item) => item.id === open));
+  await service.dispose();
+  console.log(
+    "[notifications] per-app rules: allow, banners, sound (alert, DND, replacement, suppress-sound) and history passed",
+  );
+}
+
 await modelCases();
+await ruleCases();
 await privateBusCases();

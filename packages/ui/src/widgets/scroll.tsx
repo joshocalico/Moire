@@ -106,11 +106,17 @@ export function ScrollArea(props: ScrollAreaProps): ReactNode {
       });
     else setInternalScrollY(clamped);
   };
-  const handleWheel = (event: HitPointerEvent) => {
+  const handleWheel = (event: HitPointerEvent): boolean => {
+    const delta = event.deltaY ?? recipe.metrics.wheelStep;
+    const current = logicalScrollY.current;
+    // Already at the limit in this direction: let an enclosing scroller take the wheel.
+    if ((delta < 0 && current <= 0) || (delta > 0 && current >= maxScroll) || delta === 0)
+      return false;
     // Wheel motion is navigational feedback rather than ornamental motion;
     // retain its short interpolation even when reduced motion is requested.
     scrollInput.current = "wheel";
-    setScroll(logicalScrollY.current + (event.deltaY ?? recipe.metrics.wheelStep));
+    setScroll(current + delta);
+    return true;
   };
   const handleKey = (event: HitKeyEvent) => {
     if (maxScroll <= 0) return;
@@ -167,6 +173,13 @@ export function ScrollArea(props: ScrollAreaProps): ReactNode {
         stroke={recipe.viewport.stroke}
         strokeWidth={recipe.viewport.strokeWidth}
       />
+      {/* Beneath the content, so wheel handlers inside it (nested scrollers) take precedence. */}
+      <Rect
+        width={props.width}
+        height={props.height}
+        fill={0x00000000}
+        onWheel={maxScroll > 0 ? handleWheel : undefined}
+      />
       <Group width={props.width} height={props.height} clip>
         <Group
           x={0}
@@ -178,12 +191,6 @@ export function ScrollArea(props: ScrollAreaProps): ReactNode {
           {props.children}
         </Group>
       </Group>
-      <Rect
-        width={props.width}
-        height={props.height}
-        fill={0x00000000}
-        onWheel={maxScroll > 0 ? handleWheel : undefined}
-      />
       {showScrollbar ? (
         <Rect
           x={scrollbarX}

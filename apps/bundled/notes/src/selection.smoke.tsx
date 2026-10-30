@@ -84,7 +84,7 @@ try {
       "search selects its matching note, never an invisible prior note",
     );
     // Delete the sole search match; no global note may appear under the empty result.
-    await noteAction(app, 4);
+    await noteAction(app, "delete");
     app.key(28, "Enter");
     await app.settle();
     assert.equal(store.load().notes.length, 1);
@@ -137,7 +137,7 @@ try {
       ...external,
       notes: external.notes.map((note) => ({ ...note, title: "External revision" })),
     });
-    await noteAction(conflicted, 2);
+    await noteAction(conflicted, "move");
     conflicted.key(28, "Enter");
     await conflicted.settle();
     conflicted.native.requestClose();

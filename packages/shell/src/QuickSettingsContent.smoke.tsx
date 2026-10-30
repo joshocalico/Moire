@@ -413,7 +413,9 @@ try {
             );
             assert.deepEqual(
               focusable.map((hit) => hit.focusId?.split(":")[0]),
-              ["quick", "quick", "slider", "quick", "quick", "toggle", "quick", "quick"],
+              // Visual order: tiles (network, Bluetooth, Do not disturb), mute, volume slider,
+              // audio output, settings, power.
+              ["quick", "quick", "quick", "quick", "slider", "quick", "quick", "quick"],
             );
             for (const hit of focusable) {
               assert(
@@ -495,6 +497,17 @@ try {
               const initial = native.lastFrame.slice();
               key(28, "Enter");
               assert.deepEqual(calls.at(-1), ["network", undefined]);
+              // Tiles first (network, Bluetooth, Do not disturb), then the sound controls.
+              key(15, "Tab");
+              key(28, "Enter");
+              assert.deepEqual(
+                calls.at(-1),
+                ["bluetooth", undefined],
+                "disclosure only; no unsupported Bluetooth toggle",
+              );
+              key(15, "Tab");
+              key(57, " ");
+              assert.deepEqual(calls.at(-1), ["dnd", true]);
               key(15, "Tab");
               key(57, " ");
               assert.deepEqual(calls.at(-1), ["mute", true]);
@@ -517,16 +530,6 @@ try {
               assert.deepEqual(calls.at(-1), ["audio", undefined]);
               key(15, "Tab");
               key(28, "Enter");
-              assert.deepEqual(
-                calls.at(-1),
-                ["bluetooth", undefined],
-                "disclosure only; no unsupported Bluetooth toggle",
-              );
-              key(15, "Tab");
-              key(57, " ");
-              assert.deepEqual(calls.at(-1), ["dnd", true]);
-              key(15, "Tab");
-              key(28, "Enter");
               assert.deepEqual(calls.at(-1), ["settings", undefined]);
               key(15, "Tab");
               key(28, "Enter");
@@ -535,18 +538,18 @@ try {
                 ["power", undefined],
                 "read-only power detail disclosure",
               );
-              key(15, "Tab", true);
-              key(15, "Tab", true);
+              // Back up past settings, audio, slider and mute to Do not disturb.
+              for (let step = 0; step < 5; step++) key(15, "Tab", true);
               key(57, " ");
               assert.deepEqual(calls.at(-1), ["dnd", true]);
               assert(
                 !Buffer.from(beforeFocus).equals(Buffer.from(initial)),
                 "actual focus repaints controls",
               );
-              click(focusable[3]!);
+              click(focusable[5]!);
               assert.deepEqual(calls.at(-1), ["audio", undefined]);
               // Release endpoint remains useful; this content does not model RPC in-flight coalescing.
-              const slider = focusable[2]!;
+              const slider = focusable[4]!;
               native.injectPointer({
                 type: "down",
                 x: slider.x,
@@ -600,8 +603,8 @@ try {
                 hits.filter((hit) => hit.focusable).map((hit) => hit.focusId),
                 [
                   "quick:network",
-                  "quick:audio",
                   "quick:bluetooth",
+                  "quick:audio",
                   "quick:settings",
                   "quick:power",
                 ],

@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import React from "react";
 import { createShellRoot, renderShell, rasterize } from "@moire/react-host";
-import { TextBlock, getWidgetTheme, installUiFonts, setUiScaleFactor } from "@moire/ui";
+import {
+  TextBlock,
+  getWidgetTheme,
+  installUiFonts,
+  setUiScaleFactor,
+  tickAllMotions,
+} from "@moire/ui";
 import { getTheme, applyThemeFamily, setTheme } from "@moire/theme";
 import type { DesktopStatusState } from "@moire/system-management/desktop-status";
 import {
@@ -131,6 +137,8 @@ const scene = createShellRoot();
 let view: "main" | "bluetooth" = "main";
 const noop = () => {};
 const paint = () => {
+  // Settle popup entrances, as a real frame does a few frames after opening.
+  tickAllMotions(1);
   const frame = shell.chromeRaster(width, height);
   assert(frame);
   return frame;

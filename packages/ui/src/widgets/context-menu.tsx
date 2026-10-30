@@ -50,8 +50,19 @@ export type ContextMenuAction = {
   icon?: IconName;
   danger?: boolean;
   disabled?: boolean;
+  /** Why a disabled action is unavailable; shown in place of its description. */
+  disabledReason?: string;
+  /** Keyboard shortcut hint painted at the trailing edge, e.g. "Ctrl+C". */
+  shortcut?: string;
+  /** Toggle or choice state; a checked row shows a check mark. */
+  checked?: boolean;
   separatorBefore?: boolean;
-  onPress: () => void;
+  /**
+   * Nested actions shown in place of this level (a sliding submenu, as GTK
+   * popover menus do), so a menu never needs a second popup surface.
+   */
+  submenu?: ContextMenuAction[];
+  onPress?: () => void;
 };
 
 export type ContextMenuProps = {
@@ -69,6 +80,35 @@ export type ContextMenuProps = {
   surface?: boolean;
 };
 
+const BACK_ROW_ID = "context-menu:back";
+/** Fills the menu item's trailing icon box. */
+const SUBMENU_CHEVRON = 16;
+
+/** Rows of one menu level: a submenu level leads with a row that returns to its parent. */
+function menuLevelRows(
+  actions: readonly ContextMenuAction[],
+  parent: ContextMenuAction | null,
+): ContextMenuAction[] {
+  return parent ? [{ id: BACK_ROW_ID, label: parent.label }, ...actions] : [...actions];
+}
+
+function menuLevelContentHeight(rows: readonly ContextMenuAction[]): number {
+  const recipe = getWidgetTheme().recipes.menu.medium;
+  const separators = rows.filter((action) => action.separatorBefore).length;
+  return rows.length * recipe.metrics.rowHeight + separators * recipe.metrics.separatorGap;
+}
+
+/** Every level a menu can show, so a fixed popup surface fits the tallest one. */
+function menuLevels(
+  actions: readonly ContextMenuAction[],
+  parent: ContextMenuAction | null = null,
+): ContextMenuAction[][] {
+  return [
+    menuLevelRows(actions, parent),
+    ...actions.flatMap((action) => (action.submenu ? menuLevels(action.submenu, action) : [])),
+  ];
+}
+
 export function contextMenuSurfaceSize(
   actions: readonly ContextMenuAction[],
   title?: string,
@@ -76,11 +116,10 @@ export function contextMenuSurfaceSize(
   maxHeight = 480,
 ): { width: number; height: number } {
   const recipe = getWidgetTheme().recipes.menu.medium;
-  const separators = actions.filter((action) => action.separatorBefore).length;
+  const contentHeight = Math.max(...menuLevels(actions).map(menuLevelContentHeight));
   const menuHeight =
     (title ? recipe.metrics.headerHeight : recipe.metrics.surfacePadding) +
-    actions.length * recipe.metrics.rowHeight +
-    separators * recipe.metrics.separatorGap +
+    contentHeight +
     recipe.metrics.surfacePadding;
   // Shadow extends 6px right/8px down; entrance settles upward by 5px.
   return { width: width + 6, height: Math.max(1, Math.min(menuHeight + 13, maxHeight)) };
@@ -96,14 +135,24 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
   const closingRequested = useRef(false);
   const afterClose = useRef<(() => void) | null>(null);
   const finalized = useRef(false);
+  // Indices of the open submenu chain, outermost first.
+  const [submenuPath, setSubmenuPath] = useState<number[]>([]);
+  let levelActions: readonly ContextMenuAction[] = props.actions;
+  let parent: ContextMenuAction | null = null;
+  for (const index of submenuPath) {
+    const next = levelActions[index];
+    if (!next?.submenu) break;
+    parent = next;
+    levelActions = next.submenu;
+  }
+  const rowsForLevel = menuLevelRows(levelActions, parent);
   const width = Math.max(
     1,
     Math.min(props.width ?? 244, props.viewportWidth - (props.surface ? 6 : 22)),
   );
   const rowH = recipe.metrics.rowHeight;
   const preferredTitleH = props.title ? recipe.metrics.headerHeight : recipe.metrics.surfacePadding;
-  const separators = props.actions.filter((action) => action.separatorBefore).length;
-  const contentH = props.actions.length * rowH + separators * recipe.metrics.separatorGap;
+  const contentH = menuLevelContentHeight(rowsForLevel);
   const height = Math.max(
     1,
     Math.min(
@@ -114,13 +163,16 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
   );
   const titleH = Math.min(preferredTitleH, height);
   const bodyH = Math.max(0, height - titleH - recipe.metrics.surfacePadding);
-  const enabledIndices = props.actions.flatMap((action, index) => (action.disabled ? [] : [index]));
-  const firstEnabled = enabledIndices[0] ?? -1;
+  const enabledIndices = rowsForLevel.flatMap((action, index) => (action.disabled ? [] : [index]));
+  const firstEnabled =
+    enabledIndices.find((index) => rowsForLevel[index]?.id !== BACK_ROW_ID) ??
+    enabledIndices[0] ??
+    -1;
   const [activeIndex, setActiveIndex] = useState(firstEnabled);
   const [scrollY, setScrollY] = useState(0);
   const rowOffsets: number[] = [];
   let offset = 0;
-  for (const action of props.actions) {
+  for (const action of rowsForLevel) {
     if (action.separatorBefore) offset += recipe.metrics.separatorGap;
     rowOffsets.push(offset);
     offset += rowH;
@@ -165,9 +217,41 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
     easeTo(reveal, 0, 28);
   };
 
+  const enterSubmenu = (index: number) => {
+    const offsetInLevel = parent ? index - 1 : index;
+    setSubmenuPath((current) => [...current, offsetInLevel]);
+    setScrollY(0);
+    setActiveIndex(-1);
+  };
+  const leaveSubmenu = () => {
+    if (!submenuPath.length) return false;
+    // Return to the row that opened the submenu; a nested level has its own back row first.
+    const opener = submenuPath[submenuPath.length - 1]! + (submenuPath.length > 1 ? 1 : 0);
+    setSubmenuPath((current) => current.slice(0, -1));
+    setScrollY(0);
+    setActiveIndex(opener);
+    return true;
+  };
+  const activate = (index: number) => {
+    const action = rowsForLevel[index];
+    if (!action || action.disabled) return;
+    if (action.id === BACK_ROW_ID) leaveSubmenu();
+    else if (action.submenu) enterSubmenu(index);
+    else dismiss(action.onPress);
+  };
+
+  // Labels in one level share a column: reserve the icon slot when any row has an icon or check.
+  const reserveLeading = rowsForLevel.some(
+    (action) => action.icon || action.checked !== undefined || action.id === BACK_ROW_ID,
+  );
   const rows: ReactNode[] = [];
-  for (const [index, action] of props.actions.entries()) {
-    const icon = action.icon;
+  for (const [index, action] of rowsForLevel.entries()) {
+    const back = action.id === BACK_ROW_ID;
+    const icon: IconName | undefined = back
+      ? "chevron-left"
+      : action.checked
+        ? "check-circle"
+        : action.icon;
     if (action.separatorBefore) {
       rows.push(
         <Rect
@@ -184,20 +268,29 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
     const yForRow = rowY;
     rows.push(
       <MenuItem
-        key={action.id}
+        key={`${submenuPath.join(".")}:${action.id}`}
         x={recipe.metrics.itemInset}
         y={yForRow}
         width={width - recipe.metrics.itemInset * 2}
         height={rowH}
         label={action.label}
-        description={action.description}
+        description={(action.disabled && action.disabledReason) || action.description}
         leading={
-          icon ? (style) => <Icon name={icon} size={style.size} color={style.color} /> : undefined
+          icon
+            ? (style) => <Icon name={icon} size={style.size} color={style.color} />
+            : reserveLeading
+              ? () => null
+              : undefined
+        }
+        trailing={
+          action.submenu
+            ? (style) => <Icon name="chevron-right" size={SUBMENU_CHEVRON} color={style.color} />
+            : action.shortcut
         }
         indicator
         danger={action.danger}
         disabled={action.disabled}
-        focusId={`context-menu:${menuId}:${action.id}`}
+        focusId={`context-menu:${menuId}:${submenuPath.join(".")}:${action.id}`}
         autoFocus={index === activeIndex}
         onFocusChange={(focused) => {
           if (focused) setActiveIndex(index);
@@ -205,9 +298,7 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
         // Layout reconciliation also emits enter/leave when scrolling below
         // a stationary pointer. Only actual movement changes menu selection.
         onPointerMove={() => setActiveIndex(index)}
-        onPress={() => {
-          if (!action.disabled) dismiss(action.onPress);
-        }}
+        onPress={() => activate(index)}
       />,
     );
     rowY += rowH;
@@ -247,6 +338,16 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
           radius={recipe.surface.radius}
         >
           <Rect x={0} y={0} width={width} height={1} fill={pal.rimLight} />
+          {/* Presses on the surface itself (a title, a separator, a disabled row) keep the menu open. */}
+          <Rect
+            x={0}
+            y={0}
+            width={width}
+            height={height}
+            fill={0x00000000}
+            onPress={() => {}}
+            onContextMenu={() => {}}
+          />
           {props.title ? (
             <Text
               x={16}
@@ -274,6 +375,15 @@ export function ContextMenu(props: ContextMenuProps): ReactNode {
                 setActiveIndex(enabledIndices[enabledIndices.length - 1] ?? -1);
               } else if (event.key === "Tab" || event.code === 15) {
                 move(event.shiftKey ? -1 : 1);
+              } else if (event.key === "ArrowRight" || event.code === 106) {
+                if (rowsForLevel[activeIndex]?.submenu) enterSubmenu(activeIndex);
+              } else if (
+                event.key === "ArrowLeft" ||
+                event.code === 105 ||
+                event.key === "Backspace" ||
+                event.code === 14
+              ) {
+                return leaveSubmenu();
               } else return false;
               return true;
             }}

@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { parseDocument, type DocumentRun } from "@moire/ui";
+import { loadDocument, writeDocument, type StoreCleanup } from "@moire/app-tools/local-store";
 export type Note = {
   id: string;
   title: string;
@@ -108,44 +109,10 @@ function parseNotebook(value: unknown): Omit<Notebook, "revision"> {
   }
   return { notes, notebooks };
 }
-const MAX_STORAGE_BYTES = 10 * 1024 * 1024;
-const hash = (text: string) => createHash("sha256").update(text).digest("hex");
-function claimWriteLock(file: string): () => void {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let fd: number;
-    try {
-      fd = fs.openSync(file, "wx", 0o600);
-    } catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
-      const owner = fs.readFileSync(file, "utf8");
-      const pid = Number(owner);
-      let stale = false;
-      if (/^\d+$/.test(owner) && Number.isSafeInteger(pid) && pid > 0) {
-        try {
-          process.kill(pid, 0);
-        } catch (failure) {
-          stale = failure instanceof Error && "code" in failure && failure.code === "ESRCH";
-        }
-      } else {
-        stale = Date.now() - fs.statSync(file).mtimeMs > 30_000;
-      }
-      if (!stale) throw new Error("Another Notes window is saving. Try again shortly.");
-      if (fs.readFileSync(file, "utf8") === owner) fs.unlinkSync(file);
-      continue;
-    }
-    try {
-      fs.writeFileSync(fd, String(process.pid), "utf8");
-    } catch (error) {
-      fs.unlinkSync(file);
-      throw error;
-    } finally {
-      fs.closeSync(fd);
-    }
-    return () => fs.unlinkSync(file);
-  }
-  throw new Error("Notes storage is busy. Try again shortly.");
-}
+type NotebookRecord = { version: 2; notes: Note[]; notebooks: NoteNotebook[] };
+const parseRecord = (value: unknown): NotebookRecord => ({ version: 2, ...parseNotebook(value) });
 
+/** Notes keeps every notebook in one JSON document under the user's data directory. */
 export class NotesStore {
   readonly file: string;
   constructor(
@@ -158,50 +125,37 @@ export class NotesStore {
     this.file = path.join(directory, "notes.json");
   }
   load(): Notebook {
-    if (!fs.existsSync(this.file)) return emptyNotebook();
-    if (fs.statSync(this.file).size > MAX_STORAGE_BYTES)
-      throw new Error("Notes storage is too large to open.");
-    const content = fs.readFileSync(this.file, "utf8");
-    const value: unknown = JSON.parse(content);
-    return { ...parseNotebook(value), revision: hash(content) };
+    const { value, revision } = loadDocument(this.file, parseRecord);
+    return value ? { notes: value.notes, notebooks: value.notebooks, revision } : emptyNotebook();
   }
-  save(notebook: Notebook): Notebook {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    const lock = path.join(path.dirname(this.file), ".write-lock");
-    const release = claimWriteLock(lock);
-    try {
-      const actual = this.load();
-      if (actual.revision !== notebook.revision)
-        throw new Error(
-          "Notes changed in another window. Reload before editing; your draft remains here.",
-        );
-      const parsed = parseNotebook({
-        version: 2,
-        notes: notebook.notes,
-        notebooks: notebook.notebooks,
-      });
-      const content = JSON.stringify({ version: 2, ...parsed }, null, 2) + "\n";
-      if (Buffer.byteLength(content, "utf8") > MAX_STORAGE_BYTES)
-        throw new Error(
-          "Notes storage exceeds 10 MiB. Shorten the draft or remove notes before saving; your draft remains here.",
-        );
-      const temporary = path.join(path.dirname(this.file), `.notes-${randomUUID()}.tmp`);
-      let fd: number | null = null;
-      try {
-        fd = fs.openSync(temporary, "wx", 0o600);
-        fs.writeFileSync(fd, content, "utf8");
-        fs.fsyncSync(fd);
-        fs.closeSync(fd);
-        fd = null;
-        fs.renameSync(temporary, this.file);
-      } finally {
-        if (fd !== null) fs.closeSync(fd);
-        if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
-      }
-      return { ...parsed, revision: hash(content) };
-    } finally {
-      release();
-    }
+  /** Throws when another window saved first; the caller keeps its draft. */
+  save(notebook: Notebook): Notebook & { cleanup: StoreCleanup } {
+    const record = parseRecord({
+      version: 2,
+      notes: notebook.notes,
+      notebooks: notebook.notebooks,
+    });
+    const written = writeDocument(this.file, record, notebook.revision, parseRecord);
+    return {
+      notes: written.value.notes,
+      notebooks: written.value.notebooks,
+      revision: written.revision,
+      cleanup: written.cleanup,
+    };
+  }
+}
+/**
+ * Writes a note as text. The file chooser has already confirmed replacing an existing file; the
+ * write goes through a temporary sibling so a failure never leaves a half-written file.
+ */
+export function exportNote(file: string, text: string): void {
+  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(temporary, text, { encoding: "utf8", flag: "wx", mode: 0o644 });
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
   }
 }
 export const createNote = (notebookId = LOCAL_NOTEBOOK_ID): Note => ({
@@ -218,9 +172,3 @@ export const createNotebook = (title: string): NoteNotebook => {
   if (!name) throw new Error("Give the notebook a name.");
   return { id: randomUUID(), title: name };
 };
-export function filterNotes(notes: readonly Note[], query: string): Note[] {
-  const needle = query.trim().toLocaleLowerCase();
-  return notes
-    .filter((note) => `${note.title}\n${note.body}`.toLocaleLowerCase().includes(needle))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-}

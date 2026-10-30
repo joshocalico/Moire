@@ -20,12 +20,18 @@ import {
 } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
 import { ScreenshotApp, ScreenshotDialog, type ScreenshotProps } from "./main";
-import { screenshotLayout } from "./layout";
 import { documentImage, emptyDocument, isDirty } from "./document";
-import { readPNG, savePNG } from "./capture";
+import { readPNG, savePNG } from "./backend";
+import { scratchHome } from "./testing";
+import { windowControl } from "@moire/app-tools/testing";
 
+const sandbox = scratchHome();
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "moire-screenshot-lifecycle-"));
-const source: ImageData = { width: 32, height: 24, rgba: new Uint8Array(32 * 24 * 4) };
+const source: ImageData = {
+  width: 32,
+  height: 24,
+  rgba: new Uint8Array(32 * 24 * 4),
+};
 for (let offset = 0; offset < source.rgba.length; offset += 4)
   source.rgba.set([51, 102, 153, 255], offset);
 const replacement: ImageData = {
@@ -36,7 +42,9 @@ const replacement: ImageData = {
 const modifiers = { shift: false, ctrl: false, alt: false, meta: false };
 class RetainedCpuPlatform extends HeadlessPlatform {
   override createWindow(opts: PlatformWindowOpts) {
-    return Object.assign(super.createWindow(opts), { presentScene: () => false });
+    return Object.assign(super.createWindow(opts), {
+      presentScene: () => false,
+    });
   }
 }
 let cases = 0;
@@ -93,18 +101,41 @@ async function harness(
   window.tick();
   const native = backend.getWindows()[0];
   assert.ok(native);
+  // The live header bar draws window controls; a stand-in window gives this independent render
+  // the same layout without touching the live window's close guard.
+  const layoutWindow = {
+    beginMove() {},
+    requestClose() {},
+    setMaximized() {},
+    isMaximized: () => false,
+    minimize() {},
+    setCloseGuard() {},
+  } as unknown as Window;
   const scene = createShellRoot();
   renderShell(
     scene,
     wrapped(
-      <ScreenshotApp width={width} height={height} initialImage={source} initialOutput={output} />,
+      <ScreenshotApp
+        width={width}
+        height={height}
+        window={layoutWindow}
+        initialImage={source}
+        initialOutput={output}
+      />,
     ),
   );
   const controls = collectHits(scene.container);
   renderShell(scene, null);
   const key = (code: number, key: string, ctrl = false, shift = false, text?: string) => {
     const mods = { ...modifiers, ctrl, shift };
-    native.injectKey({ type: "down", code, key, modifiers: mods, text, timeMs: 1 });
+    native.injectKey({
+      type: "down",
+      code,
+      key,
+      modifiers: mods,
+      text,
+      timeMs: 1,
+    });
     native.injectKey({ type: "up", code, key, modifiers: mods, timeMs: 2 });
     window.tick();
   };
@@ -217,26 +248,26 @@ async function harness(
     });
     window.tick();
   };
-  const captureNow = () => {
-    const field = controls.find(
-      (hit) =>
-        hit.focusId?.startsWith("text-field:") &&
-        hit.y < screenshotLayout({ width, height }, scale).tools.y,
-    );
-    assert.ok(field);
-    click(field.x + field.width / 2, field.y + field.height / 2);
-    text("0");
-    press("screenshot-capture");
+  /** Click a control in the live window, found by focusId or its label. */
+  const pressLive = (match: { focusId: string } | { text: string }) => {
+    const point = windowControl(window, match);
+    click(point.x, point.y);
   };
-  let sourceValue = app.initialFile ?? "";
-  const open = (file: string) => {
+  /** New Screenshot with no delay: the dialog's Delay "None", then Take Screenshot. */
+  const captureNow = async () => {
+    press("screenshot-capture");
+    await settle();
+    pressLive({ text: "None" });
+    pressLive({ focusId: "screenshot-take" });
+  };
+  /** Open through the shared chooser: Ctrl+O, edit the location, type the file, Enter. */
+  const open = async (file: string) => {
     key(24, "o", true);
-    // Cancel autofocus -> Open action -> source path field, within actual trapped scope.
-    key(15, "Tab", false, true);
-    if (sourceValue.trim()) key(15, "Tab", false, true);
+    await settle();
+    pressLive({ text: "Edit" });
     text(file);
     key(28, "Enter");
-    sourceValue = file;
+    await settle();
   };
   const destroy = () => {
     window.destroy();
@@ -352,17 +383,20 @@ try {
   try {
     open.cropDrag();
     const before = documentImage(open.latest.current);
-    open.open(opened);
+    await open.open(opened);
     open.key(1, "Escape");
     assert.deepEqual(reads, []);
     assert.deepEqual(documentImage(open.latest.current), before);
-    open.open(path.join(fixture, "missing.png"));
+    // A file that is not a PNG fails to read after the guard approves it.
+    const broken = path.join(fixture, "broken.png");
+    await fs.writeFile(broken, "not a png");
+    await open.open(broken);
     open.promptPress("discard");
     await open.settle();
     assert.equal(reads.length, 1);
     assert.deepEqual(documentImage(open.latest.current), before);
     assert.equal(isDirty(open.latest.current), true);
-    open.open(opened);
+    await open.open(opened);
     open.promptPress("save");
     await open.wait(() => reads.length === 2 && !isDirty(open.latest.current));
     assert.deepEqual(await readPNG(open.output), before);
@@ -373,16 +407,20 @@ try {
     open.destroy();
   }
 
-  const captures: Array<{ resolve: (image: ImageData) => void; reject: (error: Error) => void }> =
-    [];
+  const captures: Array<{
+    resolve: (image: ImageData) => void;
+    reject: (error: Error) => void;
+  }> = [];
   const capture = await harness({
-    app: { capture: () => new Promise((resolve, reject) => captures.push({ resolve, reject })) },
+    app: {
+      capture: () => new Promise((resolve, reject) => captures.push({ resolve, reject })),
+    },
   });
   try {
-    capture.captureNow();
+    await capture.captureNow();
     capture.key(1, "Escape");
     assert.equal(captures.length, 0);
-    capture.captureNow();
+    await capture.captureNow();
     capture.promptPress("discard");
     assert.equal(captures.length, 1);
     capture.press("screenshot-capture");
@@ -393,14 +431,14 @@ try {
       source,
       "canceled late capture cannot replace current image",
     );
-    capture.captureNow();
+    await capture.captureNow();
     capture.promptPress("discard");
     assert.equal(captures.length, 2);
     captures[1]?.reject(new Error("capture unavailable"));
     await capture.settle();
     assert.deepEqual(documentImage(capture.latest.current), source);
     assert.equal(isDirty(capture.latest.current), true);
-    capture.captureNow();
+    await capture.captureNow();
     capture.promptPress("save");
     await capture.wait(() => captures.length === 3);
     captures[2]?.resolve(replacement);
@@ -417,7 +455,9 @@ try {
   }
 
   // Native close during pending read: explicit discard cancels ownership, late completion stays inert.
-  const delivery: { complete: ((image: ImageData) => void) | null } = { complete: null };
+  const delivery: { complete: ((image: ImageData) => void) | null } = {
+    complete: null,
+  };
   const delayedRead = await harness({
     app: {
       initialImage: undefined,
@@ -619,4 +659,5 @@ try {
 } finally {
   setUiScaleFactor(1);
   await fs.rm(fixture, { recursive: true, force: true });
+  sandbox.restore();
 }

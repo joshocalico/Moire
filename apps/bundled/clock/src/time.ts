@@ -1,7 +1,4 @@
-import path from "node:path";
-import os from "node:os";
-import { loadSnapshot, writeSnapshot, type StoreWriteResult } from "@moire/app-tools/local-store";
-
+/** Timer, stopwatch and alarm arithmetic: pure functions over explicit clock readings. */
 export type Countdown =
   | { kind: "idle"; durationMs: number }
   | { kind: "running"; deadlineMs: number }
@@ -57,58 +54,4 @@ export function nextAlarm(time: string, now: number): number {
   date.setHours(h ?? 0, m ?? 0, 0, 0);
   if (date.getTime() <= now) date.setDate(date.getDate() + 1);
   return date.getTime();
-}
-function parseAlarms(data: unknown, now: number): Alarm[] {
-  if (!Array.isArray(data)) throw new Error("Alarm file is invalid.");
-  const identifiers = new Set<string>();
-  return data.map((item: unknown) => {
-    if (
-      typeof item !== "object" ||
-      !item ||
-      !("id" in item) ||
-      typeof item.id !== "string" ||
-      !item.id ||
-      !("label" in item) ||
-      typeof item.label !== "string" ||
-      !("time" in item) ||
-      typeof item.time !== "string" ||
-      !("enabled" in item) ||
-      typeof item.enabled !== "boolean"
-    )
-      throw new Error("Alarm file contains an invalid alarm.");
-    if (identifiers.has(item.id))
-      throw new Error("Alarm file contains duplicate alarm identifiers.");
-    identifiers.add(item.id);
-    return {
-      id: item.id,
-      label: item.label,
-      time: item.time,
-      enabled: item.enabled,
-      nextAtMs: nextAlarm(item.time, now),
-    };
-  });
-}
-export class AlarmStore {
-  constructor(
-    readonly file = path.join(
-      process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"),
-      "moire/clock/alarms.json",
-    ),
-  ) {}
-  load(now = Date.now()) {
-    return loadSnapshot(this.file, (data) => parseAlarms(data, now));
-  }
-  read(now = Date.now()): Alarm[] {
-    return [...this.load(now).items];
-  }
-  write(
-    alarms: readonly Alarm[],
-    expectedRevision: string | null,
-    now = Date.now(),
-  ): StoreWriteResult<Alarm> {
-    const snapshot = writeSnapshot(this.file, alarms, expectedRevision, (data) =>
-      parseAlarms(data, now),
-    );
-    return { ...snapshot, items: [...alarms] };
-  }
 }

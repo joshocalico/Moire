@@ -6,5 +6,8 @@
   "description": "Device-free selected-session login/logout source fixtures; no production authentication entry",
   "scripts": {
     "typecheck": "node ../compositor/node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@moire/moire-dm": "workspace:*"
   }
 }

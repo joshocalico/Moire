@@ -35,7 +35,9 @@ export type SelectionAction<Key> =
   | { type: "first"; options?: SelectionMoveOptions }
   | { type: "last"; options?: SelectionMoveOptions }
   | { type: "all" }
-  | { type: "clear" };
+  | { type: "clear" }
+  /** Replace the selection with exactly these keys (a rubber band), focusing `focusKey`. */
+  | { type: "set"; keys: Iterable<Key>; focusKey?: Key | null };
 
 export type SelectionModel<Key> = SelectionState<Key> & {
   selectedKeysInOrder: readonly Key[];
@@ -48,6 +50,7 @@ export type SelectionModel<Key> = SelectionState<Key> & {
   last: (options?: SelectionMoveOptions) => void;
   selectAll: () => void;
   clear: () => void;
+  selectKeys: (keys: Iterable<Key>, focusKey?: Key | null) => void;
 };
 
 function sameSet<Key>(left: ReadonlySet<Key>, right: ReadonlySet<Key>): boolean {
@@ -176,6 +179,15 @@ export function reduceSelection<Key>(
 
   if (action.type === "clear") {
     next = { selectedKeys: new Set(), anchorKey: null, focusKey: null };
+  } else if (action.type === "set") {
+    const available = new Set(keys);
+    const selected = new Set([...action.keys].filter((key) => available.has(key)));
+    const limited = multiple ? selected : new Set([...selected].slice(0, 1));
+    const focusKey =
+      action.focusKey !== undefined && action.focusKey !== null && available.has(action.focusKey)
+        ? action.focusKey
+        : (keys.find((key) => limited.has(key)) ?? current.focusKey);
+    next = { selectedKeys: limited, anchorKey: focusKey, focusKey };
   } else if (action.type === "all") {
     const selected = multiple ? new Set(keys) : new Set(keys.slice(0, 1));
     const focusKey =
@@ -308,6 +320,11 @@ export function useSelectionModel<Key>(
   );
   const selectAll = useCallback(() => dispatch({ type: "all" }), [dispatch]);
   const clear = useCallback(() => dispatch({ type: "clear" }), [dispatch]);
+  const selectKeys = useCallback(
+    (selected: Iterable<Key>, focusKey?: Key | null) =>
+      dispatch({ type: "set", keys: selected, focusKey }),
+    [dispatch],
+  );
 
   return {
     ...state,
@@ -321,5 +338,6 @@ export function useSelectionModel<Key>(
     last,
     selectAll,
     clear,
+    selectKeys,
   };
 }

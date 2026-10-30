@@ -47,7 +47,9 @@ await withFixture(async (fixture) => {
       },
     });
     try {
-      await assert.rejects(extractArchive(archive, destination), { code: "EEXIST" });
+      await assert.rejects(extractArchive(archive, destination), {
+        code: "EEXIST",
+      });
     } finally {
       Object.defineProperty(fs, "lstat", { value: originalLstat });
     }
@@ -75,7 +77,9 @@ await withFixture(async (fixture) => {
       const stat = await originalLstat(target, options);
       if (target === destination) {
         observedPublication = true;
-        throw Object.assign(new Error("fixture EIO after actual publication"), { code: "EIO" });
+        throw Object.assign(new Error("fixture EIO after actual publication"), {
+          code: "EIO",
+        });
       }
       return stat;
     },

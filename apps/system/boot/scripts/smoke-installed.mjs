@@ -17,11 +17,13 @@ assert.ok(fs.statSync(path.join(runtime, manifest.wasm)).size > 0, "Yoga embedde
 const native = path.join(runtime, "node_modules/koffi/build/koffi");
 assert.deepEqual(fs.readdirSync(native), [`linux_${process.arch}`]);
 const fonts = fs.readdirSync(path.join(runtime, "fonts")).filter((name) => name.endsWith(".ttf"));
-assert.equal(fonts.length, 5, "The current shared font engine requires all five font files");
+assert.equal(fonts.length, 6, "The shared font engine requires all six font files");
+assert.ok(fonts.includes("Newsreader-Display330.ttf"), "The display (wordmark) face is bundled");
 const icons = fs.readdirSync(path.join(runtime, "icons")).filter((name) => name.endsWith(".svg"));
 assert.ok(icons.length > 0);
 for (const name of [
   "moire-boot",
+  "moire-boot-stage",
   "moire-boot-cleanup",
   "moire-boot-smoke",
   "moire-boot-view-smoke",

@@ -3,20 +3,28 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Moire Settings \u2014 out-of-process @moire/ui app",
+  "imports": {
+    "#settings/*": "./src/*.ts",
+    "#settings-view/*": "./src/*.tsx"
+  },
+  "description": "Moire Settings — out-of-process @moire/ui app",
   "bin": {
-    "moire-settings": "./src/main.ts"
+    "moire-settings": "./src/main.tsx"
   },
   "scripts": {
-    "start": "tsx src/main.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "start": "tsx src/main.tsx",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx src/settings-model.smoke.ts && tsx src/search-model.smoke.ts && tsx src/settings.smoke.tsx && tsx src/search.smoke.tsx && tsx src/pages.smoke.tsx && tsx src/power.smoke.tsx && tsx src/desktop.smoke.tsx && tsx src/notifications.smoke.tsx && tsx src/sound.smoke.tsx && tsx src/daylight.smoke.tsx && tsx src/connections.smoke.tsx && tsx src/users.smoke.tsx"
   },
   "dependencies": {
+    "@moire/app-discovery": "workspace:*",
+    "@moire/app-tools": "workspace:*",
     "@moire/dbus": "workspace:*",
     "@moire/prefs": "workspace:*",
+    "@moire/system-management": "workspace:*",
+    "@moire/theme": "workspace:*",
     "@moire/ui": "workspace:*",
-    "react": "^19.0.0",
-    "@moire/theme": "workspace:*"
+    "react": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

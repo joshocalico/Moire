@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createElement } from "react";
+import React from "react";
 import {
   Rect,
   createShellRoot,
@@ -25,13 +25,9 @@ const cases = [
 ];
 try {
   for (const [index, fixture] of cases.entries()) {
-    const content = fixture.rectWidth
-      ? createElement(Rect, {
-          width: fixture.rectWidth,
-          height: fixture.height,
-          fill: fixture.fill,
-        })
-      : null;
+    const content = fixture.rectWidth ? (
+      <Rect width={fixture.rectWidth} height={fixture.height} fill={fixture.fill} />
+    ) : null;
     renderShell(retainedRoot, content);
     const viewport = { width: fixture.width, height: fixture.height };
     const scene = retainedScene.render(retainedRoot.container, viewport);

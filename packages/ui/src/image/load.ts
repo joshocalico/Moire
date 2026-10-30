@@ -1,9 +1,10 @@
 /**
- * PNG loader with module-level cache.
- * Uses pngjs.  Safe to import anywhere in @moire/ui; no Wayland/platform deps.
+ * Image file loader with a module-level cache: PNG, JPEG (upright by EXIF) and GIF.
+ * Safe to import anywhere in @moire/ui; no Wayland/platform deps. Decoding is synchronous, so
+ * large photos belong in `requestThumbnail`, which decodes off the render thread.
  */
-import { PNG } from "pngjs";
 import fs from "node:fs";
+import { decodeImage } from "./decode";
 
 export type ImageData = {
   rgba: Uint8Array;
@@ -23,18 +24,13 @@ export function getCachedImage(path: string): ImageData | null {
 export function loadImageSync(filePath: string): ImageData {
   const hit = cache.get(filePath);
   if (hit) return hit;
-  const parsed = PNG.sync.read(fs.readFileSync(filePath));
-  const img: ImageData = {
-    rgba: new Uint8Array(parsed.data),
-    width: parsed.width,
-    height: parsed.height,
-  };
+  const img = decodeImage(fs.readFileSync(filePath));
   cache.set(filePath, img);
   return img;
 }
 
 /**
- * Load a PNG file and return its RGBA pixel data.
+ * Load an image file and return its RGBA pixel data.
  * Subsequent calls for the same path return the cached result immediately.
  * Concurrent calls while a load is in progress share the same Promise.
  */

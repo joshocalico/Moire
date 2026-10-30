@@ -3,15 +3,22 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#files/views/*": "./src/views/*.tsx",
+    "#files/*": "./src/*.ts"
+  },
   "description": "Moire Files \u2014 native file browser",
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "smoke": "tsx src/places.smoke.ts && tsx src/filesystem.smoke.ts && tsx src/keyboard.smoke.tsx && tsx src/keyboard.smoke.tsx --list && tsx src/tabs.smoke.tsx && tsx src/inspector.smoke.tsx && tsx src/transfer-outcome.smoke.ts && tsx src/transfer-outcome.ui.smoke.tsx",
+    "smoke": "tsx src/places.smoke.ts && tsx src/launch.smoke.ts && tsx src/filesystem.smoke.ts && tsx src/keyboard.smoke.tsx && tsx src/keyboard.smoke.tsx --list && tsx src/tabs.smoke.tsx && tsx src/inspector.smoke.tsx && tsx src/inspector-actions.smoke.tsx && tsx src/batch-rename.smoke.ts && tsx src/transfer-outcome.smoke.ts && tsx src/transfer-outcome.ui.smoke.tsx && tsx src/context-menus.smoke.tsx && tsx src/trash.smoke.tsx && tsx src/selection.smoke.tsx && tsx src/drop-targets.smoke.tsx && tsx src/search/search.smoke.ts && tsx src/overview.smoke.tsx && tsx src/folder-page.smoke.tsx && tsx src/columns.smoke.tsx && tsx src/search-page.smoke.tsx && tsx src/sheets.smoke.tsx && tsx src/rail.smoke.tsx && tsx src/preview/preview.smoke.ts && tsx src/preview-kinds.smoke.tsx && tsx src/open-in-terminal.smoke.tsx && tsx src/preview/audio-playback.smoke.tsx && tsx src/permissions.smoke.ts && tsx src/preview/font-family.smoke.ts && tsx src/catalog.smoke.ts",
     "smoke:visual": "tsx src/visual.smoke.tsx"
   },
   "dependencies": {
     "@moire/app-discovery": "workspace:*",
+    "@moire/app-tools": "workspace:*",
+    "@moire/file-formats": "workspace:*",
+    "@moire/file-operations": "workspace:*",
     "@moire/prefs": "workspace:*",
     "@moire/system-management": "workspace:*",
     "@moire/ui": "workspace:*",

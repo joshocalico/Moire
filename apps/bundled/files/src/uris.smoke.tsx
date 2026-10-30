@@ -21,6 +21,8 @@ const previous = {
 };
 process.env.HOME = fixture;
 process.env.XDG_CONFIG_HOME = path.join(fixture, ".config");
+// The session file clipboard lives in the runtime directory; keep it in the fixture.
+process.env.XDG_RUNTIME_DIR = path.join(fixture, ".run");
 process.env.XDG_DATA_HOME = path.join(fixture, ".local/share");
 try {
   await installUiFonts();
@@ -75,7 +77,7 @@ try {
       onShowContextMenu={(request) => {
         title = request.title;
         ready = request.actions.some(
-          (action) => action.id === "moire.background:select-all" && action.disabled === false,
+          (action) => action.id === "select-all" && action.disabled === false,
         );
         return true;
       }}

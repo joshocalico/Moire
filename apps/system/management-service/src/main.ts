@@ -6,6 +6,10 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { SessionBus } from "@moire/dbus";
 import { attachDesktopControls } from "./desktop-controls";
 import { attachStorageControls } from "./storage-controls";
+import { attachSystemSettings } from "./system-settings";
+import { attachSessionPowerControls } from "./power-profiles";
+import { attachBrightnessControls } from "./backlight";
+import { attachAppearanceSchedule } from "./appearance-schedule";
 import { createUDisksStorageAdapter } from "./udisks-storage";
 import {
   SYSTEM_MANAGEMENT_BUS,
@@ -103,6 +107,7 @@ export function loadProcessCatalog(root: string): ProcessCatalog {
     ["system/compositor", "Moire Compositor", "org.moire.Compositor", true],
     ["system/session", "Moire Session", "org.moire.Session", true, "moire-session"],
     ["system/management-service", "System Management Service", "org.moire.SystemManagement", true],
+    ["system/index-service", "File Index", "org.moire.Index", false],
     ["system/portal", "Desktop Portal", "org.moire.Portal", true, "moire-portal"],
     ["core/settings", "Settings", "org.moire.Settings", false, "moire-settings"],
     [
@@ -455,12 +460,26 @@ async function main(): Promise<void> {
     await controls.dispose().finally(() => bus.close());
     throw error;
   }
+  const settings = await attachSystemSettings(bus);
+  const power = await attachSessionPowerControls(bus);
+  const brightness = attachBrightnessControls(bus, {
+    onError: (error) => console.warn("[system-management] brightness:", error),
+  });
+  const appearance = attachAppearanceSchedule({
+    onError: (error) => console.warn("[system-management] automatic dark style:", error),
+  });
   bindManagementShutdown(
     bus,
     {
       async dispose() {
         try {
-          await storage.dispose();
+          await Promise.allSettled([
+            storage.dispose(),
+            settings.dispose(),
+            power.dispose(),
+            brightness.dispose(),
+            appearance.dispose(),
+          ]);
         } finally {
           await controls.dispose();
         }

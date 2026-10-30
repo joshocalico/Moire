@@ -16,20 +16,20 @@ try {
   const initial = loadPlaces();
   assert.deepEqual(
     initial.map((place) => place.id),
-    ["home", "desktop", "downloads", "documents", "pictures"],
+    ["home", "desktop", "downloads", "documents", "pictures", "music"],
   );
   assert.equal(initial[1]?.path, path.join(os.homedir(), "Desk"));
   assert.equal(initial[2]?.path, path.join(os.homedir(), "Incoming"));
 
   const projectPath = path.join(os.homedir(), "Projects", "Moire");
   const withFavorite = addFavorite(initial, projectPath);
-  assert.equal(withFavorite.length, 6);
-  assert.equal(withFavorite[5]?.label, "Moire");
+  assert.equal(withFavorite.length, 7);
+  assert.equal(withFavorite[6]?.label, "Moire");
   savePlaces(withFavorite);
 
   const reloaded = loadPlaces();
-  assert.equal(reloaded[5]?.path, projectPath);
-  assert.equal(reloaded[5]?.builtIn, false);
+  assert.equal(reloaded[6]?.path, projectPath);
+  assert.equal(reloaded[6]?.builtIn, false);
 
   const renamed = normalizePlaceLabels(
     reloaded.map((place) =>
@@ -37,10 +37,23 @@ try {
     ),
   );
   savePlaces(renamed);
-  assert.equal(loadPlaces()[5]?.label, "Workspace");
+  assert.equal(loadPlaces()[6]?.label, "Workspace");
 
   const deduplicated = addFavorite(renamed, projectPath);
   assert.equal(deduplicated.length, renamed.length);
+
+  // Home's Pinned: four built-ins and the user's places, until a built-in is unpinned.
+  assert.deepEqual(
+    loadPlaces()
+      .filter((place) => place.pinned)
+      .map((place) => place.id),
+    ["downloads", "documents", "pictures", "music", `favorite:${projectPath}`],
+  );
+  savePlaces(
+    loadPlaces().map((place) => (place.id === "pictures" ? { ...place, pinned: false } : place)),
+  );
+  assert.equal(loadPlaces().find((place) => place.id === "pictures")?.pinned, false);
+  assert.equal(loadPlaces().length, 7, "an unpinned place stays on the rail");
   console.log("[files/places-smoke] ok");
 } finally {
   if (originalConfigHome == null) delete process.env.XDG_CONFIG_HOME;

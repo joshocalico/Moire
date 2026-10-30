@@ -31,6 +31,8 @@ import {
 } from "./retained-motion-admission";
 import { wrapWidgetTheme, type WidgetTheme } from "./widget-theme";
 
+/** Logs key codes and focus only, never text, so secrets stay out of journals. */
+const DEBUG_KEYS = process.env.MOIRE_DEBUG_KEYS === "1";
 export type WindowSize = { width: number; height: number };
 
 /** Client chrome uses the same close guard and native state as server chrome. */
@@ -98,6 +100,20 @@ const mountedWindows = new Set<Window>();
  */
 export function hitTestDropData(x: number, y: number): unknown {
   return activeWindowForHitTest?.hitTestData(x, y) ?? null;
+}
+
+/**
+ * Focus ids of the focusable regions intersecting a window-local rectangle on
+ * the active window, in paint order. Collections use it for rubber-band
+ * selection without re-deriving their own item geometry.
+ */
+export function focusIdsInRect(rect: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): string[] {
+  return activeWindowForHitTest?.focusIdsInRect(rect) ?? [];
 }
 
 /** Geometric drop-hover update on the active window — see `Window.updateDropHover`. */
@@ -206,17 +222,31 @@ export class Window {
   private theme: WidgetTheme | null = null;
   private root: ShellRoot = createShellRoot({
     onCommit: () => {
-      // Timer/promise-driven React state (Spinner, async loading, progress)
-      // commits outside tickFrame(). Schedule a present without requiring an
-      // unrelated pointer/key event to wake the visual state up.
-      if (!this.renderingRoot) this.invalidate();
+      this.hitsStale = true;
+      if (this.renderingRoot) return;
+      // A motion re-rendering its own component (a hover tween) leaves the tree current: the
+      // frame only diffs the retained scene. Other commits (async loading, a paste, timers)
+      // may accompany state kept outside React, so they render the whole content again.
+      if (this.advancingMotion) {
+        this.committed = true;
+        this.invalidate(false);
+      } else this.invalidate();
     },
   });
   private platformWin: PlatformWindow | null = null;
   private backend: PlatformBackend | null = null;
   private readonly popups = new Set<Window>();
   private hits: HitRegion[] = [];
+  /**
+   * React committed since hit regions were last collected. Input arriving
+   * before the next frame must not reach handlers closed over earlier state.
+   */
+  private hitsStale = false;
   private dirty = true;
+  /** React committed state on its own since the last frame; the scene graph must be diffed. */
+  private committed = false;
+  /** Motion values are being advanced; their subscribers commit as they re-render. */
+  private advancingMotion = false;
   /** React/component tree changed; false means the committed scene is reusable. */
   private reconcileDirty = true;
   /** Suppress invalidation caused by the explicit renderShell call in tick. */
@@ -637,6 +667,26 @@ export class Window {
     };
   }
 
+  focusIdsInRect(rect: { x: number; y: number; width: number; height: number }): string[] {
+    const ids = new Set<string>();
+    for (const hit of this.hits) {
+      if (!hit.focusable || !hit.focusId) continue;
+      const clip = hit.pointerClip;
+      const left = Math.max(hit.x, clip?.x ?? -Infinity);
+      const top = Math.max(hit.y, clip?.y ?? -Infinity);
+      const right = Math.min(hit.x + hit.width, clip ? clip.x + clip.width : Infinity);
+      const bottom = Math.min(hit.y + hit.height, clip ? clip.y + clip.height : Infinity);
+      if (
+        right > rect.x &&
+        left < rect.x + rect.width &&
+        bottom > rect.y &&
+        top < rect.y + rect.height
+      )
+        ids.add(hit.focusId);
+    }
+    return [...ids];
+  }
+
   /** Topmost hit region's `data` at window-local (x, y), or null. */
   hitTestData(x: number, y: number): unknown {
     return this.findDropRegion(x, y)?.data ?? null;
@@ -691,9 +741,15 @@ export class Window {
     const now = Date.now();
     const dt = Math.min((now - this.lastTickMs) / 1000, 0.1);
     this.lastTickMs = now;
-    const motion = advanceMotions
-      ? tickMotionFrame(dt)
-      : { active: false, presentationChanged: false, requiresReconcile: false };
+    this.advancingMotion = true;
+    let motion: ReturnType<typeof tickMotionFrame>;
+    try {
+      motion = advanceMotions
+        ? tickMotionFrame(dt)
+        : { active: false, presentationChanged: false, requiresReconcile: false };
+    } finally {
+      this.advancingMotion = false;
+    }
     this.animationsActive = motion.active;
     const retainedChanged = this.retainedMotion.tick(now);
     if (retainedChanged || motion.presentationChanged || motion.requiresReconcile) {
@@ -737,7 +793,9 @@ export class Window {
     const sceneMs = sceneFinishedAt - frameStartedAt;
     if (platformWin.presentScene) {
       const rasterStartedAt = performance.now();
-      const retained = !shouldReconcile
+      const sceneChanged = shouldReconcile || this.committed;
+      this.committed = false;
+      const retained = !sceneChanged
         ? (this.retainedRenderer.renderPresentation(this.root.container, viewport) ??
           this.retainedRenderer.render(this.root.container, viewport))
         : this.retainedRenderer.render(this.root.container, viewport);
@@ -926,10 +984,26 @@ export class Window {
       this.renderingRoot = false;
     }
     this.refreshHits();
+    // Render once more next frame: effects run after this commit may change what it shows.
     this.invalidate();
   }
 
+  /** A wheel re-renders once now (scroll offsets may live outside React), not again next frame. */
+  private flushAfterWheel(): void {
+    const tree = this.contentTree();
+    this.renderingRoot = true;
+    try {
+      renderShell(this.root, tree);
+    } finally {
+      this.renderingRoot = false;
+    }
+    this.refreshHits();
+    this.committed = true;
+    this.invalidate(false);
+  }
+
   private refreshHits(): void {
+    this.hitsStale = false;
     // Exit animations may still paint a closed flyout. Its inactive scope
     // must stop receiving pointer and keyboard input immediately.
     this.hits = collectHits(this.root.container, [], undefined, {
@@ -1104,6 +1178,7 @@ export class Window {
 
   private handlePointer(ev: UiPointerEvent): void {
     if (this.closed) return;
+    if (this.hitsStale) this.refreshHits();
     this.lastPointerEvent = ev;
 
     if (ev.type === "move") {
@@ -1200,17 +1275,22 @@ export class Window {
     }
 
     if (ev.type === "wheel") {
-      const hit = this.findTopHit(ev.x, ev.y, (h) => !!h.onWheel);
-      if (hit?.onWheel) {
-        hit.onWheel(this.makeEvArgs(hit, ev));
-        this.flushAndDirty();
+      // Innermost first; a handler returning false (a scroller at its limit) chains the wheel
+      // to the next one beneath, so nested viewports hand off to their parents.
+      for (let i = this.hits.length - 1; i >= 0; i--) {
+        const hit = this.hits[i]!;
+        if (!hit.onWheel || !hitRegionContains(hit, ev.x, ev.y)) continue;
+        const consumed = hit.onWheel(this.makeEvArgs(hit, ev));
+        if (consumed !== false) break;
       }
+      this.flushAfterWheel();
       return;
     }
   }
 
   private handleKey(ev: UiKeyEvent): void {
     if (this.closed) return;
+    if (this.hitsStale) this.refreshHits();
     const event: HitKeyEvent = {
       code: ev.code,
       key: ev.key,
@@ -1255,7 +1335,11 @@ export class Window {
       return;
     }
     const focused = this.focusedHit;
-    if (!focused) return;
+    if (!focused) {
+      if (DEBUG_KEYS)
+        console.log(`[keys] window ${ev.type} code=${ev.code} dropped: no focused hit`);
+      return;
+    }
     const contextMenuKey =
       ev.type === "down" && (ev.code === 139 || (ev.code === 68 && ev.modifiers.shift));
     if (contextMenuKey && focused.onContextMenu) {
@@ -1271,6 +1355,10 @@ export class Window {
       this.flushAndDirty();
       return;
     }
+    if (DEBUG_KEYS)
+      console.log(
+        `[keys] window ${ev.type} code=${ev.code} focus=${focused.focusId ?? "?"} text=${ev.text ? ev.text.length : 0}`,
+      );
     if (ev.type === "up") focused.onKeyUp?.(event);
     else focused.onKeyDown?.(event);
     this.flushAndDirty();

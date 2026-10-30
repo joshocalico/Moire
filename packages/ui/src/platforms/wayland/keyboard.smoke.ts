@@ -65,7 +65,34 @@ function assertClosed(fd: number) {
     (error: unknown) => error instanceof Error && "code" in error && error.code === "EBADF",
   );
 }
+/** Deterministic repeat clock: timers fire only when a test advances it. */
+class FakeClock {
+  now = 0;
+  private pending = new Map<number, { at: number; callback: () => void }>();
+  private nextId = 1;
+  setTimeout = (callback: () => void, ms: number) => {
+    const id = this.nextId++;
+    this.pending.set(id, { at: this.now + ms, callback });
+    return id;
+  };
+  clearTimeout = (handle: unknown) => {
+    this.pending.delete(handle as number);
+  };
+  advance(ms: number) {
+    const end = this.now + ms;
+    for (;;) {
+      let next: [number, { at: number; callback: () => void }] | null = null;
+      for (const entry of this.pending) if (!next || entry[1].at < next[1].at) next = entry;
+      if (!next || next[1].at > end) break;
+      this.pending.delete(next[0]);
+      this.now = next[1].at;
+      next[1].callback();
+    }
+    this.now = end;
+  }
+}
 function setup() {
+  const clock = new FakeClock();
   const parent: Target = { keys: [] };
   const popup: Target = { keys: [] };
   const surfaces = new Map([
@@ -100,6 +127,7 @@ function setup() {
       throw new Error("Synthetic observer failure");
     },
     keymapIo: io,
+    timers: clock,
     createKeymap(source) {
       sources.push(Buffer.from(source));
       if (configuration.rejectFactory) throw new Error("Synthetic invalid source");
@@ -131,6 +159,9 @@ function setup() {
       wlKeyboard.events.enter.opcode,
       new MessageBuilder().uint(100).object(surface).array(keys),
     );
+  }
+  function repeatInfo(rate: number, delay: number) {
+    dispatch(wlKeyboard.events.repeatInfo.opcode, new MessageBuilder().int(rate).int(delay));
   }
   function leave(surface: number) {
     dispatch(wlKeyboard.events.leave.opcode, new MessageBuilder().uint(101).object(surface));
@@ -175,6 +206,8 @@ function setup() {
     key,
     modifiers,
     currentMap,
+    clock,
+    repeatInfo,
   };
 }
 let cases = 0;
@@ -235,6 +268,7 @@ try {
     f.modifiers(mask);
     assert.equal(f.serial(), 300);
     assert.deepEqual(f.currentMap().updates, [mask]);
+    f.key(30, wlKeyboard.enums.keyState.released);
     f.key(30);
     assert.equal(f.parent.keys.at(-1)?.text, "й");
     assert.deepEqual(f.parent.keys.at(-1)?.modifiers, {
@@ -244,11 +278,13 @@ try {
       meta: false,
     });
     f.modifiers({ depressed: 128, latched: 0, locked: 0, group: 0 });
+    f.key(30, wlKeyboard.enums.keyState.released);
     f.key(30);
     assert.equal(f.parent.keys.at(-1)?.text, "€");
     assert.equal(f.parent.keys.at(-1)?.modifiers.alt, false, "synthetic AltGr is not Alt");
     f.modifiers({ depressed: 0, latched: 1, locked: 0, group: 0 });
     f.key(42, wlKeyboard.enums.keyState.released);
+    f.key(30, wlKeyboard.enums.keyState.released);
     f.key(30);
     assert.equal(
       f.parent.keys.at(-1)?.text,
@@ -256,6 +292,7 @@ try {
       "physical release cannot clear compositor latched state",
     );
     f.modifiers({ depressed: 0, latched: 0, locked: 2, group: 0 });
+    f.key(30, wlKeyboard.enums.keyState.released);
     f.key(30);
     assert.equal(f.parent.keys.at(-1)?.text, "Q");
     assert.equal(f.parent.keys.at(-1)?.modifiers.shift, false);
@@ -282,7 +319,8 @@ try {
     f.key(30);
     assert.deepEqual(
       f.popup.keys.map((event) => event.type),
-      ["repeat", "up", "down"],
+      ["up", "down"],
+      "a key held at enter cannot be pressed again; only its release and next press emit",
     );
     assert.equal(f.parent.keys.length, 0);
     assert.equal(f.serial(), 102);
@@ -290,7 +328,7 @@ try {
     assert.equal(f.keyboard.modifiers().shift, true);
     f.leave(20);
     f.key(28);
-    assert.equal(f.popup.keys.length, 3);
+    assert.equal(f.popup.keys.length, 2);
     assert.equal(f.pressedKeys.size, 0);
     assert.deepEqual(f.keyboard.modifiers(), zeroModifiers);
     assert.equal(map.destroyed, 0);
@@ -316,6 +354,58 @@ try {
     assert.deepEqual(f.keyboard.keymapState(), { kind: "unavailable", reason: "disconnected" });
   });
 
+  test("client repeat follows repeat_info, stops on release/leave and never repeats modifiers", () => {
+    const f = setup();
+    f.sendMap();
+    f.enter(10);
+    f.repeatInfo(25, 400);
+    const types = () => f.parent.keys.map((event) => `${event.type}:${event.code}`);
+    f.key(30);
+    f.clock.advance(399);
+    assert.deepEqual(types(), ["down:30"], "no repeat before the advertised delay");
+    f.clock.advance(1);
+    f.clock.advance(40 * 3);
+    assert.deepEqual(types(), ["down:30", "repeat:30", "repeat:30", "repeat:30", "repeat:30"]);
+    assert.equal(f.parent.keys.at(-1)?.text, "q", "repeats carry translated text");
+    f.key(30, wlKeyboard.enums.keyState.released);
+    f.clock.advance(2000);
+    assert.equal(f.parent.keys.length, 6, "release ends repeat");
+
+    f.parent.keys.length = 0;
+    f.key(42);
+    f.clock.advance(2000);
+    assert.deepEqual(types(), ["down:42"], "modifiers never repeat");
+    f.key(42, wlKeyboard.enums.keyState.released);
+
+    f.parent.keys.length = 0;
+    f.key(30);
+    f.clock.advance(200);
+    f.key(28);
+    f.clock.advance(440);
+    f.key(30, wlKeyboard.enums.keyState.released);
+    f.clock.advance(40);
+    assert.deepEqual(
+      types(),
+      ["down:30", "down:28", "repeat:28", "repeat:28", "up:30", "repeat:28"],
+      "the newest key owns repeat; releasing an older key does not stop it",
+    );
+    f.key(28, wlKeyboard.enums.keyState.released);
+
+    f.parent.keys.length = 0;
+    f.key(30);
+    f.leave(10);
+    f.clock.advance(2000);
+    assert.deepEqual(types(), ["down:30"], "focus loss ends repeat");
+
+    f.enter(10);
+    f.repeatInfo(0, 400);
+    f.parent.keys.length = 0;
+    f.key(30);
+    f.clock.advance(2000);
+    assert.deepEqual(types(), ["down:30"], "rate 0 disables repeat");
+    f.keyboard.disconnect();
+  });
+
   test("unfocused compositor masks drive pointer modifiers and enter waits for fresh masks", () => {
     const f = setup();
     f.sendMap();
@@ -330,6 +420,7 @@ try {
     f.key(30);
     assert.equal(f.parent.keys.at(-1)?.text, "q");
     f.modifiers({ depressed: 1, latched: 0, locked: 0, group: 0 });
+    f.key(30, wlKeyboard.enums.keyState.released);
     f.key(30);
     assert.equal(f.parent.keys.at(-1)?.text, "Q");
     f.leave(10);
@@ -337,7 +428,7 @@ try {
     f.modifiers({ depressed: 4, latched: 0, locked: 0, group: 0 });
     assert.equal(f.keyboard.modifiers().ctrl, true);
     f.key(30);
-    assert.equal(f.parent.keys.length, 2);
+    assert.equal(f.parent.keys.length, 3, "down, up, down; unfocused presses never emit");
     f.keyboard.disconnect();
   });
 
@@ -355,7 +446,10 @@ try {
     assert.equal(f.parent.keys.length, 1);
     assert.equal(f.pressedKeys.has(30), true);
     f.key(30);
-    assert.equal(f.parent.keys.at(-1)?.type, "repeat");
+    assert.equal(f.parent.keys.length, 1, "a duplicate press is ignored, not a repeat");
+    f.key(30, wlKeyboard.enums.keyState.released);
+    f.key(30);
+    assert.equal(f.parent.keys.at(-1)?.type, "down");
     assert.equal(f.parent.keys.at(-1)?.text, "Q");
     f.key(30, wlKeyboard.enums.keyState.released);
     assert.equal(f.parent.keys.at(-1)?.type, "up");

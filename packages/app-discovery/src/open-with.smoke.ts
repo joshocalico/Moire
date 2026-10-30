@@ -71,6 +71,35 @@ try {
     true,
     "Always Use did not update the canonical model",
   );
+
+  // Choosing a default from discovered desktop files writes the user's mimeapps.list, and the
+  // association database reflects it at once and after a reload.
+  const applicationsDir = path.join(root, "data", "applications");
+  fs.mkdirSync(applicationsDir, { recursive: true });
+  for (const [id, name] of [
+    ["viewer-one.desktop", "Viewer One"],
+    ["viewer-two.desktop", "Viewer Two"],
+  ])
+    fs.writeFileSync(
+      path.join(applicationsDir, id),
+      `[Desktop Entry]\nType=Application\nName=${name}\nExec=${id.replace(".desktop", "")} %f\nMimeType=image/jpeg;\n`,
+    );
+  const photos = new FileActivationService(() => {});
+  const viewers = photos.mimeDatabase.applicationsForMime("image/jpeg").map(({ id }) => id);
+  assert.deepEqual([...viewers].sort(), ["viewer-one.desktop", "viewer-two.desktop"]);
+  const other = viewers.find(
+    (id) => id !== photos.mimeDatabase.defaultApplicationForMime("image/jpeg")?.id,
+  )!;
+  assert.equal(photos.setDefaultApplication("image/jpeg", other.replace(".desktop", "")), true);
+  const written = fs.readFileSync(path.join(root, "config", "mimeapps.list"), "utf8");
+  assert.match(written, new RegExp(`\\[Default Applications\\][^[]*image/jpeg=${other};`));
+  assert.equal(photos.mimeDatabase.defaultApplicationForMime("image/jpeg")?.id, other);
+  assert.equal(
+    new FileActivationService(() => {}).mimeDatabase.defaultApplicationForMime("image/jpeg")?.id,
+    other,
+    "the default survives a reload",
+  );
+  assert.equal(photos.setDefaultApplication("image/jpeg", "missing.desktop"), false);
   console.log("[app-discovery/open-with-smoke] ok");
 } finally {
   for (const [key, value] of Object.entries(previous)) {

@@ -94,7 +94,7 @@ try {
     root.close();
     assert.equal(root.root.container.children.length, 0);
     assert.throws(() => root.softwareFrame(), /closed/);
-    assert.strictEqual(root.source.image.rgba, source.image.rgba);
+    assert.strictEqual(root.source?.image.rgba, source.image.rgba);
     console.log(
       `[boot/react] ${width}x${height} actual shared artwork and wordmark: ${art} art pixels, ${wordmark} wordmark pixels; stable static root passed`,
     );

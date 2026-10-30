@@ -1,17 +1,18 @@
+/**
+ * Clearing saved places while a refresh is in flight: the older response must not repopulate the
+ * cache, a new explicit refresh still works, and closing the window invalidates late answers too.
+ */
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import React from "react";
-import { Window, installUiFonts } from "@moire/ui";
-import { HeadlessPlatform } from "@moire/ui/testing";
+import { mountWindow, withFixture } from "@moire/app-tools/testing";
 import { WeatherApp } from "./main";
 import { WeatherCache, type Forecast, type Place } from "./weather";
 
-const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "moire-weather-clear-"));
-const platform = new HeadlessPlatform();
-const window = new Window({ title: "weather clear lifecycle", width: 860, height: 700 });
-const requests: Array<{ signal: AbortSignal | undefined; resolve: (value: Forecast) => void }> = [];
+const requests: Array<{
+  signal: AbortSignal | undefined;
+  resolve: (value: Forecast) => void;
+}> = [];
 const place: Place = {
   id: "fixture-city",
   name: "Fixture City",
@@ -30,9 +31,8 @@ const forecast: Forecast = {
   code: 0,
   days: [{ date: "2026-10-03", min: 15, max: 21, rain: 0, code: 0 }],
 };
-try {
-  await installUiFonts();
-  const cache = new WeatherCache(path.join(fixture, "places.json"));
+await withFixture(async (directory) => {
+  const cache = new WeatherCache(path.join(directory, "places.json"));
   cache.write([{ place, forecast }]);
   const client = {
     search: async () => [place],
@@ -42,53 +42,38 @@ try {
         requests.push({ signal, resolve });
       }),
   };
-  await platform.connect();
-  window.setContent((size) => <WeatherApp {...size} client={client} cache={cache} />);
-  window.mount(platform);
-  await Promise.resolve();
-  window.tick();
-  const native = platform.getWindows()[0];
-  assert.ok(native);
-  const click = (x: number, y: number) => {
-    native.injectPointer({ type: "down", button: "left", x, y, timeMs: 1 });
-    native.injectPointer({ type: "up", button: "left", x, y, timeMs: 2 });
-    window.tick();
-  };
-  const settle = async () => {
-    for (let frame = 0; frame < 4; frame++) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      window.tick();
-    }
-  };
-  click(790, 34);
-  assert.equal(requests.length, 1);
-  click(100, 618);
-  assert.deepEqual(cache.read(), []);
-  assert.equal(requests[0]?.signal?.aborted, true, "Clear Saved invalidates the older refresh");
-  click(790, 34);
-  assert.equal(requests.length, 2, "clear releases busy state so explicit Refresh works again");
-  requests[0]?.resolve({ ...forecast, temperature: 99 });
-  await settle();
-  assert.deepEqual(cache.read(), [], "late pre-clear response cannot repopulate saved places");
-  requests[1]?.resolve({ ...forecast, temperature: 23 });
-  await settle();
-  assert.equal(
-    cache.read()[0]?.forecast.temperature,
-    23,
-    "a new explicit request may save normally",
-  );
-  click(790, 34);
-  assert.equal(requests.length, 3);
-  window.destroy();
+  const app = await mountWindow((size) => <WeatherApp {...size} client={client} cache={cache} />, {
+    width: 860,
+    height: 700,
+  });
+  try {
+    app.press({ focusId: "weather:refresh" });
+    assert.equal(requests.length, 1);
+    app.press({ focusId: "weather:clear" });
+    assert.deepEqual(cache.read(), []);
+    assert.equal(requests[0]?.signal?.aborted, true, "Clear Saved invalidates the older refresh");
+    app.press({ focusId: "weather:refresh" });
+    assert.equal(requests.length, 2, "clear releases busy state so explicit Refresh works again");
+    requests[0]?.resolve({ ...forecast, temperature: 99 });
+    await app.settle(4);
+    assert.deepEqual(cache.read(), [], "late pre-clear response cannot repopulate saved places");
+    requests[1]?.resolve({ ...forecast, temperature: 23 });
+    await app.settle(4);
+    assert.equal(
+      cache.read()[0]?.forecast.temperature,
+      23,
+      "a new explicit request may save normally",
+    );
+    app.press({ focusId: "weather:refresh" });
+    assert.equal(requests.length, 3);
+  } finally {
+    app.destroy();
+  }
   assert.equal(requests[2]?.signal?.aborted, true);
   requests[2]?.resolve({ ...forecast, temperature: 88 });
   await Promise.resolve();
   assert.equal(cache.read()[0]?.forecast.temperature, 23, "close invalidates late responses too");
-  console.log(
-    "Weather actual Window clear/new refresh/late response/close lifecycle passed without HTTP",
-  );
-} finally {
-  window.destroy();
-  platform.disconnect();
-  await fs.rm(fixture, { recursive: true, force: true });
-}
+});
+console.log(
+  "Weather actual Window clear/new refresh/late response/close lifecycle passed without HTTP",
+);

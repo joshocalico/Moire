@@ -38,6 +38,8 @@
         moire-pam-test = pamTest.config.system.build.isoImage;
         inherit moire;
         moire-boot = moireBoot;
+        # moire-dm (bundled); its build runs every moire-dm smoke incl. real Linux-PAM.
+        moire-dm = import ./nix/moire-dm-package.nix { inherit moire pkgs; inherit (pkgs) lib; };
         moire-vm = image;
         moire-storage-probe = storageProbe.config.system.build.isoImage;
         moire-removable-desktop = removableDesktop.config.system.build.isoImage;

@@ -6,15 +6,21 @@
  */
 /* ---------- Re-exports from split modules ---------- */
 
-export { WindowHeader, WindowFrame } from "./window-frame";
+export {
+  WindowHeader,
+  WindowFrame,
+  WindowControls,
+  WindowMoveArea,
+  windowControlSize,
+} from "./window-frame";
 export type { WindowHeaderProps, WindowFrameProps } from "./window-frame";
 
 export { AdaptivePanes } from "./adaptive-panes";
 export type { AdaptivePane, AdaptivePanesProps } from "./adaptive-panes";
 export { CollectionList, CollectionRow } from "./collection-list";
 export type { CollectionListProps, CollectionRowProps } from "./collection-list";
-export { PlaybackBar, playbackBarHeight, formatPlaybackTime } from "./playback-bar";
-export type { PlaybackBarProps } from "./playback-bar";
+export { MediaGlyph, PlaybackBar, playbackBarHeight, formatPlaybackTime } from "./playback-bar";
+export type { MediaSymbol, PlaybackBarProps } from "./playback-bar";
 
 export { DocumentEditor } from "./document-editor";
 export type { DocumentEditorProps, DocumentSelectionGeometry } from "./document-editor";
@@ -44,6 +50,8 @@ export type {
 
 export { Pressable } from "./pressable";
 export type { PressableProps } from "./pressable";
+export { PointerArea } from "./pointer-area";
+export type { PointerAreaProps } from "./pointer-area";
 
 export { Button } from "./button";
 export type { ButtonProps, ButtonVariant, ButtonSize, ButtonSlot } from "./button";
@@ -145,7 +153,7 @@ export type { SliderProps } from "./slider";
 export { ProgressBar } from "./progress-bar";
 export type { ProgressBarProps } from "./progress-bar";
 
-export { TextField } from "./text-field";
+export { TextField, isEditingText } from "./text-field";
 export type { TextFieldProps, TextFieldSlot } from "./text-field";
 
 export { SearchField } from "./search-field";
@@ -275,19 +283,48 @@ export type {
   NavigationSidebarItem,
 } from "./navigation-sidebar";
 
-export { SegmentedControl, RadioGroup } from "./controls";
+export { SegmentedControl, IconSegmentedControl, RadioGroup } from "./controls";
 export type {
   SegmentedControlProps,
   SegmentedControlOption,
+  IconSegmentedControlProps,
+  IconSegmentedControlOption,
   RadioGroupProps,
   RadioOption,
 } from "./controls";
 
+export { NavigationRail } from "./navigation-rail";
+export type {
+  NavigationRailProps,
+  NavigationRailSection,
+  NavigationRailItem,
+  NavigationRailAction,
+} from "./navigation-rail";
+
+export { FilterChip, ChipGroup, filterChipWidth, filterChipHeight } from "./filter-chip";
+export type { FilterChipProps, ChipGroupProps, ChipGroupItem } from "./filter-chip";
+
+export { TokenField } from "./token-field";
+export type { TokenFieldProps, TokenFieldToken, TokenFieldCompletion } from "./token-field";
+
+export { SelectionBar, selectionBarHeight } from "./selection-bar";
+export type { SelectionBarProps, SelectionBarAction } from "./selection-bar";
+
+export { FileTile, fileTileHeight } from "./file-tile";
+export type { FileTileProps } from "./file-tile";
+
+export { ItemCard } from "./item-card";
+export type { ItemCardProps } from "./item-card";
+
+export { HoverActions, hoverActionsWidth } from "./hover-actions";
+export type { HoverActionsProps, HoverAction } from "./hover-actions";
+
 export { Badge, Banner, Spinner, EmptyState } from "./feedback";
 export type { BadgeProps, BadgeTone, BannerProps, SpinnerProps, EmptyStateProps } from "./feedback";
 
-export { CodeView } from "./code-view";
+export { CodeView, codeLanguageFor } from "./code-view";
 export type { CodeViewProps, CodeLanguage } from "./code-view";
+export { MarkdownView, type MarkdownViewProps } from "./markdown-view";
 
 export { RichTextView } from "./rich-text";
 export type { RichTextViewProps, RichTextLine, RichTextRun } from "./rich-text";
@@ -328,7 +365,39 @@ export type {
   HeatmapChartProps,
 } from "./chart";
 
-export { TextArea, type TextAreaProps } from "./text-area";
+export { TextArea, type TextAreaCommand, type TextAreaProps, type TextRange } from "./text-area";
 
 export { ContentCard, ScrollColumn } from "./content-flow";
 export type { ContentCardProps, ScrollColumnProps } from "./content-flow";
+
+/* ---------- Inspector parts ---------- */
+export { propertyListHeight, type PropertyListDensity } from "./property-list";
+export { MetaPill, metaPillWidth, metaPillHeight, type MetaPillProps } from "./meta-pill";
+export {
+  TagChip,
+  tagChipWidth,
+  tagChipHeight,
+  layoutTagChips,
+  type TagChipProps,
+  type TagChipVariant,
+  type TagChipLayoutItem,
+} from "./tag-chip";
+export {
+  ColourStrip,
+  colourStripWidth,
+  Histogram,
+  type ColourStripProps,
+  type HistogramProps,
+} from "./colour-strip";
+export {
+  StackedBar,
+  stackedBarHeight,
+  type StackedBarProps,
+  type StackedBarSegment,
+} from "./stacked-bar";
+export {
+  PageStepper,
+  pageStepperWidth,
+  pageStepperHeight,
+  type PageStepperProps,
+} from "./page-stepper";

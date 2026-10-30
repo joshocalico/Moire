@@ -137,6 +137,8 @@ export type PathBarProps = BreadcrumbsProps & {
   editButtonWidth?: number;
   focusRequest?: number;
   onEditingChange?: (editing: boolean) => void;
+  /** Tab completion while editing: the completed text, or null when nothing matches. */
+  complete?: (draft: string) => string | null;
 };
 
 export function PathBar(props: PathBarProps): ReactNode {
@@ -192,6 +194,16 @@ export function PathBar(props: PathBarProps): ReactNode {
                 setError(null);
               }}
               onSubmit={commit}
+              captureTab={!!props.complete}
+              onKeyDown={(event) => {
+                if (!props.complete || !(event.key === "Tab" || event.code === 15)) return false;
+                const completed = props.complete(draft);
+                if (completed !== null && completed !== draft) {
+                  setDraft(completed);
+                  setError(null);
+                }
+                return true;
+              }}
               onCancel={() => {
                 setEditing(false);
                 setError(null);

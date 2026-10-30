@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#clock/*": "./src/*.ts"
+  },
   "description": "Moire Clock",
   "scripts": {
     "start": "tsx src/main.tsx",

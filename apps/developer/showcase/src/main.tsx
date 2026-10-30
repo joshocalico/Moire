@@ -76,6 +76,7 @@ import {
   usePalette,
   useWidgetTheme,
   setUiScaleFactor,
+  getUiScaleFactor,
   type ColorScheme,
   type NavigationSidebarSection,
   type PersonalizationProfile,
@@ -85,6 +86,8 @@ import {
   type WindowSize,
 } from "@moire/ui";
 import { loadSettings } from "@moire/prefs";
+import { FilesSample, isFilesSample } from "./files-samples";
+import { SettingsSample, isSettingsSample } from "./settings-samples";
 
 type Sample = {
   id: string;
@@ -384,6 +387,78 @@ const theme = createPersonalizedWidgetTheme(profile);
 />`,
   },
   {
+    id: "settings-widgets",
+    title: "Settings widgets",
+    description:
+      "Compact sidebar, setting rows, hero, status tiles, pictures, swatches and a side sheet",
+    section: "Settings",
+    code: `<NavigationRail density="compact" expanded sections={pages} selectedId={page} />
+<PageHero icon="network" title="Wi‑Fi" detail="On · connected to Halcyon" control={<Toggle on />} />
+<StatusTile icon="battery" title="Battery" value="78%" progress={0.78} onPress={openPower} />
+<SettingsSection width={560} section={{ id: "networks", title: "Networks", rows }} />
+<PictureOptions options={panelShapes} value={panel} onChange={setPanel} />
+<SwatchPicker swatches={accents} value={accent} onChange={setAccent} />
+<SideSheet open title="Halcyon" onClose={close}>{(size) => details(size)}</SideSheet>`,
+  },
+  {
+    id: "navigation-rail",
+    title: "Navigation rail",
+    description: "Icon places with tooltips, badges and drop targets; widens into a sidebar",
+    section: "Files",
+    code: `<NavigationRail
+  height={420}
+  sections={places}
+  selectedId={selected}
+  expanded={showLabels}
+  header={<IconButton icon="folder-filled" onPress={toggleLabels} />}
+  onSelect={(item) => open(item.id)}
+  onContextMenu={(item, event) => showPlaceMenu(item, event)}
+/>`,
+  },
+  {
+    id: "filters-search",
+    title: "Filters and search",
+    description: "Token search with completions, icon segments, and filter chips",
+    section: "Files",
+    code: `<TokenField
+  width={560}
+  tokens={tokens}
+  value={query}
+  completions={completionsFor(query)}
+  onChange={setQuery}
+  onTokensChange={setTokens}
+/>
+<IconSegmentedControl options={views} value={view} onChange={setView} />
+<ChipGroup width={420} chips={kinds} selectedId={kind} onSelect={(chip) => setKind(chip.id)} />`,
+  },
+  {
+    id: "file-items",
+    title: "File items",
+    description: "Tiles, cards, hover actions and the selection bar",
+    section: "Files",
+    code: `<FileTile name="Launch plan.pdf" detail="1.2 MB" icon="document" extension="pdf"
+  tint={red} selected={selected} onPress={toggle} onDoublePress={open} dropData={path} />
+<ItemCard icon="folder-filled" tint={violet} title="Projects" detail="10 items" onMenu={showMenu} />
+<HoverActions width={128} height={46} active={hovered} trailing="Yesterday" actions={rowActions} />
+<SelectionBar width={width} count={2} detail="selected · 5.4 MB" actions={actions} />`,
+  },
+  {
+    id: "inspector-parts",
+    title: "Inspector parts",
+    description: "Pills, tag chips, swatches, histogram, size bar, page stepper and compact facts",
+    section: "Files",
+    code: `<MetaPill text="600 × 400" />
+<TagChip label="Travel" colour={blue} onRemove={remove} />
+<TagChip label="Add tag" variant="add" editing={editing} draft={draft} onDraft={setDraft}
+  onPress={startEditing} onSubmit={addTag} onCancel={stopEditing} />
+<TagChip label="2024" variant="suggestion" onPress={addSuggestion} />
+<Histogram width={240} height={26} values={bins} />
+<ColourStrip colours={dominant} />
+<StackedBar width={380} segments={sizeByKind} />
+<PageStepper page={page} pages={12} onPage={setPage} />
+<PropertyList density="compact" scroll={false} sections={[{ id: "history", items }]} />`,
+  },
+  {
     id: "feedback",
     title: "Feedback",
     description: "Status, progress, banners, and empty states",
@@ -487,6 +562,31 @@ const theme = createPersonalizedWidgetTheme(profile);
 type SampleGuidance = { about: string; when: string };
 
 const GUIDANCE: Record<string, SampleGuidance> = {
+  "settings-widgets": {
+    about:
+      "Settings pages are a hero and cards of rows; rows reveal actions on hover, open details in a side sheet, and show choices as pictures or swatches.",
+    when: "Use for preference pages: one row per setting, a picture when the choice is visual, a side sheet for details on demand.",
+  },
+  "navigation-rail": {
+    about:
+      "NavigationRail keeps places one press away in 64px, naming each in a tooltip; expanded, it shows labels like a sidebar.",
+    when: "Use for an app's top-level places when content needs the width; give every item a tooltip-worthy label.",
+  },
+  "filters-search": {
+    about:
+      "TokenField turns filters into removable chips beside free text; chips and icon segments filter or switch views in place.",
+    when: "Use tokens for structured search, ChipGroup for one-of filters over a page, and icon segments for view modes.",
+  },
+  "file-items": {
+    about:
+      "FileTile and ItemCard share selection, focus, drag and drop-target states; HoverActions and SelectionBar surface the commands for one or many items.",
+    when: "Use tiles for grids of files, cards for places, hover actions on rows, and the bar once more than one item is selected.",
+  },
+  "inspector-parts": {
+    about:
+      "Small parts for an inspector: facts over a picture, tags that add and remove in place, a picture's tones and colours, a size split by kind, paging through a document, and dense facts for a card.",
+    when: "Use inside property sheets and preview panes; the compact PropertyList sits in a card without its own padding or scrolling.",
+  },
   "theme-lab": {
     about:
       "A normalized personalization profile separates platform discovery from renderer-neutral widget recipes and app-local overrides.",
@@ -608,7 +708,9 @@ const SECTIONS: NavigationSidebarSection[] = [
           ? "list"
           : sample.section === "Feedback"
             ? "image"
-            : "file",
+            : sample.section === "Files"
+              ? "folder"
+              : "file",
   })),
 }));
 
@@ -1888,6 +1990,10 @@ function Preview(props: {
         focusId="showcase-terminal"
       />
     );
+  } else if (isFilesSample(props.sample.id)) {
+    content = <FilesSample id={props.sample.id} width={contentW} />;
+  } else if (isSettingsSample(props.sample.id)) {
+    content = <SettingsSample width={contentW} />;
   } else {
     content = (
       <CodeView
@@ -1905,7 +2011,13 @@ function Preview(props: {
   };
   const scrollContentHeight = Math.max(
     props.height,
-    props.sample.id === "charts" ? 1240 : props.sample.id === "theme-lab" ? 900 : 820,
+    props.sample.id === "charts"
+      ? 1240
+      : props.sample.id === "theme-lab"
+        ? 900
+        : isFilesSample(props.sample.id) || isSettingsSample(props.sample.id)
+          ? 900 * getUiScaleFactor()
+          : 820,
   );
 
   return (

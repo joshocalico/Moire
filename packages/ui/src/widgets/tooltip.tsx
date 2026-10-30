@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, type ReactNode } from "react";
-import { Group, Rect, measureTextBounds } from "@moire/react-host";
+import { Group, Rect, measureTextBounds, type SceneNode } from "@moire/react-host";
 import { easeTo, useMotionValue } from "#ui/motion";
 import { useWidgetTheme } from "#ui/widget-theme";
+import { OverlayPortal, useOverlayHost } from "./overlay";
 import { Surface, TextBlock } from "./primitives";
 
 export type TooltipPlacement = "top" | "bottom" | "left" | "right";
@@ -36,19 +37,23 @@ export function Tooltip(props: TooltipProps): ReactNode {
   );
   const tipHeight = estimatedLines === 1 ? 28 : 14 + estimatedLines * 14;
   const offset = props.offset ?? 7;
-  const placement = props.placement ?? "top";
-  const tipX =
-    placement === "left"
-      ? -tipWidth - offset
-      : placement === "right"
-        ? props.width + offset
-        : Math.round((props.width - tipWidth) / 2);
-  const tipY =
-    placement === "top"
-      ? -tipHeight - offset
-      : placement === "bottom"
-        ? props.height + offset
-        : Math.round((props.height - tipHeight) / 2);
+  const host = useOverlayHost();
+  const trigger = useRef<SceneNode | null>(null);
+  // Inside an OverlayHost the tip paints in its top layer, above later siblings, and keeps to
+  // the host's bounds; elsewhere it paints inline beside the trigger.
+  const located = host && trigger.current ? host.locate(trigger.current) : null;
+  const tip = tipPosition(
+    props.placement ?? "top",
+    {
+      x: located?.x ?? 0,
+      y: located?.y ?? 0,
+      width: props.width,
+      height: props.height,
+    },
+    { width: tipWidth, height: tipHeight },
+    offset,
+    located,
+  );
   const cancelTimer = () => {
     if (!timer.current) return;
     clearTimeout(timer.current);
@@ -76,8 +81,43 @@ export function Tooltip(props: TooltipProps): ReactNode {
     return cancelTimer;
   }, [props.open, props.disabled]);
 
+  const surface = (
+    <Surface
+      x={tip.x}
+      y={tip.y}
+      width={tipWidth}
+      height={tipHeight}
+      fill={pal.overlay}
+      radius={theme.foundations.radii.small}
+      stroke={pal.border}
+      strokeWidth={theme.foundations.borders.hairline}
+      elevation="low"
+      opacity={opacity.get() / 100}
+    >
+      <TextBlock
+        x={8}
+        width={tipWidth - 16}
+        height={tipHeight}
+        text={props.label}
+        color={pal.text}
+        fontSize={10}
+        horizontalAlign="center"
+        verticalAlign="center"
+        wrap
+        lineGap={2}
+        overflow="ellipsis"
+        maxLines={estimatedLines}
+      />
+    </Surface>
+  );
   return (
-    <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height}>
+    <Group
+      ref={trigger}
+      x={props.x ?? 0}
+      y={props.y ?? 0}
+      width={props.width}
+      height={props.height}
+    >
       {props.children}
       {props.open == null ? (
         <Rect
@@ -88,33 +128,59 @@ export function Tooltip(props: TooltipProps): ReactNode {
           onPointerLeave={props.disabled ? undefined : conceal}
         />
       ) : null}
-      <Surface
-        x={tipX}
-        y={tipY}
-        width={tipWidth}
-        height={tipHeight}
-        fill={pal.overlay}
-        radius={theme.foundations.radii.small}
-        stroke={pal.border}
-        strokeWidth={theme.foundations.borders.hairline}
-        elevation="low"
-        opacity={opacity.get() / 100}
-      >
-        <TextBlock
-          x={8}
-          width={tipWidth - 16}
-          height={tipHeight}
-          text={props.label}
-          color={pal.text}
-          fontSize={10}
-          horizontalAlign="center"
-          verticalAlign="center"
-          wrap
-          lineGap={2}
-          overflow="ellipsis"
-          maxLines={estimatedLines}
-        />
-      </Surface>
+      {located && opacity.get() > 0 ? (
+        <OverlayPortal>{surface}</OverlayPortal>
+      ) : located ? null : (
+        surface
+      )}
     </Group>
   );
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+
+/**
+ * Where the tip goes beside its trigger. Within known bounds it flips to the opposite side when
+ * the preferred one has no room, then slides along the edge to stay inside.
+ */
+function tipPosition(
+  placement: TooltipPlacement,
+  trigger: Box,
+  tip: { width: number; height: number },
+  offset: number,
+  bounds: { width: number; height: number } | null,
+): { x: number; y: number } {
+  const margin = 4;
+  const fits = (side: TooltipPlacement) => {
+    if (!bounds) return true;
+    if (side === "top") return trigger.y - offset - tip.height >= margin;
+    if (side === "bottom")
+      return trigger.y + trigger.height + offset + tip.height <= bounds.height - margin;
+    if (side === "left") return trigger.x - offset - tip.width >= margin;
+    return trigger.x + trigger.width + offset + tip.width <= bounds.width - margin;
+  };
+  const opposite = {
+    top: "bottom",
+    bottom: "top",
+    left: "right",
+    right: "left",
+  } as const;
+  const side = fits(placement) || !fits(opposite[placement]) ? placement : opposite[placement];
+  let x =
+    side === "left"
+      ? trigger.x - tip.width - offset
+      : side === "right"
+        ? trigger.x + trigger.width + offset
+        : trigger.x + Math.round((trigger.width - tip.width) / 2);
+  let y =
+    side === "top"
+      ? trigger.y - tip.height - offset
+      : side === "bottom"
+        ? trigger.y + trigger.height + offset
+        : trigger.y + Math.round((trigger.height - tip.height) / 2);
+  if (bounds) {
+    x = Math.max(margin, Math.min(x, bounds.width - tip.width - margin));
+    y = Math.max(margin, Math.min(y, bounds.height - tip.height - margin));
+  }
+  return { x, y };
 }

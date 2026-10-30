@@ -11,29 +11,32 @@ import {
 } from "@moire/system-management";
 import {
   Application,
+  AppHeaderBar,
+  AppStatusLine,
   Badge,
   Box,
   Button,
   ConfirmationDialog,
   EmptyState,
   Horizontal,
-  Inset,
   Label,
   OverlayHost,
   ProgressBar,
+  ScrollArea,
+  SearchField,
   SegmentedControl,
-  StatusBar,
   Surface,
-  TextField,
   Table,
-  Toolbar,
+  TextBlock,
   Vertical,
   Window,
   setUiScaleFactor,
+  appChromeBody,
   getUiScaleFactor,
   usePalette,
   type TableColumn,
   type TableSort,
+  type WindowActions,
   type WindowSize,
 } from "@moire/ui";
 
@@ -46,7 +49,12 @@ function memory(value: number): string {
 type MonitorClient = Pick<SystemManagementClient, "snapshot" | "terminate"> &
   Partial<Pick<SystemManagementClient, "close">>;
 export function SystemMonitor(
-  props: WindowSize & { client?: MonitorClient; connect?: () => Promise<MonitorClient> },
+  props: WindowSize & {
+    client?: MonitorClient;
+    connect?: () => Promise<MonitorClient>;
+    /** The window the header bar controls (minimize, maximize, close, move). */
+    window?: WindowActions | null;
+  },
 ): ReactNode {
   const ui = getUiScaleFactor();
   const pal = usePalette();
@@ -216,26 +224,32 @@ export function SystemMonitor(
 
   const pressure = snapshot ? memoryPressure(snapshot) : 0;
   const used = snapshot ? snapshot.totalMemoryBytes - snapshot.availableMemoryBytes : 0;
-  const tableY = 190 * ui;
-  const footerH = 44 * ui;
-  const statusH = 28 * ui;
-  const tableH = Math.max(120 * ui, props.height - tableY - footerH - statusH);
+  const pad = 16 * ui;
+  const chrome = appChromeBody(props.height);
+  const titleH = chrome.y;
+  const memoryY = titleH + 12 * ui;
+  const memoryH = 64 * ui;
+  const filterY = memoryY + memoryH + 12 * ui;
+  const filterH = 32 * ui;
+  const footerH = view === "processes" ? 52 * ui : 0;
+  const statusH = props.height - chrome.y - chrome.height;
+  const bodyY = view === "resources" ? filterY : filterY + filterH + 12 * ui;
+  const bodyH = Math.max(120 * ui, props.height - bodyY - footerH - statusH - 12 * ui);
+  const innerW = Math.max(1, props.width - pad * 2);
+  const actionable = !busy && service.current != null && selected != null && !selected.protected;
 
   return (
     <OverlayHost width={props.width} height={props.height}>
       <Surface width={props.width} height={props.height} fill={pal.bg}>
-        <Toolbar width={props.width} height={76 * ui}>
-          <Vertical flexGrow={1} gap={3 * ui} justify="center">
-            <Label text="System Monitor" fontSize={18} fontWeight="bold" />
-            <Label
-              text="Applications and processes in this desktop session"
-              color={pal.muted}
-              fontSize={10}
-            />
-          </Vertical>
-          <Box width={220 * ui} height={32 * ui}>
+        <AppHeaderBar
+          width={props.width}
+          title="System Monitor"
+          icon="monitor"
+          subtitle="Applications and processes"
+          window={props.window}
+          actions={
             <SegmentedControl
-              width={220 * ui}
+              width={Math.min(220 * ui, props.width * 0.4)}
               height={32 * ui}
               value={view}
               options={[
@@ -244,132 +258,57 @@ export function SystemMonitor(
               ]}
               onChange={setView}
             />
-          </Box>
-        </Toolbar>
-        <Surface y={76 * ui} width={props.width} height={66 * ui} fill={pal.panel}>
-          <Inset
-            width={props.width}
-            height={66 * ui}
-            padding={{ horizontal: 18 * ui, vertical: 10 * ui }}
-          >
-            <Horizontal gap={16 * ui} align="center">
-              <Vertical flexGrow={1} gap={6 * ui} justify="center">
-                <Horizontal gap={8 * ui} align="center">
-                  <Label
-                    flexGrow={1}
-                    text={`Memory  ${memory(used)} of ${memory(snapshot?.totalMemoryBytes ?? 0)}`}
-                    color={pal.text}
-                    fontSize={11}
-                    fontWeight="medium"
-                  />
-                  <Box width={pressure >= 0.9 ? 72 : 58} height={22 * ui}>
-                    <Badge
-                      text={pressure >= 0.9 ? "CRITICAL" : pressure >= 0.75 ? "HIGH" : "NORMAL"}
-                      tone={pressure >= 0.9 ? "danger" : pressure >= 0.75 ? "warning" : "success"}
-                    />
-                  </Box>
-                </Horizontal>
-                <ProgressBar
-                  width={Math.max(1, props.width - 36 * ui)}
-                  value={pressure}
-                  size="small"
-                />
-              </Vertical>
-            </Horizontal>
-          </Inset>
-        </Surface>
-        <Horizontal
-          x={12 * ui}
-          y={148 * ui}
-          width={Math.max(1, props.width - 24 * ui)}
-          height={32 * ui}
-          gap={8 * ui}
-        >
-          <Box flexGrow={1} height={32 * ui}>
-            <TextField
-              width={Math.max(80, props.width - 268 * ui)}
-              height={32 * ui}
+          }
+        />
+        <MemoryCard
+          x={pad}
+          y={memoryY}
+          width={innerW}
+          height={memoryH}
+          used={used}
+          total={snapshot?.totalMemoryBytes ?? 0}
+          pressure={pressure}
+        />
+        {view === "processes" ? (
+          <Horizontal x={pad} y={filterY} width={innerW} height={filterH} gap={8 * ui}>
+            <SearchField
+              width={Math.max(80 * ui, innerW - 188 * ui)}
+              height={filterH}
               value={query}
               placeholder="Search name, command or PID"
               onChange={setQuery}
+              onClear={() => setQuery("")}
             />
-          </Box>
-          <SegmentedControl
-            width={220 * ui}
-            height={32 * ui}
-            value={scope}
-            options={[
-              { id: "applications", label: "Apps" },
-              { id: "all", label: "All" },
-            ]}
-            onChange={setScope}
-          />
-        </Horizontal>
+            <SegmentedControl
+              width={180 * ui}
+              height={filterH}
+              value={scope}
+              options={[
+                { id: "applications", label: "Apps" },
+                { id: "all", label: "All" },
+              ]}
+              onChange={setScope}
+            />
+          </Horizontal>
+        ) : null}
         {error ? (
           <EmptyState
-            y={tableY}
+            y={bodyY}
             width={props.width}
-            height={tableH}
+            height={bodyH}
             title="System management is unavailable"
             message={error}
-            icon="app"
+            icon="monitor"
             action={<Button width={140 * ui} label="Try Again" onPress={() => void refresh()} />}
           />
         ) : view === "resources" ? (
-          <Surface
-            x={18 * ui}
-            y={tableY}
-            width={Math.max(1, props.width - 36 * ui)}
-            height={tableH}
-            fill={pal.panel}
-          >
-            <Vertical
-              x={16 * ui}
-              y={16 * ui}
-              width={Math.max(1, props.width - 68 * ui)}
-              height={Math.max(1, tableH - 32 * ui)}
-              gap={14 * ui}
-            >
-              <Label text="Live resources" fontSize={18} fontWeight="medium" />
-              <Label text={`Memory available · ${memory(snapshot?.availableMemoryBytes ?? 0)}`} />
-              <ProgressBar width={Math.max(1, props.width - 68 * ui)} value={pressure} />
-              <Label
-                text={`Swap used · ${memory((snapshot?.swapTotalBytes ?? 0) - (snapshot?.swapFreeBytes ?? 0))} of ${memory(snapshot?.swapTotalBytes ?? 0)}`}
-              />
-              <ProgressBar
-                width={Math.max(1, props.width - 68 * ui)}
-                value={
-                  snapshot?.swapTotalBytes
-                    ? 1 - snapshot.swapFreeBytes / snapshot.swapTotalBytes
-                    : 0
-                }
-              />
-              <Label
-                text={`Process CPU total · ${(snapshot?.processes.reduce((total, item) => total + item.cpuPercent, 0) ?? 0).toFixed(1)}% · ${os.cpus().length} logical CPUs`}
-              />
-              <Label
-                text={`Load average · ${os
-                  .loadavg()
-                  .map((value) => value.toFixed(2))
-                  .join("  /  ")} (1 / 5 / 15 minutes)`}
-              />
-              <Label
-                text={`${snapshot?.processes.length ?? 0} processes · ${snapshot?.processes.filter((item) => item.appId).length ?? 0} application processes`}
-              />
-              <Label
-                text="CPU is summed per-process use: one fully occupied core is 100%."
-                fontSize={11}
-                color={pal.muted}
-                wrap
-              />
-            </Vertical>
-          </Surface>
+          <ResourcesCard x={pad} y={bodyY} width={innerW} height={bodyH} snapshot={snapshot} />
         ) : (
           <Table
-            x={12 * ui}
-            y={tableY + 10 * ui}
-            width={Math.max(1, props.width - 24 * ui)}
-            height={Math.max(1, tableH - 18 * ui)}
+            x={pad}
+            y={bodyY}
+            width={innerW}
+            height={bodyH}
             headerHeight={34 * ui}
             rowHeight={38 * ui}
             columns={columns}
@@ -382,66 +321,75 @@ export function SystemMonitor(
             striped
             emptyState={
               <EmptyState
-                width={Math.max(1, props.width - 24 * ui)}
-                height={Math.max(1, tableH - 52 * ui)}
+                width={innerW}
+                height={Math.max(1, bodyH - 34 * ui)}
                 title="No matching processes"
-                message="Switch to All Processes to inspect background services."
-                icon="app"
+                message={
+                  scope === "all"
+                    ? "Try a different name, command or PID."
+                    : "Choose All to include background services."
+                }
+                icon="search"
               />
             }
           />
         )}
-        <Surface
-          y={props.height - footerH - statusH}
-          width={props.width}
-          height={footerH}
-          fill={pal.bg}
-        >
-          <Inset
+        {footerH ? (
+          <Surface
+            y={props.height - footerH - statusH}
             width={props.width}
             height={footerH}
-            padding={{ horizontal: 12 * ui, vertical: 6 * ui }}
+            fill={pal.panel}
           >
-            <Horizontal gap={8 * ui} justify="end" align="center">
-              <Label
-                flexGrow={1}
-                text={
-                  selected
-                    ? selected.protected
-                      ? `${selected.name} is required by the desktop session`
-                      : selected.command
-                    : "Select a process to inspect or quit it"
-                }
-                color={pal.muted}
-                fontSize={10}
-                overflow="ellipsis"
-                maxLines={1}
-              />
+            <Surface width={props.width} height={1} fill={pal.borderSubtle} />
+            <Horizontal x={pad} width={innerW} height={footerH} gap={8 * ui} align="center">
+              <Vertical flexGrow={1} gap={1 * ui} justify="center">
+                <TextBlock
+                  text={selected ? `${selected.name} · PID ${selected.pid}` : "No process selected"}
+                  fontSize={13}
+                  fontWeight="medium"
+                  overflow="ellipsis"
+                  maxLines={1}
+                />
+                <TextBlock
+                  text={
+                    selected
+                      ? selected.protected
+                        ? "Required by the desktop session"
+                        : selected.command
+                      : "Select a process to inspect or quit it"
+                  }
+                  color={pal.muted}
+                  fontSize={11}
+                  overflow="ellipsis"
+                  maxLines={1}
+                />
+              </Vertical>
               <Button
-                width={96 * ui}
+                width={104 * ui}
+                height={32 * ui}
                 label="Force Quit"
                 variant="danger"
-                disabled={busy || !service.current || !selected || selected.protected}
+                disabled={!actionable}
                 onPress={() => setConfirmTarget(selected)}
               />
               <Button
-                width={76 * ui}
+                width={84 * ui}
+                height={32 * ui}
                 label="Quit"
-                disabled={busy || !service.current || !selected || selected.protected}
+                variant="secondary"
+                disabled={!actionable}
                 onPress={() => void terminate(selected, false)}
               />
             </Horizontal>
-          </Inset>
-        </Surface>
-        <StatusBar y={props.height - statusH} width={props.width} height={statusH}>
-          <Label flexGrow={1} text={status} color={pal.muted} fontSize={9} />
-          <Label
-            text={`${rows.length} ${scope === "all" ? "processes" : "application processes"}`}
-            color={pal.muted}
-            fontSize={9}
-            fontFamily="mono"
-          />
-        </StatusBar>
+          </Surface>
+        ) : null}
+        <AppStatusLine
+          y={props.height - statusH}
+          width={props.width}
+          status={status}
+          end={`${rows.length} ${scope === "all" ? "processes" : "application processes"}`}
+        />
       </Surface>
       <ConfirmationDialog
         open={confirmTarget != null}
@@ -462,6 +410,178 @@ export function SystemMonitor(
   );
 }
 
+function pressureTone(pressure: number) {
+  return pressure >= 0.9
+    ? ({ text: "Critical", tone: "danger" } as const)
+    : pressure >= 0.75
+      ? ({ text: "High", tone: "warning" } as const)
+      : ({ text: "Normal", tone: "success" } as const);
+}
+
+function Card(props: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  children: ReactNode;
+}): ReactNode {
+  const ui = getUiScaleFactor();
+  const pal = usePalette();
+  return (
+    <Surface
+      x={props.x}
+      y={props.y}
+      width={props.width}
+      height={props.height}
+      fill={pal.surface}
+      radius={12 * ui}
+      stroke={pal.borderSubtle}
+      strokeWidth={1}
+    >
+      {props.children}
+    </Surface>
+  );
+}
+
+function MemoryCard(props: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  used: number;
+  total: number;
+  pressure: number;
+}): ReactNode {
+  const ui = getUiScaleFactor();
+  const pal = usePalette();
+  const badge = pressureTone(props.pressure);
+  const inner = Math.max(1, props.width - 32 * ui);
+  return (
+    <Card x={props.x} y={props.y} width={props.width} height={props.height}>
+      <Vertical x={16 * ui} width={inner} height={props.height} gap={8 * ui} justify="center">
+        <Horizontal width={inner} height={22 * ui} gap={8 * ui} align="center">
+          <TextBlock text="Memory" fontSize={13} fontWeight="medium" maxLines={1} />
+          <TextBlock
+            flexGrow={1}
+            text={`${memory(props.used)} of ${memory(props.total)} in use`}
+            color={pal.muted}
+            fontSize={12}
+            overflow="ellipsis"
+            maxLines={1}
+          />
+          <Badge text={badge.text} tone={badge.tone} />
+        </Horizontal>
+        <ProgressBar width={inner} value={props.pressure} size="small" />
+      </Vertical>
+    </Card>
+  );
+}
+
+function ResourceRow(props: {
+  width: number;
+  label: string;
+  value: string;
+  detail?: string;
+  progress?: number;
+}): ReactNode {
+  const ui = getUiScaleFactor();
+  const pal = usePalette();
+  return (
+    <Vertical width={props.width} height={64 * ui} gap={6 * ui} justify="center">
+      <Horizontal width={props.width} height={18 * ui} gap={12 * ui} align="center">
+        <TextBlock text={props.label} fontSize={13} fontWeight="medium" maxLines={1} />
+        <TextBlock
+          flexGrow={1}
+          text={props.value}
+          color={pal.muted}
+          fontSize={12}
+          horizontalAlign="end"
+          overflow="ellipsis"
+          maxLines={1}
+        />
+      </Horizontal>
+      {props.progress != null ? (
+        <ProgressBar width={props.width} value={props.progress} size="small" />
+      ) : (
+        <TextBlock
+          text={props.detail ?? ""}
+          color={pal.muted}
+          fontSize={11}
+          overflow="ellipsis"
+          maxLines={1}
+        />
+      )}
+    </Vertical>
+  );
+}
+
+function ResourcesCard(props: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  snapshot: SystemSnapshot | null;
+}): ReactNode {
+  const ui = getUiScaleFactor();
+  const pal = usePalette();
+  const snapshot = props.snapshot;
+  const inner = Math.max(1, props.width - 32 * ui);
+  const swapUsed = (snapshot?.swapTotalBytes ?? 0) - (snapshot?.swapFreeBytes ?? 0);
+  const cpu = snapshot?.processes.reduce((total, item) => total + item.cpuPercent, 0) ?? 0;
+  const rows = [
+    {
+      label: "Memory pressure",
+      value: `${Math.round((snapshot ? memoryPressure(snapshot) : 0) * 100)}% · ${memory(snapshot?.availableMemoryBytes ?? 0)} available`,
+      progress: snapshot ? memoryPressure(snapshot) : 0,
+    },
+    {
+      label: "Swap",
+      value: `${memory(swapUsed)} of ${memory(snapshot?.swapTotalBytes ?? 0)}`,
+      progress: snapshot?.swapTotalBytes ? swapUsed / snapshot.swapTotalBytes : 0,
+    },
+    {
+      label: "CPU",
+      value: `${os.cpus().length} logical CPUs`,
+      detail: `Process CPU total · ${cpu.toFixed(1)}% · one busy core is 100%`,
+    },
+    {
+      label: "Load average",
+      value: os
+        .loadavg()
+        .map((value) => value.toFixed(2))
+        .join("  /  "),
+      detail: "Over 1, 5 and 15 minutes",
+    },
+    {
+      label: "Running",
+      value: `${snapshot?.processes.length ?? 0} processes`,
+      detail: `${snapshot?.processes.filter((item) => item.appId).length ?? 0} belong to applications`,
+    },
+  ];
+  const contentH = rows.length * 64 * ui + 16 * ui;
+  return (
+    <Card x={props.x} y={props.y} width={props.width} height={props.height}>
+      <ScrollArea
+        x={1}
+        y={1}
+        width={props.width - 2}
+        height={props.height - 2}
+        contentHeight={contentH}
+        fill={0x00000000}
+      >
+        <Vertical x={16 * ui} y={8 * ui} width={inner} height={contentH - 16 * ui} gap={0}>
+          {rows.map((row, index) => (
+            <Box key={row.label} width={inner} height={64 * ui}>
+              {index > 0 ? <Surface width={inner} height={1} fill={pal.borderSubtle} /> : null}
+              <ResourceRow width={inner} {...row} />
+            </Box>
+          ))}
+        </Vertical>
+      </ScrollArea>
+    </Card>
+  );
+}
+
 async function main(): Promise<void> {
   const settings = loadSettings();
   setUiScaleFactor(settings.uiScale);
@@ -472,8 +592,10 @@ async function main(): Promise<void> {
     width: Math.round(860 * settings.uiScale),
     height: Math.round(620 * settings.uiScale),
     resizable: true,
+    // The AppHeaderBar is this window's titlebar.
+    decorated: false,
   });
-  win.setContent((size) => <SystemMonitor {...size} />);
+  win.setContent((size) => <SystemMonitor {...size} window={win} />);
   win.onClose(() => {
     app.quit();
   });

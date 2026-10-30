@@ -400,8 +400,12 @@ export function DocumentEditor(props: DocumentEditorProps): ReactNode {
           dragging.current = false;
         }}
         onWheel={(event) => {
-          scroll.current = Math.max(0, Math.min(maxScroll, scroll.current + (event.deltaY ?? 0)));
+          const next = Math.max(0, Math.min(maxScroll, scroll.current + (event.deltaY ?? 0)));
+          // At its limit the editor lets an enclosing scroller take the wheel.
+          if (next === scroll.current) return false;
+          scroll.current = next;
           redraw((value) => value + 1);
+          return true;
         }}
       />
       <Group x={padding} y={topPadding} width={viewWidth} height={viewHeight} clip>

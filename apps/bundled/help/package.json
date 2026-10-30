@@ -10,16 +10,15 @@
     "smoke": "tsx src/smoke.tsx"
   },
   "dependencies": {
+    "@moire/app-tools": "workspace:*",
     "@moire/ui": "workspace:*",
-    "@moire/prefs": "workspace:*",
     "react": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "@moire/react-host": "workspace:*"
+    "typescript": "^5.7.2"
   },
   "exports": {
     ".": "./src/main.tsx",

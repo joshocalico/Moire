@@ -158,6 +158,7 @@ try {
     recorder,
     monitor,
     disk,
+    filesApp,
     noteStorage,
     dictionaryStorage,
     clockStorage,
@@ -186,9 +187,10 @@ try {
     import("../../../apps/bundled/sound-recorder/src/main"),
     import("../../../apps/core/process-manager/src/main"),
     import("../../../apps/bundled/disk-usage/src/main"),
+    import("../../../apps/bundled/files/src/main"),
     import("../../../apps/bundled/notes/src/store"),
     import("../../../apps/bundled/dictionary/src/dictionary"),
-    import("../../../apps/bundled/clock/src/time"),
+    import("../../../apps/bundled/clock/src/backend"),
     import("../../../apps/bundled/calendar/src/events"),
     import("../../../apps/bundled/weather/src/weather"),
     import("../../../apps/bundled/colors/src/palettes"),
@@ -327,9 +329,30 @@ try {
           { date: "2026-10-03", min: 13, max: 24, rain: 5, code: 0 },
           { date: "2026-10-04", min: 14, max: 20, rain: 45, code: 61 },
         ],
+        // A day of hours from noon, so the hourly strip is laid out too.
+        hours: Array.from({ length: 24 }, (_, hour) => ({
+          time: `2026-10-0${hour < 12 ? 2 : 3}T${String((12 + hour) % 24).padStart(2, "0")}:00`,
+          temperature: Math.round(21 + 3 * Math.sin((hour * Math.PI) / 12)),
+          rain: hour === 6 ? 40 : 0,
+          code: hour === 6 ? 61 : 2,
+        })),
       },
     },
   ]);
+  const [settings, settingsFixtures, prefs] = await Promise.all([
+    import("../../../apps/core/settings/src/main"),
+    import("../../../apps/core/settings/src/testing"),
+    import("@moire/prefs"),
+  ]);
+  const settingsInitial = prefs.updateSettings({
+    indexExcludes: [path.join(fixture, "Projects", "Archive")],
+    indexIncludes: ["/run/media/ada/USB"],
+  });
+  const resultsFixture = settingsFixtures.settingsFixture(settingsInitial);
+  const wiredFixture = settingsFixtures.settingsFixture(settingsInitial, {
+    page: "network",
+    desktop: settingsFixtures.wiredOnlySnapshot(),
+  });
   const sampleImage: ImageData = { width: 360, height: 220, rgba: new Uint8Array(360 * 220 * 4) };
   for (let y = 0; y < sampleImage.height; y++)
     for (let x = 0; x < sampleImage.width; x++) {
@@ -382,7 +405,7 @@ try {
   const apps: AppCase[] = [
     {
       id: "editor",
-      labels: ["New", "Open", "Save", "Close"],
+      labels: ["Save"],
       state: "sample UTF-8 document",
       render: (size) => (
         <editor.EditorApp
@@ -447,11 +470,12 @@ try {
     },
     {
       id: "clock",
-      state: "fixed local clock; alarms disabled",
+      state: "fixed local clock with two world clocks; alarms disabled",
       render: (size) => (
         <clock.ClockApp
           {...size}
           store={alarmStore}
+          cityStore={{ load: () => ["Asia/Tokyo", "Europe/London"], save: () => {} }}
           wallNow={() => now}
           monotonicNow={() => 1000}
           onRing={() => assert.fail("Idle gallery rang an alarm")}
@@ -503,7 +527,13 @@ try {
         );
         const albums = collectHits(root.container).find((hit) => hit.focusId === "music:albums");
         assert.ok(albums?.onKeyDown, "Music gallery has no album collection keyboard owner");
+        // Arrow keys highlight an album; Enter opens it.
         albums.onKeyDown(key(108, "ArrowDown"));
+        refresh();
+        const highlighted = collectHits(root.container).find(
+          (hit) => hit.focusId === "music:albums",
+        );
+        highlighted?.onKeyDown?.(key(28, "Enter"));
         refresh();
         await settle(() => textNodes(root.container).includes("Play album"));
       },
@@ -536,7 +566,13 @@ try {
     {
       id: "sound-recorder",
       state: "idle; recording not started",
-      render: (size) => <recorder.SoundRecorderApp {...size} />,
+      // A fixed input keeps the frame the same with or without PipeWire on the host.
+      render: (size) => (
+        <recorder.SoundRecorderApp
+          {...size}
+          probeInput={async () => ({ kind: "ready", name: "Built-in Microphone" })}
+        />
+      ),
     },
     {
       id: "system-monitor",
@@ -558,15 +594,69 @@ try {
       id: "disk-usage",
       visibleText: "entries ·",
       state: "scanned disposable fixture",
+      // A folder given at launch is scanned straight away.
       render: (size) => <disk.DiskUsageApp {...size} initialPath={diskFixture} />,
-      prepare: async ({ root, settle }) => {
-        press(root.container, "Scan");
-        await settle(() => textNodes(root.container).some((text) => text.includes("entries ·")));
-      },
-      ready: (texts) => texts.some((text) => text.includes("Pictures")),
+      ready: (texts) =>
+        texts.some((text) => text.includes("entries ·")) && texts.includes("Pictures"),
+    },
+    {
+      id: "files",
+      state: "disposable folder page with folders and files",
+      // The disk usage fixture doubles as a folder of folders and files.
+      render: (size) => <filesApp.FilesApp {...size} initialPath={diskFixture} onQuit={() => {}} />,
+      ready: (texts) => texts.includes("Documents") && texts.includes("Projects"),
+    },
+    ...(
+      [
+        [
+          "overview",
+          "overview",
+          "Overview tiles, quick toggles and recent changes",
+          "Quick toggles",
+        ],
+        [
+          "appearance",
+          "appearance",
+          "Appearance with the desktop preview and pictures",
+          "Color scheme",
+        ],
+        ["network", "network", "Wi‑Fi networks and wired connections", "Halcyon-Guest"],
+        ["bluetooth", "bluetooth", "Paired and nearby Bluetooth devices", "Pixel 8"],
+        ["displays", "displays", "Display arrangement and modes", "Resolution"],
+        ["keyboard", "keyboard", "Keyboard layouts, repeat and the pointer", "Repeat delay"],
+        ["power", "power", "Battery, power mode and screen timeouts", "Turn the screen off"],
+        ["users", "users", "Your account and other users", "Your picture"],
+        ["search", "privacy", "Search & Privacy with a ready index", "Rebuild index"],
+      ] as const
+    ).map(([id, page, state, ready]) => {
+      const fixture = settingsFixtures.settingsFixture(settingsInitial, { page });
+      return {
+        id: `settings-${id}`,
+        state,
+        render: (size: WindowSize) => <settings.SettingsApp {...size} {...fixture.props} />,
+        ready: (texts: string[]) => texts.includes(ready),
+      };
+    }),
+    {
+      id: "settings-network-wired",
+      state: "Wi‑Fi & Network on a wired-only computer with no Wi‑Fi adapter",
+      render: (size: WindowSize) => <settings.SettingsApp {...size} {...wiredFixture.props} />,
+      ready: (texts: string[]) => texts.includes("No Wi‑Fi adapter"),
+    },
+    {
+      id: "settings-results",
+      state: "Settings search results for “screen” with live controls",
+      render: (size: WindowSize) => (
+        <settings.SettingsApp
+          {...size}
+          {...resultsFixture.props}
+          route={{ kind: "search", query: "screen" }}
+        />
+      ),
+      ready: (texts: string[]) => texts.includes("Resolution"),
     },
   ];
-  assert.equal(apps.length, 20);
+  assert.equal(apps.length, 32);
   for (const family of THEME_FAMILIES)
     for (const scheme of ["dark", "light"] as const) {
       const theme = createPersonalizedWidgetTheme(
@@ -687,7 +777,7 @@ try {
                 const shortcut = collectHits(root.container).find((hit) => hit.onGlobalKeyDown);
                 assert.ok(shortcut?.onGlobalKeyDown);
                 shortcut.onGlobalKeyDown({ ...key(31, "s"), ctrlKey: true, shiftKey: true });
-                await settle(() => textNodes(root.container).includes("Save file"));
+                await settle(() => textNodes(root.container).includes("Save document as"));
                 savePNG(
                   renderer.render(root.container, { width, height }),
                   `editor-save-as-sheet-${configuration}.png`,
@@ -729,7 +819,7 @@ try {
     [],
     "Gallery found invalid app trees or unloaded sample states; see report.json",
   );
-  assert.equal(records.length, 20 * 10 * 2 * 2);
+  assert.equal(records.length, 32 * 10 * 2 * 2);
 } finally {
   setUiScaleFactor(1);
   globalThis.fetch = realFetch;

@@ -29,8 +29,16 @@ try {
     assert.ok(edge(code, 0), `${name} release changes masks`);
     assert.equal(client.modifiers()[name], false);
   }
+  // Server-side text for the lock screen: bytes into a caller buffer, before the press updates.
+  const text = (code: number) => {
+    const out = new Uint8Array(16);
+    const length = server.keyText(code, out);
+    return Buffer.from(out.subarray(0, length)).toString("utf8");
+  };
+  assert.equal(text(30), "a");
   edge(42, 1);
   assert.equal(client.translate(30).text, "A");
+  assert.equal(text(30), "A");
   edge(42, 0);
   assert.equal(client.translate(30).text, "a");
   edge(58, 1);
@@ -66,6 +74,7 @@ try {
       modifierEdges: 4,
       shiftText: true,
       capsLock: true,
+      serverText: true,
       repeatStable: true,
       focusSnapshot: true,
       deviceAccess: 0,

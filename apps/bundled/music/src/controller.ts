@@ -3,9 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { PlaybackSession, type PlaybackState, errorText } from "@moire/app-tools";
 import type { Track } from "./library";
 import { MusicQueueStore, type QueueSnapshot } from "./queue-store";
+import { appendToQueue, clearUpcoming, currentIndex, removeFromQueue, replaceQueue } from "./model";
 export type { QueueEntry } from "./queue-store";
 export type MusicPlaybackOptions = { binary?: string; extraArgs?: string[] };
 const CHECKPOINT_INTERVAL_MS = 5000;
+export type MusicPlayback = ReturnType<typeof useMusicPlayback>;
 /** Queue drafts retain their loaded revision until an explicit successful save. */
 export function useMusicPlayback(options: MusicPlaybackOptions = {}, queueStore?: MusicQueueStore) {
   const [store] = useState(() => queueStore ?? new MusicQueueStore());
@@ -230,10 +232,7 @@ export function useMusicPlayback(options: MusicPlaybackOptions = {}, queueStore?
     });
   };
   const queue = snapshot.entries;
-  const index = Math.max(
-    0,
-    queue.findIndex((item) => item.id === snapshot.currentEntryId),
-  );
+  const index = currentIndex(snapshot);
   return {
     queue,
     index,
@@ -267,22 +266,13 @@ export function useMusicPlayback(options: MusicPlaybackOptions = {}, queueStore?
     },
     play: (tracks: readonly Track[], start = 0, paused = false) => {
       if (!tracks.length) return;
-      const added = entries(tracks);
-      const current = added[Math.max(0, Math.min(tracks.length - 1, start))];
-      if (!current) return;
       autoPlay.current = !paused;
       setRestored(false);
-      update({ ...draft.current, entries: added, currentEntryId: current.id, position: 0 });
+      update(replaceQueue(draft.current, entries(tracks), start));
       setStopped(false);
     },
     enqueue: (tracks: readonly Track[]) => {
-      const added = entries(tracks);
-      if (!added.length) return;
-      update({
-        ...draft.current,
-        entries: [...draft.current.entries, ...added],
-        currentEntryId: draft.current.currentEntryId ?? added[0]!.id,
-      });
+      if (tracks.length) update(appendToQueue(draft.current, entries(tracks)));
     },
     jump: (nextIndex: number) => {
       const next = draft.current.entries[nextIndex];
@@ -309,24 +299,12 @@ export function useMusicPlayback(options: MusicPlaybackOptions = {}, queueStore?
       control(["set_property", "volume", Math.max(0, Math.min(100, value))]),
     remove: (id: string) => {
       const current = draft.current;
-      const index = current.entries.findIndex((item) => item.id === id);
-      if (index < 0) return;
+      if (!current.entries.some((item) => item.id === id)) return;
       if (current.currentEntryId === id) autoPlay.current = state.kind === "ready" && !state.paused;
-      const remaining = current.entries.filter((item) => item.id !== id);
-      const replacement = remaining[Math.min(index, remaining.length - 1)];
-      update({
-        ...current,
-        entries: remaining,
-        currentEntryId:
-          current.currentEntryId === id ? (replacement?.id ?? null) : current.currentEntryId,
-        position: current.currentEntryId === id ? 0 : current.position,
-      });
-      if (!remaining.length) stop();
+      const next = removeFromQueue(current, id);
+      update(next);
+      if (!next.entries.length) stop();
     },
-    clearUpcoming: () =>
-      update({
-        ...draft.current,
-        entries: draft.current.entries.filter((_, position) => position <= index),
-      }),
+    clearUpcoming: () => update(clearUpcoming(draft.current)),
   };
 }

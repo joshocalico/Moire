@@ -1,5 +1,5 @@
 /** Multiline editing shared by document apps; text remains controlled by its owner. */
-import React, { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Group,
   Rect,
@@ -10,6 +10,18 @@ import {
 } from "@moire/react-host";
 import { useWidgetTheme, resolveStatefulStyle } from "#ui/widget-theme";
 import { readClipboardText, writeClipboardText } from "#ui/window";
+import type { DocumentSelection } from "./document-model";
+
+export type TextRange = { from: number; to: number };
+/**
+ * A programmatic edit or selection, applied once per new object. `replace` is an undoable edit
+ * reported through `onChange`; `select` is in offsets of the resulting text and is scrolled into
+ * view (centred when it was off screen).
+ */
+export type TextAreaCommand = {
+  replace?: TextRange & { text: string };
+  select: DocumentSelection;
+};
 
 export type TextAreaProps = {
   x?: number;
@@ -27,9 +39,23 @@ export type TextAreaProps = {
   fontSize?: number;
   lineNumbers?: boolean;
   captureTab?: boolean;
+  /** Soft-wrap long lines at the field's width instead of scrolling sideways. */
+  wrap?: boolean;
+  /** Sorted, non-overlapping ranges painted behind the text, such as search matches. */
+  highlights?: readonly TextRange[];
+  command?: TextAreaCommand;
+  onSelectionChange?: (selection: DocumentSelection) => void;
   onKeyDown?: (event: HitKeyEvent) => boolean | void;
   onFocusChange?: (focused: boolean) => void;
   onError?: (error: Error) => void;
+};
+/** One painted row: a whole line, or one wrapped segment of it. `end` excludes the newline. */
+type VisualRow = {
+  start: number;
+  end: number;
+  line: number;
+  lineStart: boolean;
+  lineEnd: boolean;
 };
 type EditState = { value: string; cursor: number; anchor: number };
 const previousCharacter = (value: string, offset: number) =>
@@ -46,6 +72,73 @@ function characterBoundary(value: string, offset: number): number {
     : bounded;
 }
 
+/** Search-match amber, legible behind text in light and dark themes. */
+const HIGHLIGHT = 0x66f2b640;
+
+/** Split text into painted rows; with `width`, long lines break after spaces where they can. */
+function layoutRows(value: string, measure: (text: string) => number, width?: number): VisualRow[] {
+  const rows: VisualRow[] = [];
+  let start = 0;
+  value.split("\n").forEach((text, line) => {
+    const lineEnd = start + text.length;
+    if (width === undefined || measure(text) <= width) {
+      rows.push({ start, end: lineEnd, line, lineStart: true, lineEnd: true });
+    } else {
+      let from = 0;
+      while (from < text.length) {
+        // The longest prefix that fits, found by bisection, then pulled back to a word break.
+        let low = from + 1,
+          high = text.length;
+        while (low < high) {
+          const middle = Math.ceil((low + high) / 2);
+          if (measure(text.slice(from, middle)) <= width) low = middle;
+          else high = middle - 1;
+        }
+        let to = characterBoundary(text, low);
+        if (to <= from) to = nextCharacter(text, from);
+        if (to < text.length) {
+          const space = text.lastIndexOf(" ", to - 1);
+          if (space >= from) to = space + 1;
+        }
+        rows.push({
+          start: start + from,
+          end: start + to,
+          line,
+          lineStart: from === 0,
+          lineEnd: to >= text.length,
+        });
+        from = to;
+      }
+    }
+    start = lineEnd + 1;
+  });
+  return rows;
+}
+
+/** Index of the row that shows `offset`; a wrap point belongs to the row it starts. */
+function rowAt(rows: readonly VisualRow[], offset: number): number {
+  let low = 0,
+    high = rows.length - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if (rows[middle]!.start <= offset) low = middle;
+    else high = middle - 1;
+  }
+  return low;
+}
+
+/** Index of the first range that ends after `offset` in sorted, non-overlapping `ranges`. */
+function firstRangeAfter(ranges: readonly TextRange[], offset: number): number {
+  let low = 0,
+    high = ranges.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (ranges[middle]!.to <= offset) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 export function TextArea(props: TextAreaProps): ReactNode {
   const theme = useWidgetTheme(),
     recipe = theme.recipes.textField.medium;
@@ -59,9 +152,13 @@ export function TextArea(props: TextAreaProps): ReactNode {
     [focused, setFocused] = useState(false);
   const scrollPosition = useRef({ x: 0, y: 0 });
   const lastCaret = useRef({ cursor: -1, value: "", width: 0, height: 0 });
+  const revealCentered = useRef(false);
   const [, redrawScroll] = useState(0);
   const [error, setError] = useState("");
-  const history = useRef<{ undo: EditState[]; redo: EditState[] }>({ undo: [], redo: [] });
+  const history = useRef<{ undo: EditState[]; redo: EditState[] }>({
+    undo: [],
+    redo: [],
+  });
   const mounted = useRef(true);
   useEffect(
     () => () => {
@@ -85,27 +182,42 @@ export function TextArea(props: TextAreaProps): ReactNode {
   const style = { fontSize, fontFamily };
   const measure = (text: string) => measureTextBounds(text, style).width;
   const lineHeight = Math.max(fontSize + 8, measureTextBounds("Mg", style).height + 4);
-  const lines = state.value.split("\n");
-  const gutter = props.lineNumbers ? measure(String(lines.length)) + 18 : 0;
+  const lineCount = useMemo(() => state.value.split("\n").length, [state.value]);
+  const gutter = props.lineNumbers ? measure(String(lineCount)) + 18 : 0;
   const padding = recipe.metrics.paddingX,
     textX = padding + gutter;
   const viewportWidth = Math.max(1, props.width - textX - padding);
   const viewportHeight = Math.max(1, props.height - padding * 2 - (error ? lineHeight : 0));
-  const starts: number[] = [];
-  let start = 0;
-  for (const line of lines) {
-    starts.push(start);
-    start += line.length + 1;
-  }
-  const rowAt = (offset: number) => {
-    let row = 0;
-    while (row + 1 < starts.length && starts[row + 1]! <= offset) row++;
-    return row;
+  // A little slack keeps the caret visible at the end of a full wrapped row.
+  const wrapWidth = props.wrap ? Math.max(1, viewportWidth - 4) : undefined;
+  const rows = useMemo(
+    () => layoutRows(state.value, measure, wrapWidth),
+    [state.value, wrapWidth, fontSize, fontFamily],
+  );
+  const rowText = (row: VisualRow, value = state.value) => value.slice(row.start, row.end);
+  /** The offset in `row` of `value` nearest to `x` (in text coordinates). */
+  const offsetInRow = (value: string, row: VisualRow, x: number) => {
+    const text = rowText(row, value);
+    let column = 0,
+      distance = Infinity;
+    for (
+      let index = 0;
+      index <= text.length;
+      index = index === text.length ? index + 1 : nextCharacter(text, index)
+    ) {
+      const next = Math.abs(measure(text.slice(0, index)) - x);
+      if (next < distance) {
+        distance = next;
+        column = index;
+      }
+    }
+    // A wrapped row's last offset belongs to the next row, so stay before it.
+    if (!row.lineEnd && column === text.length) column = previousCharacter(text, column);
+    return row.start + column;
   };
-  const cursorRow = rowAt(state.cursor),
-    cursorColumn = state.cursor - starts[cursorRow]!;
-  const caretX = measure(lines[cursorRow]!.slice(0, cursorColumn));
-  const maxY = Math.max(0, lines.length * lineHeight - viewportHeight);
+  const cursorRow = rowAt(rows, state.cursor);
+  const caretX = measure(state.value.slice(rows[cursorRow]!.start, state.cursor));
+  const maxY = Math.max(0, rows.length * lineHeight - viewportHeight);
   const scroll = scrollPosition.current;
   if (
     lastCaret.current.cursor !== state.cursor ||
@@ -113,20 +225,29 @@ export function TextArea(props: TextAreaProps): ReactNode {
     lastCaret.current.width !== viewportWidth ||
     lastCaret.current.height !== viewportHeight
   ) {
-    scroll.x =
-      caretX < scroll.x
+    scroll.x = props.wrap
+      ? 0
+      : caretX < scroll.x
         ? caretX
         : caretX > scroll.x + viewportWidth - 3
           ? Math.max(0, caretX - viewportWidth + 3)
           : scroll.x;
-    scroll.y = Math.min(
-      maxY,
-      cursorRow * lineHeight < scroll.y
-        ? cursorRow * lineHeight
-        : (cursorRow + 1) * lineHeight > scroll.y + viewportHeight
-          ? (cursorRow + 1) * lineHeight - viewportHeight
-          : scroll.y,
+    const top = cursorRow * lineHeight,
+      outside = top < scroll.y || top + lineHeight > scroll.y + viewportHeight;
+    scroll.y = Math.max(
+      0,
+      Math.min(
+        maxY,
+        outside && revealCentered.current
+          ? top - (viewportHeight - lineHeight) / 2
+          : top < scroll.y
+            ? top
+            : top + lineHeight > scroll.y + viewportHeight
+              ? top + lineHeight - viewportHeight
+              : scroll.y,
+      ),
     );
+    revealCentered.current = false;
     lastCaret.current = {
       cursor: state.cursor,
       value: state.value,
@@ -140,12 +261,33 @@ export function TextArea(props: TextAreaProps): ReactNode {
       if (history.current.undo.length > 100) history.current.undo.shift();
       history.current.redo = [];
     }
-    const changed = next.value !== live.current.value;
+    const previous = live.current;
     live.current = next;
     setState(next);
     setError("");
-    if (changed) props.onChange?.(next.value);
+    if (next.value !== previous.value) props.onChange?.(next.value);
+    if (next.cursor !== previous.cursor || next.anchor !== previous.anchor)
+      props.onSelectionChange?.({ anchor: next.anchor, focus: next.cursor });
   };
+  useEffect(() => {
+    const command = props.command;
+    if (!command) return;
+    let value = live.current.value;
+    if (command.replace) {
+      const from = characterBoundary(value, command.replace.from),
+        to = characterBoundary(value, Math.max(from, command.replace.to));
+      value = value.slice(0, from) + command.replace.text + value.slice(to);
+    }
+    revealCentered.current = true;
+    publish(
+      {
+        value,
+        cursor: characterBoundary(value, command.select.focus),
+        anchor: characterBoundary(value, command.select.anchor),
+      },
+      !!command.replace,
+    );
+  }, [props.command]);
   const replace = (text: string) => {
     const current = live.current,
       from = Math.min(current.cursor, current.anchor),
@@ -174,7 +316,11 @@ export function TextArea(props: TextAreaProps): ReactNode {
     const from = Math.min(current.cursor, current.anchor),
       to = Math.max(current.cursor, current.anchor);
     const move = (cursor: number) =>
-      publish({ ...current, cursor, anchor: event.shiftKey ? current.anchor : cursor });
+      publish({
+        ...current,
+        cursor,
+        anchor: event.shiftKey ? current.anchor : cursor,
+      });
     if (modifier) {
       if (character === "a" || event.code === 30)
         publish({ ...current, anchor: 0, cursor: current.value.length });
@@ -234,16 +380,11 @@ export function TextArea(props: TextAreaProps): ReactNode {
       case 108:
       case 104:
       case 109: {
-        const currentLines = current.value.split("\n"),
-          currentStarts: number[] = [];
-        let offset = 0;
-        for (const line of currentLines) {
-          currentStarts.push(offset);
-          offset += line.length + 1;
-        }
-        let row = 0;
-        while (row + 1 < currentStarts.length && currentStarts[row + 1]! <= current.cursor) row++;
-        const column = current.cursor - currentStarts[row]!;
+        // Keys can arrive faster than renders, so lay out the live value when it is newer.
+        const liveRows =
+          current.value === state.value ? rows : layoutRows(current.value, measure, wrapWidth);
+        const row = rowAt(liveRows, current.cursor);
+        const column = current.cursor - liveRows[row]!.start;
         const delta =
           event.code === 103
             ? -1
@@ -251,20 +392,20 @@ export function TextArea(props: TextAreaProps): ReactNode {
               ? 1
               : (event.code === 104 ? -1 : 1) *
                 Math.max(1, Math.floor(viewportHeight / lineHeight));
-        row = Math.max(0, Math.min(currentLines.length - 1, row + delta));
-        move(
-          characterBoundary(
-            current.value,
-            currentStarts[row]! + Math.min(column, currentLines[row]!.length),
-          ),
-        );
+        const target = liveRows[Math.max(0, Math.min(liveRows.length - 1, row + delta))]!;
+        // A wrapped row's end offset is drawn on the next row, so stop one character short.
+        const end = target.lineEnd ? target.end : previousCharacter(current.value, target.end);
+        move(characterBoundary(current.value, Math.min(target.start + column, end)));
         return;
       }
       case 14:
         if (editable) {
           if (from !== to) replace("");
           else if (current.cursor > 0) {
-            live.current = { ...current, anchor: previousCharacter(current.value, current.cursor) };
+            live.current = {
+              ...current,
+              anchor: previousCharacter(current.value, current.cursor),
+            };
             replace("");
           }
         }
@@ -273,7 +414,10 @@ export function TextArea(props: TextAreaProps): ReactNode {
         if (editable) {
           if (from !== to) replace("");
           else {
-            live.current = { ...current, anchor: nextCharacter(current.value, current.cursor) };
+            live.current = {
+              ...current,
+              anchor: nextCharacter(current.value, current.cursor),
+            };
             replace("");
           }
         }
@@ -290,24 +434,9 @@ export function TextArea(props: TextAreaProps): ReactNode {
   const locate = (event: HitPointerEvent) => {
     const row = Math.max(
       0,
-      Math.min(lines.length - 1, Math.floor((event.localY - padding + scroll.y) / lineHeight)),
+      Math.min(rows.length - 1, Math.floor((event.localY - padding + scroll.y) / lineHeight)),
     );
-    const target = Math.max(0, event.localX - textX + scroll.x),
-      line = lines[row]!;
-    let column = 0,
-      distance = Infinity;
-    for (
-      let index = 0;
-      index <= line.length;
-      index = index === line.length ? index + 1 : nextCharacter(line, index)
-    ) {
-      const next = Math.abs(measure(line.slice(0, index)) - target);
-      if (next < distance) {
-        distance = next;
-        column = index;
-      }
-    }
-    return starts[row]! + column;
+    return offsetInRow(state.value, rows[row]!, Math.max(0, event.localX - textX + scroll.x));
   };
   const dragging = useRef(false);
   const box = resolveStatefulStyle(
@@ -318,7 +447,22 @@ export function TextArea(props: TextAreaProps): ReactNode {
   const selectionFrom = Math.min(state.cursor, state.anchor),
     selectionTo = Math.max(state.cursor, state.anchor);
   const firstRow = Math.max(0, Math.floor(scroll.y / lineHeight)),
-    lastRow = Math.min(lines.length, Math.ceil((scroll.y + viewportHeight) / lineHeight) + 1);
+    lastRow = Math.min(rows.length, Math.ceil((scroll.y + viewportHeight) / lineHeight) + 1);
+  const highlights = props.highlights ?? [];
+  const band = (row: VisualRow, from: number, to: number, fill: number, key: string) => {
+    const text = rowText(row);
+    const start = Math.max(0, from - row.start),
+      end = Math.min(text.length, to - row.start);
+    return (
+      <Rect
+        key={key}
+        x={gutter + measure(text.slice(0, start)) - scroll.x}
+        width={Math.max(4, measure(text.slice(start, Math.max(start, end))))}
+        height={lineHeight}
+        fill={fill}
+      />
+    );
+  };
   return (
     <Group x={props.x ?? 0} y={props.y ?? 0} width={props.width} height={props.height} clip>
       <Rect
@@ -354,8 +498,12 @@ export function TextArea(props: TextAreaProps): ReactNode {
           dragging.current = false;
         }}
         onWheel={(event) => {
-          scrollPosition.current.y = Math.max(0, Math.min(maxY, scroll.y + (event.deltaY ?? 0)));
+          const next = Math.max(0, Math.min(maxY, scroll.y + (event.deltaY ?? 0)));
+          // At its limit the field lets an enclosing scroller take the wheel.
+          if (next === scroll.y) return false;
+          scrollPosition.current.y = next;
           redrawScroll((current) => current + 1);
+          return true;
         }}
       />
       <Group
@@ -365,39 +513,48 @@ export function TextArea(props: TextAreaProps): ReactNode {
         height={viewportHeight}
         clip
       >
-        {lines.slice(firstRow, lastRow).map((line, visible) => {
-          const row = firstRow + visible,
-            y = row * lineHeight - scroll.y;
-          const from = Math.max(0, selectionFrom - starts[row]!),
-            to = Math.min(line.length, selectionTo - starts[row]!);
-          const selected =
-            selectionFrom < starts[row]! + line.length + 1 && selectionTo > starts[row]!;
+        {rows.slice(firstRow, lastRow).map((row, visible) => {
+          const index = firstRow + visible,
+            y = index * lineHeight - scroll.y;
+          // A line's trailing newline is selectable, so a selection across it shows on the row.
+          const rowLimit = row.end + (row.lineEnd ? 1 : 0);
+          const selected = selectionFrom < rowLimit && selectionTo > row.start;
+          const matches: ReactNode[] = [];
+          for (
+            let match = firstRangeAfter(highlights, row.start);
+            match < highlights.length && highlights[match]!.from < rowLimit;
+            match++
+          )
+            matches.push(
+              band(row, highlights[match]!.from, highlights[match]!.to, HIGHLIGHT, `h${match}`),
+            );
           return (
-            <Group key={row} width={props.width} height={lineHeight} y={y}>
-              {props.lineNumbers && (
+            <Group key={index} width={props.width} height={lineHeight} y={y}>
+              {props.lineNumbers && row.lineStart && (
                 <Text
-                  text={String(row + 1)}
+                  text={String(row.line + 1)}
                   fontSize={fontSize}
                   fontFamily="mono"
                   color={theme.foundations.palette.muted}
                 />
               )}
-              {selected && (
-                <Rect
-                  x={gutter + measure(line.slice(0, from)) - scroll.x}
-                  width={Math.max(4, measure(line.slice(from, Math.max(from, to))))}
-                  height={lineHeight}
-                  fill={(theme.foundations.palette.accent & 0x00ffffff) | 0x40000000}
-                />
-              )}
+              {matches}
+              {selected &&
+                band(
+                  row,
+                  selectionFrom,
+                  selectionTo,
+                  (theme.foundations.palette.accent & 0x00ffffff) | 0x40000000,
+                  "selection",
+                )}
               <Text
                 x={gutter - scroll.x}
-                text={state.value ? line : (props.placeholder ?? "")}
+                text={state.value ? rowText(row) : (props.placeholder ?? "")}
                 fontSize={fontSize}
                 fontFamily={fontFamily}
                 color={state.value ? recipe.text.base.color : recipe.placeholder.base.color}
               />
-              {focused && row === cursorRow && (
+              {focused && index === cursorRow && (
                 <Rect
                   x={gutter + caretX - scroll.x}
                   width={1}

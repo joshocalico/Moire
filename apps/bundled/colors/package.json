@@ -3,11 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#colors/*": "./src/*.ts"
+  },
   "description": "Moire Colors",
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "smoke": "tsx src/smoke.tsx"
+    "smoke": "tsx src/model.smoke.ts && tsx src/smoke.tsx"
   },
   "dependencies": {
     "@moire/app-tools": "workspace:*",

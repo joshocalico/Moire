@@ -67,7 +67,7 @@ await withFixture(async (fixture) => {
     );
     assert.equal(
       (await fs.readdir(store.directory)).some(
-        (name) => name.startsWith(".library") || name === ".write-lock",
+        (name) => name.includes("write-lock") || name.endsWith(".tmp"),
       ),
       false,
     );

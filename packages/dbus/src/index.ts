@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import net from "node:net";
 import {
   decodeMessage,
@@ -12,11 +13,41 @@ export type { DbusMessage, DbusVariant } from "./codec";
 
 export type DbusMethodResult = {
   body?: unknown[];
+  /**
+   * Descriptors to send with the reply; each `h` in the body indexes this list. The bus takes
+   * ownership and closes them once sent (or once the connection fails).
+   */
+  fds?: readonly number[];
 };
 
 export type DbusMethodContext = {
   message: DbusMessage;
   body: unknown[];
+  /** Descriptors received with the call. They are closed when the handler settles... */
+  fds: readonly number[];
+  /** ...unless kept: the handler then owns the descriptor at `index` and must close it. */
+  keepFd(index: number): number;
+};
+
+/**
+ * Descriptor passing (SCM_RIGHTS) for one connection. A Node socket cannot carry descriptors, so a
+ * native boundary supplies this (`@moire/sys/dbus-fds` on Linux): it takes over reading `socket`,
+ * reporting each chunk with the descriptors that arrived on it, and sends with descriptors attached.
+ */
+export type DbusUnixFdTransport = (
+  socket: net.Socket,
+  receive: (data: Buffer, fds: number[]) => void,
+) => DbusUnixFdChannel;
+export type DbusUnixFdChannel = {
+  /**
+   * Send what the socket takes now of `data`, with `fds` attached to its first byte. Returns the
+   * bytes written; 0 means it would block and nothing (descriptors included) was sent.
+   */
+  send(data: Buffer, fds: readonly number[]): number;
+};
+export type DbusConnectOptions = DbusOperationOptions & {
+  /** Negotiate descriptor passing and use this transport for it. */
+  unixFds?: DbusUnixFdTransport;
 };
 
 export type DbusMethod = {
@@ -31,6 +62,11 @@ export type DbusInterface = {
 };
 
 export type DbusOperationOptions = { signal?: AbortSignal; timeoutMs?: number };
+/**
+ * Message flag: the caller is prepared to wait while the service asks the user to authorize the
+ * call (a polkit prompt). Without it a service must answer from policy alone.
+ */
+export const ALLOW_INTERACTIVE_AUTHORIZATION = 0x4;
 export type DbusSignalMatch = {
   sender: string;
   path: string;
@@ -64,10 +100,26 @@ const MAX_PENDING = 1024;
 const MAX_SUBSCRIPTIONS = 128;
 const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_SETUP_BYTES = 64 * 1024 * 1024;
+/** Descriptors received but not yet matched to a whole message (dbus-daemon allows 16 per message). */
+const MAX_PENDING_FDS = 1024;
+function closeFds(fds: Iterable<number>): void {
+  for (const fd of fds) {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // Already closed by its owner.
+    }
+  }
+}
+/**
+ * The longest a call may wait. A call that allows interactive authorization waits for a person at
+ * a password prompt, which gives up after two idle minutes (docs/polkit-agent.md).
+ */
+const MAX_TIMEOUT = 180_000;
 function timeoutMs(options: DbusOperationOptions): number {
   const timeout = options.timeoutMs ?? DEFAULT_TIMEOUT;
-  if (!Number.isFinite(timeout) || timeout < 1 || timeout > 120_000)
-    throw new Error("D-Bus timeoutMs must be between 1 and 120000 milliseconds");
+  if (!Number.isFinite(timeout) || timeout < 1 || timeout > MAX_TIMEOUT)
+    throw new Error(`D-Bus timeoutMs must be between 1 and ${MAX_TIMEOUT} milliseconds`);
   return timeout;
 }
 function cancelled(): Error {
@@ -120,9 +172,13 @@ function busSocketPath(address: string): string {
   throw new Error(`Unsupported D-Bus address: ${address}`);
 }
 
-function authenticate(socket: net.Socket): Promise<Buffer> {
+function authenticate(
+  socket: net.Socket,
+  negotiateFds: boolean,
+): Promise<{ leftover: Buffer; unixFds: boolean }> {
   return new Promise((resolve, reject) => {
     let pending = Buffer.alloc(0);
+    let negotiating = false;
     const identity = Buffer.from(String(process.getuid?.() ?? 0), "ascii")
       .toString("hex")
       .toUpperCase();
@@ -147,10 +203,22 @@ function authenticate(socket: net.Socket): Promise<Buffer> {
         if (end < 0) return;
         const line = pending.subarray(0, end).toString("ascii");
         pending = pending.subarray(end + 2);
-        if (line.startsWith("OK ")) {
+        if (negotiating) {
+          // ERROR means the peer or this socket cannot pass descriptors; the connection still works.
           cleanup();
           socket.write("BEGIN\r\n");
-          resolve(pending);
+          resolve({ leftover: pending, unixFds: line === "AGREE_UNIX_FD" });
+          return;
+        }
+        if (line.startsWith("OK ")) {
+          if (negotiateFds) {
+            negotiating = true;
+            socket.write("NEGOTIATE_UNIX_FD\r\n");
+            continue;
+          }
+          cleanup();
+          socket.write("BEGIN\r\n");
+          resolve({ leftover: pending, unixFds: false });
           return;
         }
         if (line.startsWith("REJECTED") || line.startsWith("ERROR")) {
@@ -191,20 +259,35 @@ export class SessionBus {
   private disconnected: Error | null = null;
   private uniqueName: string | null = null;
   private setupBytes = 0;
+  private readonly channel: DbusUnixFdChannel | null = null;
+  /** Descriptors received ahead of the message that claims them. */
+  private inputFds: number[] = [];
+  /** Writes held back behind a descriptor-carrying message, in order. */
+  private readonly outgoing: { bytes: Buffer; fds: readonly number[]; owned: boolean }[] = [];
+  private flushScheduled = false;
 
   get name(): string | null {
     return this.uniqueName;
   }
 
-  private constructor(private readonly socket: net.Socket) {
-    socket.on("data", (chunk) => this.receive(chunk));
+  /** Whether this connection negotiated descriptor passing. */
+  get unixFds(): boolean {
+    return this.channel !== null;
+  }
+
+  private constructor(
+    private readonly socket: net.Socket,
+    transport?: DbusUnixFdTransport,
+  ) {
+    if (transport) this.channel = transport(socket, (chunk, fds) => this.receive(chunk, fds));
+    else socket.on("data", (chunk) => this.receive(chunk));
     socket.on("error", (error) => this.disconnect(error));
     socket.on("close", () => this.disconnect(new Error("D-Bus disconnected")));
   }
 
   static async connect(
     address = process.env.DBUS_SESSION_BUS_ADDRESS,
-    options: DbusOperationOptions = {},
+    options: DbusConnectOptions = {},
   ): Promise<SessionBus> {
     if (!address) throw new Error("DBUS_SESSION_BUS_ADDRESS is not set");
     options.signal?.throwIfAborted();
@@ -238,9 +321,9 @@ export class SessionBus {
         socket.once("error", failed);
         socket.once("close", closed);
       });
-      const initial = await authenticate(socket);
-      const bus = new SessionBus(socket);
-      if (initial.length > 0) bus.receive(initial);
+      const auth = await authenticate(socket, !!options.unixFds);
+      const bus = new SessionBus(socket, auth.unixFds ? options.unixFds : undefined);
+      if (auth.leftover.length > 0) bus.receive(auth.leftover);
       const reply = await bus.call(
         { destination: BUS, path: BUS_PATH, interface: BUS, member: "Hello" },
         options,
@@ -290,6 +373,13 @@ export class SessionBus {
       member: string;
       signature?: string;
       body?: unknown[];
+      /**
+       * Descriptors to send; each `h` in the body indexes this list. They stay the caller's and
+       * must stay open until the call settles. Needs a connection with `unixFds`.
+       */
+      fds?: readonly number[];
+      /** Header flags, e.g. `ALLOW_INTERACTIVE_AUTHORIZATION`. */
+      flags?: number;
     },
     options: DbusOperationOptions = {},
   ): Promise<DbusMessage> {
@@ -300,7 +390,10 @@ export class SessionBus {
     const serial = this.nextSerial();
     try {
       timeout = timeoutMs(options);
-      bytes = encodeMessage({ type: 1, serial, ...input });
+      if (input.fds?.length && !this.channel)
+        throw new Error("This D-Bus connection cannot pass descriptors");
+      const { fds, ...message } = input;
+      bytes = encodeMessage({ type: 1, serial, ...message, unixFds: fds?.length ?? 0 });
     } catch (error) {
       return Promise.reject(error);
     }
@@ -332,7 +425,7 @@ export class SessionBus {
       });
       options.signal?.addEventListener("abort", abort, { once: true });
       try {
-        this.socket.write(bytes);
+        this.write(bytes, input.fds ?? [], false);
       } catch (error) {
         cleanup();
         reject(error);
@@ -565,7 +658,7 @@ export class SessionBus {
     body?: unknown[];
   }): void {
     if (this.disconnected) throw this.disconnected;
-    this.socket.write(encodeMessage({ type: 4, serial: this.nextSerial(), ...input }));
+    this.write(encodeMessage({ type: 4, serial: this.nextSerial(), ...input }));
   }
 
   close(): void {
@@ -580,8 +673,71 @@ export class SessionBus {
     }
   }
 
-  private receive(chunk: Buffer): void {
-    if (this.disconnected) return;
+  /**
+   * Queue a message. Descriptors ride on the transport's sendmsg, which must not overtake bytes
+   * still buffered in the Node stream, so everything after such a message waits behind it too.
+   * `owned` descriptors are closed once sent.
+   */
+  private write(bytes: Buffer, fds: readonly number[] = [], owned = true): void {
+    if (fds.length === 0 && this.outgoing.length === 0) {
+      this.socket.write(bytes);
+      return;
+    }
+    if (fds.length && !this.channel) {
+      if (owned) closeFds(fds);
+      throw new Error("This D-Bus connection cannot pass descriptors");
+    }
+    this.outgoing.push({ bytes, fds, owned });
+    this.flushOutgoing();
+  }
+
+  private flushOutgoing(): void {
+    this.flushScheduled = false;
+    while (this.outgoing.length > 0 && !this.disconnected) {
+      const next = this.outgoing[0]!;
+      if (next.fds.length === 0) {
+        this.outgoing.shift();
+        this.socket.write(next.bytes);
+        continue;
+      }
+      if (this.socket.writableLength > 0) {
+        this.scheduleFlush("drain");
+        return;
+      }
+      let written: number;
+      try {
+        written = this.channel!.send(next.bytes, next.fds);
+      } catch (error) {
+        this.disconnect(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      if (written <= 0) {
+        this.scheduleFlush("retry");
+        return;
+      }
+      this.outgoing.shift();
+      if (next.owned) closeFds(next.fds);
+      if (written < next.bytes.length) this.socket.write(next.bytes.subarray(written));
+    }
+  }
+
+  private scheduleFlush(reason: "drain" | "retry"): void {
+    if (this.flushScheduled) return;
+    this.flushScheduled = true;
+    if (reason === "drain") this.socket.once("drain", () => this.flushOutgoing());
+    else setTimeout(() => this.flushOutgoing(), 1);
+  }
+
+  private receive(chunk: Buffer, fds: number[] = []): void {
+    if (this.disconnected) {
+      closeFds(fds);
+      return;
+    }
+    this.inputFds.push(...fds);
+    if (this.inputFds.length > MAX_PENDING_FDS) {
+      this.disconnect(new Error("D-Bus peer sent too many unclaimed descriptors"));
+      return;
+    }
     this.input = Buffer.concat([this.input, chunk]);
     for (;;) {
       let length: number | null;
@@ -611,8 +767,17 @@ export class SessionBus {
         this.socket.destroy();
         return;
       }
+      // The kernel delivers a message's descriptors with its first byte, so they are here by now.
+      const fdCount = message.unixFds ?? 0;
+      if (fdCount > this.inputFds.length) {
+        this.disconnect(new Error("D-Bus message announces descriptors that did not arrive"));
+        return;
+      }
+      message.fds = this.inputFds.splice(0, fdCount);
       if (message.type === 2 || message.type === 3) {
         const pending = this.pending.get(message.replySerial ?? 0);
+        // A reply's descriptors belong to its caller; anything else is closed here.
+        if (!pending || message.type === 3) closeFds(message.fds);
         if (!pending) continue;
         this.pending.delete(message.replySerial ?? 0);
         if (message.type === 3) {
@@ -652,6 +817,8 @@ export class SessionBus {
               this.setupBytes += length;
             } else subscription.listener(message);
         }
+        // Signal listeners run synchronously; buffered setup deliveries see closed descriptors.
+        closeFds(message.fds);
       } else if (message.type === 1) {
         void this.dispatchMethod(message);
       }
@@ -659,6 +826,15 @@ export class SessionBus {
   }
 
   private async dispatchMethod(message: DbusMessage): Promise<void> {
+    const fds = new Set(message.fds ?? []);
+    try {
+      await this.dispatchMethodWith(message, fds);
+    } finally {
+      closeFds(fds);
+    }
+  }
+
+  private async dispatchMethodWith(message: DbusMessage, unclaimed: Set<number>): Promise<void> {
     if (message.interface === "org.freedesktop.DBus.Peer" && message.member === "Ping") {
       this.reply(message, "", []);
       return;
@@ -681,13 +857,21 @@ export class SessionBus {
       return;
     }
     try {
+      const fds = message.fds ?? [];
       const result = await method.handler({
         message,
         body: message.body ?? [],
+        fds,
+        keepFd: (index) => {
+          const fd = fds[index];
+          if (fd === undefined || !unclaimed.delete(fd))
+            throw new Error(`No descriptor ${index} to keep`);
+          return fd;
+        },
       });
       if (!((message.flags ?? 0) & 1)) {
-        this.reply(message, method.outSignature, result.body ?? []);
-      }
+        this.reply(message, method.outSignature, result.body ?? [], result.fds ?? []);
+      } else closeFds(result.fds ?? []);
     } catch (error) {
       const name =
         error instanceof DbusRemoteError &&
@@ -699,9 +883,17 @@ export class SessionBus {
     }
   }
 
-  private reply(call: DbusMessage, signature: string, body: unknown[]): void {
-    if (this.disconnected) return;
-    this.socket.write(
+  private reply(
+    call: DbusMessage,
+    signature: string,
+    body: unknown[],
+    fds: readonly number[] = [],
+  ): void {
+    if (this.disconnected) {
+      closeFds(fds);
+      return;
+    }
+    this.write(
       encodeMessage({
         type: 2,
         serial: this.nextSerial(),
@@ -709,13 +901,15 @@ export class SessionBus {
         destination: call.sender,
         signature,
         body,
+        unixFds: fds.length,
       }),
+      fds,
     );
   }
 
   private error(call: DbusMessage, name: string, detail: string): void {
     if (this.disconnected) return;
-    this.socket.write(
+    this.write(
       encodeMessage({
         type: 3,
         serial: this.nextSerial(),
@@ -755,6 +949,9 @@ export class SessionBus {
       this.socket.end();
     } else this.socket.destroy();
     this.input = Buffer.alloc(0);
+    closeFds(this.inputFds);
+    this.inputFds = [];
+    for (const queued of this.outgoing.splice(0)) if (queued.owned) closeFds(queued.fds);
     for (const pending of [...this.pending.values()]) pending.reject(error);
     this.pending.clear();
     // Owner listeners revoke before local subscription retirement.

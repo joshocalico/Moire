@@ -13,6 +13,8 @@ import {
 import { Application } from "../../ui/src/application";
 import { installUiFonts } from "../../ui/src/font/index";
 import { SettingsApp } from "../../../apps/core/settings/src/main";
+import { settingsFixture } from "../../../apps/core/settings/src/testing";
+import { initialRoute } from "../../../apps/core/settings/src/catalog";
 import { GreeterApp } from "../../../apps/system/greeter/src/view";
 import { greeterHarness } from "../../../apps/system/greeter/src/testing";
 import { loadSettings, settingsPath, updateSettings } from "../src/index";
@@ -31,16 +33,16 @@ const texts = (node: SceneNode): string[] => [
 ];
 let pending: Promise<void> | null = null;
 let settingsWrites = 0;
+const fixture = settingsFixture(loadSettings());
 const refresh = () =>
   renderShell(
     root,
     <SettingsApp
       width={640}
       height={1000}
+      {...fixture.props}
       initial={loadSettings()}
-      reducedMotion={loadSettings().reducedMotion}
-      display={null}
-      onQuit={() => {}}
+      route={initialRoute(process.env)}
       onReducedMotionChange={(value) => {
         settingsWrites++;
         pending = app.setSessionReducedMotion(value);
@@ -78,7 +80,10 @@ try {
   await settled();
   assert.equal(settingsWrites, 1);
   assert.equal(loadSettings().reducedMotion, true);
-  assert.ok(texts(root.container).includes("Motion preference saved"));
+  assert.ok(
+    !texts(root.container).some((text) => text.startsWith("Couldn't save")),
+    "a saved motion preference shows no failure",
+  );
   assert.equal(loadSettings().volume, 0.31, "motion-only save changed audio preference");
   // A separate consumer changes fields after Settings mounted. Appearance must not save its stale snapshot.
   updateSettings({ reducedMotion: false, notifications: false, uiScale: 1.5 });
@@ -95,7 +100,7 @@ try {
   press("Reduce motion");
   await settled();
   assert.ok(
-    texts(root.container).some((text) => text.startsWith("Could not save motion preference:")),
+    texts(root.container).some((text) => text.startsWith("Couldn't save the motion preference:")),
   );
   fs.unlinkSync(config);
   fs.renameSync(path.join(directory, "held"), config);

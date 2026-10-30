@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createAudioStatusAdapter, executeAudioCommand } from "@moire/prefs";
+import { createAudioStatusAdapter } from "@moire/audio";
 import { bindManagementShutdown } from "./main";
 
 function fakeBus(events: string[]) {
@@ -33,14 +33,9 @@ async function worker(directory: string): Promise<void> {
   const watch = setInterval(() => {}, 1000);
   const connection = setInterval(() => {}, 1000);
   const bus = fakeBus(events);
-  const adapter = createAudioStatusAdapter({
-    execute: (_command, _args, signal) =>
-      executeAudioCommand(
-        process.execPath,
-        [path.join(directory, "hang.mjs"), path.join(directory, "child.json")],
-        signal,
-      ),
-  });
+  // The production adapter owns its PipeWire connection; this PipeWire accepts and never answers.
+  process.env.PIPEWIRE_REMOTE = path.join(directory, "pipewire-0");
+  const adapter = createAudioStatusAdapter();
   bindManagementShutdown(
     {
       onDisconnect: bus.onDisconnect,
@@ -73,7 +68,7 @@ async function worker(directory: string): Promise<void> {
     );
   });
   // No process.exit, no IPC handle and no fixture termination timer. Production
-  // shutdown must retire actual CLI handles and both borrowed-lifecycle fixtures.
+  // shutdown must close the PipeWire connection and both borrowed-lifecycle fixtures.
 }
 
 async function waitForFile(file: string, milliseconds: number): Promise<void> {
@@ -83,20 +78,21 @@ async function waitForFile(file: string, milliseconds: number): Promise<void> {
   assert(fs.existsSync(file), `Missing fixture readiness ${file}`);
 }
 
-function readChild(file: string): { pid: number; parent: number } {
-  const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-  assert(value && typeof value === "object" && "pid" in value && "parent" in value);
-  assert(typeof value.pid === "number" && Number.isSafeInteger(value.pid) && value.pid > 0);
-  assert(typeof value.parent === "number" && Number.isSafeInteger(value.parent));
-  return { pid: value.pid, parent: value.parent };
-}
-
 async function naturalSignalExit(directory: string, signal: "SIGTERM" | "SIGINT") {
   fs.mkdirSync(directory);
+  // A PipeWire that accepts and never answers, so the worker's first read is in flight.
   fs.writeFileSync(
     path.join(directory, "hang.mjs"),
-    'import fs from "node:fs"; fs.writeFileSync(process.argv[2],JSON.stringify({pid:process.pid,parent:process.ppid}));setInterval(()=>{},1000);',
+    'import fs from "node:fs"; import net from "node:net"; const [, , socket, dir] = process.argv;' +
+      ' net.createServer((s) => { fs.writeFileSync(dir + "/connected", ""); s.on("close", () => fs.writeFileSync(dir + "/closed", "")); s.on("error", () => {}); s.resume(); })' +
+      '.listen(socket, () => fs.writeFileSync(dir + "/ready", ""));',
   );
+  const silent = spawn(process.execPath, [
+    path.join(directory, "hang.mjs"),
+    path.join(directory, "pipewire-0"),
+    directory,
+  ]);
+  await waitForFile(path.join(directory, "ready"), 2000);
   const child = spawn(
     process.execPath,
     [...process.execArgv, fileURLToPath(import.meta.url), "--worker", directory],
@@ -110,8 +106,7 @@ async function naturalSignalExit(directory: string, signal: "SIGTERM" | "SIGINT"
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  let output = "",
-    descendant: number | null = null;
+  let output = "";
   child.stdout.on("data", (bytes: Buffer) => {
     output = (output + bytes.toString()).slice(-16 * 1024);
   });
@@ -129,10 +124,7 @@ async function naturalSignalExit(directory: string, signal: "SIGTERM" | "SIGINT"
   void exited.catch(() => {});
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await waitForFile(path.join(directory, "child.json"), 1000);
-    const owned = readChild(path.join(directory, "child.json"));
-    assert.equal(owned.parent, child.pid);
-    descendant = owned.pid;
+    await waitForFile(path.join(directory, "connected"), 2000);
     const began = performance.now();
     assert(child.kill(signal));
     const result = await Promise.race([
@@ -148,22 +140,9 @@ async function naturalSignalExit(directory: string, signal: "SIGTERM" | "SIGINT"
     const elapsed = performance.now() - began;
     assert(
       elapsed < 1500,
-      "Shutdown must cancel its actual CLI, not wait for the command deadline",
+      "Shutdown must close its PipeWire connection, not wait for the request deadline",
     );
-    const deadline = performance.now() + 1000;
-    let live = true;
-    while (live && performance.now() < deadline) {
-      try {
-        process.kill(descendant, 0);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      } catch (error) {
-        if (error && typeof error === "object" && "code" in error && error.code === "ESRCH")
-          live = false;
-        else throw error;
-      }
-    }
-    assert.equal(live, false, "Actual CLI child must be retired, not orphaned");
-    descendant = null;
+    await waitForFile(path.join(directory, "closed"), 1000);
     const final: unknown = JSON.parse(
       fs.readFileSync(path.join(directory, "audio-final.json"), "utf8"),
     );
@@ -185,17 +164,12 @@ async function naturalSignalExit(directory: string, signal: "SIGTERM" | "SIGINT"
       expected,
     );
     console.log(
-      `${signal}: natural parent exit0, actual CLI retired, elapsed ${Math.round(elapsed)}ms`,
+      `${signal}: natural parent exit0, PipeWire connection closed, elapsed ${Math.round(elapsed)}ms`,
     );
   } finally {
     if (timeout) clearTimeout(timeout);
-    if (descendant !== null)
-      try {
-        process.kill(descendant, "SIGKILL");
-      } catch {
-        /* Only an already-retired owned fixture child. */
-      }
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    silent.kill("SIGKILL");
   }
 }
 
@@ -271,7 +245,7 @@ if (process.argv[2] === "--worker") {
     await naturalSignalExit(path.join(directory, "term"), "SIGTERM");
     await naturalSignalExit(path.join(directory, "int"), "SIGINT");
     console.log(
-      "Management shutdown: 5 cases passed; production hook + actual owned Node parent/audio CLI children. No live D-Bus/audio/devices.",
+      "Management shutdown: 5 cases passed; production hook + actual owned Node parent and its PipeWire connection. No live D-Bus/audio/devices.",
     );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

@@ -100,13 +100,13 @@ key(108);
 key(108, wlKeyboard.enums.keyState.released);
 assert.deepEqual(
   popup.keys.map((event) => event.type),
-  ["down", "repeat", "up"],
-  "native popup receives keys after enter even if parent receives a stale leave",
+  ["down", "up"],
+  "native popup receives keys after enter even if parent receives a stale leave; a re-press of a held key is ignored",
 );
 assert.equal(parent.keys.length, 1, "popup keys never leak to its parent");
 leave(20);
 key(28);
-assert.equal(popup.keys.length, 3, "leave stops delivery");
+assert.equal(popup.keys.length, 2, "leave stops delivery");
 assert.equal(pressedKeys.size, 0, "leave clears stale modifiers and repeat state");
 
 enter(10);

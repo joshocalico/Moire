@@ -55,6 +55,34 @@ function loadBindings() {
       lib,
       "unsigned int xkb_state_serialize_layout(void *state, int components)",
     ),
+    updateMask: bindNativeFunction<
+      (
+        state: unknown,
+        depressedMods: number,
+        latchedMods: number,
+        lockedMods: number,
+        depressedLayout: number,
+        latchedLayout: number,
+        lockedLayout: number,
+      ) => number
+    >(
+      lib,
+      "unsigned int xkb_state_update_mask(void *state, unsigned int depressed_mods, unsigned int latched_mods, unsigned int locked_mods, unsigned int depressed_layout, unsigned int latched_layout, unsigned int locked_layout)",
+    ),
+    numLayouts: bindNativeFunction<(keymap: unknown) => number>(
+      lib,
+      "unsigned int xkb_keymap_num_layouts(void *keymap)",
+    ),
+    layoutName: bindNativeFunction<(keymap: unknown, index: number) => string | null>(
+      lib,
+      "const char *xkb_keymap_layout_get_name(void *keymap, unsigned int idx)",
+    ),
+    keyUtf8: bindNativeFunction<
+      (state: unknown, keycode: number, output: Uint8Array, size: number) => number
+    >(
+      lib,
+      "int xkb_state_key_get_utf8(void *state, unsigned int keycode, void *output, size_t size)",
+    ),
   };
 }
 let bindings: ReturnType<typeof loadBindings> | undefined;
@@ -114,6 +142,57 @@ export class XkbKeyboardState {
       before.group === after.group
       ? null
       : after;
+  }
+
+  /** Number of layouts (XKB groups) in the keymap. */
+  layoutCount(): number {
+    if (!this.keymap) throw new Error("Keyboard state is closed");
+    return this.native.numLayouts(this.keymap);
+  }
+
+  /** The keymap's human name for a layout, such as "German (no dead keys)". */
+  layoutName(index: number): string | null {
+    if (!this.keymap) throw new Error("Keyboard state is closed");
+    return this.native.layoutName(this.keymap, index);
+  }
+
+  /**
+   * Lock the active layout, keeping every modifier component as it is. Returns the new masks,
+   * or null when the layout was already active.
+   */
+  setLayoutIndex(index: number): KeyboardModifierMask | null {
+    if (!this.state) throw new Error("Keyboard state is closed");
+    const count = this.layoutCount();
+    if (!Number.isInteger(index) || index < 0 || index >= count)
+      throw new RangeError(`Layout ${index} is outside 0..${count - 1}`);
+    const before = this.snapshot();
+    if (before.group === index) return null;
+    this.native.updateMask(
+      this.state,
+      before.depressed,
+      before.latched,
+      before.locked,
+      0,
+      0,
+      index,
+    );
+    return this.snapshot();
+  }
+
+  /**
+   * The text a key press produces in the current state, written as UTF-8 into `output` (never a
+   * JS string, so a password can be wiped). Call before `update` for that press, as
+   * libxkbcommon's own tools do. Returns the byte count; 0 for keys without text.
+   */
+  keyText(code: number, output: Uint8Array): number {
+    if (!this.state) throw new Error("Keyboard state is closed");
+    if (!Number.isInteger(code) || code < 0 || code > 0xfffffff7 || output.length < 2) return 0;
+    const length = this.native.keyUtf8(this.state, code + 8, output, output.length);
+    if (!Number.isInteger(length) || length <= 0 || length >= output.length) {
+      output.fill(0);
+      return 0;
+    }
+    return length;
   }
 
   close(): void {

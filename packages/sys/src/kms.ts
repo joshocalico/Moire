@@ -199,6 +199,8 @@ export type KmsMode = {
 type KmsModeData = KmsMode & { raw: Record<string, unknown> };
 
 export type KmsOutput = {
+  /** The on-screen framebuffer was handed to the next stage (see retainKmsScanout). */
+  retainedScanout?: boolean;
   /** Connector/mode observation, independent of queued/active framebuffer ownership. */
   availability: "available" | "unavailable" | "unknown";
   fd: number;
@@ -335,6 +337,11 @@ export function openKmsOutput(
   requestedModeId = process.env.MOIRE_MODE,
   bounds?: { maxWidth: number; maxHeight: number },
   devices?: SeatDeviceAccess,
+  /**
+   * Tight BGRA shown by the initial modeset instead of black: the boot stage's final frame,
+   * so taking over the display is invisible. Ignored unless its size matches the mode.
+   */
+  initialFrame?: { pixels: Uint8Array; width: number; height: number } | { fill: number },
 ): KmsOutput {
   assertLinux("KMS");
   if (
@@ -509,6 +516,30 @@ export function openKmsOutput(
         };
         const size = Number(created.size);
         const map = mmap(size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, Number(mapped.offset));
+        if (initialFrame && "fill" in initialFrame) {
+          const row = new Uint32Array(created.pitch / 4).fill(initialFrame.fill >>> 0);
+          const filled = new Uint8Array(created.pitch * height);
+          for (let y = 0; y < height; y++)
+            filled.set(new Uint8Array(row.buffer), y * created.pitch);
+          flushMmap(map, filled, Math.min(size, filled.byteLength));
+        } else if (
+          initialFrame &&
+          initialFrame.width === width &&
+          initialFrame.height === height &&
+          initialFrame.pixels.byteLength === width * height * 4
+        ) {
+          const rowBytes = width * 4;
+          let packed = initialFrame.pixels;
+          if (created.pitch !== rowBytes) {
+            packed = new Uint8Array(created.pitch * height);
+            for (let row = 0; row < height; row++)
+              packed.set(
+                initialFrame.pixels.subarray(row * rowBytes, (row + 1) * rowBytes),
+                row * created.pitch,
+              );
+          }
+          flushMmap(map, packed, Math.min(size, packed.byteLength));
+        }
 
         const fbIdOut = koffi.alloc("uint32_t", 1);
         const add = drmModeAddFB(
@@ -1670,14 +1701,48 @@ function releaseKmsOutputResources(out: KmsOutput): void {
   koffi.free(out.connectorsPtr);
 }
 
+/**
+ * Give up DRM master but keep the fd (and so the framebuffer on screen) open, letting the next
+ * stage become master and replace the frame with its own modeset.
+ */
+export function dropKmsMaster(out: KmsOutput): boolean {
+  const drmDropMaster = loadLibdrm().func("int drmDropMaster(int fd)");
+  return (drmDropMaster(out.fd) as number) === 0;
+}
+
+/** struct drm_mode_closefb { u32 fb_id; u32 pad; } — DRM_IOWR(0xD0), Linux ≥ 6.8. */
+const DRM_IOCTL_MODE_CLOSEFB = 0xc00864d0;
+
+/**
+ * Leave the current frame on screen after this process closes its DRM fd: CLOSEFB drops the
+ * handle without disabling the plane, so the next stage's modeset replaces it seamlessly.
+ * False when nothing is on screen or the kernel predates CLOSEFB (the screen then blanks).
+ */
+export function retainKmsScanout(out: KmsOutput): { retained: boolean; reason?: string } {
+  const framebuffer = kmsScanout(out).ownership.activeFramebuffer;
+  if (!framebuffer) return { retained: false, reason: "a flip is still pending" };
+  const request = new Uint32Array([framebuffer, 0]);
+  if (out.drmIoctl(out.fd, DRM_IOCTL_MODE_CLOSEFB, request) !== 0)
+    return { retained: false, reason: `CLOSEFB failed (errno ${koffi.errno()})` };
+  out.retainedScanout = true;
+  return { retained: true };
+}
+
+/** No page flip in flight: the on-screen framebuffer is settled. */
+export function isKmsScanoutSettled(out: KmsOutput): boolean {
+  return kmsScanout(out).ownership.activeFramebuffer !== null;
+}
+
 export function closeKmsOutput(out: KmsOutput): void {
   out.availability = "unavailable";
   const scanout = kmsScanout(out);
   if (scanout.ownership.status === "closed") return;
   destroyKmsCursor(out);
-  // Disable scanout before retiring storage. If this fails on a shared fd,
-  // keep all resources until the owning output closes that fd.
-  const disabled = out.setCrtc(out.fd, out.crtcId, 0, 0, 0, null, 0, null);
+  // Disable scanout before retiring storage, unless the frame was handed to the next stage.
+  // If this fails on a shared fd, keep all resources until the owning output closes that fd.
+  const disabled = out.retainedScanout
+    ? 0
+    : out.setCrtc(out.fd, out.crtcId, 0, 0, 0, null, 0, null);
   if (disabled !== 0 && !out.ownsFd) {
     scanout.ownership.quarantine(new Error(`DRM CRTC disable failed (${disabled})`));
     console.error(

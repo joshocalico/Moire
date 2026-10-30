@@ -37,8 +37,15 @@ export type IconButtonProps = {
   tooltip?: string;
   tooltipPlacement?: TooltipPlacement;
   autoFocus?: boolean;
+  /**
+   * False makes a pointer-only button: not a tab stop, and pressing it leaves keyboard focus
+   * where it was (a field's clear button). Defaults to focusable when it has `onPress`.
+   */
+  focusable?: boolean;
   focusId?: string;
   onFocusChange?: (focused: boolean) => void;
+  /** Pointer over the button, e.g. to keep a hover-revealed action row open. */
+  onHoverChange?: (hovered: boolean) => void;
   onPress?: (event?: HitPointerEvent) => void;
   onContextMenu?: (event: HitPointerEvent) => void;
 };
@@ -137,7 +144,7 @@ export function IconButton(props: IconButtonProps): ReactNode {
           explicitFill ? undefined : props.disabled ? disabled.strokeWidth : root.strokeWidth
         }
         disabled={props.disabled}
-        focusable={!!props.onPress}
+        focusable={props.focusable !== false && !!props.onPress}
         autoFocus={props.autoFocus}
         focusId={props.focusId ?? `icon-button:${generatedId}`}
         onFocusChange={(next) => {
@@ -147,7 +154,14 @@ export function IconButton(props: IconButtonProps): ReactNode {
         onKeyDown={handleKey}
         onPress={props.onPress}
         onContextMenu={props.onContextMenu}
-        onHoverChange={props.tooltip ? setHoveredControl : undefined}
+        onHoverChange={
+          props.tooltip || props.onHoverChange
+            ? (next) => {
+                setHoveredControl(next);
+                props.onHoverChange?.(next);
+              }
+            : undefined
+        }
       />
       {artwork}
       {props.tooltip ? (

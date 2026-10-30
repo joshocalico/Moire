@@ -1,48 +1,12 @@
+/** The user's saved palettes, kept in one local-store snapshot with revision checks. */
 import os from "node:os";
 import path from "node:path";
 import { loadSnapshot, writeSnapshot } from "@moire/app-tools/local-store";
-export type RGB = { r: number; g: number; b: number };
+import { parseHex, rgbHex } from "./color";
+
 export type Swatch = { id: string; name: string; hex: string };
 export type Palette = { id: string; name: string; swatches: Swatch[] };
-export function parseHex(value: string): RGB {
-  const hex = value.trim().replace(/^#/, "");
-  const expanded = /^[0-9a-f]{3}$/i.test(hex)
-    ? hex
-        .split("")
-        .map((char) => char + char)
-        .join("")
-    : hex;
-  if (!/^[0-9a-f]{6}$/i.test(expanded)) throw new Error("Use a HEX color such as #BF5AF2 or #F80.");
-  return {
-    r: parseInt(expanded.slice(0, 2), 16),
-    g: parseInt(expanded.slice(2, 4), 16),
-    b: parseInt(expanded.slice(4, 6), 16),
-  };
-}
-export function rgbHex(rgb: RGB): string {
-  const values = [rgb.r, rgb.g, rgb.b];
-  if (values.some((value) => !Number.isInteger(value) || value < 0 || value > 255))
-    throw new Error("RGB channels must be whole numbers from 0 to 255.");
-  return (
-    "#" +
-    values
-      .map((value) => value.toString(16).padStart(2, "0"))
-      .join("")
-      .toUpperCase()
-  );
-}
-export function colorFill(rgb: RGB): number {
-  return (0xff000000 | (rgb.r << 16) | (rgb.g << 8) | rgb.b) >>> 0;
-}
-export function contrastText(rgb: RGB): number {
-  const linear = (value: number) => {
-    const s = value / 255;
-    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b) > 0.179
-    ? 0xff000000
-    : 0xffffffff;
-}
+
 function parseSwatch(value: unknown): Swatch {
   if (
     typeof value !== "object" ||

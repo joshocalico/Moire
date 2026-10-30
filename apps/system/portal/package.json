@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@moire/app-discovery": "workspace:*",
+    "@moire/app-tools": "workspace:*",
     "@moire/dbus": "workspace:*",
     "@moire/prefs": "workspace:*",
+    "@moire/sys": "workspace:*",
     "@moire/ui": "workspace:*",
     "react": "^19.0.0"
   },

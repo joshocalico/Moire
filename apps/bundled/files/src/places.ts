@@ -1,8 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { xdgUserDirectories } from "@moire/file-operations";
 
-export type PlaceIcon = "home" | "desktop" | "downloads" | "folder" | "file" | "image";
+export type PlaceIcon =
+  | "home"
+  | "desktop"
+  | "downloads"
+  | "folder"
+  | "document"
+  | "image"
+  | "music";
 
 export type FilePlace = {
   id: string;
@@ -10,6 +18,8 @@ export type FilePlace = {
   path: string;
   icon: PlaceIcon;
   builtIn: boolean;
+  /** Shown under Pinned on Home: the user's own places, and these built-ins until unpinned. */
+  pinned: boolean;
 };
 
 type StoredFavorite = {
@@ -20,7 +30,17 @@ type StoredFavorite = {
 type StoredPlaces = {
   version: 1;
   favorites: StoredFavorite[];
+  /** Built-in places the user took off Home's Pinned. */
+  unpinned?: string[];
 };
+
+/** Built-in places pinned on Home until the user unpins them. */
+const PINNED_BY_DEFAULT: ReadonlySet<string> = new Set([
+  "documents",
+  "pictures",
+  "downloads",
+  "music",
+]);
 
 function configHome(): string {
   return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
@@ -30,26 +50,10 @@ function placesFile(): string {
   return path.join(configHome(), "moire", "files-places.json");
 }
 
-function xdgUserDirectories(): Map<string, string> {
-  const result = new Map<string, string>();
-  try {
-    const source = fs.readFileSync(path.join(configHome(), "user-dirs.dirs"), "utf8");
-    for (const line of source.split(/\r?\n/)) {
-      const match = /^XDG_([A-Z]+)_DIR="(.*)"$/.exec(line.trim());
-      if (!match) continue;
-      const expanded = match[2]!.replace(/^\$HOME(?=\/|$)/, os.homedir());
-      result.set(match[1]!, path.resolve(expanded));
-    }
-  } catch {
-    // user-dirs.dirs is optional; conventional locations remain useful.
-  }
-  return result;
-}
-
 export function builtInPlaces(): FilePlace[] {
   const home = os.homedir();
   const userDirs = xdgUserDirectories();
-  return [
+  const places: Omit<FilePlace, "pinned">[] = [
     { id: "home", label: "Home", path: home, icon: "home", builtIn: true },
     {
       id: "desktop",
@@ -69,7 +73,7 @@ export function builtInPlaces(): FilePlace[] {
       id: "documents",
       label: "Documents",
       path: userDirs.get("DOCUMENTS") ?? path.join(home, "Documents"),
-      icon: "file",
+      icon: "document",
       builtIn: true,
     },
     {
@@ -79,7 +83,15 @@ export function builtInPlaces(): FilePlace[] {
       icon: "image",
       builtIn: true,
     },
+    {
+      id: "music",
+      label: "Music",
+      path: userDirs.get("MUSIC") ?? path.join(home, "Music"),
+      icon: "music",
+      builtIn: true,
+    },
   ];
+  return places.map((place) => ({ ...place, pinned: PINNED_BY_DEFAULT.has(place.id) }));
 }
 
 function favoriteId(favoritePath: string): string {
@@ -91,7 +103,7 @@ function favoriteLabel(label: string, favoritePath: string): string {
 }
 
 export function loadPlaces(): FilePlace[] {
-  const builtIns = builtInPlaces();
+  let builtIns = builtInPlaces();
   const usedPaths = new Set(builtIns.map((place) => place.path));
   const favorites: FilePlace[] = [];
   try {
@@ -99,6 +111,11 @@ export function loadPlaces(): FilePlace[] {
     if (stored.version !== 1 || !Array.isArray(stored.favorites)) {
       return builtIns;
     }
+    const unpinned = Array.isArray(stored.unpinned) ? stored.unpinned : [];
+    builtIns = builtIns.map((place) => ({
+      ...place,
+      pinned: place.pinned && !unpinned.includes(place.id),
+    }));
     for (const candidate of stored.favorites) {
       if (!candidate || typeof candidate.path !== "string" || typeof candidate.label !== "string") {
         continue;
@@ -112,6 +129,7 @@ export function loadPlaces(): FilePlace[] {
         path: favoritePath,
         icon: "folder",
         builtIn: false,
+        pinned: true,
       });
     }
   } catch {
@@ -129,6 +147,9 @@ export function savePlaces(places: readonly FilePlace[]): void {
         label: favoriteLabel(place.label, place.path),
         path: place.path,
       })),
+    unpinned: places
+      .filter((place) => place.builtIn && PINNED_BY_DEFAULT.has(place.id) && !place.pinned)
+      .map((place) => place.id),
   };
   const destination = placesFile();
   const temporary = `${destination}.tmp`;
@@ -137,7 +158,7 @@ export function savePlaces(places: readonly FilePlace[]): void {
     fs.writeFileSync(temporary, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
     fs.renameSync(temporary, destination);
   } catch (error) {
-    console.warn("[files] unable to save sidebar places", error);
+    console.warn("[files] unable to save places", error);
   }
 }
 
@@ -152,6 +173,7 @@ export function addFavorite(places: readonly FilePlace[], favoritePath: string):
       path: resolved,
       icon: "folder",
       builtIn: false,
+      pinned: true,
     },
   ];
 }

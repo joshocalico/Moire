@@ -19,7 +19,9 @@ export type LabelProps = FlexItemProps & {
   scale?: number;
   fontSize?: number;
   fontWeight?: "regular" | "medium" | "bold";
-  fontFamily?: "sans" | "mono" | "serif";
+  fontFamily?: "sans" | "mono" | "serif" | "display";
+  /** Extra advance after each glyph, in pixels (negative tightens). */
+  letterSpacing?: number;
   horizontalAlign?: "start" | "center" | "end";
   verticalAlign?: "start" | "center" | "end";
   wrap?: boolean;
@@ -28,7 +30,10 @@ export type LabelProps = FlexItemProps & {
   overflow?: "visible" | "clip" | "ellipsis";
 };
 
-type TextMeasureStyle = Pick<LabelProps, "scale" | "fontSize" | "fontWeight" | "fontFamily">;
+type TextMeasureStyle = Pick<
+  LabelProps,
+  "scale" | "fontSize" | "fontWeight" | "fontFamily" | "letterSpacing"
+>;
 
 function lineWidth(text: string, style: TextMeasureStyle): number {
   return measureTextBounds(text, style).width;
@@ -124,6 +129,7 @@ function intrinsicTextSize(props: LabelProps): { width: number; height: number }
     fontSize,
     fontWeight: props.fontWeight,
     fontFamily: props.fontFamily,
+    letterSpacing: props.letterSpacing,
   };
   if (props.wrap && props.width != null) {
     const measured = measureWrappedText(props.text, props.width, {
@@ -152,6 +158,7 @@ export function TextBlock(props: LabelProps): ReactNode {
     fontSize,
     fontWeight: props.fontWeight,
     fontFamily: props.fontFamily,
+    letterSpacing: props.letterSpacing,
   };
   const natural = intrinsicTextSize(props);
   const width = props.width ?? allocated?.width ?? natural.width;
@@ -209,6 +216,7 @@ export function TextBlock(props: LabelProps): ReactNode {
             fontSize={fontSize}
             fontWeight={props.fontWeight}
             fontFamily={props.fontFamily}
+            letterSpacing={props.letterSpacing}
           />
         );
       })}

@@ -15,7 +15,14 @@ export type DbusMessage = {
   destination?: string;
   sender?: string;
   signature?: string;
+  /** Header field UNIX_FDS: how many descriptors travel with this message. */
+  unixFds?: number;
   body?: unknown[];
+  /**
+   * Descriptors received with the message, in order; an `h` value in the body is an index here.
+   * Only a connection that negotiated descriptor passing receives them.
+   */
+  fds?: number[];
 };
 
 type TypeNode = {
@@ -362,6 +369,7 @@ const headerFieldCodes = {
   destination: [6, "s"],
   sender: [7, "s"],
   signature: [8, "g"],
+  unixFds: [9, "u"],
 } as const;
 
 export function encodeMessage(message: DbusMessage): Buffer {
@@ -370,7 +378,7 @@ export function encodeMessage(message: DbusMessage): Buffer {
   const headerWriter = new Writer(16);
   for (const [key, [code, fieldSignature]] of Object.entries(headerFieldCodes)) {
     const value = message[key as keyof DbusMessage];
-    if (value == null || value === "") continue;
+    if (value == null || value === "" || (key === "unixFds" && value === 0)) continue;
     headerWriter.align(8);
     headerWriter.u8(code);
     writeValue(
@@ -437,6 +445,7 @@ export function decodeMessage(buffer: Buffer): DbusMessage {
     destination: fields.get(6) as string | undefined,
     sender: fields.get(7) as string | undefined,
     signature,
+    unixFds: fields.get(9) as number | undefined,
     body: decodeBody(signature, buffer.subarray(bodyStart, bodyStart + bodyLength)),
   };
 }

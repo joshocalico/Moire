@@ -15,8 +15,18 @@ moire.overrideAttrs (old: {
     try { process.exit(await runPreLogin('${sessionExecutable}', '${sessionLabel}', ${if discoverUsers then "true" else "false"})); }
     catch { console.error('Moire pre-login failed.'); process.exit(1); }
     EOF
+    # Precompile the greeter so boot runs plain Node, with no tsx transpilation on
+    # tmpfs. Sources stay installed: the bundle resolves assets beside them.
+    ${pkgs.nodejs_22}/bin/node ${../scripts/bundle-sessions.mjs} $out/lib/moire \
+      $out/lib/moire/session-bundle pre-login=$out/lib/moire/native-login-entry.mts
+    # Render the greeter's silk backdrop once; runtime loads these exact pixels.
+    LD_LIBRARY_PATH=${lib.makeLibraryPath (old.buildInputs ++ [ pkgs.seatd ])} \
+      ${pkgs.nodejs_22}/bin/node \
+      --import $out/lib/moire/apps/system/compositor/node_modules/tsx/dist/loader.mjs \
+      $out/lib/moire/apps/system/greeter/src/native/silk.ts
+    test "$(find $out/lib/moire/packages/ui/precomputed/silk -name 'silk-*-greeter-*.rgba' -size 4096000c | wc -l)" = 1
     makeWrapper ${pkgs.nodejs_22}/bin/node $out/bin/moire-native-login-direct \
-      --add-flags "--import $out/lib/moire/apps/system/compositor/node_modules/tsx/dist/loader.mjs $out/lib/moire/native-login-entry.mts" \
+      --add-flags "$out/lib/moire/session-bundle/pre-login.mjs" \
       --set LIBSEAT_BACKEND logind \
       --set MOIRE_OUTPUT_PIPELINE_TRACE 1 \
       --unset MOIRE_INPUT_FIXTURE_TRACE --unset MOIRE_SCROLL_TRACE \
@@ -32,6 +42,8 @@ moire.overrideAttrs (old: {
     set -e
     test "$entryStatus" = 1
     ${pkgs.gnugrep}/bin/grep -Fx 'Moire pre-login failed.' entry-check.log
+    # The installed session entry must not load the runtime TypeScript loader.
+    if ${pkgs.gnugrep}/bin/grep -F tsx/dist/loader $out/bin/moire-native-login-direct; then exit 1; fi
     UV_THREADPOOL_SIZE=4 LD_LIBRARY_PATH=${lib.makeLibraryPath (old.buildInputs ++ [ pkgs.seatd ])} \
       ${pkgs.nodejs_22}/bin/node \
       --import $out/lib/moire/apps/system/compositor/node_modules/tsx/dist/loader.mjs \
@@ -52,6 +64,9 @@ moire.overrideAttrs (old: {
       packages/ui/src/platforms/wayland/rendering.smoke.ts \
       apps/system/greeter/src/native/wave.smoke.tsx \
       apps/system/greeter/src/native/user-picker.smoke.tsx \
+      apps/system/greeter/src/native/silk.smoke.ts \
+      packages/ui/src/backdrop/silk-cache.smoke.ts \
+      packages/ui/src/image/svg-icon.smoke.ts \
       apps/system/display-manager/src/native-greetd-client.smoke.ts; do
       UV_THREADPOOL_SIZE=4 MOIRE_UI_PLATFORM=headless MOIRE_UI_ACCELERATION=software \
         PATH=${lib.makeBinPath [ pkgs.ffmpeg pkgs.coreutils ]}:$PATH \

@@ -1,6 +1,8 @@
 /** Device-free public Window observer contract: tracing never owns editing or saving. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import React from "react";
 import {
   createInputFixtureRecorder,
@@ -24,6 +26,7 @@ import { HeadlessPlatform } from "@moire/ui/testing";
 import { ScreenshotApp } from "./main";
 import { documentImage, emptyDocument } from "./document";
 import { screenshotLayout } from "./layout";
+import { scratchHome } from "./testing";
 
 const manifest: InputFixtureManifest = {
   version: 2,
@@ -50,10 +53,13 @@ const manifest: InputFixtureManifest = {
 };
 class RetainedCpuPlatform extends HeadlessPlatform {
   override createWindow(opts: PlatformWindowOpts) {
-    return Object.assign(super.createWindow(opts), { presentScene: () => false });
+    return Object.assign(super.createWindow(opts), {
+      presentScene: () => false,
+    });
   }
 }
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const sandbox = scratchHome();
 await installUiFonts();
 let cases = 0;
 for (const retained of [false, true])
@@ -88,7 +94,11 @@ for (const retained of [false, true])
       const wrap = (content: React.ReactNode) => (
         <WidgetThemeProvider theme={theme}>{content}</WidgetThemeProvider>
       );
-      const image: ImageData = { width: 80, height: 50, rgba: new Uint8Array(80 * 50 * 4) };
+      const image: ImageData = {
+        width: 80,
+        height: 50,
+        rgba: new Uint8Array(80 * 50 * 4),
+      };
       for (let i = 0; i < image.rgba.length; i += 4) image.rgba.set([i % 251, 85, 194, 255], i);
       const latest = { current: emptyDocument() };
       const saves: { image: ImageData; target: string }[] = [];
@@ -248,9 +258,10 @@ for (const retained of [false, true])
             });
           for (let i = 0; i < 15; i++) await Promise.resolve();
           window.tick();
+          // A bare name saves as a PNG in the screenshot folder.
           assert.equal(
             saves.at(-1)?.target,
-            "?",
+            path.join(os.homedir(), "Pictures", "Screenshots", "?.png"),
             "diagnostic denial never blocks the real submit callback",
           );
           assert.equal(saves.length, 2);
@@ -266,3 +277,4 @@ for (const retained of [false, true])
 console.log(
   `input-trace: ${cases} public Window direct/retained/scale fixtures; actual path burst/submit/save pixels, missing-move crop + stationary rejection, recording/denied/throwing diagnostic observer preserved`,
 );
+sandbox.restore();

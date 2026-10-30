@@ -55,16 +55,20 @@ for (const observer of ["absent", "record", "throw"]) {
   assert.equal(keys[0]?.target, first);
   assert.equal(keys[0]?.event.text, "A");
   down(4, 30);
-  assert.equal(keys[1]?.event.type, "repeat");
+  assert.equal(
+    keys.length,
+    1,
+    "a press for a held key is not a wl_keyboard event; repeat is client-side",
+  );
   dispatch(wlKeyboard.events.leave.opcode, new MessageBuilder().uint(5).object(20));
   assert.equal(keyboard.modifiers().shift, true, "unrelated leave preserves the compositor mask");
   down(6, 48); // Unrelated leave must preserve actual first focus.
-  assert.equal(keys[2]?.target, first);
+  assert.equal(keys[1]?.target, first);
   dispatch(wlKeyboard.events.leave.opcode, new MessageBuilder().uint(7).object(10));
   assert.equal(held.size, 0);
   assert.equal(keyboard.modifiers().shift, false);
   down(8, 46);
-  assert.equal(keys.length, 3);
+  assert.equal(keys.length, 2);
   dispatch(
     wlKeyboard.events.enter.opcode,
     new MessageBuilder().uint(9).object(20).array(Buffer.alloc(0)),
@@ -75,14 +79,14 @@ for (const observer of ["absent", "record", "throw"]) {
     new MessageBuilder().uint(10).uint(0).uint(0).uint(0).uint(0),
   );
   down(11, 32);
-  assert.equal(keys[3]?.target, second);
-  assert.equal(keys[3]?.event.text, "d");
+  assert.equal(keys[2]?.target, second);
+  assert.equal(keys[2]?.event.text, "d");
   dispatch(
     wlKeyboard.events.enter.opcode,
     new MessageBuilder().uint(12).object(999).array(Buffer.alloc(0)),
   );
   down(13, 18);
-  assert.equal(keys.length, 4);
+  assert.equal(keys.length, 3);
   assert.equal(held.size, 0);
   assert.deepEqual(serials, [1, 2, 3, 4, 6, 9, 10, 11]);
   if (observer === "absent") assert.equal(focus.length, 0);
@@ -100,7 +104,7 @@ for (const observer of ["absent", "record", "throw"]) {
   keyboard.disconnect();
 }
 console.log(
-  "input-observer: keyboard wire/focus, compositor masks/repeat, unknown target and absent/throwing observers preserved (3 deterministic keymap fixture cases; no native XKB layout proof)",
+  "input-observer: keyboard wire/focus, compositor masks/duplicate-press rejection, unknown target and absent/throwing observers preserved (3 deterministic keymap fixture cases; no native XKB layout proof)",
 );
 
 // Production Window emit methods forward the identical object even if the sink throws.

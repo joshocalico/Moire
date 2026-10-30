@@ -36,6 +36,11 @@ export type RetainedClip = {
 /** Texture-backed primitive emitted without choosing a platform API. */
 export type RetainedLayer = {
   id: string;
+  /**
+   * Named external surface (see `GroupProps.surface`). `pixels` is a transparent placeholder; the
+   * platform substitutes the surface's own content and treats it as changing every frame.
+   */
+  surface?: string;
   pixels: Uint8Array;
   sourceWidth: number;
   sourceHeight: number;

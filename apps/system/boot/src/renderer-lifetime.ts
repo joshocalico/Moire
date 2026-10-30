@@ -62,3 +62,45 @@ export function createRendererLifetime() {
     },
   };
 }
+
+/**
+ * Standalone stage run directly by its service manager (no guardian): stopped by signals, and
+ * "scanout accepted" becomes systemd readiness so the next stage can be ordered after it.
+ */
+export function createStandaloneLifetime(notify: (socket: string) => void) {
+  let stopped = false;
+  let wake: () => void = () => {};
+  const stopRequested = new Promise<void>((resolve) => {
+    wake = resolve;
+  });
+  const stop = () => {
+    stopped = true;
+    wake();
+  };
+  process.once("SIGTERM", stop);
+  process.once("SIGINT", stop);
+  let notified = false;
+  const ready = () => {
+    if (notified) return;
+    notified = true;
+    const socket = process.env.NOTIFY_SOCKET;
+    if (socket) notify(socket);
+  };
+  return {
+    isStopped: () => stopped,
+    waitForStop: () => stopRequested,
+    /** Ask the stage to finish on its own (e.g. after handing the display over). */
+    stop,
+    async notifyScanoutAccepted(_feedback: KmsPresentationFeedback): Promise<void> {
+      ready();
+    },
+    /** Readiness even when nothing was presented, so dependents are never held up. */
+    notifyReady: ready,
+    close(): void {
+      stop();
+      ready();
+      process.removeListener("SIGTERM", stop);
+      process.removeListener("SIGINT", stop);
+    },
+  };
+}

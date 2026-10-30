@@ -49,6 +49,8 @@ export type CollectionItemProps = {
   onDoublePress?: () => void;
   onContextMenu?: (event: HitPointerEvent) => void;
   onFocusChange?: (focused: boolean) => void;
+  /** Pointer over the item, for hover presentation the children draw. */
+  onHoverChange?: (hovered: boolean) => void;
   /** Return true after handling a key to suppress built-in activation. */
   onKeyDown?: (event: HitKeyEvent) => boolean | void;
   dragSource?: Omit<DragSourceOptions, "width" | "height">;
@@ -120,7 +122,17 @@ export function CollectionItem(props: CollectionItemProps): ReactNode {
         onPointerDown={props.disabled || !props.dragSource ? undefined : drag.onPointerDown}
         onPointerMove={props.disabled || !props.dragSource ? undefined : drag.onPointerMove}
         onPointerUp={props.disabled || !props.dragSource ? undefined : drag.onPointerUp}
-        onPointerLeave={props.disabled || !props.dragSource ? undefined : drag.onPointerLeave}
+        onPointerEnter={
+          props.disabled || !props.onHoverChange ? undefined : () => props.onHoverChange?.(true)
+        }
+        onPointerLeave={
+          props.disabled || (!props.dragSource && !props.onHoverChange)
+            ? undefined
+            : () => {
+                if (props.dragSource) drag.onPointerLeave();
+                props.onHoverChange?.(false);
+              }
+        }
         onPress={props.disabled ? undefined : activate}
         onContextMenu={props.disabled ? undefined : props.onContextMenu}
         data={props.dropData}

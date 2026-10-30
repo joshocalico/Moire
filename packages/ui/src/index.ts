@@ -24,6 +24,7 @@ export {
 export {
   Window,
   hitTestDropData,
+  focusIdsInRect,
   requestActiveWindowRedraw,
   writeClipboardText,
   readClipboardText,
@@ -65,12 +66,14 @@ export {
   getUiScaleFactor,
   getFontEngine,
   FontEngine,
+  uiFontPath,
   type FontFamily,
   type FontWeight,
   type TextStyle,
 } from "./font/index";
 export { layoutFlex, type FlexChildSpec, type FlexContainerOpts } from "./layout/index";
 export { themePalette, getTheme, loadTheme, hexToArgb } from "./theme";
+export { mixColor, colorWithAlpha, foregroundOn } from "./theme-families/color";
 export type { MoireTheme, ThemePalette, MoireTokens } from "./theme";
 export {
   createSelectionState,
@@ -101,6 +104,7 @@ export {
   createLoopValue,
   useAnimatedValue,
   useDampedValue,
+  useEntrance,
   useOscillation,
   useLoop,
   getMotionActivity,
@@ -109,6 +113,8 @@ export {
   type AnimationValue,
   type AnimatedValueOptions,
   type DampedValueOptions,
+  type EntranceValues,
+  type EntranceOptions,
   type OscillationOptions,
   type OwnedAnimationValue,
   type LoopOptions,
@@ -123,6 +129,16 @@ export {
 
 // Image loading
 export { loadImage, getCachedImage, clearImageCache, type ImageData } from "./image/load";
+export { decodeImage, imageSize, sniffImage, type ImageFormat } from "./image/decode";
+export {
+  cachedThumbnail,
+  requestFontSample,
+  requestThumbnail,
+  setThumbnailDiskCache,
+  type ThumbnailRequest,
+  type ThumbnailResult,
+} from "./image/thumbnails";
+export { fontNames, parseFontFile, type FontSampleLine } from "./font/sample";
 
 // Theme design tokens (re-exported for widget consumers)
 export { TYPE_ROLES, SPACE } from "@moire/theme";
@@ -174,6 +190,7 @@ export {
   Toggle,
   Slider,
   TextField,
+  isEditingText,
   TextArea,
   SearchField,
   Breadcrumbs,
@@ -195,6 +212,7 @@ export {
   contextMenuSurfaceSize,
   OpenWithPicker,
   Pressable,
+  PointerArea,
   ImageWidget,
   Icon,
   applicationIcon,
@@ -217,8 +235,22 @@ export {
   Pagination,
   PropertyList,
   NavigationSidebar,
+  NavigationRail,
   SegmentedControl,
+  IconSegmentedControl,
   RadioGroup,
+  FilterChip,
+  ChipGroup,
+  filterChipWidth,
+  filterChipHeight,
+  TokenField,
+  SelectionBar,
+  selectionBarHeight,
+  FileTile,
+  fileTileHeight,
+  ItemCard,
+  HoverActions,
+  hoverActionsWidth,
   Badge,
   Banner,
   Spinner,
@@ -228,6 +260,8 @@ export {
   measureTerminalGrid,
   StatusBar,
   CodeView,
+  codeLanguageFor,
+  MarkdownView,
   LineChart,
   AreaChart,
   BarChart,
@@ -310,6 +344,8 @@ export type {
   SliderProps,
   TextFieldProps,
   TextAreaProps,
+  TextAreaCommand,
+  TextRange,
   TextFieldSlot,
   SearchFieldProps,
   BreadcrumbSegment,
@@ -344,6 +380,7 @@ export type {
   OpenWithChoice,
   OpenWithPickerProps,
   PressableProps,
+  PointerAreaProps,
   ImageWidgetProps,
   ImageFit,
   IconProps,
@@ -374,10 +411,28 @@ export type {
   NavigationSidebarProps,
   NavigationSidebarSection,
   NavigationSidebarItem,
+  NavigationRailProps,
+  NavigationRailSection,
+  NavigationRailItem,
+  NavigationRailAction,
   SegmentedControlProps,
   SegmentedControlOption,
+  IconSegmentedControlProps,
+  IconSegmentedControlOption,
   RadioGroupProps,
   RadioOption,
+  FilterChipProps,
+  ChipGroupProps,
+  ChipGroupItem,
+  TokenFieldProps,
+  TokenFieldToken,
+  TokenFieldCompletion,
+  SelectionBarProps,
+  SelectionBarAction,
+  FileTileProps,
+  ItemCardProps,
+  HoverActionsProps,
+  HoverAction,
   BadgeProps,
   BadgeTone,
   BannerProps,
@@ -392,6 +447,7 @@ export type {
   StatusBarProps,
   CodeViewProps,
   CodeLanguage,
+  MarkdownViewProps,
   ChartPoint,
   ChartSeries,
   ChartHover,
@@ -409,6 +465,66 @@ export type {
 } from "./widgets/index";
 
 export { ContentCard, ScrollColumn } from "./widgets/content-flow";
+export { Entrance, type EntranceProps } from "./widgets/entrance";
+export { bannerHeight } from "./widgets/feedback";
+export { Avatar, avatarColor, avatarInitials, type AvatarProps } from "./widgets/avatar";
+export {
+  ColorBands,
+  DesktopPreview,
+  type DesktopPreviewPalette,
+  type DesktopPreviewProps,
+  type DesktopPreviewWallpaper,
+} from "./widgets/desktop-preview";
+export { IconTile, isDarkPalette, type IconTileProps } from "./widgets/icon-tile";
+export {
+  OptionCard,
+  PictureOptions,
+  optionCardLabelHeight,
+  pictureOptionsHeight,
+  type OptionCardProps,
+  type PictureOption,
+  type PictureOptionsProps,
+} from "./widgets/option-card";
+export { PageHero, pageHeroHeight, type PageHeroProps } from "./widgets/page-hero";
+export {
+  SettingsSection,
+  settingsRowOffset,
+  settingsSectionHeight,
+  type SettingControl,
+  type SettingRevealHandlers,
+  type SettingRowSpec,
+  type SettingsSectionProps,
+  type SettingsSectionSpec,
+} from "./widgets/setting-row";
+export {
+  SideSheet,
+  sideSheetBodyHeight,
+  sideSheetWidth,
+  type SideSheetProps,
+} from "./widgets/side-sheet";
+export {
+  SignalStrength,
+  signalBars,
+  signalStrengthLabel,
+  type SignalStrengthProps,
+} from "./widgets/signal-strength";
+export { StatusTile, statusTileHeight, type StatusTileProps } from "./widgets/status-tile";
+export {
+  SwatchPicker,
+  swatchPickerSize,
+  swatchesThatFit,
+  type Swatch,
+  type SwatchPickerProps,
+} from "./widgets/swatch-picker";
+export {
+  AppHeaderBar,
+  AppStatusLine,
+  APP_HEADER_HEIGHT,
+  APP_STATUS_HEIGHT,
+  appChromeBody,
+  type AppHeaderBarProps,
+  type AppStatusLineProps,
+} from "./widgets/app-chrome";
 export {
   DocumentEditor,
   SelectionToolbar,
@@ -437,10 +553,14 @@ export type {
 export {
   WindowFrame,
   WindowHeader,
+  WindowControls,
+  WindowMoveArea,
+  windowControlSize,
   AdaptivePanes,
   CollectionList,
   CollectionRow,
   PlaybackBar,
+  MediaGlyph,
   playbackBarHeight,
   formatPlaybackTime,
 } from "./widgets/index";
@@ -452,6 +572,7 @@ export type {
   CollectionListProps,
   CollectionRowProps,
   PlaybackBarProps,
+  MediaSymbol,
 } from "./widgets/index";
 export type { ContentCardProps, ScrollColumnProps } from "./widgets/content-flow";
 export { BrandMark, type BrandMarkProps } from "./widgets/brand-mark";
@@ -464,6 +585,13 @@ export {
   type SilkVariant,
   type SilkPalette,
 } from "./backdrop/silk";
+export {
+  defaultSilkBackdropCacheDirectory,
+  loadSilkBackdrop,
+  readPrecomputedSilkBackdrop,
+  silkBackdropCacheKey,
+  writeSilkBackdropCache,
+} from "./backdrop/silk-cache";
 export { Backdrop, type BackdropProps } from "./backdrop/backdrop";
 export { windowBackdropMotion, observeWindowBackdropMotion } from "./backdrop/window-motion";
 export type { RetainedMotionAdmission } from "./retained-motion-admission";
@@ -472,3 +600,60 @@ export {
   resolveBackdropMotion,
   type BackdropMotion,
 } from "./backdrop/placement";
+export {
+  registerSceneSurface,
+  sceneSurfaceEntry,
+  hasSceneSurfaces,
+  setSceneSurfaceSupport,
+  sceneSurfacesAvailable,
+  type SceneGl,
+  type SceneSurfaceFactory,
+  type SceneSurfaceInstance,
+  type SceneSurfaceOptions,
+} from "./scene/surface";
+export { SceneSurface, type SceneSurfaceProps } from "./scene/scene-surface";
+export { silkSceneSurface, type SilkSceneSurfaceOptions } from "./scene/silk-surface";
+export {
+  SilkRenderer,
+  SilkMotion,
+  SILK_ASPECT,
+  SILK_SAMPLES,
+  SILK_TIMELINE,
+  SILK_SETTLED_TIME,
+  silkSettledState,
+  type SilkFrame,
+  type SilkMotionState,
+  type SilkGl,
+} from "./scene/silk/index";
+
+// Image statistics for the inspector: histogram and dominant colours
+export { cachedImageStats, requestImageStats, type ImageStatsRequest } from "./image/thumbnails";
+export type { ImageStats } from "./image/image-stats";
+export {
+  propertyListHeight,
+  MetaPill,
+  metaPillWidth,
+  metaPillHeight,
+  TagChip,
+  tagChipWidth,
+  tagChipHeight,
+  layoutTagChips,
+  ColourStrip,
+  colourStripWidth,
+  Histogram,
+  StackedBar,
+  stackedBarHeight,
+  PageStepper,
+  pageStepperWidth,
+  pageStepperHeight,
+  type PropertyListDensity,
+  type MetaPillProps,
+  type TagChipProps,
+  type TagChipVariant,
+  type TagChipLayoutItem,
+  type ColourStripProps,
+  type HistogramProps,
+  type StackedBarProps,
+  type StackedBarSegment,
+  type PageStepperProps,
+} from "./widgets/index";

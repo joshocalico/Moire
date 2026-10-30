@@ -5,18 +5,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { PNG } from "pngjs";
-import React, { useState, type ReactNode } from "react";
+import React, { type ReactNode } from "react";
 import {
   Application,
+  OverlayHost,
   Window,
-  Surface,
-  Label,
-  TextField,
-  Button,
-  Row,
   setUiScaleFactor,
-  getUiScaleFactor,
-  usePalette,
   type WindowSize,
   type ImageData,
 } from "@moire/ui";
@@ -52,7 +46,10 @@ export async function runTool(
       signal,
       // Archive listings must preserve Unicode member names even under a C locale.
       env: options.utf8Locale
-        ? { ...process.env, LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8" }
+        ? {
+            ...process.env,
+            LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
+          }
         : undefined,
     });
     return result.stdout;
@@ -95,13 +92,48 @@ export type Preview = {
   bitmap: ImageData;
   dispose: () => Promise<void>;
 };
-export async function privatePreview(
+/** Private preview work (rendering into or removing a preview directory) still in flight. */
+const previewWork = new Set<Promise<unknown>>();
+function trackPreviewWork<T>(work: Promise<T>): Promise<T> {
+  previewWork.add(work);
+  const done = () => previewWork.delete(work);
+  work.then(done, done);
+  return work;
+}
+/**
+ * Resolve once no private preview is rendering or being removed. A view that unmounts aborts its
+ * render and disposes its preview without awaiting either; whoever then removes the temporary
+ * directory (a test fixture) waits here first, or it races the late writes and rmdir fails with
+ * ENOTEMPTY.
+ */
+export async function privatePreviewsSettled(): Promise<void> {
+  // setImmediate runs after the microtask queue drains, so a settled render's caller has had
+  // its chance to dispose (or adopt) the result before the set is checked again.
+  do {
+    await Promise.allSettled([...previewWork]);
+    await new Promise((resolve) => setImmediate(resolve));
+  } while (previewWork.size);
+}
+/**
+ * Render a PNG into a private temporary directory with `make` and decode it. An aborted `signal`
+ * refuses before the directory is created, so an unmounted view leaves nothing behind.
+ */
+export function privatePreview(
   make: (file: string, directory: string) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<Preview> {
+  return trackPreviewWork(renderPrivatePreview(make, signal));
+}
+async function renderPrivatePreview(
+  make: (file: string, directory: string) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<Preview> {
+  signal?.throwIfAborted();
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "moire-preview-"));
   const file = path.join(directory, "preview.png");
   try {
     await make(file, directory);
+    signal?.throwIfAborted();
     const png = await fs.readFile(file);
     if (
       png.length < 24 ||
@@ -118,85 +150,18 @@ export async function privatePreview(
       width,
       height,
       bitmap: { rgba: new Uint8Array(decoded.data), width, height },
-      dispose: () => fs.rm(directory, { recursive: true, force: true }),
+      dispose: () => trackPreviewWork(fs.rm(directory, { recursive: true, force: true })),
     };
   } catch (error) {
     await fs.rm(directory, { recursive: true, force: true });
     throw error;
   }
 }
-export function FileHeader(props: {
-  width: number;
-  value: string;
-  onOpen: (value: string) => void;
-  disabled?: boolean;
-}): ReactNode {
-  const ui = getUiScaleFactor();
-  const [draft, setDraft] = useState(props.value);
-  return (
-    <Row width={props.width} height={44 * ui} padding={6 * ui} gap={6 * ui}>
-      <TextField
-        width={Math.max(100 * ui, props.width - 90 * ui)}
-        height={32 * ui}
-        value={draft}
-        disabled={props.disabled}
-        autoFocus
-        selectAllOnFocus
-        onChange={setDraft}
-        onSubmit={() => props.onOpen(draft)}
-        placeholder="Local path or file URL"
-      />
-      <Button
-        width={66 * ui}
-        height={32 * ui}
-        disabled={props.disabled}
-        label="Open"
-        onPress={() => props.onOpen(draft)}
-      />
-    </Row>
-  );
-}
-export function AppFrame(
-  props: WindowSize & {
-    header?: ReactNode;
-    controls?: ReactNode;
-    controlsHeight?: number;
-    status: string;
-    children?: ReactNode;
-  },
-): ReactNode {
-  const ui = getUiScaleFactor();
-  const pal = usePalette();
-  const controlsHeight = props.controlsHeight ?? 44 * ui;
-  const bodyY = 44 * ui + controlsHeight;
-  return (
-    <Surface width={props.width} height={props.height} fill={pal.bg}>
-      {props.header}
-      <Surface y={44 * ui} width={props.width} height={controlsHeight} fill={pal.panel}>
-        {props.controls}
-      </Surface>
-      <Surface
-        y={bodyY}
-        width={props.width}
-        height={Math.max(1, props.height - bodyY - 30 * ui)}
-        clip
-      >
-        {props.children}
-      </Surface>
-      <Label
-        x={10 * ui}
-        y={props.height - 28 * ui}
-        width={props.width - 20 * ui}
-        height={24 * ui}
-        text={props.status}
-        color={pal.muted}
-        fontSize={11}
-        overflow="ellipsis"
-        maxLines={1}
-      />
-    </Surface>
-  );
-}
+/**
+ * Open the app's window and render it. The content draws the window's titlebar itself (an
+ * AppFrame with a `title`, or AppHeaderBar, given `window`), so the window opens undecorated
+ * unless `decorated: true` asks the compositor for its own titlebar.
+ */
 export async function runApp(
   name: string,
   appId: string,
@@ -211,10 +176,11 @@ export async function runApp(
     appId,
     width: Math.round((options.width ?? 860) * settings.uiScale),
     height: Math.round((options.height ?? 620) * settings.uiScale),
-    decorated: options.decorated,
+    decorated: options.decorated ?? false,
     resizable: true,
   });
-  window.setContent((size) => render(size, window));
+  // Tooltips and other top-layer content paint above the whole app, not under later rows.
+  window.setContent((size) => <OverlayHost {...size}>{render(size, window)}</OverlayHost>);
   window.onClose(() => app.quit());
   app.addWindow(window);
   await app.run();
@@ -226,5 +192,45 @@ export function startMain(url: string, work: () => Promise<void>): void {
       process.exitCode = 1;
     });
 }
+export {
+  AppFrame,
+  Card,
+  CenteredMessage,
+  FileHeader,
+  IconTile,
+  OpenButton,
+  OpenFileState,
+  OpenPathRow,
+  RecentFiles,
+  TitleActions,
+  ToolButton,
+  ToolIcon,
+  ToolReadout,
+  ToolRow,
+  ToolSeparator,
+  appFrameBody,
+  cardContent,
+  clearRecentFiles,
+  countRecentFiles,
+  loadRecentFiles,
+  recentFilesHeight,
+  rememberRecentFile,
+  type AppFrameProps,
+  type ToolIconName,
+} from "./frame";
+export { FileChooser, type FileChooserMode, type FileChooserProps } from "./file-chooser";
+export { formatBytes, formatTimeAgo, tidyPath } from "./format";
+export { isTimeZone, localTimeZone, wallClock, wallClockTimestamp } from "./time-zones";
+export { freePath, homeFolder, moveToTrash, showInFiles } from "./places";
 export { PlaybackSession, type PlaybackState } from "./playback";
 export { PlayerApp } from "./player";
+export { ZOOM_STEP, type FitMode, type Placement, type ZoomLimits, type ZoomView } from "./zoom";
+export {
+  ZoomControls,
+  ZoomSurface,
+  useShownSize,
+  useZoom,
+  zoomShortcuts,
+  type Zoom,
+} from "./zoom-view";
+export { appSettingsPath, loadAppSettings, saveAppSettings } from "./app-settings";

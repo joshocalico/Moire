@@ -55,7 +55,7 @@ export function createPrefsWatcher(onChange?: (theme: MoireTheme) => void): Pref
   const signature = (): string => {
     try {
       const s = loadSettings();
-      return `${s.dark}|${s.themeFamily}|${s.uiScale}|${s.reducedMotion}|${fileStamp(activeThemePath())}|${current.name}`;
+      return `${s.dark}|${s.themeFamily}|${s.uiScale}|${s.reducedMotion}|${s.panelFullWidth}|${s.panelIconsOnly}|${fileStamp(activeThemePath())}|${current.name}`;
     } catch {
       return String(fileStamp(activeThemePath()));
     }
@@ -78,7 +78,7 @@ export function createPrefsWatcher(onChange?: (theme: MoireTheme) => void): Pref
       try {
         const settings = loadSettings();
         const next = loadRuntimeTheme();
-        const sig = `${settings.dark}|${settings.themeFamily}|${settings.uiScale}|${settings.reducedMotion}|${tm}|${next.name}`;
+        const sig = `${settings.dark}|${settings.themeFamily}|${settings.uiScale}|${settings.reducedMotion}|${settings.panelFullWidth}|${settings.panelIconsOnly}|${tm}|${next.name}`;
         if (sig === lastSig) return false;
         lastSig = sig;
         current = next;
@@ -111,8 +111,6 @@ export {
 } from "./store";
 export {
   applySettings,
-  applyVolume,
-  readSystemVolume,
   writeActiveTheme,
   themeForSettings,
   applyGtkAppearance,
@@ -120,12 +118,125 @@ export {
   type ApplyResult,
 } from "./apply";
 export {
-  createAudioStatusAdapter,
-  executeAudioCommand,
-  type AudioStatus,
-  type AudioReady,
-  type AudioSink,
-  type AudioStatusAdapter,
-  type AudioCommandExecutor,
-  type AudioCommandResult,
-} from "./audio-status";
+  DEFAULT_KEYBOARD_SETTINGS,
+  DEFAULT_POINTER_SETTINGS,
+  MAX_KEYBOARD_LAYOUTS,
+  REPEAT_DELAY_RANGE,
+  REPEAT_RATE_RANGE,
+  isXkbName,
+  keyboardLayoutId,
+  normalizeKeyboardSettings,
+  normalizePointerSettings,
+  type AccelProfile,
+  type CapsLockBehavior,
+  type KeyboardLayoutRef,
+  type KeyboardSettings,
+  type LayoutSwitchShortcut,
+  type PointerSettings,
+  type TouchpadClickMethod,
+  type TouchpadScrollMethod,
+} from "./input";
+export {
+  createInputSettingsWatcher,
+  loadInputSettings,
+  updateKeyboardSettings,
+  updatePointerSettings,
+  type InputSettings,
+  type InputSettingsWatcher,
+} from "./input-settings";
+export {
+  DEFAULT_REGION_SETTINGS,
+  formatCalendarDate,
+  formatClockTime,
+  normalizeRegionSettings,
+  resolveFirstDayOfWeek,
+  resolveFormatLocale,
+  systemTimeZone,
+  type ClockFormat,
+  type DateFormat,
+  type FirstDayOfWeek,
+  type FormatOptions,
+  type RegionSettings,
+} from "./region";
+export {
+  createLiveClock,
+  loadRegionSettings,
+  updateRegionSettings,
+  type LiveClock,
+} from "./region-settings";
+export {
+  DEFAULT_POWER_SETTINGS,
+  POWER_CHOICES,
+  applyPowerPatch,
+  normalizePowerSettings,
+  type LidCloseAction,
+  type PowerButtonAction,
+  type PowerProfile,
+  type PowerSettings,
+  type PowerSettingsPatch,
+  type PowerSourceTimeouts,
+  type SleepBlockerGrant,
+} from "./power";
+export { loadPowerSettings, updatePowerSettings } from "./power-settings";
+export {
+  MAX_LAUNCHER_PINS,
+  isLauncherPinned,
+  moveLauncherPin,
+  normalizeLauncherPins,
+  orderLauncherApps,
+  pinLauncherApp,
+  toggleLauncherPin,
+  unpinLauncherApp,
+} from "./launcher";
+export { loadLauncherPins, updateLauncherPins } from "./launcher-settings";
+export {
+  DEFAULT_DND_SCHEDULE,
+  DEFAULT_NOTIFICATION_RULE,
+  dndScheduleActive,
+  dndScheduleEnd,
+  minutesOfDay,
+  normalizeDndSchedule,
+  normalizeNotificationRules,
+  notificationAppKey,
+  notificationRuleFor,
+  withNotificationRule,
+  type DoNotDisturbSchedule,
+  type NotificationRule,
+  type NotificationRules,
+} from "./notifications";
+export {
+  DEFAULT_AUTO_DARK,
+  DEFAULT_NIGHT_LIGHT,
+  NEUTRAL_KELVIN,
+  WARMEST_KELVIN,
+  autoDarkState,
+  clockMinutes,
+  clockTime,
+  localClock,
+  nightLightKelvin,
+  nightLightScale,
+  nightLightSchedule,
+  nightLightState,
+  normalizeAutoDark,
+  normalizeNightLight,
+  parseIso6709,
+  readZoneLocation,
+  scheduleState,
+  sunTimes,
+  zoneCoordinates,
+  type AutoDarkSettings,
+  type ClockTime,
+  type Coordinates,
+  type DaySchedule,
+  type DaylightContext,
+  type NightLightSettings,
+  type ScheduleState,
+  type SunTimes,
+} from "./daylight";
+export {
+  DEFAULT_MANUAL_PROXY,
+  isProxyAddress,
+  normalizeManualProxy,
+  proxyEnvironment,
+  type ManualProxySettings,
+} from "./network-proxy";

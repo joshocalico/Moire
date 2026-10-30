@@ -12,6 +12,8 @@ export type DesktopEntry = {
   terminal: boolean;
   categories: string[];
   mimeTypes?: string[];
+  /** The window class the app's windows carry, often its reverse-DNS app id. */
+  startupWMClass?: string;
 };
 
 function parseLocaleKey(map: Map<string, string>, base: string): string | undefined {
@@ -85,6 +87,7 @@ export function parseDesktopFile(
     terminal: keys.get("Terminal") === "true",
     categories: (keys.get("Categories") ?? "").split(";").filter(Boolean),
     mimeTypes: (keys.get("MimeType") ?? "").split(";").filter(Boolean),
+    startupWMClass: keys.get("StartupWMClass") || undefined,
   };
 }
 

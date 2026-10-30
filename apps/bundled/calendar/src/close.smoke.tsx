@@ -17,7 +17,9 @@ import {
   type WidgetTheme,
 } from "@moire/ui";
 import { HeadlessPlatform } from "@moire/ui/testing";
-import { CalendarApp, CalendarEventEditor } from "./main";
+import { CalendarApp } from "./main";
+import { newDraft, type DraftKey, type EventDraft } from "./model";
+import { CalendarEventEditor } from "./views/editor";
 import { CalendarStore } from "./events";
 class RetainedCpuPlatform extends HeadlessPlatform {
   override createWindow(options: Parameters<HeadlessPlatform["createWindow"]>[0]) {
@@ -69,7 +71,10 @@ function letterCounters(
   return counters;
 }
 
-type GlyphProbe = { points: Array<[number, number]>; holes: Array<[number, number]> };
+type GlyphProbe = {
+  points: Array<[number, number]>;
+  holes: Array<[number, number]>;
+};
 type GlyphMode = "body" | "control";
 const glyphCache = new Map<string, GlyphProbe>();
 
@@ -116,7 +121,13 @@ function locateText(
   mode: GlyphMode = "body",
 ) {
   const rgb = [style.color & 255, (style.color >>> 8) & 255, (style.color >>> 16) & 255];
-  const cacheKey = JSON.stringify({ text, style, probeWidth, mode, scale: getUiScaleFactor() });
+  const cacheKey = JSON.stringify({
+    text,
+    style,
+    probeWidth,
+    mode,
+    scale: getUiScaleFactor(),
+  });
   let glyph = glyphCache.get(cacheKey);
   if (!glyph) {
     const probeHeight = Math.round(180 * getUiScaleFactor());
@@ -201,7 +212,10 @@ function locateText(
       const at = (y * width + x) * 4;
       if (frame[at] !== rgb[0] || frame[at + 1] !== rgb[1] || frame[at + 2] !== rgb[2]) continue;
       if (glyphMatches(frame, width, height, rgb, glyph, x, y))
-        return { x: x + (firstBoundX + lastX) / 2 - fx, y: y + (firstBoundY + lastY) / 2 - fy };
+        return {
+          x: x + (firstBoundX + lastX) / 2 - fx,
+          y: y + (firstBoundY + lastY) / 2 - fy,
+        };
     }
   return null;
 }
@@ -288,12 +302,9 @@ try {
             let saves = 0,
               cancels = 0;
             function Harness() {
-              const [draft, setDraft] = useState({
+              const [draft, setDraft] = useState<EventDraft>({
+                ...newDraft("2026-10-03", "UTC"),
                 title: "Draft",
-                date: "2026-10-03",
-                start: "09:00",
-                end: "10:00",
-                timeZone: "UTC",
                 notes: "Review draft notes",
               });
               return (
@@ -302,7 +313,9 @@ try {
                   height={height}
                   draft={draft}
                   status="Scroll or use Page Up / Page Down for all fields."
-                  onChange={(key, value) => setDraft((old) => ({ ...old, [key]: value }))}
+                  onChange={(key: DraftKey, value: string) =>
+                    setDraft((old) => ({ ...old, [key]: value }))
+                  }
                   onSave={() => saves++}
                   onCancel={() => cancels++}
                 />
