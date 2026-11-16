@@ -1,6 +1,7 @@
 # Moire polkit authentication agent
 
-Status, 2026-10-11: **approved by Josh; being built.**
+Status: **built and in use.** Approved 2026-10-11; built through 2026-10-31 and checked in the VM
+through R68 (see "Decided on 2026-10-31" below).
 
 Decided on 2026-10-11:
 
