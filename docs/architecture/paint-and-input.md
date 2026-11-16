@@ -42,7 +42,7 @@ SSD hit or receive a click-through.
 
 Software-rendered overlay frames store premultiplied ARGB while scene colors
 are specified as straight ARGB. Translucent primitives must preserve frame
-alpha; forcing an initially transparent pixel opaque turns dismiss veils into
+alpha; forcing an initially transparent pixel opaque turns dismiss covers into
 black fullscreen rectangles when composited later.
 
 ## Pointer motion

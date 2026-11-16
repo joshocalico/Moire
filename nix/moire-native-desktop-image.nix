@@ -12,7 +12,7 @@ let
     inherit pkgs moire; inherit (pkgs) lib;
     networkControl = "interactive";
   };
-  sessionLabel = "Moire desktop · C63 R65 polkit";
+  sessionLabel = "Moire desktop · C63 R89 boot";
   greeter = import ./moire-native-login.nix {
     inherit pkgs moire;
     inherit (pkgs) lib;
@@ -23,13 +23,16 @@ let
   machine = base.inputs.nixpkgs.lib.nixosSystem {
     inherit system;
     specialArgs = { inherit moire; };
-    modules = [ ./moire-pam-test.nix ./moire-native-login-probe.nix ./moire-native-boot.nix ./moire-settings-services.nix ./moire-power-services.nix ./moire-network-services.nix ./moire-sound-services.nix ./moire-portal-services.nix ./moire-dm.nix ({ config, lib, ... }: {
+    modules = [ ./moire-pam-test.nix ./moire-native-login-probe.nix ./moire-native-boot.nix ./moire-settings-services.nix ./moire-power-services.nix ./moire-network-services.nix ./moire-sound-services.nix ./moire-portal-services.nix ./moire-dm.nix ./moire-testing.nix ({ config, lib, ... }: {
       image.baseName = lib.mkOverride 30 "moire-aarch64-native-desktop";
       isoImage.volumeID = lib.mkOverride 40 "MOIRE_NATIVE_DESK";
       environment.systemPackages = [ desktop ];
       # This image is the UTM VM image, which runs with `-audio none`: PipeWire gets null test
       # devices. An image for real hardware sets this false (or leaves it out; it defaults off).
       moire.sound.testDevices = true;
+      # TEST IMAGE ONLY: the guest display scripts may change modes and layouts from a root
+      # shell while root grants it (nix/moire-testing.nix). Asserted off without moire-pam-test.
+      moire.testing.displayControl = true;
       # AccountsService (guest metadata for the user picker and Settings) comes from
       # moire-settings-services.nix; PAM remains greetd-owned.
       assertions = [
@@ -115,10 +118,24 @@ let
           "nix/moire-settings-services.nix"
           "nix/moire-settings.rules"
           "nix/moire-admin.rules"
+          "nix/moire-accounts.rules"
+          "nix/moire-accounts.policy"
+          "nix/moire-accounts-dbus.conf"
+          "nix/moire-accounts-package.nix"
+          "apps/system/management-service/src/account-admin.ts"
+          "apps/system/management-service/src/account-admin-entry.ts"
+          "apps/system/management-service/src/accounts-service.ts"
+          "apps/system/management-service/src/sha512-crypt.ts"
+          "packages/system-management/src/account-admin.ts"
+          "packages/system-management/src/accounts-settings.ts"
+          "apps/core/settings/src/services.ts"
+          "nix/patches/polkit-process-agent-fallback.patch"
           "apps/system/compositor/src/polkit-agent.ts"
           "apps/system/compositor/src/polkit-helper.ts"
           "apps/system/compositor/src/sleep-blockers.ts"
           "packages/core/src/secure-prompt.ts"
+          "apps/system/compositor/src/display-access.ts"
+          "packages/app-tools/src/single-instance.ts"
           "nix/moire-power-services.nix"
           "nix/moire-power.rules"
           "nix/moire-network-services.nix"
@@ -139,13 +156,15 @@ let
           "apps/system/moire-dm/src/main.ts"
           "apps/system/moire-dm/src/autologin-file.ts"
           "apps/system/moire-dm/src/login-manager.ts"
-          "apps/system/management-service/src/login-settings.ts"
+          "packages/system-management/src/login-settings.ts"
           "apps/core/settings/src/pages/users.tsx"
           "nix/moire-native-boot.nix"
+          "nix/moire-silent-iso.nix"
           "nix/boot.nix"
           "apps/system/boot/src/renderer.tsx"
           "apps/system/boot/src/scene-silk.tsx"
           "packages/sys/src/boot-handoff.ts"
+          "packages/sys/src/drm.ts"
           "packages/sys/src/egl-output.ts"
           "nix/moire.nix"
           "pnpm-lock.yaml"

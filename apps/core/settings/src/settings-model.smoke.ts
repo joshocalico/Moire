@@ -3,7 +3,16 @@
  * search folding and ranking, the change journal, and the wording and ordering the pages use.
  */
 import assert from "node:assert/strict";
-import { GROUPS, PAGES, SETTINGS, deepLink, initialRoute, parseDeepLink } from "./catalog";
+import {
+  GROUPS,
+  PAGES,
+  SETTINGS,
+  deepLink,
+  initialRoute,
+  parseDeepLink,
+  parseSettingsActivation,
+  settingsActivation,
+} from "./catalog";
 import {
   JOURNAL_LIMIT,
   parseJournal,
@@ -73,6 +82,14 @@ assert.deepEqual(
   "the page link wins over the old tab",
 );
 assert.equal(deepLink(parseDeepLink("appearance#wallpaper")), "appearance#wallpaper");
+
+// ---- A second start hands its link (or none) to the running window; anything else is dropped.
+assert.deepEqual(settingsActivation({ MOIRE_SETTINGS_PAGE: "displays" }), { link: "displays" });
+assert.deepEqual(settingsActivation({}), { link: null });
+assert.deepEqual(parseSettingsActivation({ link: "network#wifi" }), { link: "network#wifi" });
+assert.deepEqual(parseSettingsActivation({ link: null }), { link: null });
+for (const bad of [null, "displays", {}, { link: 3 }, { link: "x".repeat(257) }])
+  assert.equal(parseSettingsActivation(bad), null);
 
 // ---- Search: folding, synonyms, ranking and grouping.
 assert.equal(fold("Wi‑Fi & Café"), "wi fi cafe");

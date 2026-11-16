@@ -939,6 +939,13 @@ try {
     0,
   );
   assert.deepEqual(server.windowBorderLayers(lower.session, lower.surface, 0), []);
+  // App activation (a single-window app launched again) restores a minimized window and, unlike
+  // the taskbar toggle, never minimizes the focused one.
+  server.activateTask(lower.session.clientId, 10);
+  assert.equal(lower.surface.minimized, false, "activation restores a minimized window");
+  server.activateTask(lower.session.clientId, 10);
+  assert.equal(lower.surface.minimized, false, "activating the focused window keeps it shown");
+  server.setMinimized(lower.session, 10);
   Object.assign(lower.surface, { minimized: false, mapped: false });
   assert.deepEqual(server.windowBorderLayers(lower.session, lower.surface, 0), []);
   Object.assign(lower.surface, { mapped: true, maximized: false });

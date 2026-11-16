@@ -6,13 +6,14 @@ import {
   type SpawnOptions,
   X11Wm,
   type XwaylandHandle,
+  STAGE_GROUND,
 } from "@moire/core";
 import { createShell, type ShellBridge } from "@moire/shell";
 import {
   observeDesktopStatus,
   type DesktopStatusClient,
 } from "@moire/system-management/desktop-status";
-import { SessionBus } from "@moire/dbus";
+import { SessionBus, type DbusMethod } from "@moire/dbus";
 import {
   INPUT_INTERFACE,
   INPUT_PATH,
@@ -34,17 +35,30 @@ import {
   type PowerSession,
 } from "./power-session";
 import { LaunchRecords, callerIdentifier, procInspector } from "./sleep-blockers";
+import {
+  CAPTURE_REFUSAL,
+  DISPLAY_CONFIG_REFUSAL,
+  launchGate,
+  orTestControl,
+  testControlGate,
+  pinTrustedLaunch,
+  restrictTo,
+  trustedApps,
+} from "./display-access";
 import type { PolkitAgent } from "./polkit-agent";
 import { startSessionPolkitAgent } from "./polkit-session";
+import { createPromptOutcomes, exportPromptOutcomes } from "./prompt-outcomes";
 import { discoverApplications } from "@moire/app-discovery";
 import { createLockAuthenticator, exportLockStatus, lockUser } from "./lock-session";
 
 /** The desktop entry name for a command the compositor launched, for Settings to show. */
 function launchedAppName(command: string): string | null {
   try {
-    const entry = discoverApplications().find(
-      (candidate) => candidate.exec.trim().split(/\s+/)[0] === command,
-    );
+    // Pinned launches record the install-tree path, while entries name the bare launcher.
+    const entry = discoverApplications().find((candidate) => {
+      const exec = candidate.exec.trim().split(/\s+/)[0] ?? "";
+      return exec === command || path.basename(exec) === path.basename(command);
+    });
     return entry?.name ?? null;
   } catch {
     return null;
@@ -118,7 +132,17 @@ async function main() {
   // What the compositor started, by pid: how a sleep-blocking request is tied to an app.
   const launches = new LaunchRecords();
   const spawnOwned = native ? ownedApps.spawn.bind(ownedApps) : spawnDesktopApp;
-  const spawnApp = (options: SpawnOptions) => launches.track(spawnOwned(options), options.exec);
+  // Bundled apps trusted with privileged display methods always run from this install tree,
+  // never from a PATH entry the user's processes can write (display-access.ts).
+  const trusted = trustedApps();
+  const spawnApp = (options: SpawnOptions) => {
+    const pinned = pinTrustedLaunch(options.exec, [trusted.screenshot, trusted.settings]);
+    return launches.track(
+      spawnOwned(pinned ? { ...options, exec: pinned.exec } : options),
+      options.exec,
+      pinned?.file,
+    );
+  };
   let xwayland: XwaylandHandle | null = null;
   let xwm: X11Wm | null = null;
   let displayBus: SessionBus | null = null;
@@ -128,6 +152,8 @@ async function main() {
   let removeFatalListener: (() => void) | null = null;
   let power: PowerSession | null = null;
   let polkit: PolkitAgent | null = null;
+  // Why the prompt dismissed a request, for the requesting process only (prompt-outcomes.ts).
+  const promptOutcomes = createPromptOutcomes();
   let stopping = false;
 
   const clientEnv = (): NodeJS.ProcessEnv => ({
@@ -143,12 +169,16 @@ async function main() {
       (opts) =>
         spawnApp({
           exec: opts.exec,
-          env: clientEnv(),
+          // The user launched it: its window, or the running instance it hands a deep link to,
+          // may come to the front (xdg-activation).
+          env: { ...clientEnv(), XDG_ACTIVATION_TOKEN: server.issueActivationToken() },
         }),
       (task) =>
         task.kind === "close"
           ? server.closeTask(task.clientId, task.surfaceId)
-          : server.toggleTask(task.clientId, task.surfaceId),
+          : task.kind === "activate"
+            ? server.activateTask(task.clientId, task.surfaceId)
+            : server.toggleTask(task.clientId, task.surfaceId),
       {
         setVolume: async (value) => {
           if (!desktopControls) throw new Error("Sound controls unavailable");
@@ -220,14 +250,14 @@ async function main() {
     stopping = true;
     console.log("\nShutting down…");
     let status = exitCode;
-    // Wake and undim first, so a logout veil or the console is never left behind a dark screen.
+    // Wake and undim first, so a logout fade or the console is never left behind a dark screen.
     await power?.dispose().catch((error: unknown) => console.warn("[power] stop:", error));
-    // Logging out: veil the desktop to the stage ground and leave that on screen, so the
+    // Logging out: fade the desktop to the stage ground and leave that on screen, so the
     // greeter rises out of it instead of the screen cutting to black. Apps then exit unseen.
     let handedOff = false;
     if (native && exitCode === 0 && !revoked) {
       try {
-        handedOff = await server.handOffDisplay("desktop", { veil: true });
+        handedOff = await server.handOffDisplay("desktop", { fadeToColor: STAGE_GROUND });
         if (handedOff) holdDisplayAcrossExit(server.getKms().fd);
       } catch (error) {
         console.warn("[session] display handoff failed:", error);
@@ -333,6 +363,7 @@ async function main() {
       );
       polkit = await startSessionPolkitAgent(server, {
         sessionUser: user.username,
+        onDismissed: (pid, actionId, dismissal) => promptOutcomes.record(pid, actionId, dismissal),
         onStatus: (status) => {
           if (status !== "agent-taken") return;
           securityNotice(
@@ -346,6 +377,7 @@ async function main() {
             root && {
               pid: root.pid,
               name: launchedAppName(root.command) ?? path.basename(root.command),
+              command: root.command,
             }
           );
         },
@@ -365,8 +397,18 @@ async function main() {
   }
 
   try {
-    displayBus = await SessionBus.connect();
-    displayBus.exportObject("/org/moire/Display1", {
+    const bus = await SessionBus.connect();
+    displayBus = bus;
+    const gate = launchGate({ launches });
+    // Reading the screen is the Screenshot app's; changing the layout or mode is Settings'.
+    // Everyone else on the session bus gets AccessDenied (docs/apps/screenshot.md).
+    const screenshotOnly = (method: DbusMethod) =>
+      restrictTo(bus, gate, trusted.screenshot, CAPTURE_REFUSAL, method);
+    // In a test image only, also the guest display scripts while root grants it (display-access.ts).
+    const settingsGate = orTestControl(gate, testControlGate());
+    const settingsOnly = (method: DbusMethod) =>
+      restrictTo(bus, settingsGate, trusted.settings, DISPLAY_CONFIG_REFUSAL, method);
+    bus.exportObject("/org/moire/Display1", {
       name: "org.moire.Display1",
       methods: {
         ...(!native
@@ -378,13 +420,17 @@ async function main() {
               },
             }
           : {}),
-        CaptureScreenshot: {
+        // Still refused, for the Screenshot app too, while a secure prompt is on screen.
+        CaptureScreenshot: screenshotOnly({
           inSignature: "",
           outSignature: "s",
-          handler: async () => ({
-            body: [await writeScreenshot(server.capturePrimaryOutput(), runtimeDir)],
-          }),
-        },
+          handler: async () => {
+            // Read a frame composed after the call: Screenshot minimizes its own window and
+            // roundtrips before calling, so that frame no longer shows it.
+            await server.settledFrame();
+            return { body: [await writeScreenshot(server.capturePrimaryOutput(), runtimeDir)] };
+          },
+        }),
         GetModes: {
           inSignature: "",
           outSignature: "asss",
@@ -428,7 +474,7 @@ async function main() {
             ],
           }),
         },
-        SetLayout: {
+        SetLayout: settingsOnly({
           inSignature: "a(siiub)",
           outSignature: "b",
           handler: ({ body }) => {
@@ -444,8 +490,8 @@ async function main() {
             );
             return { body: [result.changed] };
           },
-        },
-        ConfirmLayout: {
+        }),
+        ConfirmLayout: settingsOnly({
           inSignature: "",
           outSignature: "b",
           handler: () => {
@@ -461,21 +507,21 @@ async function main() {
             saveSettings({ ...loadSettings(), displayOutputs });
             return { body: [true] };
           },
-        },
-        RevertLayout: {
+        }),
+        RevertLayout: settingsOnly({
           inSignature: "",
           outSignature: "b",
           handler: () => ({ body: [server.revertDisplayLayout()] }),
-        },
-        SetMode: {
+        }),
+        SetMode: settingsOnly({
           inSignature: "s",
           outSignature: "b",
           handler: ({ body }) => {
             const result = server.beginDisplayModeChange(String(body[0] ?? ""));
             return { body: [result.changed] };
           },
-        },
-        ConfirmMode: {
+        }),
+        ConfirmMode: settingsOnly({
           inSignature: "",
           outSignature: "b",
           handler: () => {
@@ -503,12 +549,12 @@ async function main() {
             }
             return { body: [confirmedMode != null] };
           },
-        },
-        RevertMode: {
+        }),
+        RevertMode: settingsOnly({
           inSignature: "",
           outSignature: "b",
           handler: () => ({ body: [server.revertDisplayMode()] }),
-        },
+        }),
       },
     });
     // Keyboard layout state for Settings and the panel; settings themselves live in prefs.
@@ -537,6 +583,7 @@ async function main() {
     });
     power?.exportStatus(displayBus);
     const unexportLock = exportLockStatus(displayBus, server);
+    const unexportPromptOutcomes = exportPromptOutcomes(displayBus, promptOutcomes);
     const ownership = await displayBus.requestName("org.moire.Display1");
     if (ownership !== 1) {
       throw new Error(`name ownership result ${ownership}`);
@@ -591,6 +638,7 @@ async function main() {
       removeLayoutListener();
       removePointerDevicesListener();
       unexportLock();
+      unexportPromptOutcomes();
     };
   } catch (error) {
     removeDisplayListener?.();

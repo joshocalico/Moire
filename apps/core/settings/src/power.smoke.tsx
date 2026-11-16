@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { DEFAULT_POWER_SETTINGS, applyPowerPatch, loadSettings } from "@moire/prefs";
-import { withFixture } from "@moire/app-tools/testing";
+import { windowControlTexts, withFixture } from "@moire/app-tools/testing";
 import { setUiScaleFactor } from "@moire/ui";
 import {
   FAKE_IDLE_STATUS,
@@ -154,6 +154,23 @@ await withFixture(async () => {
     await app.until(() => power.state.settings.sleepBlockers.length === 1, "grant removed");
     assert.deepEqual(power.state.settings.sleepBlockers, [XTERM]);
     await shows(app, "Asking now, but closing the lid still sleeps");
+    app.destroy();
+  }
+
+  // ---- The power button's menu shows its setting: the default is one it offers, and an "ask"
+  // stored by an earlier build (no power menu exists to ask with) shows as what it does.
+  assert.notEqual(DEFAULT_POWER_SETTINGS.powerButtonAction, "ask");
+  for (const [stored, label] of [
+    [DEFAULT_POWER_SETTINGS.powerButtonAction, "Suspend"],
+    ["power-off", "Shut down"],
+    ["ask", "Do nothing"],
+  ] as const) {
+    const power = createFakePowerSettingsClient({
+      settings: applyPowerPatch(DEFAULT_POWER_SETTINGS, { powerButtonAction: stored }),
+    });
+    const app = await mount(power, 1020, 1600);
+    await shows(app, "Power button");
+    assert.deepEqual(windowControlTexts(app.window, "setting:power.power-button"), [label]);
     app.destroy();
   }
 

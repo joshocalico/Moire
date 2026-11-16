@@ -95,6 +95,11 @@ export type DesktopDependencies = {
   spawn: DesktopSpawn;
   filesExec: string;
   settingsExec: string;
+  /**
+   * Open Settings at a deep link through the shell's app activation (which raises an open
+   * Settings window); false when Settings is unavailable. Absent: run `settingsExec` directly.
+   */
+  openSettings?(link: string): boolean;
   activation(): FileActivationService;
   activationPortal: FileActivationPortalClient;
   modifiers(): DesktopModifiers;
@@ -348,6 +353,7 @@ export function createDesktop(deps: DesktopDependencies) {
     spawn: deps.spawn,
     filesExec: deps.filesExec,
     settingsExec: deps.settingsExec,
+    openSettings: deps.openSettings,
     activation: deps.activation,
     showToast,
   });

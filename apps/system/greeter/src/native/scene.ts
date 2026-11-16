@@ -22,12 +22,15 @@ const AMBIENT_FRAME_MS = 33;
  * `bootSceneTime` continues the boot stage's clock when it handed over the display; without
  * it the wave starts settled.
  */
+/** How long a stage may take from creating this scene to showing it. */
+const SCENE_PREPARE_SECONDS = 1;
+
 export function greeterSceneBackdrop(bootSceneTime?: () => number): GreeterSceneBackdrop {
   if (bootSceneTime) {
     const startAt = bootSceneTime();
     // A fast boot hands over before the ribbon has crossed the screen: let it finish its flight
     // behind the login, then pour into the wave.
-    const waveAt = Math.max(startAt + 0.15, RIBBON_FLIGHT_SECONDS);
+    const waveAt = Math.max(startAt + SCENE_PREPARE_SECONDS, RIBBON_FLIGHT_SECONDS);
     return {
       create: silkSceneSurface(startAt, { waveAt }),
       time: bootSceneTime,

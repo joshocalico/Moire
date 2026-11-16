@@ -5,10 +5,13 @@
  *   system ask for an administrator's password, in a prompt the compositor draws
  *   (docs/polkit-agent.md). Settings never asks for that password and never sees it: it calls
  *   the service and waits, saying so. A standard user can ask too; an administrator answers.
- * - **A dismissed prompt** comes back as `cancelled` and shows nothing.
+ * - **A dismissed prompt** comes back as `cancelled` and shows nothing. One the system turned
+ *   away without showing it (`refused`: paused after cancels, or too many waiting) says so
+ *   calmly beside the control for a few seconds, never as an error.
  * - **The sheets here are data entry and confirmation:** a new name, a new password, "delete?".
- * - Every change goes through the accounts or login service, whose failure sentences are shown
- *   as they are.
+ * - Every change goes to a service Settings calls itself (the management service for your own
+ *   account, moire-accounts for other accounts, moire-dm-settings for automatic login), so the
+ *   prompt names Settings. Their failure sentences are shown as they are.
  */
 import React, { useState, type ReactNode } from "react";
 import {
@@ -48,9 +51,15 @@ function typeLabel(type: AccountType): string {
   return type === "administrator" ? "Administrator" : "Standard";
 }
 
-/** What a failed change says: the service's sentence, or nothing for a dismissed prompt. */
+/**
+ * What a failed change says as a failure: the service's sentence. Nothing for a dismissed
+ * prompt, and nothing here for a refused one, which the control's own line says
+ * (`context.calls.refused`).
+ */
 function failureText(result: SettingsResult<unknown>): string | null {
-  return result.ok || result.code === "cancelled" ? null : result.message;
+  return result.ok || result.code === "cancelled" || result.code === "refused"
+    ? null
+    : result.message;
 }
 
 /**
@@ -97,6 +106,8 @@ function FormSheet(props: {
   action: string;
   /** Said while the submit is pending, for a change that raises the system's password prompt. */
   waiting?: string;
+  /** Said, as calmly, when the system turned that prompt away without showing it. */
+  paused?: string | null;
   extra?: (values: Record<string, string>, set: (id: string, value: string) => void) => ReactNode;
   submit: (values: Record<string, string>) => Promise<string | null>;
   onCancel: () => void;
@@ -186,9 +197,9 @@ function FormSheet(props: {
         y={extraY + extraH}
         width={inner}
         height={34 * ui}
-        text={busy && props.waiting ? props.waiting : (failure ?? "")}
+        text={busy && props.waiting ? props.waiting : (failure ?? props.paused ?? "")}
         fontSize={12}
-        color={busy && props.waiting ? pal.muted : pal.danger}
+        color={(busy && props.waiting) || !failure ? pal.muted : pal.danger}
         wrap
         maxLines={2}
       />
@@ -226,8 +237,8 @@ async function run(
 
 /**
  * Automatic login, for your own account. Shown only where the login daemon supports it
- * (moire-dm). The switch calls the service, and the system asks for an administrator's password
- * before anything changes; until that is answered the switch keeps its old position.
+ * (moire-dm). The switch calls moire-dm-settings, and the system asks for an administrator's
+ * password before anything changes; until that is answered the switch keeps its old position.
  */
 function autologinRow(context: PageContext, standard: boolean): SettingRowSpec | null {
   const login = context.login.status;
@@ -237,13 +248,14 @@ function autologinRow(context: PageContext, standard: boolean): SettingRowSpec |
   // Whose it is comes first: a standard user still sees that another account signs in by itself.
   const description = waiting
     ? waitingText(context)
-    : login.enabled
-      ? "On · starts without asking for your password"
-      : login.user
-        ? `On for ${login.user}`
-        : standard
-          ? NEEDS_ADMINISTRATOR
-          : undefined;
+    : (context.calls.refused("autologin") ??
+      (login.enabled
+        ? "On · starts without asking for your password"
+        : login.user
+          ? `On for ${login.user}`
+          : standard
+            ? NEEDS_ADMINISTRATOR
+            : undefined));
   return toggleRow(
     "users.autologin",
     login.enabled,
@@ -340,6 +352,8 @@ function otherRows(
       .filter(Boolean)
       .join(" · "),
     leading: <Avatar name={displayName(user)} image={user.iconFile} size={32} />,
+    // Named, so focus finds its way back here when the user's sheet closes.
+    focusId: `setting:user:${user.uid}`,
     chevron: editable,
     onPress: editable ? () => context.openSheet(PAGE, `user:${user.uid}`) : undefined,
     height: 56,
@@ -347,6 +361,7 @@ function otherRows(
   if (editable)
     rows.push({
       id: "users:add",
+      focusId: "setting:users:add",
       label: "Add a user…",
       description: standard
         ? `A standard account or an administrator · ${NEEDS_ADMINISTRATOR.toLowerCase()}`
@@ -387,9 +402,10 @@ function userSheet(context: PageContext, user: AccountUser, administrators: numb
                 description:
                   context.calls.busy === "type"
                     ? waitingText(context)
-                    : lastAdmin
-                      ? "The only administrator stays one"
-                      : "Administrators can change any account",
+                    : (context.calls.refused("type") ??
+                      (lastAdmin
+                        ? "The only administrator stays one"
+                        : "Administrators can change any account")),
                 disabled: lastAdmin || context.calls.busy === "type",
               },
             ),
@@ -505,6 +521,7 @@ export function usersPage(context: PageContext): PageContent {
               <FormSheet
                 {...size}
                 waiting={waitingText(context)}
+                paused={context.calls.refused("create")}
                 fields={[
                   { id: "realName", label: "Full name", problem: realNameProblem },
                   { id: "username", label: "Username", problem: usernameProblem },
@@ -571,6 +588,7 @@ export function usersPage(context: PageContext): PageContent {
             <FormSheet
               {...size}
               waiting={waitingText(context)}
+              paused={context.calls.refused("set-password")}
               fields={[
                 { id: "password", label: "New password", password: true, problem: passwordProblem },
               ]}
@@ -658,9 +676,13 @@ function DeleteSheet(props: {
         y={84 * ui}
         width={inner}
         height={34 * ui}
-        text={busy ? waitingText(props.context) : (failure ?? "")}
+        text={
+          busy
+            ? waitingText(props.context)
+            : (failure ?? props.context.calls.refused("delete") ?? "")
+        }
         fontSize={12}
-        color={busy ? pal.muted : pal.danger}
+        color={busy || !failure ? pal.muted : pal.danger}
         wrap
         maxLines={2}
       />

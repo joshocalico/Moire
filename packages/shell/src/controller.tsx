@@ -3,6 +3,7 @@ import {
   filterApplications,
   FileActivationPortalClient,
   FileActivationService,
+  applicationOwnsWindow,
   resolveApplicationIcon,
   type DesktopEntry,
 } from "@moire/app-discovery";
@@ -837,6 +838,8 @@ export function createShell(
       icon: "preferences-system",
       terminal: false,
       categories: ["Settings", "System"],
+      startupWMClass: "org.moire.Settings",
+      singleMainWindow: true,
     },
     {
       id: "moire-files.desktop",
@@ -1135,6 +1138,7 @@ export function createShell(
     spawn,
     filesExec,
     settingsExec,
+    openSettings: (link) => openSettings(link),
     activation: () => activation,
     activationPortal,
     modifiers: () => ({ ctrl: ctrlHeld, shift: shiftHeld, alt: altHeld, meta: metaHeld }),
@@ -1429,12 +1433,49 @@ export function createShell(
     });
   };
 
-  const launch = (app: DesktopEntry) => {
+  /**
+   * Start `app`, or open it at a deep link with `linkExec` (its Exec carrying the link).
+   * A `SingleMainWindow` app that already has a window is activated instead (restored, raised
+   * and focused); a deep link is still run, and the app's own single-instance lock hands it to
+   * the open window and exits. Other apps open a new window every time.
+   */
+  /** Open Settings, at `link` (`page#setting`) when given; false when Settings is not installed. */
+  const openSettings = (link?: string): boolean => {
+    const settings = apps.find(
+      (app) => app.id === "moire-settings.desktop" || app.id === "moire-settings",
+    );
+    if (!settings) return false;
+    launch(settings, link ? settingsCommand(settings.exec, link) : undefined);
+    return true;
+  };
+  const launch = (app: DesktopEntry, linkExec?: string) => {
+    const running = app.singleMainWindow
+      ? tasks.find((task) => applicationOwnsWindow(app, task.appId))
+      : undefined;
+    if (running) {
+      console.log(`[shell] activate ${app.id} (${running.clientId}:${running.surfaceId})`);
+      if (open) dismissLauncher();
+      onTaskAction({ clientId: running.clientId, surfaceId: running.surfaceId, kind: "activate" });
+      if (linkExec) {
+        try {
+          const child = spawn({ exec: linkExec });
+          child.once?.("error", (error) =>
+            console.error(`[shell] deep link failed ${app.id}:`, error),
+          );
+          child.unref?.();
+        } catch (error) {
+          console.error(`[shell] deep link failed ${app.id}:`, error);
+        }
+      }
+      dirty = true;
+      return;
+    }
     if (launchState.kind === "pending") return;
     const attempt: LauncherLaunchState = { kind: "pending", appName: app.name };
     launchState = attempt;
     dirty = true;
-    const exec = app.terminal ? `moire-terminal --command ${shellQuote(app.exec)}` : app.exec;
+    const command = linkExec ?? app.exec;
+    const exec = app.terminal ? `moire-terminal --command ${shellQuote(command)}` : command;
     const started = () => {
       if (launchState !== attempt) return;
       console.log(`[shell] launch ${app.id} → ${exec}`);
@@ -1967,12 +2008,7 @@ export function createShell(
           }}
           onSettings={(link) => {
             dismissControls();
-            const settings = apps.find(
-              (app) => app.id === "moire-settings.desktop" || app.id === "moire-settings",
-            );
-            if (settings)
-              launch(link ? { ...settings, exec: settingsCommand(settings.exec, link) } : settings);
-            else {
+            if (!openSettings(link)) {
               controlsError = "Settings application unavailable";
               dirty = true;
             }

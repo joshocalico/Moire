@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./generated": "./src/generated.ts",
-    "./surface-state": "./src/surface-state.generated.ts"
+    "./surface-state": "./src/surface-state.generated.ts",
+    "./xdg-activation": "./src/xdg-activation.generated.ts"
   },
   "scripts": {
     "generate": "pnpm --workspace-root exec tsx scripts/generate-wayland-protocol.ts --output packages/protocol/src/generated.ts",

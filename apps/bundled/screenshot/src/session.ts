@@ -32,6 +32,7 @@ import {
   type SaveRequest,
   type Tool,
 } from "./model";
+import { prepareOwnWindow } from "./own-window";
 import { inputFixtureTrace, observe, observeGesture, observePointer } from "./trace";
 
 export type ScreenshotServices = {
@@ -141,6 +142,9 @@ export function useScreenshotSession(props: ScreenshotServices) {
     const op = startOperation("capture");
     if (!op) return;
     try {
+      // Now, while the click that asked for it still has the window focused.
+      const hidden = await prepareOwnWindow(props.window);
+      if (!current(op)) return;
       for (let remaining = options.delay; remaining > 0; remaining--) {
         setStatus(`Taking the screenshot in ${remaining} s · arrange your windows now`);
         await new Promise<void>((resolve, reject) => {
@@ -156,7 +160,7 @@ export function useScreenshotSession(props: ScreenshotServices) {
         });
         if (!current(op)) return;
       }
-      const next = await (props.capture ?? captureDesktop)();
+      const next = await hidden(props.capture ?? captureDesktop);
       if (!current(op)) return;
       changeDocument(replaceDocument(documentRef.current, next, false));
       clearGesture();

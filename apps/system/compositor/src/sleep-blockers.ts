@@ -38,20 +38,32 @@ export type AppIdentity = {
 export type ProcessInspector = {
   parent(pid: number): number | null;
   executable(pid: number): string | null;
+  /**
+   * The process's session id. A process can leave its session (setsid) but never join another,
+   * so it marks what a launch's own process tree is, apart from what it spawned detached.
+   */
+  session?(pid: number): number | null;
+  /** When the process started (clock ticks since boot), to tell a reused pid apart. */
+  startTime?(pid: number): number | null;
 };
 
+/** A positive number field of `/proc/<pid>/stat`, counted from the state after the comm. */
+function statField(pid: number, index: number): number | null {
+  try {
+    // "pid (comm) state ppid pgrp session …": comm may hold spaces and parentheses, so read
+    // past the last ")".
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const value = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[index]);
+    return Number.isInteger(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export const procInspector: ProcessInspector = {
-  parent(pid) {
-    try {
-      // "pid (comm) state ppid …": comm may hold spaces and parentheses, so read past the last ")".
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      const parent = Number(fields[1]);
-      return Number.isInteger(parent) && parent > 0 ? parent : null;
-    } catch {
-      return null;
-    }
-  },
+  parent: (pid) => statField(pid, 1),
+  session: (pid) => statField(pid, 3),
+  startTime: (pid) => statField(pid, 19),
   executable(pid) {
     try {
       const exe = fs.readlinkSync(`/proc/${pid}/exe`);
@@ -65,12 +77,27 @@ export const procInspector: ProcessInspector = {
 
 type Launched = { pid?: number; once(event: "exit" | "error", listener: () => void): unknown };
 
+/** A launch the compositor made: the command as asked for and, when pinned, the file it ran. */
+export type LaunchRecord = {
+  pid: number;
+  /** The command's first word, as the desktop entry or caller wrote it. */
+  command: string;
+  /**
+   * Set only when the compositor itself chose the absolute file to execute (a bundled app's
+   * launcher in its own install tree, display-access.ts), so no `PATH` lookup was involved.
+   */
+  file?: string;
+};
+
 /** The compositor's own record of what it started: pid to the command it ran. */
 export class LaunchRecords {
-  private readonly commands = new Map<number, string>();
+  private readonly records = new Map<number, LaunchRecord>();
 
-  /** Remember a child until it exits; returns the child, so it wraps a spawn call. */
-  track<Child extends Launched>(child: Child, exec: string): Child {
+  /**
+   * Remember a child until it exits; returns the child, so it wraps a spawn call. `file` is the
+   * absolute file the compositor executed for a pinned launch.
+   */
+  track<Child extends Launched>(child: Child, exec: string, file?: string): Child {
     const pid = child.pid;
     if (pid === undefined) return child;
     let command: string;
@@ -79,9 +106,12 @@ export class LaunchRecords {
     } catch {
       return child;
     }
-    this.commands.set(pid, command);
+    const record: LaunchRecord = file === undefined ? { pid, command } : { pid, command, file };
+    this.records.set(pid, record);
+    // libuv reaps the child and runs this in the same turn, before any bus call is handled, so a
+    // reused pid never meets a stale record.
     const forget = () => {
-      if (this.commands.get(pid) === command) this.commands.delete(pid);
+      if (this.records.get(pid) === record) this.records.delete(pid);
     };
     child.once("exit", forget);
     child.once("error", forget);
@@ -89,15 +119,38 @@ export class LaunchRecords {
   }
 
   /** The launch `pid` belongs to: itself or its nearest launched ancestor. */
-  rootOf(pid: number, inspector: ProcessInspector): { pid: number; command: string } | null {
+  rootOf(pid: number, inspector: ProcessInspector): LaunchRecord | null {
     let current: number | null = pid;
     for (let depth = 0; current !== null && current > 1 && depth < MAX_ANCESTORS; depth++) {
-      const command = this.commands.get(current);
-      if (command !== undefined) return { pid: current, command };
+      const record = this.records.get(current);
+      if (record !== undefined) return { ...record };
       current = inspector.parent(current);
     }
     return null;
   }
+}
+
+/**
+ * The kernel's pid for a bus connection, asked of the bus daemon at call time (it read the
+ * peer credentials when the connection was made). Rejects when the sender has left the bus.
+ */
+export async function busPeerPid(
+  bus: SessionBus,
+  sender: string,
+  timeoutMs = 2000,
+): Promise<number> {
+  const reply = await bus.call(
+    {
+      destination: BUS,
+      path: BUS_PATH,
+      interface: BUS,
+      member: "GetConnectionUnixProcessID",
+      signature: "s",
+      body: [sender],
+    },
+    { timeoutMs },
+  );
+  return Number(reply.body?.[0]);
 }
 
 export type WaylandClientProcess = { pid: number; xwayland: boolean };
@@ -173,9 +226,10 @@ export function callerIdentifier(options: CallerIdentifierOptions): CallerIdenti
         ? { id: `portal:${claimedAppId}`, name: claimedAppId, x11: false }
         : null;
 
-    const pid = options.peerPid
-      ? await options.peerPid(bus, sender)
-      : Number((await daemon("GetConnectionUnixProcessID", sender)).body?.[0]);
+    const pid = await (options.peerPid ?? ((bus, sender) => busPeerPid(bus, sender, timeoutMs)))(
+      bus,
+      sender,
+    );
     if (!Number.isInteger(pid) || pid <= 1) return null;
     const root = options.launches.rootOf(pid, inspector);
     if (root) {

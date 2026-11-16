@@ -252,7 +252,8 @@ export function powerPage(context: PageContext): PageContent {
           selectRow(
             "power.power-button",
             viewport,
-            settings.powerButtonAction,
+            // "ask" (an earlier default) has no power menu to open yet, so it does nothing.
+            settings.powerButtonAction === "ask" ? "nothing" : settings.powerButtonAction,
             [
               { id: "suspend", label: "Suspend" },
               ...(capabilities?.powerOff !== false

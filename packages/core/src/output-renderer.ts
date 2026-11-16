@@ -56,10 +56,14 @@ export type CompositorSceneLayer = {
 export type OutputRendererOptions = {
   /** Create a GLES 3 context so compositor scenes (createSceneLayer) can be drawn. */
   gles3?: boolean;
+  /** Render on this fd instead of the KMS fd; pass -1 as the KMS fd until attachKmsDevice. */
+  renderFd?: number;
 };
 
 export interface CompositorOutputRenderer {
   readonly id: "software" | "egl";
+  /** Own the display: scanout registers on this fd from now on. Rendered state is kept. */
+  attachKmsDevice?(fd: number): void;
   readonly capabilities: CompositionCapabilities;
   readonly detail: string;
   readonly renderingGeneration: object;
@@ -234,6 +238,10 @@ export class EglCompositorOutputRenderer implements CompositorOutputRenderer {
           ? "readback scanout"
           : "automatic presentation probe";
     return `${this.scaler.info.glRenderer}; ${this.scaler.info.glVersion}; ${presentation}`;
+  }
+
+  attachKmsDevice(fd: number): void {
+    (this.scaler as Partial<Pick<EglOutputScaler, "attachKmsDevice">>).attachKmsDevice?.(fd);
   }
 
   get supportsSceneLayers(): boolean {
@@ -493,6 +501,10 @@ class AutoCompositorOutputRenderer implements CompositorOutputRenderer {
       console.warn("[renderer] EGL unavailable; falling back to software:", error);
       this.active = new SoftwareOutputRenderer();
     }
+  }
+
+  attachKmsDevice(fd: number): void {
+    this.active.attachKmsDevice?.(fd);
   }
 
   get renderingGeneration(): object {

@@ -19,8 +19,10 @@ import {
   observeAccountsSettings,
   type AccountsSettingsClient,
 } from "@moire/system-management/accounts-settings";
+import { createAccountAdminClient } from "@moire/system-management/account-admin";
+import { compositorDismissalLookup } from "@moire/system-management/prompt-outcome";
 import {
-  observeLoginSettings,
+  createLoginSettingsClient,
   type LoginSettingsClient,
 } from "@moire/system-management/login-settings";
 import {
@@ -47,7 +49,7 @@ export type SettingsServices = {
   desktop: DesktopStatusSource | null;
   time: TimeSettingsClient | null;
   accounts: AccountsSettingsClient | null;
-  /** Automatic login; on the accounts client's connection. */
+  /** Automatic login: moire-dm-settings, called by Settings itself. */
   login: LoginSettingsClient | null;
   input: InputSettingsClient | null;
   power: PowerSettingsClient | null;
@@ -100,28 +102,34 @@ async function connectDesktopStatus(): Promise<{
   }
 }
 
-/** Accounts and automatic login, sharing one connection. */
+/**
+ * Accounts and automatic login, sharing one session-bus connection. Administrator changes to
+ * accounts go from this process to moire-accounts, and automatic login to moire-dm-settings,
+ * both on the system bus, so the system's password prompt names Settings; the compositor
+ * answers this process, on this connection, why a prompt it asked for was dismissed.
+ */
 async function connectAccountServices(): Promise<{
   accounts: AccountsSettingsClient;
-  login: LoginSettingsClient | null;
+  login: LoginSettingsClient;
   dispose(): Promise<void>;
 }> {
   const bus = await SessionBus.connect();
+  const promptDismissal = compositorDismissalLookup(bus);
+  const admin = createAccountAdminClient({ promptDismissal });
+  const login = createLoginSettingsClient({ promptDismissal });
   try {
-    const accounts = await observeAccountsSettings(bus);
-    const login = await observeLoginSettings(bus).catch((error: unknown) => {
-      console.warn("[settings] login settings unavailable:", error);
-      return null;
-    });
+    const accounts = await observeAccountsSettings(bus, { admin });
     return {
       accounts,
       login,
       async dispose() {
-        await Promise.allSettled([accounts.dispose(), login?.dispose()]);
+        await Promise.allSettled([accounts.dispose(), login.dispose(), admin.dispose()]);
         bus.close();
       },
     };
   } catch (error) {
+    void admin.dispose();
+    void login.dispose();
     bus.close();
     throw error;
   }

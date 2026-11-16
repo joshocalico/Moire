@@ -10,6 +10,25 @@ Decided on 2026-10-11:
   the compositor's, so no client sees the key.
 - **Open questions 4 to 9:** the recommendations stand.
 
+Decided on 2026-10-31, after the R65 VM run:
+
+- **No kept authorization:** the administrator actions answer `AUTH_ADMIN`, not
+  `AUTH_ADMIN_KEEP`; every change asks. See "Policy changes".
+- **The greeter is excluded in the rule:** `00-moire-admin.rules` answers NO for the greeter
+  account and for any subject not in an active, local session, before its prompt branch.
+- **One prompt per change (all recommendations approved):** Settings calls moire-accounts, a
+  small unprivileged system service, which asks polkit once per change about Settings and then
+  makes the AccountsService calls itself. The prompt names Settings, and the management service
+  leaves the administrator path. See "One prompt per change".
+- **Automatic login asked for by Settings too (approved follow-up):** Settings calls
+  moire-dm-settings itself, so the prompt says "Requested by Settings", not "Moire Management".
+  The management service no longer serves automatic login at all (`org.moire.LoginSettings1` is
+  gone; Settings reads the status from moire-dm-settings as well).
+- **No direct AccountsService administration from a session (approved follow-up):**
+  `org.freedesktop.accounts.user-administration` answers NO, with no prompt, for every subject
+  but root and the `moire-accounts` system account. Nothing in Moire asks for it from a session
+  any more. See "Policy changes".
+
 The design:
 
 - **Who is the agent:** the compositor. It registers with polkit for its own logind session
@@ -87,8 +106,8 @@ signals and message flags. It needs no descriptor passing for this.
 ## Architecture
 
 ```
-mechanism (AccountsService,     polkitd                         compositor (session user)
- timedated, moire-dm-settings)   rules: YES / NO / AUTH_ADMIN*    polkit-agent.ts
+mechanism (moire-accounts,      polkitd                         compositor (session user)
+ timedated, moire-dm-settings)   rules: YES / NO / AUTH_ADMIN     polkit-agent.ts
    CheckAuthorization ─────────▶ finds the subject's session ──▶ BeginAuthentication(action,
    (interaction allowed)         and its registered agent          message, details, cookie,
                                                                     identities)
@@ -120,8 +139,9 @@ mechanism (AccountsService,     polkitd                         compositor (sess
   Processes outside a session (ssh, system services) get no prompt and keep today's answer.
 - **When:** during compositor start, before `spawnApp` runs anything (`main.ts` awaits
   `startSessionPolkitAgent` first). Polkit allows one agent per session, so registering first is
-  what stops a user process from becoming the _session's_ agent. It does not stop a per-process
-  agent: see "Not protected against" and open question 10.
+  what stops a user process from becoming the _session's_ agent. A per-process agent can still
+  register, but Moire's polkitd patch makes it fallback-only: it is asked only when the session
+  has no agent (see "Protected against" and open question 10).
 - **If registration fails** because an agent already exists (polkitd answers
   `org.freedesktop.PolicyKit1.Error.Failed`, "An authentication agent already exists for the
   given subject"), the compositor doesn't retry in a loop or fall back. It logs
@@ -156,8 +176,11 @@ The prompt is drawn by the compositor after everything a client can influence, t
   Up and Down (another administrator), the layout switch, Super+L and the verification key.
   The keys that were down when a prompt closes (the submitting Enter) are swallowed, releases
   included, as after unlock.
-- **Captures:** `CaptureScreenshot` is refused while a prompt is up (`capturePrimaryOutput`
-  throws).
+- **Captures:** `CaptureScreenshot` answers only the Screenshot app the compositor launched from
+  its own install tree, identified by the bus daemon's pid for the caller and the compositor's
+  launch records, never by anything the caller says; everyone else gets `AccessDenied`
+  (docs/apps/screenshot.md, "Who may capture"). While a prompt is up it is refused for Screenshot
+  too (`capturePrimaryOutput` throws).
 - **Fail closed:** the shell draws the prompt's UI through a raster bridge like `lockRaster`
   (`securePromptRaster`, `onSecurePromptPointer`). If it throws or is missing, the compositor
   draws its own text-free prompt (a shield, dots, the field colour;
@@ -190,6 +213,8 @@ client and not the shell.
   `cancel()`. The prompt bounds and strips the request's text a second time.
 - `server.onSecurePromptFlood((program) => …)`: called once when a requester's cancels become
   a flood (below), with its advisory name, for the one notification.
+- A request's `coolDownKey` (executable plus action) keys the 2 s cool-down after a cancel;
+  its `requesterKey` (the program) keys the flood count and the 5-minute pause.
 - A consent prompt (`kind: "consent"`, for the keyring) has Allow and Deny and no field. Allow
   takes the pointer: Enter never allows, Escape denies.
 
@@ -204,9 +229,10 @@ client and not the shell.
 | Who signs      | The identity chooser                                                                                 | From polkit                                                                      |
 | Details        | Action id and pid, behind a disclosure                                                               | Action id is authoritative                                                       |
 
-- **Which pid:** `polkit.subject-pid` is the process the authorization is for (Settings' side
-  of the call, usually the management service). `polkit.caller-pid` is the mechanism that asked
-  polkit (AccountsService), and is used only when polkit sends no subject pid.
+- **Which pid:** `polkit.subject-pid` is the process the authorization is for: Settings itself
+  for account changes and automatic login (it calls moire-accounts and moire-dm-settings
+  directly). `polkit.caller-pid` is the mechanism that asked polkit (moire-accounts,
+  moire-dm-settings), and is used only when polkit sends no subject pid.
 - **Naming:** `polkit-requester.ts` shares `sleep-blockers.ts`' process inspector and the
   compositor's launch records. A windowless service the compositor started is named by its
   launch ("Moire Management"). The X11 flag needs all of: no Wayland connection in the process
@@ -263,9 +289,42 @@ sentences: "That password didn't work", "Too many attempts", "can't be checked r
 
   An error reply refuses the request even when the helper has already succeeded.
 
+- **Why a request was dismissed.** polkitd passes no reason with `polkit.dismissed`, so the
+  mechanism (and Settings behind it) can't tell a person's cancel from a refusal. The
+  compositor tells the requesting process itself, and nobody else
+  (`apps/system/compositor/src/prompt-outcomes.ts`, wire constants in
+  `packages/system-management/src/prompt-outcome.ts`):
+  - Before it answers `Cancelled`, the agent records the reason under polkit's
+    `polkit.subject-pid` (the kernel's pid for the process the authorization is for, which
+    polkitd got from the system bus daemon), that process's start time, and the action id.
+    Never under `polkit.caller-pid`: a mechanism asking on someone's behalf is not told.
+  - `org.moire.SecurePrompt1.TakeDismissal(s action_id) → s` at `/org/moire/SecurePrompt1` on
+    the compositor's session-bus name (`org.moire.Display1`) answers from the record for the
+    caller's own pid, as the session bus daemon reports it (`GetConnectionUnixProcessID`), and
+    only if the start time still matches (a reused pid gets nothing). It returns `refused`,
+    `cancelled`, `timed-out`, `locked`, `withdrawn` (polkit cancelled it), or an empty string.
+  - A record is read once and lives 60 s; at most 32 are kept.
+  - **What can't leak:** a process learns a reason only for a request polkit made on its own
+    behalf, which it already knows was dismissed. It can't learn whether a prompt is open, nor
+    anything about another app's requests; it can't read another process's record by naming
+    a pid or by guessing action ids.
+  - **Not protected:** a process that takes `org.moire.Display1` before the compositor (it
+    can't while the compositor holds it) could answer Settings falsely. The
+    worst it does is choose between silence and "Password requests are paused" in Settings.
+
+  | The prompt ended as                                      | `TakeDismissal` | Settings shows                                               |
+  | -------------------------------------------------------- | --------------- | ------------------------------------------------------------ |
+  | Refused at once (full queue, cool-down, flood pause)     | `refused`       | "Password requests are paused. Try again in a little while." |
+  | Refused after waiting in the queue (cool-down, flood)    | `refused`       | The same                                                     |
+  | Cancelled by a person                                    | `cancelled`     | Nothing                                                      |
+  | Timed out (120 s)                                        | `timed-out`     | Nothing                                                      |
+  | The session locked while it was on screen                | `locked`        | Nothing: the person locked the screen themselves             |
+  | `CancelAuthentication`, or polkitd went away             | `withdrawn`     | Nothing                                                      |
+  | No reason kept (another agent answered, compositor gone) | empty           | Nothing                                                      |
+
 - **Callers must wait long enough.** A D-Bus call that may raise a prompt needs a timeout above
-  120 s. The management service's interactive calls will use 150 s, and Settings shows "Waiting
-  for your password" meanwhile.
+  120 s. Settings waits 170 s for moire-accounts and moire-dm-settings, and shows "Waiting for
+  your password" meanwhile.
 
 ## Authenticating: the helper, weighed
 
@@ -361,43 +420,80 @@ system `dbus-daemon` loaded with polkit's own bus policy, and the real
 logind, so the socket was served inetd-style by `socat` (the accepted connection as the
 helper's stdin, stdout and stderr), and those two parts were read from source instead.
 
-| Fact                                                                                                                                 | How                                                     |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
-| `BeginAuthentication(sssa{ss}sa(sa{sv}))`: action id, message, icon name, details, cookie, identities                                | Live (`dbus-monitor`, and Moire's D-Bus code)           |
-| `details` holds `polkit.caller-pid` and `polkit.subject-pid` as decimal strings, plus the mechanism's own                            | Live; source for the absent-pid cases                   |
-| Identities arrive as `("unix-user", {"uid": u})`, groups already expanded; uid 0 when there is no admin                              | Live; source for the fallback                           |
-| The helper's line protocol, in bytes, for a wrong and a right password; the same cookie works for a retry                            | Live (`strace` of the helper, Moire's client)           |
-| The helper refuses an identity polkitd did not offer and a cookie it does not know (`FAILURE`)                                       | Live                                                    |
-| An empty return after `SUCCESS` authorizes; `Error.Cancelled` gives `polkit.dismissed`; `Error.Failed` refuses, even after `SUCCESS` | Live (`pkcheck`)                                        |
-| A second registration for one subject: `Error.Failed`, "An authentication agent already exists for the given subject"                | Live                                                    |
-| The bus refuses agent-interface calls from anyone but `polkituser` (`AccessDenied`), even the same user                              | Live                                                    |
-| A `unix-process` agent registered by any process of the user receives that process's requests                                        | Live; its precedence over the session agent from source |
-| `unix-session` registration: subject form, "the caller must be in that session", one agent per session                               | Source (no logind in the container)                     |
-| The unit's stdio (`StandardInput=socket`, `StandardOutput=socket`, stderr inherited upstream, journal on NixOS)                      | Source and the evaluated NixOS module                   |
-| The helper is not setuid: mode 0555 in the store, no `polkit-agent-helper-1` wrapper, `polkit-1` PAM service present                 | Live `ls`; the evaluated NixOS module                   |
+| Fact                                                                                                                                 | How                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| `BeginAuthentication(sssa{ss}sa(sa{sv}))`: action id, message, icon name, details, cookie, identities                                | Live (`dbus-monitor`, and Moire's D-Bus code)          |
+| `details` holds `polkit.caller-pid` and `polkit.subject-pid` as decimal strings, plus the mechanism's own                            | Live; source for the absent-pid cases                  |
+| Identities arrive as `("unix-user", {"uid": u})`, groups already expanded; uid 0 when there is no admin                              | Live; source for the fallback                          |
+| The helper's line protocol, in bytes, for a wrong and a right password; the same cookie works for a retry                            | Live (`strace` of the helper, Moire's client)          |
+| The helper refuses an identity polkitd did not offer and a cookie it does not know (`FAILURE`)                                       | Live                                                   |
+| An empty return after `SUCCESS` authorizes; `Error.Cancelled` gives `polkit.dismissed`; `Error.Failed` refuses, even after `SUCCESS` | Live (`pkcheck`)                                       |
+| A second registration for one subject: `Error.Failed`, "An authentication agent already exists for the given subject"                | Live                                                   |
+| The bus refuses agent-interface calls from anyone but `polkituser` (`AccessDenied`), even the same user                              | Live                                                   |
+| A `unix-process` agent registered by any process of the user receives that process's requests                                        | Live; outranks session agent upstream; patched (OQ 10) |
+| `unix-session` registration: subject form, "the caller must be in that session", one agent per session                               | Source (no logind in the container)                    |
+| The unit's stdio (`StandardInput=socket`, `StandardOutput=socket`, stderr inherited upstream, journal on NixOS)                      | Source and the evaluated NixOS module                  |
+| The helper is not setuid: mode 0555 in the store, no `polkit-agent-helper-1` wrapper, `polkit-1` PAM service present                 | Live `ls`; the evaluated NixOS module                  |
 
 Corrections this made to the design: the answer limit (510 bytes, not 512); the helper's
 diagnostics on the socket; the subject pid, not the caller's, names the requester; polkitd
 expands groups, not the agent; no vendor in the request; and a session agent does not exclude
 per-process agents.
 
+The image's polkitd is no longer stock polkit 127: it carries
+`nix/patches/polkit-process-agent-fallback.patch` (open question 10), which changes only the
+agent lookup in `src/polkitbackend/polkitbackendinteractiveauthority.c`. The patch was checked
+against the exact source nixpkgs `7fc6f2c` fetches (`polkit-org/polkit` tag `127`, NAR hash
+`sha256-YTugETy0rqu/bv53jV1UeGqSK79bRXR52EJNcTblvzo=`). `nix/moire-settings-services.nix`
+asserts `pkgs.polkit.version == "127"`, so a nixpkgs bump that moves polkit fails evaluation
+until the patch is re-reviewed. Nothing in the table above depends on the lookup order except
+the per-process row.
+
 ## Policy changes
 
 The deny-all model stays: `00-moire-*.rules` allow, `01-moire-deny-unapproved.rules` denies the
 rest. The agent adds a third answer for chosen actions.
 
-- **New file** `nix/moire-admin.rules` (`00-moire-admin.rules`, built): for active, local
-  subjects and an explicit list of action ids, return `polkit.Result.AUTH_ADMIN_KEEP`. It does
-  not look at the subject's groups, so a standard user is asked too and an administrator answers.
-  `moire-settings-services.nix` installs it next to `00-moire-settings.rules`; `moire-dm.nix`
-  asserts it is present.
+- **New file** `nix/moire-admin.rules` (`00-moire-admin.rules`, built): for an explicit list of
+  action ids (two: `org.moire.accounts.administer` and `org.moire.dm.set-autologin`) it returns NO for the greeter account (`greeter`, by name or group; moire-dm's
+  pre-login account) and for any subject not in an active, local session, then
+  `polkit.Result.AUTH_ADMIN` for everyone else but root, who keeps stock authority. Apart from
+  the greeter it does not look at the subject's groups, so a standard user is asked too and an
+  administrator answers. `moire-settings-services.nix` installs it next to
+  `00-moire-settings.rules`; `moire-dm.nix` asserts it is present.
 - **Phase 4 moved exactly two actions into it:** `org.freedesktop.accounts.user-administration`
   and `org.moire.dm.set-autologin`. Their YES rules for `wheel` are deleted, and with it the
-  whole of `nix/moire-dm.rules` (`00-moire-dm.rules`), which held nothing else.
+  whole of `nix/moire-dm.rules` (`00-moire-dm.rules`), which held nothing else. "One prompt per
+  change" then added `org.moire.accounts.administer` and took `user-administration` out again
+  (below).
 - **Who may answer:** `security.polkit.adminIdentities`, which must yield `wheel`. That is the
   NixOS default (`[ "unix-group:wheel" ]`), and `moire-settings-services.nix` asserts it.
-- **`AUTH_ADMIN_KEEP`** keeps the authorization for 5 minutes for the process that asked. That
-  matches the management service's 5‑minute unlock today.
+- **`AUTH_ADMIN`, never `AUTH_ADMIN_KEEP` (decided 2026-10-31): every check asks.** Phase 4
+  shipped `AUTH_ADMIN_KEEP` to match the old 5‑minute unlock. The R65 VM run (2026-10-30) showed
+  polkit keeps that authorization for the whole session, not the process that asked: after
+  `testtwo`, a standard user, answered with the admin password once, a second
+  `busctl … CreateUser` from a different process in the same session created a user with no
+  prompt. Any program in that session held the admin authorization for 5 minutes. The cost was
+  two or three prompts for one Settings change, since the management service's own check and
+  each AccountsService call it made were separate checks. moire-accounts removed that cost
+  ("One prompt per change").
+- **`org.moire.accounts.administer`** (moire-accounts, `nix/moire-accounts.policy`) is in
+  `00-moire-admin.rules` with the same answers as automatic login.
+- **`org.freedesktop.accounts.user-administration` is refused to sessions** (decided
+  2026-10-31). `nix/moire-accounts.rules` (`00-moire-accounts.rules`, ordered before
+  `00-moire-admin.rules`) is the only rule that decides it: YES for the `moire-accounts` system
+  account, nothing for root (stock authority), and NO for every other subject, with no prompt:
+  administrators and standard users, active and local or not, the greeter, and every other
+  system account (moire-dm-settings and moire-dm-front included; neither calls AccountsService's
+  write methods, and the greeter's user list only reads). Before, a session process (`busctl`,
+  any app) calling `CreateUser` got the administrator prompt and could pass it off as the
+  system's request; nothing in Moire made that call any more (Settings goes through
+  moire-accounts), so it is now refused outright. The user's own changes are other actions and
+  are unchanged: `change-own-user-data` is YES in `00-moire-settings.rules`, and
+  `change-own-password` stays ungranted (Moire uses `passwd`).
+- **The greeter is refused in the rule** (decided 2026-10-31). A greeter session has no agent,
+  and moire-dm-settings refuses accounts below uid 1000, but the rule no longer relies on either:
+  it never hands the greeter an `AUTH_*` answer.
 - **Everything granted YES today stays YES** (time zone, Wi‑Fi, suspend, the inhibitors, own
   name and avatar). No prompt appears at login or for everyday actions.
 - **Candidates for later, each needing its own approval:**
@@ -413,11 +509,17 @@ rest. The agent adds a third answer for chosen actions.
 
 - **Image:** `moire-settings-services.nix` enables the helper's socket and service, and the
   assertion becomes "pkexec stays off; the helper socket is on; `polkit-1` has a PAM service".
-- **`scripts/test-settings-policy.mjs`** (built) evaluates the new file and asserts: the two
-  actions return `auth_admin_keep` for active local users, in `wheel` or not, and `no` for
-  inactive or remote ones; the file names exactly those two ids and no other result; no other
-  Moire rule mentions them; everything YES before is still YES; the deny fallback still catches
-  a fixture YES.
+- **`scripts/test-settings-policy.mjs`** (built) evaluates the new files and asserts: the three
+  actions return `auth_admin` for active local users, in `wheel` or not, and `no` from the same
+  rule for the greeter (by name or group, active or not) and for inactive or remote subjects;
+  the file names exactly those two ids and answers only `NO` and `AUTH_ADMIN`; no Moire rule
+  returns a `_KEEP` result; no other Moire rule mentions them; `user-administration` is decided
+  only by `00-moire-accounts.rules`: `no` for every session user (in `wheel` or not, active and
+  local or not), the greeter, other system accounts and look-alike names or the group, `yes` for
+  `moire-accounts` alone (nothing else for it), and root falls through; the user's own actions
+  are not decided there; the files are listed in polkitd's order; the
+  moire-accounts unit, action and bus policy are as described; everything YES before is still
+  YES; the deny fallback still catches a fixture YES.
 
 ## Settings' password sheets
 
@@ -436,8 +538,8 @@ Wi‑Fi password sheet. They do two different jobs.
 **Can the authorization sheets be replaced? Yes. Should they? Yes.**
 
 - **It closes the stated residual risk.** Today any process of an administrator gets a YES. With
-  `AUTH_ADMIN_KEEP`, polkit itself requires a password typed into a prompt no client can draw,
-  and the authorization belongs to the process that asked.
+  `AUTH_ADMIN`, polkit itself requires a password typed into a prompt no client can draw, for
+  every check; nothing is kept for the session.
 - **The password stops crossing the session bus.** Today `authenticate(password)` carries it as
   a JS string in a D-Bus body, which any process of the user can read with `BecomeMonitor`
   (settings-redesign.md says so). The agent's path is compositor buffer → helper socket.
@@ -447,23 +549,30 @@ Wi‑Fi password sheet. They do two different jobs.
 What changed in code (Phase 4, built):
 
 - **Management service:** `org.moire.Accounts1` and `org.moire.LoginSettings1` dropped the
-  per-connection unlock (`Authenticate`, `Lock`) and the `auth_required` code. Admin calls to
-  AccountsService and `moire-dm-settings` are sent with D-Bus's
-  `ALLOW_INTERACTIVE_AUTHORIZATION` flag and a 150 s timeout. A cancelled prompt maps to a new
-  fixed code, `cancelled`, which Settings shows as nothing at all.
+  per-connection unlock (`Authenticate`, `Lock`) and the `auth_required` code. A cancelled prompt
+  maps to a new fixed code, `cancelled`, which Settings shows as nothing at all. Since "One
+  prompt per change" neither administrator path is there: Settings calls moire-accounts and
+  `moire-dm-settings` itself, with D-Bus's `ALLOW_INTERACTIVE_AUTHORIZATION` flag and a 170 s
+  timeout, and `org.moire.LoginSettings1` is gone.
 - **Telling a dismissal from a refusal:** AccountsService answers both with `PermissionDenied`.
-  So before an account action the service asks polkit itself (`CheckAuthorization` for
-  `user-administration`, subject its own system-bus connection, `AllowUserInteraction`), which a
-  process may do for itself. `polkit.dismissed` in the reply is `cancelled`. The kept
-  authorization then covers AccountsService's own check of the same process. Arguments are
-  validated before the question, and a check nobody answers in 150 s is withdrawn
-  (`CancelCheckAuthorization`).
+  Phase 4 had the management service ask polkit itself first, then call AccountsService, whose
+  own checks asked again. That is replaced by moire-accounts ("One prompt per change"), which
+  asks polkit once and reads `polkit.dismissed` from that one reply.
 - **`moire-dm-settings`:** checks `org.moire.dm.set-autologin` with interaction allowed, for a
   caller that set the D-Bus flag (140 s, withdrawn on timeout), and reports a dismissal as the
   error `cancelled`. A caller without the flag gets polkit's answer with no prompt.
-- **Timeouts, innermost first:** prompt 120 s idle; `moire-dm-settings` → polkit 140 s;
-  management service → AccountsService, polkit and `moire-dm-settings` 150 s; Settings → the
-  management service 170 s. `@moire/dbus` now allows calls up to 180 s (it capped at 120 s).
+- **Refused unseen:** a request the prompt turns away without showing (cool-down, flood pause,
+  full queue, at once or after waiting in the queue) also reaches the mechanism as
+  `polkit.dismissed`; polkitd carries no reason. After a dismissal Settings, being the subject,
+  asks the compositor why (`TakeDismissal`, "Why a request was dismissed" above): `refused`
+  becomes
+  the code `refused`, with the sentence "Password requests are paused. Try again in a little
+  while."; anything else, or no answer, stays `cancelled`. Nothing is guessed from timing. (Before
+  this the service called any dismissal under 400 ms `refused`, which missed refusals after
+  queueing and misreported a prompt the lock closed at once.)
+- **Timeouts, innermost first:** prompt 120 s idle; `moire-dm-settings` and moire-accounts →
+  polkit 140 s; Settings → moire-accounts and `moire-dm-settings` 170 s. `@moire/dbus` now
+  allows calls up to 180 s (it capped at 120 s).
 - **Clients:** `authenticate()`, `lock()` and `policy.unlockSeconds` are removed from
   `accounts-settings.ts` and its fake, and `canChange` from the login status (anyone at the seat
   may ask). The fakes take a `prompt` that stands in for the system's. `unix_chkpwd` stays for
@@ -471,14 +580,102 @@ What changed in code (Phase 4, built):
 - **Settings:** the Unlock row and sheet and the Automatic login password sheet are gone. Rows
   and sheets say "Waiting for your password" while a call is pending ("Waiting for an
   administrator's password" for a standard user, whose rows also say "Needs an administrator's
-  password"). `cancelled` leaves everything as it was.
-- **Still true:** the service accepts calls from any process of the user. What stops a rogue
-  process is now polkit's prompt, which names the management service as the requester. See open
+  password"). `cancelled` leaves everything as it was. `refused` says the service's sentence
+  in muted text on the row or under the sheet's form for 8 s, never as an error banner.
+- **Who asks:** account changes and automatic login come from Settings' own process, so the
+  prompt names Settings. A rogue process can call moire-accounts or `moire-dm-settings` too, and
+  is then named itself; it can no longer hide behind the management service. Calling
+  AccountsService's administrator methods directly is refused with no prompt. See open
   question 5.
 
 The data-entry sheets keep a weakness the agent doesn't address: a new password is a JS string
 in Settings and in a D-Bus body. A compositor-owned "secure field" for data entry is possible
 with the same layer, and is left as open question 6.
+
+## One prompt per change
+
+Built 2026-10-31 (Josh approved the recommended design). With `AUTH_ADMIN` every polkit check
+asks, and one Settings change used to make two or three checks: the management service's own,
+then AccountsService's for each call. Now each change is one check.
+
+| Settings change                           | Prompts before | Prompts now | Requested by (prompt) |
+| ----------------------------------------- | -------------- | ----------- | --------------------- |
+| Add a user, with a password               | 3              | 1           | Settings              |
+| Delete a user                             | 2              | 1           | Settings              |
+| Account type                              | 2              | 1           | Settings              |
+| Another user's password                   | 2              | 1           | Settings              |
+| Another user's name or picture (API only) | 2              | not offered | —                     |
+| Automatic login                           | 1              | 1           | Settings              |
+| Your own name, picture or password        | 0              | 0           | —                     |
+
+**moire-accounts** (`apps/system/management-service/src/account-admin.ts`, entry
+`account-admin-entry.ts`; `org.moire.AccountAdmin1` at `/org/moire/AccountAdmin1` on the system
+bus):
+
+- **Methods:** `AddUser(s username, s realName, b administrator, ay password) → u`,
+  `DeleteUser(u uid, b removeFiles)`, `SetAccountType(u uid, b administrator)`,
+  `SetPassword(u uid, ay password)`. Errors are `org.moire.AccountAdmin1.Error.<code>` with fixed
+  sentences (`invalid`, `permission`, `cancelled`, `busy`, `unavailable`, `failed`).
+- **One check, then the calls:** each method checks its arguments, then asks polkit once:
+  `CheckAuthorization` for `org.moire.accounts.administer`, subject `system-bus-name` of the
+  caller, `AllowUserInteraction` only if the caller set D-Bus's
+  `ALLOW_INTERACTIVE_AUTHORIZATION`, 140 s and withdrawn after that. If authorized it makes the
+  AccountsService calls as itself, never with interaction: `nix/moire-accounts.rules` gives its
+  account `user-administration`, so they can't raise a second prompt. A method can't ask twice.
+- **Who the subject is:** Settings calls moire-accounts itself
+  (`packages/system-management/src/account-admin.ts`), so polkitd takes the subject's pid from
+  the system bus daemon for Settings' connection. The prompt names Settings, the compositor
+  records a dismissal under Settings' pid, and Settings reads it with `TakeDismissal` on its
+  session-bus connection (same process). `refused` and `cancelled` are reported as before.
+  The management service is no longer in the path: `org.moire.Accounts1` keeps the list and the
+  session user's own name, picture and password, and refuses another account's name or picture.
+- **Automatic login, the same way:** Settings calls `moire-dm-settings`
+  (`org.moire.LoginManager1` on the system bus, `packages/system-management/src/login-settings.ts`)
+  itself, for the status and for `SetAutomaticLogin`, with the interactive flag. Its bus policy
+  already lets anyone call it (`nix/moire-dm-dbus.conf`); its own checks are the gate: the
+  caller's uid from the bus daemon (people's accounts only, never the greeter) and one polkit
+  check for `org.moire.dm.set-autologin` about the calling connection. The prompt names
+  Settings, and Settings asks `TakeDismissal` after `cancelled`, as for account changes. The
+  management service's `org.moire.LoginSettings1` is removed.
+- **What it refuses before asking:** callers below uid 1000 (the greeter among them; the bus
+  policy also denies the greeter), accounts that aren't people's (uid < 1000, system, non-local,
+  `nologin`), the caller's own account (delete, password), the last administrator (delete,
+  demote), a taken or invalid name, a password under 8 characters, over 256 bytes, with a line
+  break or NUL, or not valid UTF-8. One change at a time per caller uid (`busy`).
+- **Passwords:** `ay`, never a string in moire-accounts: checked as bytes, hashed with SHA-512
+  crypt (`$6$rounds=65536$`, `sha512-crypt.ts`, plain `node:crypto`; about 110 ms under
+  `--jitless`), and the buffer wiped when the call ends. AccountsService gets only the hash.
+  Adding a user hashes before `CreateUser` and deletes the account again if `SetPassword` fails.
+  Log lines are `moire-accounts: code=<code>` with uids and the account type only.
+- **Unit** (`nix/moire-settings-services.nix`, package `nix/moire-accounts-package.nix`, a
+  bundled single file run with moire-dm's V8 flags): its own system account `moire-accounts`,
+  never root; the hardening of `moire-dm-settings` (no capabilities, `ProtectSystem=strict`,
+  `ProtectHome`, `PrivateNetwork`, `AF_UNIX` only, `@system-service ~@privileged`,
+  `MemoryDenyWriteExecute`); only that account may own the name (`nix/moire-accounts-dbus.conf`).
+
+**Why this is not weaker:**
+
+- **It grants nothing new to callers.** Any process of an active, local user could already call
+  AccountsService and get a prompt per call. moire-accounts gives the same caller one prompt for
+  one change, after the same `AUTH_ADMIN` rule, and refuses more than AccountsService does.
+  Calling AccountsService directly is now refused with no prompt at all.
+- **Nothing is kept.** The authorization is used for the calls of the method that asked, inside
+  moire-accounts, and the next change asks again. Polkit's session-wide kept authorization (the
+  R65 finding) is still never returned.
+- **The prompt names the real requester.** The subject is the caller's own bus connection, as
+  the bus daemon reports it, for account changes and automatic login alike. A process that is
+  not Settings is named as itself. Before this, any process could ask the management service and
+  be shown as "Moire Management".
+- **The new YES is narrow.** It is for one action and one system account that nothing else runs
+  as (an assertion keeps it a system account with an empty capability set). polkitd reads the
+  account from the bus daemon. The rule test checks look-alike names and the group get nothing.
+- **Not root.** A root mechanism would also have been possible (root passes polkit), but it
+  would need a larger trust base, and AccountsService reads an icon file as its caller, so a
+  root caller can read any file. moire-accounts never sets icons.
+
+**What it doesn't change:** compromising moire-accounts itself would let an attacker administer
+accounts (and so reach root), as compromising any account mechanism would. Its whole input is
+four D-Bus methods with fixed signatures, and it holds nothing else.
 
 ## Threat model
 
@@ -493,6 +690,23 @@ user's trust that a password prompt is the system's.
   while the prompt is up. The screen shows dots, and captures are refused.
 - **A process becoming the session's agent.** The compositor registers before any client
   starts, accepts calls only from polkitd, and reports loudly if it finds another agent.
+- **A per-process agent taking the session's requests.** Polkit also lets any process register
+  an agent for a single process of the same user (`unix-process`, what `pkttyagent --process`
+  does). Upstream, such an agent outranks the session's unless it registered as a fallback, so
+  a process could register one for Settings or the management service and draw its own
+  password window for their requests. Moire's polkitd carries a patch
+  (`nix/patches/polkit-process-agent-fallback.patch`, applied through `security.polkit.package`
+  in `nix/moire-settings-services.nix`) that makes every `unix-process` agent a fallback: in
+  `get_authentication_agent_for_subject()` the session's agent is chosen first, and a process
+  agent only when the session has none or the subject has no session. Registration is
+  unchanged, so `pkttyagent` still works over ssh and outside logind sessions. The patch is
+  reviewed against polkit 127 only; an assertion fails the build on any other version until it
+  is re-reviewed (open question 10).
+- **A process borrowing another's name.** Account changes and automatic login are asked about
+  Settings' own connection (moire-accounts, moire-dm-settings), so a process can't get its
+  request shown as Settings' or the management service's. moire-accounts' YES for
+  AccountsService is for its own system account only, used inside one call after one prompt;
+  every session gets NO for it, so no process can raise an AccountsService prompt at all.
 - **A process answering for the user.** Only the root helper can tell polkit an authentication
   succeeded, the helper takes the agent's uid from the kernel, and a successful answer needs the
   password. A process that connects to the helper socket itself gains nothing without one.
@@ -501,10 +715,16 @@ user's trust that a password prompt is the system's.
   requests.
 - **A flood of prompts.** One visible, three queued. After a cancel, the same executable asking
   for the same action is refused without a prompt for 2 s, and its requests already waiting
-  are refused with it. Three cancels within two minutes extend that to 5 minutes and raise one
-  notification naming the program; a waiting request refused by a cancel counts as one. (The
-  short refusal was 30 s until the r64 VM run: a person who cancelled by mistake and clicked
-  again got nothing, with no message.)
+  are refused with it. Three cancels of one requester within two minutes, whatever it asked
+  for, refuse that requester for 5 minutes, for every action, including its requests already
+  waiting, and raise one notification naming the program; a waiting request refused by a cancel
+  counts as one. The requester is the compositor's launch the process belongs to, else its
+  executable (as for sleep blockers): never the pid, which is reused, and not the executable
+  alone for launched services, since every Moire service and app is `node`. Other programs are
+  unaffected. (The short refusal was 30 s until the r64 VM run: a person who cancelled by
+  mistake and clicked again got nothing, with no message. Until the R65 VM run the 5 minutes
+  were per action too, so the management service could still ask to add a user after a flood
+  of automatic login prompts.)
   A requester that goes away, a timeout and the lock start no cool-down. Escape always works,
   and Super+L still locks, so a looping requester can't hold the desktop.
 - **A malformed or hostile helper stream.** Bounded lines, a fixed keyword set, deadlines, and
@@ -526,18 +746,10 @@ X windows' pixels and read X selections.
   an X client sets itself. An X requester is flagged "runs under X11".
 - **What X can still do:** an X client can inject input into another X app to make _it_ request
   an action, and the prompt will then name that app truthfully. The password is still required.
-  With `AUTH_ADMIN_KEEP`, a kept authorization for an X app is usable by other X apps driving
-  it for those 5 minutes.
+  No authorization is kept (`AUTH_ADMIN`), so each further action asks again.
 
 **Not protected against:**
 
-- **A per-process agent.** Polkit also lets any process register an agent for a single process
-  of the same user (`unix-process`, what `pkttyagent --process` does), and such an agent
-  outranks the session's unless it registered as a fallback. A process of the user can register
-  one for the management service or for Settings, receive their requests instead of the
-  compositor, and draw its own password window. Registering first does not prevent it, and the
-  compositor cannot see it happen. The password is still required. Closing it needs a change
-  on the root side: see open question 10.
 - **A look-alike drawn by a client when no real prompt is open.** A fullscreen client can paint
   something that resembles the prompt and collect what is typed into it. No desktop prevents
   this by pixels alone. The mitigation offered is a reserved key that only the compositor sees
@@ -577,6 +789,7 @@ The compositor never logs the action's details, the cookie or the answer. Log li
 | 2     | `secure-prompt.ts` in core: state machine, composition, seat gates, fallback painter, capture refusal; the shell's prompt view; portable smokes    | Built; VM run pending |
 | 3     | The agent: registration, sender check, queue, chooser, helper client; the helper units on in the image; fake-helper and private-bus smokes         | Built; VM run pending |
 | 4     | `00-moire-admin.rules` with the two actions; management service and `moire-dm-settings` go interactive; Settings loses the two sheets; policy test | Built; needs 5        |
+| 4b    | One prompt per change: moire-accounts; Settings calls it and moire-dm-settings itself; user-administration NO for sessions                         | Built; needs 5        |
 | 5     | VM run (below)                                                                                                                                     | Josh's                |
 | 6     | Further actions from the candidate table, one approval each                                                                                        | Needs approval        |
 
@@ -600,7 +813,29 @@ Each smoke runs on its own with `pnpm exec tsx <file>` from its package, like th
   spawn; calls from a non-authority refused; the answer on the socket only as bytes; wrong, then
   right; a visible prompt refused; oversized and unknown lines; `CancelAuthentication`; an agent
   already registered; a new polkitd and a dropped bus; the throttle; identities; every reply; the
-  log's fixed form; naming the requester.
+  log's fixed form; naming the requester; the dismissal reason kept for the subject pid only,
+  before polkitd hears the answer.
+- **`apps/system/compositor/src/prompt-outcomes.smoke.ts`:** `TakeDismissal` answers only the
+  subject's own pid (from the bus daemon), once, within 60 s, not after the pid is reused; the
+  client trusts only a known reason.
+- **`apps/system/management-service/src/account-admin.smoke.ts`** (Settings' client →
+  moire-accounts → fake AccountsService, fake polkit and compositor on a private bus): one
+  polkit check per change, about Settings' connection, with interaction only when the caller
+  waits; AccountsService called by moire-accounts alone, never interactively; arguments checked
+  before the prompt; `refused`/`cancelled` from the compositor's answer to Settings' process
+  only; another caller named as itself; per-person busy; the check withdrawn on timeout; the
+  rollback; hashes only at AccountsService, buffers wiped, nothing secret logged.
+- **`apps/system/management-service/src/accounts-settings.smoke.ts`:** own name, picture and
+  password with no polkit check; another account's name or picture refused; the old admin
+  methods and `org.moire.LoginSettings1` gone.
+- **`apps/system/management-service/src/autologin-client.smoke.ts`** (Settings' client → a fake
+  moire-dm-settings and compositor on a private bus): one call, so one polkit check, per change,
+  from Settings' own connection with interaction allowed; the status parsed strictly (on for
+  you, for someone else, off, malformed); refused at once and after queueing is `refused`;
+  cancelled, locked and no compositor are `cancelled`, asked on Settings' own session
+  connection; fixed sentences only; one change at a time; no moire-dm-settings is "not
+  available" with no call. `apps/system/moire-dm/src/login-manager.smoke.ts` covers the
+  service's own checks.
 - **`apps/system/compositor/src/polkit-helper.smoke.ts`** (a fake helper on a socket): the
   verdict table above, the strict reader, answer limits, deadlines, cancelling, a missing socket,
   and the write copy wiped.
@@ -625,18 +860,30 @@ Image with the helper socket on, `moire-pam-test` (standard) and `moire-admin-te
    after closing the prompt.
 4. Wrong password: shake, "That password didn't work", the prompt stays. Five wrong: "Too many
    attempts" for a minute.
-5. Right password: the user is created. A second admin action within 5 minutes doesn't prompt;
-   after 5 minutes it does.
+5. Right password: the user is created, with its password, after that one prompt and no second
+   one. A second admin action prompts again at once, and so
+   does `busctl … AddUser` to moire-accounts from a terminal in the same session (no kept
+   authorization; that prompt names `busctl`, not Settings). `busctl … CreateUser` straight to
+   AccountsService, as the admin and as `moire-pam-test`, is refused at once with no prompt
+   (`pkcheck --action-id org.freedesktop.accounts.user-administration --process $$
+   --allow-user-interaction`: not authorized, no prompt). Changing your own name and picture in
+   Settings still works with no prompt. As the greeter, the rule answers NO (`pkcheck` as
+   `greeter`: not authorized, no prompt).
 6. Escape: the action is refused quietly, and Settings shows no error banner.
 7. Leave the prompt untouched for 2 minutes: it closes and the action is refused.
 8. As `moire-pam-test`, the same action: "An administrator's password is needed" with
    `moire-admin-test` listed (or a refusal, per open question 2).
-9. Automatic login: the switch raises the prompt, with no Settings sheet.
+9. Automatic login: the switch raises one prompt, with no Settings sheet, and it says
+   "Requested by Settings". Cancel it: nothing is said and the switch stays. The management
+   service is not involved (`busctl --user introspect org.moire.SystemManagement1
+   /org/moire/LoginSettings1` finds nothing).
 10. From a terminal as the admin, an unlisted action (`systemctl restart polkit`): still refused
     with no prompt. The deny fallback holds.
-11. Flood: a loop of ten `busctl` calls to AccountsService with interaction allowed. One prompt,
-    three waiting, the rest refused. Cancel once: the three waiting are refused with it, which
+11. Flood: a loop of ten `busctl` calls to moire-accounts (`org.moire.AccountAdmin1`) with
+    interaction allowed. One prompt, three waiting, the rest refused. Cancel once: the three waiting are refused with it, which
     makes a flood, so no new prompt for 5 minutes. One notification names the program.
+    Settings' own prompts still appear meanwhile. Then cancel automatic login three times
+    within two minutes: Add user is refused too, with no prompt and no second notification.
 12. Super+L with a prompt open: the lock screen appears, the request is refused, and no prompt is
     visible after unlock.
 13. X11: with `xev` focused in Xwayland, raise a prompt and type. `xev` records nothing. Run an
@@ -659,6 +906,9 @@ Image with the helper socket on, `moire-pam-test` (standard) and `moire-admin-te
    _Recommended: yes, for active local sessions, as macOS and GNOME do. It replaces "log out and
    in as the admin". The alternative is to keep the `wheel` check in the rule and show standard
    users no prompt._
+   _Decided: yes (2026-10-11). Since 2026-10-31 every change asks (`AUTH_ADMIN`): the kept
+   authorization the R65 VM run found session-wide is gone, so a standard user's one admin
+   password no longer lends the whole session admin for 5 minutes._
 3. **A reserved verification key.** Should one key combination be reserved so that only the
    compositor sees it: with a real prompt open it pulses the prompt's badge, with none it shows
    "No system password request is open"?
@@ -673,6 +923,11 @@ Image with the helper socket on, `moire-pam-test` (standard) and `moire-admin-te
    _Recommended: leave it open to the user's processes for now. The polkit prompt is the gate,
    and it appears for every caller. Revisit with the keyring's client identity work, which
    builds the same check._
+   _Decided (2026-10-31): only Settings, from the kernel. Built by taking the management service
+   out of the path: Settings calls moire-accounts itself, so polkit's subject is Settings' own
+   connection and the prompt names it. Any other caller is named as itself ("One prompt per
+   change"). Automatic login followed: Settings calls moire-dm-settings itself, and the prompt
+   names Settings._
 6. **A compositor-owned secure field for data entry** (new passwords, Wi‑Fi passwords), so those
    stop being strings in an app and on the bus.
    _Recommended: later, after both prompts ship. The seam is the same layer._
@@ -687,8 +942,17 @@ Image with the helper socket on, `moire-pam-test` (standard) and `moire-admin-te
 10. **Per-process agents** (found in Phase 1). Any process of the user can register a
     `unix-process` agent for another of the user's processes and take its prompts away from the
     compositor.
-    _Recommended: carry a small polkitd patch in the image that treats every `unix-process`
-    agent as a fallback, so the session's agent always wins and `pkttyagent` still works where
-    no session agent exists (ssh). It is the first root-side change in this design, so it needs
-    its own approval. Until then this is a stated gap, of the same kind as the look-alike
-    prompt: the user is asked for a password by a window that is not the system's._
+    _Decided (approved by Josh): Moire's polkitd treats every `unix-process` agent as a
+    fallback, so the session's agent always wins and `pkttyagent` still works where no session
+    agent exists (ssh, no logind session). It is the first root-side change in this design:
+    `nix/patches/polkit-process-agent-fallback.patch`, pinned to polkit 127 by an assertion in
+    `nix/moire-settings-services.nix`. See the threat model and "Pinned against polkit 127"._
+11. **Ending the kept authorization on leaving the Users page.** Should Settings end the 5-minute
+    authorization when the Users page closes?
+    _Decided (2026-10-31): moot. No authorization is kept (`AUTH_ADMIN`), so there is nothing to
+    end._
+12. **Excluding the greeter explicitly.** Should `00-moire-admin.rules` refuse the greeter
+    itself, rather than relying on the greeter having no agent and moire-dm-settings refusing
+    uid < 1000?
+    _Decided (2026-10-31): yes. The rule answers NO for the `greeter` account (name or group)
+    and for any subject not in an active, local session, before the `AUTH_ADMIN` branch._

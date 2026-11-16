@@ -205,6 +205,8 @@ export type WindowOpts = {
   fullscreen?: boolean;
   /** Explicit bounded software backdrop policy; ordinary windows remain hardware-only. */
   retainedMotionPolicy?: RetainedMotionPolicy;
+  /** Return focus to a control that went away when it comes back. Default true. */
+  restoreLostFocus?: boolean;
 };
 
 /**
@@ -308,6 +310,16 @@ export class Window {
     returnFocusId: string | null;
   }> = [];
   private readonly consumedAutoFocusIds = new Set<string>();
+  /**
+   * A control that lost focus by going away rather than by the user moving it: disabled while
+   * its action runs (the system's password prompt holds the keyboard meanwhile), or briefly
+   * absent from a commit. Focus goes back to it when it can take focus again, unless the user
+   * has put focus somewhere else first.
+   */
+  private lostFocusId: string | null = null;
+  private readonly restoreLostFocus: boolean;
+  /** Focus was put on the first control of a trapped scope only because the focused one went. */
+  private focusIsFallback = false;
 
   // Pointer state
   private hoverHit: HitRegion | null = null;
@@ -333,6 +345,7 @@ export class Window {
   private lastTickMs: number = Date.now();
 
   constructor(opts: WindowOpts) {
+    this.restoreLostFocus = opts.restoreLostFocus !== false;
     this.retainedMotion = new WindowRetainedMotionController((paint) => {
       if (paint) this.invalidate(false);
       else for (const callback of this.invalidationCallbacks) callback();
@@ -575,6 +588,26 @@ export class Window {
 
   minimize(): void {
     this.platformWin?.minimize?.();
+  }
+
+  /**
+   * An xdg-activation token naming this window, to hand to a program it launches
+   * (`XDG_ACTIVATION_TOKEN`) or to the running instance of a single-window app, so that window may
+   * come to the front. The compositor honours it only when this window had the user's attention
+   * when it asked. Null where the platform issues none.
+   */
+  requestActivationToken(): Promise<string | null> {
+    return this.platformWin?.requestActivationToken?.() ?? Promise.resolve(null);
+  }
+
+  /** Raise and focus this window (restoring it if minimized) with an xdg-activation token. */
+  activate(token: string): void {
+    this.platformWin?.activate?.(token);
+  }
+
+  /** Resolves once the compositor has handled this window's requests so far (a minimize, say). */
+  sync(): Promise<void> {
+    return this.platformWin?.sync?.() ?? Promise.resolve();
   }
 
   setPresentationMode(mode: UiPresentationMode): void {
@@ -962,6 +995,7 @@ export class Window {
     this.focusedHit?.onFocusChange?.(false);
     this.focusedHit = null;
     this.focusedId = null;
+    this.lostFocusId = null;
     renderShell(this.root, null);
     this.platformWin?.destroy();
     this.platformWin = null;
@@ -1040,6 +1074,11 @@ export class Window {
       if (returnFocusId) {
         const returnHit = this.hits.find((hit) => hit.focusable && hit.focusId === returnFocusId);
         if (returnHit) this.changeFocus(returnHit);
+        else if (this.restoreLostFocus) {
+          // The opener is disabled or not committed yet: it takes focus when it is back.
+          this.changeFocus(null);
+          this.lostFocusId = returnFocusId;
+        }
       }
       if (activeScopeId && retainedIndex < 0) {
         this.focusScopeHistory.push({
@@ -1073,7 +1112,21 @@ export class Window {
         (hit) => hit.focusable && hit.focusScopeId === activeScopeId,
       );
       if (firstInScope) {
-        this.changeFocus(firstInScope);
+        this.changeFocus(firstInScope, true);
+        this.invalidate();
+        return;
+      }
+    }
+    if (this.lostFocusId && (!this.focusedId || this.focusIsFallback)) {
+      const lostId = this.lostFocusId;
+      const back = this.hits.find(
+        (hit) =>
+          hit.focusable &&
+          hit.focusId === lostId &&
+          (!activeScopeId || hit.focusScopeId === activeScopeId),
+      );
+      if (back) {
+        this.changeFocus(back);
         this.invalidate();
         return;
       }
@@ -1084,7 +1137,14 @@ export class Window {
     }
     this.focusedHit =
       this.hits.find((hit) => hit.focusable && hit.focusId === this.focusedId) ?? null;
-    if (!this.focusedHit) this.focusedId = null;
+    if (!this.focusedHit) {
+      // Remember it rather than forget it: keys go nowhere until it is back, as in a toolkit
+      // whose focused button is made insensitive for the length of a modal operation.
+      // A fallback that goes too leaves the original remembered.
+      if (!this.focusIsFallback && this.restoreLostFocus) this.lostFocusId = this.focusedId;
+      this.focusIsFallback = false;
+      this.focusedId = null;
+    }
   }
 
   private reconcileHoverAfterLayout(): void {
@@ -1117,9 +1177,12 @@ export class Window {
     return null;
   }
 
-  private changeFocus(next: HitRegion | null): boolean {
+  /** `fallback`: focus moves only because the focused control went; remember that one. */
+  private changeFocus(next: HitRegion | null, fallback = false): boolean {
     const focusable = next?.focusable ? next : null;
     const nextId = focusable?.focusId ?? null;
+    this.focusIsFallback = fallback;
+    if (!fallback) this.lostFocusId = null;
     if (nextId === this.focusedId) {
       this.focusedHit = focusable;
       return false;

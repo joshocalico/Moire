@@ -3,8 +3,13 @@
  *
  * The boot stage animates until the next stage is ready to take the display, then stops,
  * drops DRM master (its framebuffer stays on screen) and publishes its final frame and scene
- * clock. The compositor seeds its first scanout buffer with that frame, so the modeset is
- * invisible, and a later stage may continue the scene from the published clock.
+ * clock. A compositor that is not yet ready to draw seeds its first scanout buffer with that
+ * frame, so the modeset is invisible, and keeps it up until its own first frame.
+ *
+ * The scene's clock is CLOCK_MONOTONIC from
+ * `startedAtMs`, so a later stage draws the same scene at the same moment. One that prepared its
+ * renderer while the boot stage was presenting asks for no frame and does no modeset: the CRTC goes
+ * on scanning out the boot stage's last frame until the next stage flips to its own.
  *
  * Protocol, all in one tmpfs directory:
  *   active.json    written by the boot stage once its first frame is on screen
@@ -16,6 +21,8 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
+const NO_FRAME = "no-frame";
+
 export const BOOT_HANDOFF_DIR = process.env.MOIRE_BOOT_HANDOFF_DIR ?? "/run/moire-boot-handoff";
 
 export type BootHandoffActive = {
@@ -25,6 +32,8 @@ export type BootHandoffActive = {
   height: number;
   /** CLOCK_MONOTONIC milliseconds at scene time zero. */
   startedAtMs: number;
+  /** The scene is on screen, so `startedAtMs`, `width` and `height` are final. */
+  presenting?: boolean;
 };
 
 export type BootHandoffRelease = BootHandoffActive & {
@@ -71,6 +80,39 @@ export function publishBootActive(state: BootHandoffActive, dir = BOOT_HANDOFF_D
   writeAtomic(file("active.json", dir), JSON.stringify(state));
 }
 
+/** Boot side: the scene's first frame is up. Leaves a pending release request in place. */
+export function markBootPresenting(state: BootHandoffActive, dir = BOOT_HANDOFF_DIR): void {
+  writeAtomic(file("active.json", dir), JSON.stringify({ ...state, presenting: true }));
+}
+
+/** The running boot stage's published state, if it is alive. */
+export function readBootActive(dir = BOOT_HANDOFF_DIR): BootHandoffActive | null {
+  const active = readJson<BootHandoffActive>(file("active.json", dir));
+  if (!active) return null;
+  try {
+    process.kill(active.pid, 0);
+  } catch (error) {
+    // EPERM: alive, but owned by another user (the boot stage runs as root).
+    if ((error as NodeJS.ErrnoException).code !== "EPERM") return null;
+  }
+  return active;
+}
+
+/** Compositor side: wait, bounded, for the boot stage's scene to be on screen. */
+export async function waitForBootPresenting(
+  timeoutMs: number,
+  dir = BOOT_HANDOFF_DIR,
+): Promise<BootHandoffActive | null> {
+  const deadline = monotonicMs() + timeoutMs;
+  for (;;) {
+    const active = readBootActive(dir);
+    if (!active) return null;
+    if (active.presenting) return active;
+    if (monotonicMs() >= deadline) return null;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 /** Watch for a handshake file to appear; returns a disposer. */
 function watchFor(name: string, dir: string, onSeen: () => void): () => void {
   let done = false;
@@ -101,6 +143,15 @@ export function watchBootPresented(onPresented: () => void, dir = BOOT_HANDOFF_D
   return watchFor("presented", dir, onPresented);
 }
 
+/** Boot side: whether the next stage asked for the final frame. It need not if it is prepared. */
+export function bootReleaseWantsFrame(dir = BOOT_HANDOFF_DIR): boolean {
+  try {
+    return !fs.readFileSync(file("request", dir), "utf8").includes(NO_FRAME);
+  } catch {
+    return true;
+  }
+}
+
 /** Boot side: master is dropped; publish the frame left on screen and the scene clock. */
 export function completeBootRelease(
   release: Omit<BootHandoffRelease, "frame">,
@@ -123,17 +174,12 @@ export function completeBootRelease(
 export async function requestBootRelease(
   timeoutMs = 2000,
   dir = BOOT_HANDOFF_DIR,
+  options: { wantFrame?: boolean } = {},
 ): Promise<BootHandoffRelease | null> {
-  const active = readJson<BootHandoffActive>(file("active.json", dir));
-  if (!active) return null;
+  if (!readBootActive(dir)) return null;
   try {
-    process.kill(active.pid, 0);
-  } catch (error) {
-    // EPERM: alive, but owned by another user (the boot stage runs as root).
-    if ((error as NodeJS.ErrnoException).code !== "EPERM") return null;
-  }
-  try {
-    fs.writeFileSync(file("request", dir), String(process.pid));
+    const noFrame = options.wantFrame === false ? ` ${NO_FRAME}` : "";
+    writeAtomic(file("request", dir), `${process.pid}${noFrame}`);
   } catch {
     return null;
   }

@@ -422,7 +422,8 @@ try {
     assert.equal(captures.length, 0);
     await capture.captureNow();
     capture.promptPress("discard");
-    assert.equal(captures.length, 1);
+    // The capture call follows the activation-token request (own-window.ts), not the click itself.
+    await capture.wait(() => captures.length === 1);
     capture.press("screenshot-capture");
     captures[0]?.resolve(replacement);
     await capture.settle();
@@ -433,7 +434,7 @@ try {
     );
     await capture.captureNow();
     capture.promptPress("discard");
-    assert.equal(captures.length, 2);
+    await capture.wait(() => captures.length === 2);
     captures[1]?.reject(new Error("capture unavailable"));
     await capture.settle();
     assert.deepEqual(documentImage(capture.latest.current), source);

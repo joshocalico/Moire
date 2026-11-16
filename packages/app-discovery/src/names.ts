@@ -40,3 +40,20 @@ function humaniseApplicationId(id: string): string {
   const title = named.map((word) => word[0]!.toUpperCase() + word.slice(1)).join(" ");
   return title || id;
 }
+
+/**
+ * Whether a window whose app id is `windowAppId` belongs to `app`: the id equals the desktop id
+ * (without `.desktop`) or the entry's `StartupWMClass`, case-insensitively. Exact on purpose: a
+ * single-window launch activates the match, so a near miss must not steal another app's window.
+ */
+export function applicationOwnsWindow(app: DesktopEntry, windowAppId: string): boolean {
+  const id = windowAppId
+    .trim()
+    .replace(/\.desktop$/i, "")
+    .toLowerCase();
+  if (!id) return false;
+  return (
+    app.id.replace(/\.desktop$/i, "").toLowerCase() === id ||
+    app.startupWMClass?.toLowerCase() === id
+  );
+}

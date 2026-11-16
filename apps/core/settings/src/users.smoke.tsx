@@ -2,12 +2,17 @@
  * Users & Login with the system's password prompt (docs/polkit-agent.md). Settings has no
  * authorization sheet of its own any more:
  *
- * - **Automatic login:** the switch calls the service at once, says "Waiting for your password"
- *   while the system's prompt is up, and shows nothing at all when the prompt is dismissed.
+ * - **Automatic login:** the switch calls moire-dm-settings at once (Settings itself, so the
+ *   prompt names Settings), raises exactly one prompt per change, says "Waiting for your
+ *   password" while it is up, and shows nothing at all when the prompt is dismissed.
  * - **Other accounts:** no Unlock row. Add a user and the per-user actions are there for
  *   everyone; the data-entry sheets stay and wait in the same way.
  * - **A standard user** can ask too, and is told an administrator's password is needed.
  * - **greetd** (no moire-dm): no automatic-login switch.
+ * - **Refused unseen** (paused after cancels, or a full queue): a calm line beside the control,
+ *   no error banner.
+ * - **Keyboard focus** goes back to the switch when its prompt ends, and to "Add a user…" when
+ *   its sheet closes.
  *
  * The fakes' `prompt` stands in for the compositor's prompt. `SETTINGS_PNG_DIR` saves pictures.
  */
@@ -34,6 +39,10 @@ const WAITING = "Waiting for your password";
 const WAITING_ADMIN = "Waiting for an administrator's password";
 const NEEDS_ADMIN = "Needs an administrator's password";
 const CANCELLED = "The password request was cancelled.";
+const PAUSED = "Password requests are paused. Try again in a little while.";
+const ERROR_BANNER = "That didn't work";
+const KEY = { tab: 15, space: 57 } as const;
+type Answer = "authorized" | "cancelled" | "refused";
 /** Text of the sheets that are gone. */
 const GONE = [
   "Unlock to change accounts",
@@ -47,13 +56,22 @@ const GONE = [
 
 /** The system's prompt, held open until the smoke answers it. */
 function heldPrompt() {
-  const waiting: ((answer: "authorized" | "cancelled") => void)[] = [];
+  const waiting: ((answer: Answer) => void)[] = [];
+  let asked = 0;
   return {
-    prompt: () => new Promise<"authorized" | "cancelled">((resolve) => waiting.push(resolve)),
+    prompt: () =>
+      new Promise<Answer>((resolve) => {
+        asked++;
+        waiting.push(resolve);
+      }),
     get open() {
       return waiting.length;
     },
-    answer(answer: "authorized" | "cancelled") {
+    /** Prompts raised so far: one per change (moire-accounts and moire-dm-settings ask once). */
+    get asked() {
+      return asked;
+    },
+    answer(answer: Answer) {
       const resolve = waiting.shift();
       assert.ok(resolve, "no prompt is open");
       resolve(answer);
@@ -62,7 +80,7 @@ function heldPrompt() {
 }
 
 /** The fake accounts, as a standard user sees them. */
-function standardAccounts(prompt?: () => Promise<"authorized" | "cancelled">) {
+function standardAccounts(prompt?: () => Promise<Answer>) {
   const accounts = createFakeAccountsSettingsClient({ prompt });
   const state = accounts.state;
   assert(state.kind === "ready" && state.status.kind === "ready");
@@ -107,6 +125,7 @@ await withFixture(async () => {
     shot(app, "users-autologin-off");
 
     // On: no sheet, the call is made at once, and the row says what it is waiting for.
+    const askedBeforeOn = system.asked;
     app.press({ focusId: TOGGLE });
     await shows(app, WAITING);
     assert.deepEqual(login.calls, ["SetAutomaticLogin:true"]);
@@ -123,6 +142,9 @@ await withFixture(async () => {
     system.answer("authorized");
     await shows(app, "On · starts without asking for your password");
     absent(app, [WAITING]);
+    await app.settle(3);
+    assert.equal(system.asked, askedBeforeOn + 1, "one prompt to turn on automatic login");
+    assert.equal(system.open, 0, "and no second one after it");
     shot(app, "users-autologin-on");
 
     // Off, but the prompt is dismissed: still on, and nothing is said.
@@ -172,6 +194,7 @@ await withFixture(async () => {
     absent(app, [CANCELLED, "Fake cancelled"]);
     assert.ok(!app.texts().includes("Alice Example · alice"), "nothing was created");
     // Again, answered: the account appears and the sheet closes.
+    const askedBeforeAdd = system.asked;
     app.press({ focusId: "users:submit" });
     await shows(app, WAITING);
     system.answer("authorized");
@@ -180,6 +203,10 @@ await withFixture(async () => {
       `No new account: ${app.texts().slice(0, 80).join(" | ")}`,
     );
     assert.deepEqual(accounts.calls, ["CreateUser", "CreateUser"]);
+    // A user with a password: one prompt, and no second one after it.
+    await app.settle(3);
+    assert.equal(system.asked, askedBeforeAdd + 1, "one prompt to add a user");
+    assert.equal(system.open, 0);
 
     // A user's sheet opens straight away; deleting is a confirmation that waits the same way.
     await hides(app, "Username");
@@ -194,15 +221,113 @@ await withFixture(async () => {
     await hides(app, WAITING);
     assert.ok(app.texts().includes("Delete Guest?"), "the confirmation stays open");
     absent(app, [CANCELLED]);
+    const askedBeforeDelete = system.asked;
     app.press({ focusId: "users:delete" });
     await shows(app, WAITING);
     system.answer("authorized");
     await hides(app, "Delete Guest?");
+    await app.settle(3);
+    assert.equal(system.asked, askedBeforeDelete + 1, "one prompt to delete a user");
+    assert.equal(system.open, 0);
     await app.until(
       () => !app.texts().some((text) => text.startsWith("guest · Standard")),
       "Guest is still listed",
     );
     absent(app, GONE);
+    app.destroy();
+  }
+
+  // ---- Keyboard only: focus stays with the control that raised the prompt, and a request the
+  // system turns away unseen is said calmly beside it.
+  {
+    const system = heldPrompt();
+    const accounts = createFakeAccountsSettingsClient({ prompt: system.prompt });
+    const login = createFakeLoginSettingsClient({ prompt: system.prompt });
+    const fixture = settingsFixture(loadSettings(), {
+      page: "users",
+      services: { accounts, login },
+    });
+    const app = await mountSettings(fixture, SIZE);
+    await shows(app, "Automatic login");
+    const focused = () => (app.window as unknown as { focusedId: string | null }).focusedId;
+    const tabTo = (focusId: string) => {
+      for (let step = 0; step < 80 && focused() !== focusId; step++) app.key(KEY.tab, "Tab");
+      assert.equal(focused(), focusId, `Tab never reached ${focusId}`);
+    };
+    const space = () => app.key(KEY.space, " ", { text: " " });
+
+    // The switch is disabled while the prompt is up; Escape there brings focus back to it.
+    tabTo(TOGGLE);
+    space();
+    await shows(app, WAITING);
+    system.answer("cancelled");
+    await hides(app, WAITING);
+    assert.equal(focused(), TOGGLE, "focus is back on the switch");
+    // ...so Space works at once, without a Tab first.
+    space();
+    await shows(app, WAITING);
+    assert.deepEqual(login.calls, ["SetAutomaticLogin:true", "SetAutomaticLogin:true"]);
+
+    // Turned away without a prompt: said beside the switch, calmly, and not as an error.
+    system.answer("refused");
+    await shows(app, PAUSED);
+    absent(app, [ERROR_BANNER, CANCELLED]);
+    assert.equal(focused(), TOGGLE);
+    shot(app, "users-autologin-refused");
+    // Trying again clears it; a dismissal still says nothing.
+    space();
+    await shows(app, WAITING);
+    absent(app, [PAUSED]);
+    system.answer("cancelled");
+    await hides(app, WAITING);
+    absent(app, [PAUSED, ERROR_BANNER]);
+    // Queued behind another prompt, then refused unseen (a flood pause began meanwhile): the
+    // row waits as long as it takes, then says the same calm sentence. The service learns the
+    // reason from the compositor, not from how fast the answer came.
+    space();
+    await shows(app, WAITING);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await app.settle(10);
+    assert.ok(app.texts().includes(WAITING), "still waiting while queued");
+    absent(app, [PAUSED]);
+    system.answer("refused");
+    await shows(app, PAUSED);
+    await hides(app, WAITING);
+    absent(app, [ERROR_BANNER, CANCELLED]);
+    assert.equal(focused(), TOGGLE);
+    space();
+    await shows(app, WAITING);
+    system.answer("cancelled");
+    await hides(app, WAITING);
+    absent(app, [PAUSED, ERROR_BANNER]);
+
+    // Add a user from the keyboard: refused, the sheet stays and says so; then added, and the
+    // sheet closes with focus back on "Add a user…".
+    tabTo("setting:users:add");
+    space();
+    await shows(app, "Add a user");
+    assert.equal(focused(), "users:field:realName");
+    app.type("Alice Example");
+    app.key(KEY.tab, "Tab");
+    app.type("alice");
+    app.key(KEY.tab, "Tab");
+    app.type("long enough pw");
+    tabTo("users:submit");
+    space();
+    await shows(app, WAITING);
+    system.answer("refused");
+    await shows(app, PAUSED);
+    assert.ok(app.texts().includes("Add a user"), "the sheet stays open");
+    absent(app, [ERROR_BANNER]);
+    assert.equal(focused(), "users:submit", "focus is back on the button that asked");
+    shot(app, "users-add-refused");
+    space();
+    await shows(app, WAITING);
+    system.answer("authorized");
+    await hides(app, "Username");
+    await app.settle(6);
+    assert.ok(app.texts().some((text) => text.startsWith("alice · Standard")));
+    assert.equal(focused(), "setting:users:add", "focus is back on the row that opened it");
     app.destroy();
   }
 

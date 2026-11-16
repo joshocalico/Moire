@@ -10,7 +10,7 @@
   "scripts": {
     "start": "tsx src/main.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "smoke": "tsx src/smoke.tsx"
+    "smoke": "tsx src/smoke.tsx && tsx src/own-window.smoke.tsx"
   },
   "dependencies": {
     "@moire/app-tools": "workspace:*",

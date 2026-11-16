@@ -1,0 +1,62 @@
+Moire: make unix-process authentication agents fallback-only.
+
+Against polkit 127 (nixpkgs 7fc6f2c, fetchFromGitHub polkit-org/polkit rev 127,
+hash sha256-YTugETy0rqu/bv53jV1UeGqSK79bRXR52EJNcTblvzo=). Applied only to
+Moire's images via nix/moire-settings-services.nix; re-review on any bump.
+
+Upstream, get_authentication_agent_for_subject() returns an agent registered
+for the requesting process (unix-process scope) ahead of the session's agent
+unless that agent opted into "fallback". Any process of the user can register
+such an agent for itself or a child (pkttyagent --process) and receive the
+request instead of the compositor, then draw its own password window.
+
+With this patch a unix-process agent is always treated as a fallback: the
+session's agent wins, and the process agent is used only when the session has
+no agent or the subject has no session at all. The second hunk keeps that last
+case working: upstream returns NULL when there is no session even if a
+fallback agent was found. Registration is unchanged, so pkttyagent still
+works over ssh and outside logind sessions. See docs/polkit-agent.md.
+
+--- a/src/polkitbackend/polkitbackendinteractiveauthority.c
++++ b/src/polkitbackend/polkitbackendinteractiveauthority.c
+@@ -1848,10 +1848,20 @@
+ 
+   if (agent != NULL)
+     {
+-      /* We have an agent! Now see if we should use this as a fallback only */
+-      if (agent->registration_options != NULL &&
+-          g_variant_lookup (agent->registration_options, "fallback", "b", &fallback) &&
+-          fallback)
++      /* We have an agent! Now see if we should use this as a fallback only.
++       *
++       * Moire: an agent registered for a unix-process subject is always a
++       * fallback, whatever its options say. Any process can register one for
++       * itself or another process of the same user (pkttyagent --process) and
++       * would otherwise outrank the session's agent, taking the request away
++       * from the compositor's secure prompt. The session's agent wins; the
++       * process agent is used only when the session has none or the subject
++       * has no session (ssh, no logind). See docs/polkit-agent.md.
++       */
++      if (POLKIT_IS_UNIX_PROCESS (agent->scope) ||
++          (agent->registration_options != NULL &&
++           g_variant_lookup (agent->registration_options, "fallback", "b", &fallback) &&
++           fallback))
+         {
+           agent_fallback = agent;
+           agent = NULL;
+@@ -1872,12 +1882,10 @@
+   session_for_subject = polkit_backend_session_monitor_get_session_for_subject (priv->session_monitor,
+                                                                                 subject,
+                                                                                 NULL);
+-  if (session_for_subject == NULL)
+-    goto out;
++  if (session_for_subject != NULL)
++    agent = g_hash_table_lookup (priv->hash_scope_to_authentication_agent, session_for_subject);
+ 
+-  agent = g_hash_table_lookup (priv->hash_scope_to_authentication_agent, session_for_subject);
+-
+-  /* use fallback, if available */
++  /* use fallback, if available (Moire: also when the subject has no session) */
+   if (agent == NULL && agent_fallback != NULL)
+     agent = agent_fallback;
+ 

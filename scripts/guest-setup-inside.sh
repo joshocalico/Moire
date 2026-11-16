@@ -46,6 +46,11 @@ if [[ ! -d /mnt/prltools ]]; then
   fi
 fi
 
+# This dev VM is a test machine: let the root-run display scripts change modes and layouts
+# (scripts/guest-display-grant.sh). The NixOS test image sets moire.testing.displayControl.
+echo "==> display test control"
+sudo install -D -o root -g root -m 0444 /dev/null /etc/moire/testing/display-control
+
 echo "==> DRM devices"
 ls -la /dev/dri || true
 groups || true

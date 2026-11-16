@@ -49,10 +49,8 @@ export async function runBootGuardian(): Promise<BootRunResult> {
     fs.statSync(artworkPath).size !== BOOT_SOURCE_BYTES
   )
     throw new Error("Supply the bounded installed MOIRE_BOOT_ARTWORK RGBA texture");
-  const { openBootConsole, listDrmConnectors, EvdevKeyboard, LinuxReadinessDispatcher } = sys;
-  const cardPath =
-    process.env.MOIRE_BOOT_CARD ??
-    listDrmConnectors().find((connector) => connector.connection === "connected")?.cardPath;
+  const { openBootConsole, findConnectedCard, EvdevKeyboard, LinuxReadinessDispatcher } = sys;
+  const cardPath = process.env.MOIRE_BOOT_CARD ?? findConnectedCard() ?? undefined;
   if (!cardPath) return skip("display-unavailable");
   const ttyPath = process.env.MOIRE_BOOT_TTY ?? "/dev/tty1";
   const lease = service

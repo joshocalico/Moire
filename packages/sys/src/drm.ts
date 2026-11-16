@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import koffi from "koffi";
 import { assertLinux } from "./platform";
 
@@ -111,6 +112,39 @@ function openFlags() {
  * List connectors on each `/dev/dri/card*` via libdrm (koffi).
  * Phase 0 sanity check — not a full KMS backend yet.
  */
+/**
+ * The card with a connected display, read from sysfs without opening the device. Closing the last
+ * DRM fd makes the kernel restore its fbdev console, which would show before the first real frame.
+ */
+export function findConnectedCard(sysfs = "/sys/class/drm"): string | null {
+  const entries = fs.readdirSync(sysfs).sort();
+  for (const name of entries) {
+    const card = /^(card\d+)-/.exec(name)?.[1];
+    if (!card) continue;
+    try {
+      const status = fs.readFileSync(path.join(sysfs, name, "status"), "utf8").trim();
+      if (status === "connected") return `/dev/dri/${card}`;
+    } catch {
+      // The connector went away while listing.
+    }
+  }
+  return null;
+}
+
+/** The render node of the GPU behind a card (never another GPU's), or null if it has none. */
+export function renderNodeForCard(cardPath: string, sysfs = "/sys/class/drm"): string | null {
+  try {
+    const dir = path.join(sysfs, path.basename(cardPath), "device", "drm");
+    const node = fs
+      .readdirSync(dir)
+      .sort()
+      .find((name) => /^renderD\d+$/.test(name));
+    return node ? `/dev/dri/${node}` : null;
+  } catch {
+    return null;
+  }
+}
+
 export function listDrmConnectors(): DrmConnectorInfo[] {
   assertLinux("DRM probe");
 

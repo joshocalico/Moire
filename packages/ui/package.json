@@ -34,7 +34,7 @@
     "smoke:themes": "tsx src/theme.smoke.tsx",
     "smoke:polish": "tsx src/polish.smoke.tsx",
     "smoke:desktop": "tsx scripts/desktop-polish.smoke.tsx && tsx scripts/files-workflow.smoke.tsx",
-    "smoke:input": "tsx src/menu-input.smoke.tsx && tsx src/wayland-input.smoke.ts && tsx scripts/integration-input.smoke.tsx && tsx src/text-area.smoke.tsx",
+    "smoke:input": "tsx src/menu-input.smoke.tsx && tsx src/wayland-input.smoke.ts && tsx src/platforms/wayland/activation.smoke.ts && tsx scripts/integration-input.smoke.tsx && tsx src/text-area.smoke.tsx",
     "smoke:apps": "tsx scripts/settings-display.smoke.tsx",
     "smoke:content": "tsx src/intrinsic-content.smoke.tsx",
     "smoke:settings": "tsx src/settings-widgets.smoke.tsx"

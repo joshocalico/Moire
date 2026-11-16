@@ -35,6 +35,7 @@ import {
   polkitCookie,
   type PolkitHelper,
 } from "./polkit-helper";
+import type { PromptDismissal } from "@moire/system-management/prompt-outcome";
 import type { RequesterResolver } from "./polkit-requester";
 
 export const POLKIT_AUTHORITY = "org.freedesktop.PolicyKit1";
@@ -149,6 +150,12 @@ export type PolkitAgentOptions = {
   now?: () => number;
   log?: (line: string) => void;
   onStatus?: (status: PolkitAgentStatus) => void;
+  /**
+   * A request was answered `Cancelled` (polkit's `polkit.dismissed`), with why, for the process
+   * polkit named as its subject (`polkit.subject-pid`). Called before polkitd hears the answer.
+   * See prompt-outcomes.ts.
+   */
+  onDismissed?: (subjectPid: number, actionId: string, dismissal: PromptDismissal) => void;
 };
 
 export type PolkitAgent = {
@@ -321,8 +328,10 @@ export async function startPolkitAgent(options: PolkitAgentOptions): Promise<Pol
     }
 
     // The subject is the process the authorization is for; the caller is the mechanism asking.
-    const pidText = own(details, "polkit.subject-pid") ?? own(details, "polkit.caller-pid");
-    const pid = typeof pidText === "string" && PID.test(pidText) ? Number(pidText) : null;
+    const pidOf = (value: unknown) =>
+      typeof value === "string" && PID.test(value) ? Number(value) : null;
+    const subjectPid = pidOf(own(details, "polkit.subject-pid"));
+    const pid = subjectPid ?? pidOf(own(details, "polkit.caller-pid"));
     const resolved = pid !== null ? (options.resolveRequester?.(pid) ?? null) : null;
 
     const session: Session = {
@@ -374,6 +383,7 @@ export async function startPolkitAgent(options: PolkitAgentOptions): Promise<Pol
         ...(pid !== null ? [{ label: "Process ID", value: String(pid) }] : []),
       ],
       coolDownKey: `${resolved?.executable ?? "-"}\n${actionId}`,
+      ...(resolved?.key ? { requesterKey: resolved.key } : {}),
       check,
     };
 
@@ -391,12 +401,24 @@ export async function startPolkitAgent(options: PolkitAgentOptions): Promise<Pol
         log("failed", actionId);
         throw new DbusRemoteError(POLKIT_FAILED, "The authentication prompt failed");
       }
-      log(
+      const code =
         result.outcome === "cancelled" && session.authorityCancelled
           ? "authority-cancelled"
-          : result.outcome,
-        actionId,
-      );
+          : result.outcome;
+      log(code, actionId);
+      // Only for the subject: the caller (a mechanism such as moire-dm-settings) asked on its
+      // behalf, and is not the process Settings' errors come from.
+      if (subjectPid !== null) {
+        try {
+          options.onDismissed?.(
+            subjectPid,
+            actionId,
+            code === "authority-cancelled" ? "withdrawn" : code,
+          );
+        } catch {
+          // Bookkeeping for the requester's error message; never changes polkit's answer.
+        }
+      }
       throw new DbusRemoteError(POLKIT_CANCELLED, "Authentication was cancelled");
     } catch (error) {
       if (error instanceof DbusRemoteError) throw error;

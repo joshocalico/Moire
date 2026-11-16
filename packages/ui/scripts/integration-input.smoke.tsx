@@ -165,6 +165,121 @@ key("Escape", 1); // modal -> base
 key("Enter", 28);
 assert.equal(basePresses, 2, "closing a modal restores its opener");
 window.destroy();
+
+// A control that goes away is remembered, not forgotten: disabled while its action runs (the
+// system's password prompt holds the keyboard meanwhile) or briefly absent, it takes focus back
+// when it returns, unless the user put focus elsewhere first. Native toolkits do the same.
+const remembered = {
+  busy: (_busy: boolean) => {},
+  modal: (_open: boolean) => {},
+  opener: (_shown: boolean) => {},
+};
+let actionPresses = 0;
+function RememberFixture() {
+  const [busy, setBusy] = useState(false),
+    [modal, setModal] = useState(false),
+    [opener, setOpener] = useState(true);
+  remembered.busy = setBusy;
+  remembered.modal = setModal;
+  remembered.opener = setOpener;
+  return (
+    <Group width={180} height={150}>
+      <Pressable width={40} height={20} focusId="other" onPress={() => {}} />
+      {opener && (
+        <Pressable y={25} width={40} height={20} focusId="opener" onPress={() => setModal(true)} />
+      )}
+      <Pressable
+        y={50}
+        width={40}
+        height={20}
+        focusId="action"
+        disabled={busy}
+        onPress={() => {
+          actionPresses++;
+          setBusy(true);
+        }}
+      />
+      {modal && (
+        <FocusScope id="sheet" x={60} width={120} height={150} onEscape={() => setModal(false)}>
+          <Pressable width={60} height={20} autoFocus focusId="sheet-first" onPress={() => {}} />
+          <Pressable
+            y={25}
+            width={60}
+            height={20}
+            focusId="sheet-submit"
+            disabled={busy}
+            onPress={() => setBusy(true)}
+          />
+        </FocusScope>
+      )}
+    </Group>
+  );
+}
+const rememberWindow = new Window({ width: 180, height: 150, title: "Focus memory" });
+rememberWindow.setContent(() => <RememberFixture />);
+rememberWindow.mount(backend);
+await Promise.resolve();
+rememberWindow.tick();
+const rememberNative = backend.getWindows().at(-1)!;
+const focused = () => (rememberWindow as unknown as { focusedId: string | null }).focusedId;
+const press = (name: string, code: number, shift = false) => {
+  rememberNative.injectKey({
+    type: "down",
+    code,
+    key: name,
+    timeMs: 4,
+    modifiers: { shift, ctrl: false, alt: false, meta: false },
+  });
+  rememberWindow.tick();
+};
+/** A state change from outside an input event: React commits it on its own schedule. */
+const update = async (change: () => void) => {
+  change();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  rememberWindow.tick();
+};
+press("Tab", 15);
+press("Tab", 15);
+press("Tab", 15);
+assert.equal(focused(), "action");
+press("Enter", 28);
+assert.equal(focused(), null, "a disabled control holds no focus");
+await update(() => remembered.busy(false));
+assert.equal(focused(), "action", "re-enabled, it has focus again");
+press("Enter", 28);
+assert.equal(actionPresses, 2, "and keys reach it without a Tab first");
+// Moving focus meanwhile wins: Tab, or a click on nothing.
+press("Tab", 15);
+assert.equal(focused(), "other");
+await update(() => remembered.busy(false));
+assert.equal(focused(), "other", "a Tab while it was away is not undone");
+press("Tab", 15, true);
+press("Enter", 28);
+rememberNative.injectPointer({ type: "down", button: "left", x: 170, y: 140, timeMs: 5 });
+rememberNative.injectPointer({ type: "up", button: "left", x: 170, y: 140, timeMs: 6 });
+await update(() => remembered.busy(false));
+assert.equal(focused(), null, "nor is a click that put focus nowhere");
+// In a sheet: the button that asked comes back, from the scope's first control, which only
+// stood in for it.
+press("Tab", 15);
+press("Tab", 15);
+assert.equal(focused(), "opener");
+press("Enter", 28);
+assert.equal(focused(), "sheet-first");
+press("Tab", 15);
+press("Enter", 28);
+assert.equal(focused(), "sheet-first", "the scope keeps focus while its button is disabled");
+await update(() => remembered.busy(false));
+assert.equal(focused(), "sheet-submit", "and gives it back when the button returns");
+// The sheet closes while its opener is away (not committed yet): focus waits for it.
+await update(() => {
+  remembered.modal(false);
+  remembered.opener(false);
+});
+assert.equal(focused(), null);
+await update(() => remembered.opener(true));
+assert.equal(focused(), "opener", "closing a sheet restores an opener that comes back");
+rememberWindow.destroy();
 backend.disconnect();
 renderShell(root, null);
-console.log("Shared input clipping and nested focus restoration passed");
+console.log("Shared input clipping, nested focus restoration and focus memory passed");

@@ -1,7 +1,10 @@
 /**
  * Quick Settings' details views each end in a "… settings…" row that closes the popup and starts
  * Settings at that view's page (`MOIRE_SETTINGS_PAGE=page#setting`); the main view's Settings
- * row opens Settings without a page. Driven through the real shell controller.
+ * row opens Settings without a page. With Settings already open (it has a single main window),
+ * the shell activates that window instead: the main row only raises it, a details row raises it
+ * and runs the deep link, which Settings' single-instance lock hands to the open window.
+ * Driven through the real shell controller.
  * `MOIRE_SHELL_CAPTURE_DIR` also saves each details view.
  */
 import assert from "node:assert/strict";
@@ -19,6 +22,7 @@ import { createShell } from "./controller";
 import { QuickSettings } from "./QuickSettings";
 import { DETAILS_SETTINGS_LINKS, type QuickSettingsDetailsView } from "./QuickSettingsDetails";
 import { panelStatusGeometry } from "./Panel";
+import type { TaskWindowAction } from "./ssd";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "moire-qs-links-"));
 process.env.HOME = home;
@@ -74,12 +78,13 @@ async function main() {
     height = 800;
   const noop = () => {};
   const spawned: string[] = [];
+  const actions: TaskWindowAction[] = [];
   const shell = createShell(
     ({ exec }: { exec: string }) => {
       spawned.push(exec);
       return {};
     },
-    noop,
+    (action) => actions.push(action),
     undefined,
     undefined,
     noop,
@@ -177,6 +182,33 @@ async function main() {
   click(anchor);
   click(find("main", "quick:settings"));
   assert(!spawned.at(-1)!.includes("MOIRE_SETTINGS_PAGE"), "main Settings row has no deep link");
+  assert.equal(actions.length, 0, "no window was activated while Settings was closed");
+
+  // Settings is open (minimized): the rows raise its window instead of starting another.
+  shell.setTasks?.([
+    {
+      clientId: 4,
+      surfaceId: 9,
+      title: "Settings",
+      appId: "org.moire.Settings",
+      focused: false,
+      minimized: true,
+    },
+  ]);
+  const activated = { clientId: 4, surfaceId: 9, kind: "activate" };
+  const afterMain = spawned.length;
+  click(anchor);
+  click(find("main", "quick:settings"));
+  assert.equal(spawned.length, afterMain, "the main row starts no second Settings");
+  assert.deepEqual(actions, [activated], "the main row activates the open Settings window");
+  click(anchor);
+  click(find("main", OPENERS.network));
+  click(find("network", "quick:details:settings"));
+  assert.deepEqual(actions, [activated, activated], "a details row activates the open window");
+  assert.equal(spawned.length, afterMain + 1, "the deep link still runs, for the lock to forward");
+  assert(
+    spawned.at(-1)!.startsWith(`MOIRE_SETTINGS_PAGE='${DETAILS_SETTINGS_LINKS.network.link}' `),
+  );
   console.log(
     `Quick Settings links: ${Object.keys(DETAILS_SETTINGS_LINKS).length} details views open Settings at their page`,
   );

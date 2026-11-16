@@ -13,7 +13,7 @@ import { activeThemePath, loadSettings, updateSettings } from "@moire/prefs";
 import { withFixture } from "@moire/app-tools/testing";
 import { setUiScaleFactor } from "@moire/ui";
 import { mountSettings } from "./testing-ui";
-import { SETTINGS, pageInfo } from "./catalog";
+import { SETTINGS, pageInfo, parseDeepLink, type Route } from "./catalog";
 import { NO_SERVICES, settingsFixture } from "./testing";
 
 const pictures = process.env.SETTINGS_PNG_DIR;
@@ -53,6 +53,25 @@ await withFixture(async (home) => {
     });
     await shows(app, title);
     app.destroy();
+  }
+
+  // ---- A deep link handed to the open window (Settings started again while running) moves the
+  // same window to the page, as Quick Settings' "… settings" rows do.
+  {
+    const fixture = settingsFixture(loadSettings(), { page: "network" });
+    const listeners = new Set<(route: Route) => void>();
+    fixture.props.routeRequests = (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    };
+    const app = await mountSettings(fixture, { width: 1020, height: 700 });
+    await shows(app, "Wi‑Fi & Network");
+    lacks(app, "Wallpaper");
+    assert.equal(listeners.size, 1, "the open window listens for deep links");
+    for (const listener of listeners) listener(parseDeepLink("appearance#wallpaper"));
+    await shows(app, "Wallpaper");
+    app.destroy();
+    assert.equal(listeners.size, 0, "closing the window stops listening");
   }
 
   // ---- The time zone sheet's search: × clears and keeps focus in the field (it used to land on

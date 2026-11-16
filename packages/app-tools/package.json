@@ -6,11 +6,12 @@
   "exports": {
     ".": "./src/index.tsx",
     "./testing": "./src/testing.ts",
-    "./local-store": "./src/local-store.ts"
+    "./local-store": "./src/local-store.ts",
+    "./single-instance": "./src/single-instance.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit --rootDir ../..",
-    "smoke": "tsx src/playback.smoke.ts && tsx src/views.smoke.tsx"
+    "smoke": "tsx src/playback.smoke.ts && tsx src/views.smoke.tsx && tsx src/single-instance.smoke.ts"
   },
   "dependencies": {
     "@moire/ui": "workspace:*",

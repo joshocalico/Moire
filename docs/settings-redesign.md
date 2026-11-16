@@ -135,6 +135,8 @@ Every page is built the same way:
   - The desktop menu, Quick Settings ("Wi‑Fi settings…", "Bluetooth settings…", "Sound
     settings…") and notifications all use it.
   - The tab index stays accepted for one release.
+  - With Settings already open, a deep link moves the open window to the page instead of
+    opening a second Settings (see `docs/ui/application.md`, Activation).
 
 ## 3. Directions
 
@@ -613,35 +615,40 @@ each `Changed` signal.
 | `status`                                                                | `{ selfUid, users: AccountUser[], policy }`                                     |
 | `AccountUser`                                                           | `{ uid, username, realName, iconFile, accountType, locked, lastLoginMs, self }` |
 | `policy`                                                                | `{ canAdminister, minPasswordLength }`; `canAdminister` only words the UI       |
-| `setRealName(uid, name)`, `setIcon(uid, path \| null)`                  | Prompts only for another user                                                   |
+| `setRealName(uid, name)`, `setIcon(uid, path \| null)`                  | Your own account only; no prompt                                                |
 | `changePassword(current, next)`                                         | No prompt: the current password is the check                                    |
 | `setPassword(uid, next)`                                                | Prompts; another user only                                                      |
 | `createUser({ username, realName, accountType, password })` → `{ uid }` | Prompts                                                                         |
 | `deleteUser(uid, { keepHome })`, `setAccountType(uid, type)`            | Prompts                                                                         |
 | `usernameProblem`, `realNameProblem`, `passwordProblem`                 | Pure validators, shared with the service, for inline errors                     |
+| `observeAccountsSettings(bus, { admin })`                               | `admin`: `createAccountAdminClient()`, moire-accounts on the system bus         |
 | `createFakeAccountsSettingsClient({ status?, prompt? })`                | `prompt` stands in for the system prompt; `calls` records method names only     |
 
 "Prompts" means the system's password prompt for an administrator
-([polkit-agent.md](polkit-agent.md)). The call resolves when the prompt does (clients wait up to
-170 s, the service 150 s, the prompt itself 120 s idle). A dismissed prompt is `cancelled`.
-Arguments are checked first, so nobody types a password for a change that would be refused.
-Polkit keeps the authorization for five minutes, so a second change soon after doesn't prompt.
-There is no `authenticate()`, `lock()` or `auth_required` any more.
+([polkit-agent.md](polkit-agent.md)), exactly once per change: Settings calls moire-accounts
+(`org.moire.AccountAdmin1`) itself, which asks polkit once and then makes every AccountsService
+call the change needs (polkit-agent.md, "One prompt per change"). The prompt names Settings.
+The call resolves when the prompt does (clients wait up to 170 s, moire-accounts 140 s for
+polkit, the prompt itself 120 s idle). A dismissed prompt is `cancelled`; one turned away unseen
+is `refused`. Arguments are checked first, so nobody types a password for a change that would be
+refused. Nothing is kept: the next change asks again. There is no `authenticate()`, `lock()` or
+`auth_required` any more.
 
-Rules the service enforces: you cannot delete yourself, the last administrator cannot be demoted
-or deleted, system and `nologin` accounts are hidden, icons must be PNG or JPEG of at most 1 MiB
-(AccountsService copies the file into its store, reading it as you), and passwords need 8 or more
-characters.
+Rules the services enforce: you cannot delete yourself or set your own password without the
+current one, the last administrator cannot be demoted or deleted, system and `nologin` accounts
+are hidden and can't be changed, another user's name and picture can't be changed, icons must be
+PNG or JPEG of at most 1 MiB (AccountsService copies the file into its store, reading it as you),
+and passwords need 8 or more characters.
 
 `@moire/system-management/login-settings` (automatic login; design and security in
 [moire-dm.md](moire-dm.md), "Automatic login"):
 
-| API                                                    | Notes                                                                    |
-| ------------------------------------------------------ | ------------------------------------------------------------------------ |
-| `observeLoginSettings(bus)` / `connectLoginSettings()` | Any session-bus connection                                               |
-| `status`                                               | `{ available, enabled, user }`; `available` is false without moire-dm    |
-| `setAutologin(enabled)`                                | Your own account. Prompts for an administrator; `cancelled` if dismissed |
-| `createFakeLoginSettingsClient({ status?, prompt? })`  | `prompt` stands in for the system prompt                                 |
+| API                                                   | Notes                                                                                         |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `createLoginSettingsClient({ promptDismissal? })`     | Calls moire-dm-settings on the system bus from Settings itself, so the prompt names Settings  |
+| `status`                                              | `{ available, enabled, user }`; `available` is false without moire-dm                         |
+| `setAutologin(enabled)`                               | Your own account. Prompts for an administrator; `cancelled` if dismissed, `refused` if unseen |
+| `createFakeLoginSettingsClient({ status?, prompt? })` | `prompt` stands in for the system prompt                                                      |
 
 AccountsService's own `AutomaticLogin` (and polkit `set-login-option`) stays unused: it only edits
 GDM's file.
@@ -670,11 +677,12 @@ within a second.
 
 Moire keeps the posture of [removable-drives.md](removable-drives.md): explicit allowances, then
 a deny-everything fallback. Since the polkit authentication agent
-([polkit-agent.md](polkit-agent.md), Phase 4) there is a third answer for two administrator
+([polkit-agent.md](polkit-agent.md), Phase 4) there is a third answer for three administrator
 actions: "ask for an administrator's password", in a prompt the compositor draws.
 
 - **Image** (`nix/moire-settings-services.nix`, imported by the native desktop image): polkit on;
-  pkexec off; `00-moire-settings.rules` and `00-moire-admin.rules`, then the immutable
+  pkexec off; `00-moire-accounts.rules`, `00-moire-admin.rules` and `00-moire-settings.rules`,
+  then the immutable
   `01-moire-deny-unapproved.rules`. Assertions keep `time.timeZone = null`, timesyncd on,
   `users.mutableUsers = true`, no `security.polkit.extraConfig`,
   `security.polkit.adminIdentities` at the NixOS default (`unix-group:wheel`: whose password an
@@ -687,29 +695,39 @@ actions: "ask for an administrator's password", in a prompt the compositor draws
   From `00-moire-network.rules`: NetworkManager `network-control`, `settings.modify.own`,
   `wifi.scan`, `enable-disable-wifi` and `enable-disable-wwan` (see "Network & Bluetooth
   backend"). From `00-moire-power.rules`: see "Power & idle backend".
-- **An administrator's password, for any active, local session** (`00-moire-admin.rules`,
-  `AUTH_ADMIN_KEEP`): `accounts.user-administration` and moire-dm's `org.moire.dm.set-autologin`.
-  The subject needn't be in `wheel`: a standard user gets through when an administrator types
-  their own password at the prompt (Josh's decision). No rule answers YES for either any more.
+- **An administrator's password, for any active, local session, every time**
+  (`00-moire-admin.rules`, `AUTH_ADMIN`, never kept): moire-accounts' `org.moire.accounts.administer`
+  and moire-dm's `org.moire.dm.set-autologin`, both asked for by Settings itself. The subject needn't
+  be in `wheel`: a standard user gets through when an administrator types their own password at
+  the prompt (Josh's decision). The greeter and inactive or remote subjects get NO.
+- **moire-accounts' own grant** (`00-moire-accounts.rules`): `accounts.user-administration` as a
+  YES for the `moire-accounts` system account only, so the one change it was asked for (after its
+  own prompt) needs no second prompt from AccountsService. Every other subject but root gets NO
+  for it, with no prompt: nothing in a session calls AccountsService's administrator methods.
 - **Never granted:** `accounts.change-own-password` (AccountsService does not check the current
   password), `accounts.set-login-option`, `timedate1.set-time`, `timedate1.set-local-rtc`, and
   every other action, including stock allow-active ones such as logind power-off. A backend that
   needs one (power, idle) must add its own `00-moire-*.rules` allowance.
 - **Own password:** changed through the setuid `passwd`, whose PAM stack verifies the current
   password. The service answers its prompts on stdin one at a time. No polkit grant covers it.
-- **Administrator actions:** the service keeps no authorization state. Before one, it asks
-  polkit (`CheckAuthorization`, interaction allowed, 150 s) about its own system-bus connection.
-  That is where a dismissed prompt (`cancelled`) is told apart from a refusal (`permission`);
-  AccountsService reports both as `PermissionDenied`. Polkit keeps the authorization for the
-  service's process for five minutes, so the AccountsService call that follows (also sent with
-  D-Bus's `ALLOW_INTERACTIVE_AUTHORIZATION`) doesn't prompt again. The password is typed into the
-  compositor's prompt and checked by polkit's helper; it never reaches Settings, the service or
-  the session bus. `unix_chkpwd` is now the lock screen's only.
-- **Secrets:** new passwords (data entry) travel only in D-Bus method bodies on the session bus
-  and in `passwd`'s stdin. They are never logged, never in argv or the environment (helpers get an empty or
-  `LC_ALL=C` environment), and never stored. Other users' new passwords become `$6$rounds=65536$`
-  SHA-512 crypt hashes inside the service; AccountsService passes only the hash to
-  `chpasswd -e`. Password hints are left empty because every local user can read them.
+- **Administrator actions:** not in the management service any more. Settings calls
+  moire-dm-settings for automatic login (one polkit check for `org.moire.dm.set-autologin` about
+  Settings' connection) and moire-accounts (`org.moire.AccountAdmin1`, system bus, its own
+  unprivileged account) for other accounts, which
+  asks polkit once (`CheckAuthorization` for `org.moire.accounts.administer`, about Settings'
+  connection, interaction allowed, 140 s) and then makes the change's AccountsService calls
+  under its own grant, never with interaction. A dismissed prompt (`cancelled`) is told apart from
+  a refusal (`permission`) there; Settings asks the compositor whether a dismissal was a
+  `refused`. Nothing is kept. The administrator's password is typed into the compositor's prompt
+  and checked by polkit's helper; it never reaches Settings, a service or a bus. `unix_chkpwd` is
+  now the lock screen's only.
+- **Secrets:** new passwords (data entry) travel only in D-Bus method bodies (your own on the
+  session bus, then `passwd`'s stdin; another user's or a new account's as bytes to moire-accounts
+  on the system bus). They are never logged, never in argv or the environment (helpers get an
+  empty or `LC_ALL=C` environment), and never stored. moire-accounts never makes a string of
+  one: it checks the bytes, turns them into a `$6$rounds=65536$` SHA-512 crypt hash, and wipes
+  them; AccountsService passes only the hash to `chpasswd -e`. Password hints are left empty
+  because every local user can read them.
 
 Residual risks, stated plainly:
 
@@ -719,9 +737,11 @@ Residual risks, stated plainly:
   password, or turn on automatic login. Polkit itself now requires an administrator's password,
   typed into a prompt no client can draw, for both actions and for every caller. It needs the
   agent registered and the helper units on (Phases 2 and 3); without an agent polkit refuses.
-- What remains of it: within five minutes of a prompt being answered, the authorization is kept
-  for the management service's process, and the service acts for any process of the user. Code
-  running as you can ride that window. See polkit-agent.md, open question 5.
+- What remains of it: nothing is kept after a prompt (`AUTH_ADMIN`, decided 2026-10-31), so there
+  is no window to ride. moire-accounts acts for whichever process calls it, but the prompt names
+  that process (from the kernel's pid, not anything it says), and each change asks again. Code
+  running as you that drives Settings itself is named "Settings", truthfully (polkit-agent.md,
+  threat model).
 - `moire-pam-test` is a standard user and `moire-admin-test` an administrator (public test
   passwords), so both sides of the prompt can be tested.
 - Same-user processes can read the session bus (`BecomeMonitor`). The administrator's password
@@ -1068,7 +1088,7 @@ the default.
 | `lockOnSuspend`                      | boolean                                        | true                   |
 | `suspendAfterSeconds.{ac,battery}`   | never, 900, 1800, 3600                         | AC never, battery 1800 |
 | `lidCloseAction`                     | `suspend`, `power-off`, `nothing`              | `suspend`              |
-| `powerButtonAction`                  | `suspend`, `power-off`, `nothing`, `ask`       | `ask`                  |
+| `powerButtonAction`                  | `suspend`, `power-off`, `nothing`, `ask`       | `suspend`              |
 | `showBatteryPercentage`              | boolean                                        | false                  |
 | `powerProfile`                       | `power-saver`, `balanced`, `performance`, null | null (system's)        |
 
@@ -1205,7 +1225,8 @@ say which app keeps the screen on.
 - **Power keys:** the compositor's exclusive keyboard grab already hides `KEY_POWER`,
   `KEY_SLEEP` and `KEY_SUSPEND` from logind, so the session acts on them itself.
   - Power key: follows `powerButtonAction`. `ask` calls the session's `askPowerAction` hook,
-    which the shell does not provide yet, so `ask` behaves like `nothing` for now.
+    which the shell does not provide yet, so `ask` behaves like `nothing` for now. Settings
+    doesn't offer it and shows a stored `ask` as "Do nothing"; the default is `suspend`.
   - Sleep and suspend keys: suspend.
 - **Lid:** the session holds a `handle-power-key:handle-suspend-key[:handle-lid-switch]`
   block inhibitor: logind's `Inhibit` over D-Bus returns a file descriptor, received close-on-exec

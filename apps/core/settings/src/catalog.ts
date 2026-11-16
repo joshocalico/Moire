@@ -750,9 +750,29 @@ export function parseDeepLink(link: string | undefined | null): Route {
   return known ? { kind: "page", id, anchor } : { kind: "page", id };
 }
 
+/** The deep link Settings was started with: `MOIRE_SETTINGS_PAGE`, else `MOIRE_SETTINGS_TAB`. */
+function startLink(env: NodeJS.ProcessEnv): string | null {
+  return env.MOIRE_SETTINGS_PAGE ?? env.MOIRE_SETTINGS_TAB ?? null;
+}
+
 /** The route Settings starts on: `MOIRE_SETTINGS_PAGE`, else the legacy `MOIRE_SETTINGS_TAB`. */
 export function initialRoute(env: NodeJS.ProcessEnv): Route {
-  return parseDeepLink(env.MOIRE_SETTINGS_PAGE ?? env.MOIRE_SETTINGS_TAB);
+  return parseDeepLink(startLink(env));
+}
+
+/** What a second start of Settings hands the running window: its deep link, if any. */
+export type SettingsActivation = { link: string | null };
+
+export function settingsActivation(env: NodeJS.ProcessEnv): SettingsActivation {
+  return { link: startLink(env) };
+}
+
+/** Validate an activation received from another process; links are length-capped. */
+export function parseSettingsActivation(value: unknown): SettingsActivation | null {
+  if (!value || typeof value !== "object" || !("link" in value)) return null;
+  const { link } = value;
+  if (link === null) return { link: null };
+  return typeof link === "string" && link.length <= 256 ? { link } : null;
 }
 
 /** The deep link for a route, the reverse of `parseDeepLink`. */

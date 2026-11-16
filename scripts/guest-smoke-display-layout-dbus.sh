@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# SetLayout and RevertLayout answer only Settings; this needs root's test-image grant.
+# shellcheck source=guest-display-grant.sh
+source "$(dirname "${BASH_SOURCE[0]}")/guest-display-grant.sh"
+
 PID="$(pgrep -u moire -f '@moire/compositor.*src/main.ts|tsx.*src/main.ts' | head -n 1)"
 if [[ -z "$PID" ]]; then
   echo "Moire compositor process not found" >&2
@@ -33,10 +37,10 @@ RESULT="$(call SetLayout "[('$ID', 0, 0, uint32 120, true)]")"
 
 TRIAL="$(call SetLayout "[('$ID', 0, 0, uint32 150, true)]")"
 [[ "$TRIAL" == "(true,)" ]]
-trap 'call RevertLayout >/dev/null 2>&1 || true' EXIT
+trap 'call RevertLayout >/dev/null 2>&1 || true; release_display_grant' EXIT
 SCALED="$(call ListOutputs)"
 grep -q ', 150, true)' <<<"$SCALED"
 REVERTED="$(call RevertLayout)"
 [[ "$REVERTED" == "(true,)" ]]
-trap - EXIT
+trap release_display_grant EXIT
 echo "[display-layout-dbus] ok id=$ID"

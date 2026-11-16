@@ -34,6 +34,8 @@ export type SelectProps = {
   placeholder?: string;
   size?: ButtonSize;
   disabled?: boolean;
+  /** Stable focus identity for the menu button, so focus can return to it by name. */
+  focusId?: string;
   maxMenuHeight?: number;
   onChange?: (id: string) => void;
   onOpenChange?: (open: boolean) => void;
@@ -178,6 +180,7 @@ export function Select(props: SelectProps): ReactNode {
         size={props.size}
         label={selected?.label ?? props.placeholder ?? "Choose…"}
         disabled={props.disabled}
+        focusId={props.focusId}
         trailingIcon={(style) => (
           <Icon
             name={open ? "chevron-up" : "chevron-down"}

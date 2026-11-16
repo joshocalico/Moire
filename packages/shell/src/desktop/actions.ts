@@ -59,6 +59,8 @@ export function createDesktopOpener(options: {
   spawn: DesktopSpawn;
   filesExec: string;
   settingsExec: string;
+  /** The shell's Settings activation; see `DesktopDependencies.openSettings`. */
+  openSettings?(link: string): boolean;
   activation(): FileActivationService;
   showToast(toast: Omit<DesktopToast, "id">): void;
 }) {
@@ -79,8 +81,14 @@ export function createDesktopOpener(options: {
     );
   return {
     inFiles,
-    settings: (link: string) =>
-      launch(settingsCommand(options.settingsExec, link), "Could not open Settings."),
+    settings: (link: string) => {
+      if (!options.openSettings) {
+        launch(settingsCommand(options.settingsExec, link), "Could not open Settings.");
+        return;
+      }
+      if (!options.openSettings(link))
+        options.showToast({ message: "Could not open Settings.", tone: "error" });
+    },
     item(item: FileMenuItem) {
       if (item.isDir) {
         inFiles(item.path);

@@ -426,7 +426,9 @@ Needs a VM, with `nix/moire-portal-services.nix` imported:
 
 - **Screenshot and ScreenCast** need PipeWire video: the compositor has to publish output and
   window frames as PipeWire streams, and the picker has to say what is shared. They come after
-  PipeWire video. RemoteDesktop follows ScreenCast.
+  PipeWire video. RemoteDesktop follows ScreenCast. They are how other apps will read the
+  screen: the compositor's own `Display1.CaptureScreenshot` answers only the bundled Screenshot
+  app ([screenshot.md](apps/screenshot.md#who-may-capture)) and is not to be widened for them.
 - **Secret** is planned in [secret-service.md](secret-service.md).
 - **Access** (the generic permission dialog other portals use for camera, location and so on),
   **Account** (name and avatar, from AccountsService) and **Background** (apps running without a

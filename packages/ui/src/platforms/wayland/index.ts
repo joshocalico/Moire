@@ -43,6 +43,7 @@ import {
   zxdgToplevelDecorationV1,
 } from "@moire/protocol/generated";
 import { moireSurfaceStateManagerV1, moireSurfaceStateV1 } from "@moire/protocol/surface-state";
+import { xdgActivationTokenV1, xdgActivationV1 } from "@moire/protocol/xdg-activation";
 import {
   EglOutputScaler,
   WaylandClientConn,
@@ -106,6 +107,8 @@ import type { KeymapAvailability } from "./keymap-types";
 import { classifyShmFrame, validateShmFrame, type ShmFrame } from "./shm-format";
 
 const WL_DISPLAY_ID = 1;
+/** A compositor answers a token request at once; past this the window has none. */
+const ACTIVATION_TOKEN_TIMEOUT_MS = 1000;
 const WL_SHM_FORMAT_ARGB8888 = wlShm.enums.format.argb8888;
 const BTN_LEFT = 0x110;
 const BTN_RIGHT = 0x111;
@@ -261,6 +264,7 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
   private shmFrames = 0;
   private wmBaseId = 0;
   private decoManagerId = 0;
+  private activationId = 0;
   private seatId = 0;
   private seatVersion = 0;
   private pointerId = 0;
@@ -400,6 +404,8 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
     if (this.globals.has("zxdg_decoration_manager_v1")) {
       this.decoManagerId = this.bindGlobal("zxdg_decoration_manager_v1", 1);
     }
+    if (this.globals.has(xdgActivationV1.name))
+      this.activationId = this.bindGlobal(xdgActivationV1.name, 1);
 
     if (this.globals.has("wl_seat")) {
       this.seatVersion = Math.min(this.globals.get("wl_seat")?.version ?? 0, 5);
@@ -1276,6 +1282,52 @@ export class WaylandPlatform implements PlatformBackend, DndCapable {
 
   getLastPointerSerial(): number {
     return this.lastPointerSerial;
+  }
+
+  getActivationId(): number {
+    return this.activationId;
+  }
+
+  /**
+   * An xdg-activation token for `surfaceId`, carrying the latest input serial so the compositor
+   * can tell a user action from a background request. Null without xdg_activation_v1 or an
+   * answer.
+   */
+  requestActivationToken(surfaceId: number, appId: string): Promise<string | null> {
+    const activation = this.getActivationId();
+    if (!activation) return Promise.resolve(null);
+    const id = this.allocId();
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (token: string | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.clearHandler(id);
+        this.sendMessage(xdgActivationTokenV1.requests.destroy.encode(id));
+        resolve(token);
+      };
+      const timer = setTimeout(() => finish(null), ACTIVATION_TOKEN_TIMEOUT_MS);
+      this.setHandler(id, (opcode, r) => {
+        if (opcode === xdgActivationTokenV1.events.done.opcode)
+          finish(xdgActivationTokenV1.events.done.decodeReader(r).token || null);
+      });
+      this.sendMessage(xdgActivationV1.requests.getActivationToken.encode(activation, id));
+      const seat = this.getSeatId(),
+        serial = this.getLastPointerSerial();
+      if (seat && serial)
+        this.sendMessage(xdgActivationTokenV1.requests.setSerial.encode(id, serial, seat));
+      if (appId) this.sendMessage(xdgActivationTokenV1.requests.setAppId.encode(id, appId));
+      this.sendMessage(xdgActivationTokenV1.requests.setSurface.encode(id, surfaceId));
+      this.sendMessage(xdgActivationTokenV1.requests.commit.encode(id));
+    });
+  }
+
+  /** Raise and focus `surfaceId` with `token`; the compositor ignores tokens it did not honour. */
+  activateSurface(token: string, surfaceId: number): void {
+    const activation = this.getActivationId();
+    if (!activation || !token) return;
+    this.sendMessage(xdgActivationV1.requests.activate.encode(activation, token, surfaceId));
   }
 
   /** Send a request whose opcode and wire layout came from protocol XML. */
@@ -2163,6 +2215,20 @@ export class WaylandWindow implements PlatformWindow {
   minimize(): void {
     if (!this.alive || !this.toplevelId) return;
     this.platform.sendMessage(xdgToplevel.requests.setMinimized.encode(this.toplevelId));
+  }
+
+  requestActivationToken(): Promise<string | null> {
+    if (!this.alive || !this.toplevelId) return Promise.resolve(null);
+    return this.platform.requestActivationToken(this.surfaceId, this.appId);
+  }
+
+  activate(token: string): void {
+    if (!this.alive || !this.toplevelId) return;
+    this.platform.activateSurface(token, this.surfaceId);
+  }
+
+  sync(): Promise<void> {
+    return this.alive ? this.platform.roundtrip() : Promise.resolve();
   }
 
   onClose(cb: () => void): void {

@@ -58,6 +58,11 @@ export type SettingsAppProps = WindowSize & {
   launch: Launcher;
   copyText: (text: string) => Promise<void>;
   route: Route;
+  /**
+   * Deep links handed to this window after it opened (Settings started again while running);
+   * subscribe returns the unsubscribe. Each one navigates like a sidebar or search jump.
+   */
+  routeRequests?: (listener: (route: Route) => void) => () => void;
   /** The session's reduced-motion save, so open apps follow at once. */
   onReducedMotionChange?: (value: boolean) => Promise<void>;
   /** The zone and location schedules use, and the clock; fixtures pin them. */
@@ -138,6 +143,10 @@ export function SettingsApp(props: SettingsAppProps): ReactNode {
       setHistory((current) => ({ back: [...current.back, route].slice(-50), forward: [] }));
     setRoute(next);
   };
+  const goRef = useRef(go);
+  goRef.current = go;
+  const { routeRequests } = props;
+  useEffect(() => routeRequests?.((next) => goRef.current(next)), [routeRequests]);
   const report = (page: PageId, message: string | null) =>
     setErrors((current) => ({ ...current, [page]: message ?? undefined }));
   const attempt: PageContext["attempt"] = (page, action) => {

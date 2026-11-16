@@ -1,6 +1,6 @@
 export type { DesktopEntry } from "./desktop";
 export { parseDesktopFile } from "./desktop";
-export { applicationDisplayName } from "./names";
+export { applicationDisplayName, applicationOwnsWindow } from "./names";
 export {
   discoverApplications,
   filterApplications,

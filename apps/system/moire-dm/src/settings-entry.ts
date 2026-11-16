@@ -22,8 +22,8 @@ const AUTHORITY = { destination: POLKIT, path: "/org/freedesktop/PolicyKit1/Auth
 /** CheckAuthorization flag: polkit may ask the user, through their session's agent. */
 const ALLOW_USER_INTERACTION = 1;
 /**
- * The prompt gives up after 120 s without input (docs/polkit-agent.md); the management service
- * waits 150 s for this service. In between, so the answer still has someone to go to.
+ * The prompt gives up after 120 s without input (docs/polkit-agent.md); Settings, which calls
+ * this service itself, waits 170 s. In between, so the answer still has someone to go to.
  */
 const INTERACTIVE_CHECK_MS = 140_000;
 let checks = 0;

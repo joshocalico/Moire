@@ -54,8 +54,7 @@ started with.
 | Automatic-login file (read and write)   | `apps/system/moire-dm/src/autologin-file.ts`                               |
 | Automatic-login writer (system bus)     | `login-manager.ts`, `settings-entry.ts` (`moire-dm-settings`)              |
 | Polkit action, rule, bus policy         | `nix/moire-dm.policy`, `nix/moire-admin.rules`, `nix/moire-dm-dbus.conf`   |
-| Session side                            | `apps/system/management-service/src/login-settings.ts`                     |
-| Settings client and fake                | `packages/system-management/src/login-settings.ts`                         |
+| Settings client (calls it) and fake     | `packages/system-management/src/login-settings.ts`                         |
 | Settings row                            | `apps/core/settings/src/pages/users.tsx` (Users & Login › Automatic login) |
 | Test controls (test images only)        | `nix/moire-dm.nix` (`moire.dm.testControls`)                               |
 
@@ -344,25 +343,30 @@ disabled.
 **Write path (built):**
 
 ```
-Settings ──session bus──▶ management service ──system bus──▶ moire-dm-settings ──▶ /var/lib/moire-dm
- LoginSettingsClient       org.moire.LoginSettings1           org.moire.LoginManager1   autologin.json
-                           no state of its own;               caller uid from the bus,  O_EXCL temp,
-                           calls with interaction allowed     polkit set-autologin ─┐   fsync, rename
-                                                                                    ▼
-                                                  polkitd ──▶ the compositor's password prompt
+Settings ──system bus──▶ moire-dm-settings ──▶ /var/lib/moire-dm
+ LoginSettingsClient      org.moire.LoginManager1   autologin.json
+ calls with interaction   caller uid from the bus,  O_EXCL temp,
+ allowed                  polkit set-autologin ─┐   fsync, rename
+                                                ▼
+              polkitd ──▶ the compositor's password prompt ("Requested by Settings")
 ```
 
 - **Settings:** Users & Login › Automatic login, for your own account. It is shown only when the
   login daemon supports it (moire-dm; under greetd the status says `available: false`). The
-  switch calls the service at once; there is no password sheet. While the system's prompt is up
+  switch calls moire-dm-settings at once; there is no password sheet. While the system's prompt is up
   the row says "Waiting for your password" (for a standard user, "Waiting for an administrator's
   password", and at rest "Needs an administrator's password"). A dismissed prompt leaves the
   switch where it was and shows nothing.
-- **Management service** (`org.moire.LoginSettings1`): keeps no authorization state and refuses
-  nobody on account type. It calls `SetAutomaticLogin(b)` with D-Bus's
-  `ALLOW_INTERACTIVE_AUTHORIZATION` flag and a 150 s timeout. `moire-dm-settings`' `cancelled`
-  (the prompt was dismissed) passes through as the fixed code `cancelled`. Only its own fixed
-  sentences reach Settings.
+- **Settings' client** (`packages/system-management/src/login-settings.ts`): Settings calls
+  moire-dm-settings itself, on the system bus, so polkit's subject is Settings and the prompt
+  names it (docs/polkit-agent.md, "One prompt per change"; the management service's
+  `org.moire.LoginSettings1` is gone). It reads `GetStatus` and calls `SetAutomaticLogin(b)` with
+  D-Bus's `ALLOW_INTERACTIVE_AUTHORIZATION` flag and a 170 s timeout, keeps no authorization
+  state, and refuses nobody on account type. `moire-dm-settings`' `cancelled` (the prompt was
+  dismissed) becomes `refused` if the compositor's `TakeDismissal`, asked from Settings' own
+  session connection, says so, and `cancelled` otherwise. Only its own fixed sentences reach
+  Settings. The bus policy (`nix/moire-dm-dbus.conf`) lets anyone call; the service's own
+  checks are the gate.
 - **`moire-dm-settings`** (`org.moire.LoginManager1`, its own system account): the account is
   the caller's, from `GetConnectionUnixUser`, never an argument. It must be uid ≥ 1000, a valid
   name and not the greeter. Then polkit `org.moire.dm.set-autologin` is checked for the calling
@@ -374,10 +378,11 @@ Settings ──session bus──▶ management service ──system bus──▶
   It logs `code=autologin-on|autologin-off user=<name>` and nothing about refused callers.
 - **Polkit:** `nix/moire-dm.policy` defines the action with every default `no`, and the
   `org.freedesktop.policykit.owner` annotation for `unix-user:moire-dm-settings` (otherwise only
-  root may ask polkit about another process). `00-moire-admin.rules` returns `AUTH_ADMIN_KEEP`
+  root may ask polkit about another process). `00-moire-admin.rules` returns `AUTH_ADMIN`
   for active, local sessions, ahead of the `01` deny fallback: an administrator's password (a
-  member of `wheel`, `security.polkit.adminIdentities`' default), kept five minutes for the
-  asking process. `00-moire-dm.rules`, a YES for `wheel`, is gone. The action's `<message>` is
+  member of `wheel`, `security.polkit.adminIdentities`' default), every time; nothing is kept
+  (decided 2026-10-31, docs/polkit-agent.md). The greeter and inactive or remote subjects get NO.
+  `00-moire-dm.rules`, a YES for `wheel`, is gone. The action's `<message>` is
   the prompt's headline.
 - **Bus policy:** only `moire-dm-settings` may own `org.moire.LoginManager1`; anyone may call it.
 - **`/var/lib/moire-dm`:** 0755, owned by `moire-dm-settings` (tmpfiles). The broker only reads it.
@@ -615,8 +620,7 @@ Service=moire-dm`;
       returns as `moire-admin-test` without a prompt (`autologin-start`, `session-start`).
    5. Log out: the greeter. `touch`ing `crash` or `restart` from a later password session never
       signs in automatically again.
-   6. Switch it off (within five minutes of the last prompt: no prompt; later: the prompt),
-      `fresh-boot`: the greeter.
+   6. Switch it off (the prompt again: nothing is kept), `fresh-boot`: the greeter.
 10. `journalctl -b | grep <password>` finds nothing.
 11. `systemctl poweroff` from a session: it shuts down cleanly in under 15 s.
 

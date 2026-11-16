@@ -14,11 +14,13 @@
     "./settings-service": "./src/settings-service.ts",
     "./time-settings": "./src/time-settings.ts",
     "./accounts-settings": "./src/accounts-settings.ts",
+    "./account-admin": "./src/account-admin.ts",
     "./login-settings": "./src/login-settings.ts",
     "./input-settings": "./src/input-settings.ts",
     "./power-settings": "./src/power-settings.ts",
     "./brightness": "./src/brightness.ts",
     "./password-check": "./src/password-check.ts",
+    "./prompt-outcome": "./src/prompt-outcome.ts",
     "./vpn-config": "./src/vpn-config.ts"
   },
   "scripts": {

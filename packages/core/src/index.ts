@@ -15,6 +15,7 @@ export const MOIRE: MoireVersion = {
 export { parseDesktopCommand, spawnDesktopApp, type SpawnOptions } from "./spawn";
 export {
   CompositorServer,
+  STAGE_GROUND,
   type CompositorShell,
   type SessionLockEnvironment,
   type SsdWindowInfo,

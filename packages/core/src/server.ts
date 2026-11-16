@@ -62,6 +62,8 @@ import {
   type EvdevPointerButton,
   type EvdevPointerAxis,
   closeFd,
+  renderNodeForCard,
+  waitForBootPresenting,
   createPipe,
   GbmDevice,
   LinuxReadinessDispatcher,
@@ -204,6 +206,15 @@ import {
 } from "@moire/prefs";
 
 const WL_DISPLAY_ID = 1;
+/**
+ * How long an xdg-activation token stays good: a launched program starting up, or Screenshot
+ * waiting out its longest capture delay, uses it well within this.
+ */
+const ACTIVATION_TOKEN_TTL_MS = 30_000;
+/** Unused tokens kept at once; older ones are forgotten first. */
+const ACTIVATION_TOKEN_LIMIT = 32;
+/** A settled frame normally follows within a minimize animation; never wait longer than this. */
+const SETTLED_FRAME_TIMEOUT_MS = 1000;
 
 // opcodes
 const OP = {
@@ -566,9 +577,9 @@ const CLIENT_HANDOFF_FADE_MS = 420;
 const BOOT_FADE_MS = 520;
 /**
  * The ground shared by stages that hand over without a frame (desktop logout → greeter):
- * the departing stage veils to it, the next seeds its first modeset with it. ARGB.
+ * the departing stage fades to it, the next seeds its first modeset with it. ARGB.
  */
-const STAGE_GROUND = 0xff06060a;
+export const STAGE_GROUND = 0xff06060a;
 /** Longest wait for a client's first detailed buffer after its first (blank) one. */
 const BOOT_FIRST_CONTENT_MAX_MS = 1500;
 
@@ -1198,6 +1209,13 @@ export class CompositorServer {
   private bootFrame: { pixels: Uint8Array; width: number; height: number } | null = null;
   private bootFadeStartedMs = 0;
   private bootFirstContentMs = 0;
+  /** Input is open but there is no output yet (during start()): events have nowhere to go. */
+  private awaitingDisplay = false;
+  /** The GPU's render node, when the renderer was created before the display was owned. */
+  private renderFd = -1;
+  private bootFadePending = false;
+  private clientRevealPending = false;
+  private clientRevealStartedMs = 0;
   /** The display belongs to the next stage now; never present another frame. */
   private displayHandedOff = false;
   /** Handing off: clients dissolve from this CLOCK_MONOTONIC ms (0: not fading). */
@@ -1217,8 +1235,8 @@ export class CompositorServer {
     },
   });
   private reducedMotion = readReducedMotion();
-  /** Handing off with a veil: the stage ground covers everything from this ms (0: none). */
-  private veilStartedMs = 0;
+  /** The whole output is fading to `outputFadePixel` from this ms (0: not fading). */
+  private outputFadeStartedMs = 0;
   /**
    * The session lock. While locked, composition draws only the lock (never a client surface)
    * and input reaches only the lock; see `compositeLocked` and the input handlers.
@@ -1265,11 +1283,7 @@ export class CompositorServer {
   private promptUiSubject = "";
   private secureNoticeTimer: NodeJS.Timeout | null = null;
   private promptPulseTimer: NodeJS.Timeout | null = null;
-  private readonly veilPixel = (() => {
-    const pixel = new Uint8Array(4);
-    new DataView(pixel.buffer).setUint32(0, STAGE_GROUND, true);
-    return pixel;
-  })();
+  private readonly outputFadePixel = new Uint8Array(4);
   /** Smoothed scene-backdrop draw time; slow (software) GL lowers the scene's frame rate. */
   private sceneDrawMs = 0;
   private readonly bootCheckedRevision = new WeakMap<object, number>();
@@ -1436,6 +1450,9 @@ export class CompositorServer {
    */
   private needsComposite = true;
   private compositeWakeResolver: (() => void) | null = null;
+  /** Composites started so far; a settled-frame waiter needs one that began after it asked. */
+  private compositesStarted = 0;
+  private settledFrameWaiters: { after: number; resolve: () => void }[] = [];
   /** Absolute output cadence; avoids accumulating setTimeout rounding drift. */
   private nextCompositeDeadlineMs = 0;
   /** Bottom → top paint/focus order for mapped toplevels. */
@@ -1482,8 +1499,8 @@ export class CompositorServer {
   private selection: ClipboardSelection | null = null;
   /** Middle-click primary selection, independent from the clipboard. */
   private primarySelection: PrimarySelection | null = null;
-  /** One-shot xdg-activation tokens issued by this compositor. */
-  private activationTokens = new Set<string>();
+  /** One-shot xdg-activation tokens this compositor will honour, with when each was issued. */
+  private activationTokens = new Map<string, number>();
   /** Active DnD session (one at a time). */
   private drag: DragSession | null = null;
   /** Pixel snapshot retained while a rejected/cancelled drag snaps home. */
@@ -1923,19 +1940,22 @@ export class CompositorServer {
     scene: string,
     options: {
       /**
-       * Fade everything (shell included) to the stage ground instead of fading only clients
+       * Fade the whole output (shell included) to this ARGB colour instead of fading only clients
        * off the scene. Nothing private is then left on screen, and no frame is published.
        */
-      veil?: boolean;
+      fadeToColor?: number;
     } = {},
   ): Promise<boolean> {
     const kms = this.kms;
     if (!kms) return false;
-    // Fade every client off the still-running scene (or veil the whole screen), so the next
+    // Fade every client off the still-running scene (or the whole output to a colour), so the next
     // stage receives the bare scene regardless of when the clients' own teardown reaches us.
-    if (options.veil) this.veilStartedMs = monotonicMs();
-    else this.clientFadeStartedMs = monotonicMs();
-    while (monotonicMs() - this.clientFadeStartedMs < CLIENT_HANDOFF_FADE_MS + 40) {
+    const fadeStartedMs = monotonicMs();
+    if (options.fadeToColor !== undefined) {
+      new DataView(this.outputFadePixel.buffer).setUint32(0, options.fadeToColor, true);
+      this.outputFadeStartedMs = fadeStartedMs;
+    } else this.clientFadeStartedMs = fadeStartedMs;
+    while (monotonicMs() - fadeStartedMs < CLIENT_HANDOFF_FADE_MS + 40) {
       this.markDirty();
       await new Promise((resolve) => setTimeout(resolve, 16));
     }
@@ -1950,10 +1970,10 @@ export class CompositorServer {
     while (!isKmsScanoutSettled(kms) && monotonicMs() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 4));
     try {
-      if (options.veil) {
+      if (options.fadeToColor !== undefined) {
         const retention = retainKmsScanout(kms);
         console.log(
-          `[stage-handoff] ${scene}: veiled; ` +
+          `[stage-handoff] ${scene}: faded out; ` +
             (retention.retained
               ? "scanout retained"
               : `scanout not retained (${retention.reason})`),
@@ -2039,15 +2059,146 @@ export class CompositorServer {
     }
   }
 
+  /**
+   * While the previous stage is still on screen: create the renderer on the GPU's render node and
+   * draw the scene and a frame once, so every shader is compiled. Taking the display is then only
+   * a modeset away from the next frame. Declines, leaving start() to do this later, if any of it
+   * is unavailable.
+   */
+  private async prepareAhead(cardPath: string): Promise<boolean> {
+    if (!this.sceneBackdropProvider) return false;
+    const active = await waitForBootPresenting(1500);
+    const node = active && renderNodeForCard(cardPath);
+    if (!active || !node) return false;
+    const { width, height } = active;
+    const startedMs = monotonicMs();
+    try {
+      const renderFd = fs.openSync(node, fs.constants.O_RDWR);
+      this.renderFd = renderFd;
+      const renderer = createCompositorOutputRenderer(-1, undefined, { gles3: true, renderFd });
+      this.outputRenderer = renderer;
+      const scene = this.canUseRetainedComposition(renderer)
+        ? this.sceneBackdropLayer(width, height)
+        : null;
+      if (!scene) throw new Error("no scene layer");
+      const sceneMs = monotonicMs();
+      if (this.sceneFrameTimer) {
+        clearTimeout(this.sceneFrameTimer);
+        this.sceneFrameTimer = null;
+      }
+      // Each pass is its own GPU submission: on a shared queue, the previous stage's next frame
+      // can get in between them. The targets are tiny because the shaders are what is prepared.
+      const destination = { x: 0, y: 0, width, height };
+      const backdrop: CompositionLayer = {
+        id: "scene-backdrop",
+        z: 0,
+        source: scene.source,
+        destination,
+        blendMode: "copy",
+        sampling: "nearest",
+      };
+      const blended: CompositionLayer = {
+        id: "prepare-blend",
+        z: 1,
+        source: { pixels: this.outputFadePixel, width: 1, height: 1, stride: 4, revision: 1 },
+        destination,
+        opacity: 0.5,
+        sampling: "nearest",
+      };
+      let rendered: ReturnType<CompositorOutputRenderer["renderOutput"]> | null = null;
+      for (const layers of [[backdrop], [backdrop, blended]]) {
+        renderer.beginComposition!({ width, height, clearColor: STAGE_GROUND, layers });
+        rendered = renderer.renderOutput({
+          geometry: { id: "prepare", x: 0, y: 0, width, height },
+          pixels: Buffer.alloc(16 * 16 * 4),
+          physicalWidth: 16,
+          physicalHeight: 16,
+          pitch: 16 * 4,
+        });
+      }
+      // One real composite with nowhere to present: the first frame after taking the display then
+      // runs code that has already run, with its cursor image already loaded.
+      this.hardwareCursorImage();
+      await this.compositeRetained(renderer, monotonicMs(), width, height);
+      if (this.sceneFrameTimer) {
+        clearTimeout(this.sceneFrameTimer);
+        this.sceneFrameTimer = null;
+      }
+      console.log(
+        `[renderer] prepared ahead on ${node} (${rendered?.framebufferId != null ? "direct" : "readback"}): ` +
+          `scene ${Math.round(sceneMs - startedMs)}ms, composition ${Math.round(monotonicMs() - sceneMs)}ms`,
+      );
+      return true;
+    } catch (error) {
+      console.warn("[renderer] not prepared ahead:", error);
+      if (this.sceneFrameTimer) clearTimeout(this.sceneFrameTimer);
+      this.sceneFrameTimer = null;
+      this.sceneLayer?.destroy();
+      this.sceneLayer = null;
+      this.sceneBackdrop = null;
+      this.outputRenderer?.destroy();
+      this.outputRenderer = null;
+      this.closeRenderFd();
+      return false;
+    }
+  }
+
+  private closeRenderFd(): void {
+    if (this.renderFd >= 0) closeFd(this.renderFd);
+    this.renderFd = -1;
+  }
+
   async start(cardPath?: string): Promise<void> {
     if (this.fatalError) throw this.fatalError;
     fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
     const displaySettings = loadSettings();
     const requestedMode = process.env.MOIRE_MODE ?? displaySettings.displayMode ?? undefined;
+    // Input comes up first: the boot stage is still animating, and this takes a visible moment.
+    this.awaitingDisplay = true;
+    this.readiness = new LinuxReadinessDispatcher("compositor");
+    this.keymap = this.compileKeymap(this.inputSettings.keyboard);
+    this.inputSettingsWatcher = createInputSettingsWatcher((next) => this.applyInputSettings(next));
+
+    this.startKeyboardInput(
+      new EvdevKeyboard(
+        this.readiness,
+        this.managedSeat ? nativeKeyboardDeviceIo(this.managedSeat.devices) : undefined,
+      ),
+    );
+
+    this.pointerDev = new EvdevPointer(
+      this.readiness,
+      this.managedSeat ? nativePointerDeviceIo(this.managedSeat.devices) : undefined,
+    );
+    this.pointerDev.setInputFixtureTrace(this.inputFixtureTrace);
+    if (this.scrollTrace.enabled) this.pointerDev.on("rawPointer", this.scrollTrace.write);
+    this.pointerDev.on("motion", (ev: EvdevPointerMotion) => {
+      if (!this.awaitingDisplay) this.onPointerMotion(ev);
+    });
+    this.pointerDev.on("absolute", (ev: EvdevPointerAbsolute) => {
+      if (!this.awaitingDisplay) this.onPointerAbsolute(ev);
+    });
+    this.pointerDev.on("button", (ev: EvdevPointerButton) => {
+      if (!this.awaitingDisplay) this.onPointerButton(ev);
+    });
+    this.pointerDev.on("axis", (ev: EvdevPointerAxis) => {
+      if (!this.awaitingDisplay) this.onPointerAxis(ev);
+    });
+    this.pointerDev.on("device", (target: PointerDeviceConfigTarget) =>
+      this.configurePointerDevice(target),
+    );
+    this.pointerDev.on("deviceRemoved", () => this.notifyPointerDevices());
+    this.pointerDev.start();
+
     // A live boot stage holds the display until this moment; its final frame seeds the modeset
     // and stays up until the first frame showing a client, so the takeover is invisible.
     const handoffEnabled = process.env.MOIRE_BOOT_HANDOFF !== "0";
-    const live = handoffEnabled ? await requestBootRelease() : null;
+    const prepared = handoffEnabled && cardPath ? await this.prepareAhead(cardPath) : false;
+    const live = handoffEnabled
+      ? await requestBootRelease(undefined, undefined, { wantFrame: !prepared })
+      : null;
+    // Prepared: the boot stage's last frame stays up by itself until this stage's first page flip.
+    const keepScanout = prepared && live !== null;
     // Without a live boot stage, a previous stage (the greeter) may have left its frame.
     const stage = handoffEnabled && !live ? readStageHandoff() : null;
     const boot = live ?? stage;
@@ -2064,15 +2215,17 @@ export class CompositorServer {
       );
       this.bootHoldUntilMs = monotonicMs() + BOOT_HOLD_MAX_MS;
     }
-    // A scene stage with no predecessor frame (the greeter after logout, whose desktop veiled to
+    // A scene stage with no predecessor frame (the greeter after logout, whose desktop faded to
     // the stage ground) starts from that ground and dissolves into its scene.
-    const groundStart = !bootFrame && this.sceneBackdropProvider !== null;
+    const groundStart = !bootFrame && !keepScanout && this.sceneBackdropProvider !== null;
     this.kms = openKmsOutput(
       cardPath,
       requestedMode,
       undefined,
       this.managedSeat?.devices,
-      bootFrame ?? (groundStart ? { fill: STAGE_GROUND } : undefined),
+      keepScanout
+        ? { keepScanout: true }
+        : (bootFrame ?? (groundStart ? { fill: STAGE_GROUND } : undefined)),
     );
     if (groundStart) {
       const ground = new Uint8Array(this.kms.width * this.kms.height * 4);
@@ -2080,8 +2233,8 @@ export class CompositorServer {
       this.bootFrame = { pixels: ground, width: this.kms.width, height: this.kms.height };
       this.bootHoldUntilMs = monotonicMs() + BOOT_HOLD_MAX_MS;
     }
-    this.readiness = new LinuxReadinessDispatcher("compositor");
     this.outputs = [{ kms: this.kms, x: 0, y: 0, scale120: 120, primary: true }];
+    this.awaitingDisplay = false;
     const connected = this.managedSeat
       ? []
       : listDrmConnectors().filter(
@@ -2128,9 +2281,11 @@ export class CompositorServer {
         version: CORE_GLOBALS.wl_output,
       });
     }
-    this.outputRenderer = createCompositorOutputRenderer(this.kms.fd, undefined, {
-      gles3: this.sceneBackdropProvider !== null,
-    });
+    if (this.outputRenderer) this.outputRenderer.attachKmsDevice?.(this.kms.fd);
+    else
+      this.outputRenderer = createCompositorOutputRenderer(this.kms.fd, undefined, {
+        gles3: this.sceneBackdropProvider !== null,
+      });
     for (const output of this.outputs)
       this.observeOutputAvailability(output.kms.connectorId, output.kms.availability);
     console.log(
@@ -2139,6 +2294,15 @@ export class CompositorServer {
     this.theme = this.seatTheme(this.theme);
     const bootBg = hexToArgb(this.theme.tokens.bg);
     for (const output of this.outputs) {
+      // The primary may already show the previous stage's frame: painting over it is the blank
+      // that the seeded modeset and the hold exist to avoid.
+      if (
+        output.kms === this.kms &&
+        (keepScanout ||
+          (this.bootFrame?.width === output.kms.width &&
+            this.bootFrame.height === output.kms.height))
+      )
+        continue;
       await fillKmsColor(
         output.kms,
         {
@@ -2198,32 +2362,6 @@ export class CompositorServer {
       }
     }
 
-    this.keymap = this.compileKeymap(this.inputSettings.keyboard);
-    this.inputSettingsWatcher = createInputSettingsWatcher((next) => this.applyInputSettings(next));
-
-    this.startKeyboardInput(
-      new EvdevKeyboard(
-        this.readiness,
-        this.managedSeat ? nativeKeyboardDeviceIo(this.managedSeat.devices) : undefined,
-      ),
-    );
-
-    this.pointerDev = new EvdevPointer(
-      this.readiness,
-      this.managedSeat ? nativePointerDeviceIo(this.managedSeat.devices) : undefined,
-    );
-    this.pointerDev.setInputFixtureTrace(this.inputFixtureTrace);
-    if (this.scrollTrace.enabled) this.pointerDev.on("rawPointer", this.scrollTrace.write);
-    this.pointerDev.on("motion", (ev: EvdevPointerMotion) => this.onPointerMotion(ev));
-    this.pointerDev.on("absolute", (ev: EvdevPointerAbsolute) => this.onPointerAbsolute(ev));
-    this.pointerDev.on("button", (ev: EvdevPointerButton) => this.onPointerButton(ev));
-    this.pointerDev.on("axis", (ev: EvdevPointerAxis) => this.onPointerAxis(ev));
-    this.pointerDev.on("device", (target: PointerDeviceConfigTarget) =>
-      this.configurePointerDevice(target),
-    );
-    this.pointerDev.on("deviceRemoved", () => this.notifyPointerDevices());
-    this.pointerDev.start();
-
     if (this.kms) {
       const desktop = this.getKmsSize();
       this.cursorX = Math.floor(desktop.width / 2);
@@ -2272,6 +2410,8 @@ export class CompositorServer {
       });
     });
     this.socket.start();
+    // A held frame is released by composition, which must not wait for a client's first commit.
+    if (this.bootHoldUntilMs) this.markDirty();
 
     console.log(`Wayland display: ${this.displayName}`);
     console.log(`Socket: ${this.socketPath}`);
@@ -2966,7 +3106,7 @@ export class CompositorServer {
       // Touchpads ignore touches that land while typing (disable-while-typing); other pointer
       // devices need not track typing.
       this.pointerDev?.noteKeyboard?.(ev);
-      this.onKey(ev);
+      if (!this.awaitingDisplay) this.onKey(ev);
     });
     keyboard.on("exclusiveFailure", (error: Error) => {
       if (this.evdev !== keyboard || this.fatalError) return;
@@ -3079,6 +3219,7 @@ export class CompositorServer {
       }
       this.outputRenderer?.destroy();
       this.outputRenderer = null;
+      this.closeRenderFd();
       this.gbm?.destroy();
       this.gbm = null;
       if (this.dmabufFormatTable) {
@@ -3313,6 +3454,38 @@ export class CompositorServer {
 
   getXwm(): X11Wm | null {
     return this.xwm;
+  }
+
+  /**
+   * Resolves once a frame composed after this call, with no window motion in flight, is the
+   * latest output: what a capture taken then shows reflects every request the compositor has
+   * handled so far (Screenshot minimizing its own window, say). Gives up after `timeoutMs`
+   * (motion that never settles) and resolves anyway.
+   */
+  settledFrame(timeoutMs = SETTLED_FRAME_TIMEOUT_MS): Promise<void> {
+    if (!this.running) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiter = {
+        after: this.compositesStarted,
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+      };
+      const timer = setTimeout(() => {
+        this.settledFrameWaiters = this.settledFrameWaiters.filter((entry) => entry !== waiter);
+        resolve();
+      }, timeoutMs);
+      this.settledFrameWaiters.push(waiter);
+      this.markDirty();
+    });
+  }
+
+  private resolveSettledFrames(started: number): void {
+    if (this.settledFrameWaiters.length === 0) return;
+    const ready = this.settledFrameWaiters.filter((waiter) => started > waiter.after);
+    this.settledFrameWaiters = this.settledFrameWaiters.filter((waiter) => started <= waiter.after);
+    for (const waiter of ready) waiter.resolve();
   }
 
   capturePrimaryOutput(): {
@@ -3971,17 +4144,47 @@ export class CompositorServer {
     selection.sourceSession.sendPrimarySourceSend(selection.sourceId, mime, fd);
   }
 
+  /**
+   * An xdg-activation token for a launch the user asked for (the shell's launcher, menus).
+   * One-shot, and honoured for ACTIVATION_TOKEN_TTL_MS.
+   */
   issueActivationToken(): string {
+    const now = monotonicMs();
+    for (const [token, issued] of this.activationTokens)
+      if (now - issued > ACTIVATION_TOKEN_TTL_MS) this.activationTokens.delete(token);
+    // Oldest first: a client asking in a loop only pushes out its own unused tokens.
+    while (this.activationTokens.size >= ACTIVATION_TOKEN_LIMIT) {
+      const oldest = this.activationTokens.keys().next().value;
+      if (oldest === undefined) break;
+      this.activationTokens.delete(oldest);
+    }
     const token = `moire-${randomUUID()}`;
-    this.activationTokens.add(token);
+    this.activationTokens.set(token, now);
     return token;
   }
 
+  /**
+   * A client's xdg_activation_token_v1.commit. Only a client that holds the focused window, with
+   * no lock or secure prompt up, gets a token that will be honoured: focus is the user's attention,
+   * so a background client cannot mint a way to the front. Others get a string that never works
+   * (the protocol always answers `done`).
+   */
+  issueClientActivationToken(session: ClientSession): string {
+    if (this.seatProtected || this.focusedToplevel?.session !== session)
+      return `moire-${randomUUID()}`;
+    return this.issueActivationToken();
+  }
+
+  /** xdg_activation_v1.activate: restore, raise and focus with a token honoured above. */
   activateWithToken(token: string, session: ClientSession, surfaceId: number): void {
-    if (!this.activationTokens.delete(token)) return;
+    const issued = this.activationTokens.get(token);
+    if (issued === undefined) return;
+    this.activationTokens.delete(token);
+    if (monotonicMs() - issued > ACTIVATION_TOKEN_TTL_MS || this.seatProtected) return;
     const surface = session.toplevelFor(surfaceId);
     if (!surface?.mapped || surface.role !== "toplevel") return;
-    this.focusClient(session, surface.id);
+    if (surface.minimized) this.restoreToplevel(session, surface.id);
+    else this.focusClient(session, surface.id);
   }
 
   /** Source client writes clipboard bytes into `fd` (from offer.receive). */
@@ -4688,6 +4891,18 @@ export class CompositorServer {
       this.focusedToplevel.surfaceId === surfaceId;
     if (surf.minimized) this.restoreToplevel(entry.session, surfaceId);
     else if (focused) this.setMinimized(entry.session, surfaceId);
+    else this.focusClient(entry.session, surfaceId);
+  }
+
+  /** App activation (a single-window app launched again): restore and focus, never minimize. */
+  activateTask(clientId: number, surfaceId: number): void {
+    const entry = this.stack.find(
+      (candidate) => candidate.session.clientId === clientId && candidate.surfaceId === surfaceId,
+    );
+    if (!entry) return;
+    const surf = entry.session.surfaceById(surfaceId);
+    if (!surf?.mapped || surf.role !== "toplevel") return;
+    if (surf.minimized) this.restoreToplevel(entry.session, surfaceId);
     else this.focusClient(entry.session, surfaceId);
   }
 
@@ -6513,6 +6728,7 @@ export class CompositorServer {
           this.nextCompositeDeadlineMs < startedAt - budget
             ? startedAt + budget
             : this.nextCompositeDeadlineMs + budget;
+        const started = ++this.compositesStarted;
         try {
           await this.composite();
         } catch (err) {
@@ -6520,6 +6736,7 @@ export class CompositorServer {
           console.error("[composite]", err);
           this.markDirty();
         }
+        if (!this.windowMotion.active) this.resolveSettledFrames(started);
       } else {
         // Idle — native commits and shell invalidation wake us directly.
         await this.waitForCompositeWork(1_000);
@@ -6947,39 +7164,42 @@ export class CompositorServer {
     const pipelineFrame = ++this.outputPipelineFrame;
     const layers: CompositionLayer[] = [];
     let z = 0;
-    const wallPhase = (Date.now() / 60000) % 1;
-    const phaseBucket = Math.floor(wallPhase * 20);
-    this.wallpaperImages.ensureSize(width, height);
-    const wallpaperKey = `${this.theme.name}:${width}x${height}:${phaseBucket}:${wallpaperImageRevision()}:${JSON.stringify(this.theme.wallpaper)}`;
-    if (
-      !this.retainedWallpaper ||
-      this.retainedWallpaper.byteLength !== width * height * 4 ||
-      this.retainedWallpaperKey !== wallpaperKey
-    ) {
-      this.retainedWallpaper = Buffer.alloc(width * height * 4);
-      paintWallpaper(
-        new Uint32Array(
-          this.retainedWallpaper.buffer,
-          this.retainedWallpaper.byteOffset,
-          this.retainedWallpaper.byteLength >>> 2,
-        ),
-        width,
-        width,
-        height,
-        this.theme,
-        wallPhase,
-      );
-      this.retainedWallpaperKey = wallpaperKey;
-      this.retainedWallpaperRevision++;
-    }
     const sceneBackdrop = this.sceneBackdropLayer(width, height);
+    // A scene covers the whole output, so the wallpaper is not painted beneath it.
+    if (!sceneBackdrop) {
+      const wallPhase = (Date.now() / 60000) % 1;
+      const phaseBucket = Math.floor(wallPhase * 20);
+      this.wallpaperImages.ensureSize(width, height);
+      const wallpaperKey = `${this.theme.name}:${width}x${height}:${phaseBucket}:${wallpaperImageRevision()}:${JSON.stringify(this.theme.wallpaper)}`;
+      if (
+        !this.retainedWallpaper ||
+        this.retainedWallpaper.byteLength !== width * height * 4 ||
+        this.retainedWallpaperKey !== wallpaperKey
+      ) {
+        this.retainedWallpaper = Buffer.alloc(width * height * 4);
+        paintWallpaper(
+          new Uint32Array(
+            this.retainedWallpaper.buffer,
+            this.retainedWallpaper.byteOffset,
+            this.retainedWallpaper.byteLength >>> 2,
+          ),
+          width,
+          width,
+          height,
+          this.theme,
+          wallPhase,
+        );
+        this.retainedWallpaperKey = wallpaperKey;
+        this.retainedWallpaperRevision++;
+      }
+    }
     layers.push({
       id: sceneBackdrop ? "scene-backdrop" : "wallpaper",
       z: z++,
       source: sceneBackdrop
         ? sceneBackdrop.source
         : {
-            pixels: this.retainedWallpaper,
+            pixels: this.retainedWallpaper!,
             width,
             height,
             stride: width * 4,
@@ -7184,12 +7404,12 @@ export class CompositorServer {
     if (dragLayer) layers.push(dragLayer);
     const bootFade = this.bootFadeLayer(z++, width, height);
     if (bootFade) layers.push(bootFade);
-    if (this.veilStartedMs) {
-      const u = Math.min(1, (monotonicMs() - this.veilStartedMs) / CLIENT_HANDOFF_FADE_MS);
+    if (this.outputFadeStartedMs) {
+      const u = Math.min(1, (monotonicMs() - this.outputFadeStartedMs) / CLIENT_HANDOFF_FADE_MS);
       layers.push({
-        id: "handoff-veil",
+        id: "output-fade",
         z: z++,
-        source: { pixels: this.veilPixel, width: 1, height: 1, stride: 4, revision: 1 },
+        source: { pixels: this.outputFadePixel, width: 1, height: 1, stride: 4, revision: 1 },
         destination: { x: 0, y: 0, width, height },
         opacity: u * u * (3 - 2 * u),
         sampling: "nearest",
@@ -7323,6 +7543,19 @@ export class CompositorServer {
    */
   private holdingBootFrame(): boolean {
     if (this.bootHoldUntilMs === 0) return false;
+    // A scene stage draws its own backdrop, so the scene resumes now and clients fade in over it.
+    const sceneRenderer = this.outputRenderer;
+    if (
+      !this.shell &&
+      this.sceneBackdropAvailable &&
+      sceneRenderer &&
+      this.canUseRetainedComposition(sceneRenderer)
+    ) {
+      this.bootHoldUntilMs = 0;
+      this.bootFadePending = this.bootFrame !== null;
+      this.clientRevealPending = true;
+      return false;
+    }
     // A shell paints its own content: dissolve into it as soon as it can be composed on the GPU
     // (its early flat frames are a bare fill, and only the retained path carries the dissolve).
     if (this.shell) {
@@ -7337,8 +7570,25 @@ export class CompositorServer {
       this.bootFadeStartedMs = this.bootFrame ? monotonicMs() : 0;
       return false;
     }
-    // A toolkit's first buffers often just map the window (a uniform fill); release on the
-    // first buffer with visible detail, or a bounded moment after the first buffer.
+    if (this.clientContentReady() || monotonicMs() >= this.bootHoldUntilMs) {
+      this.bootHoldUntilMs = 0;
+      this.bootFadeStartedMs = this.bootFrame ? monotonicMs() : 0;
+      return false;
+    }
+    // Keep clients drawing while held: their content is snapshotted, so frames may complete.
+    for (const client of this.clients)
+      for (const surface of client.surfaces())
+        if (surface.frameCallbacks.length || surface.releaseBuffers.length)
+          client.finishSurfaceFrame(surface);
+    this.scheduleBootHoldCheck();
+    return true;
+  }
+
+  /**
+   * A toolkit's first buffers often just map the window (a uniform fill): ready on the first buffer
+   * with visible detail, or a bounded moment after the first buffer.
+   */
+  private clientContentReady(): boolean {
     let mapped = false;
     let detailed = false;
     for (const client of this.clients)
@@ -7351,21 +7601,10 @@ export class CompositorServer {
       }
     const now = monotonicMs();
     if (mapped && this.bootFirstContentMs === 0) this.bootFirstContentMs = now;
-    const ready =
+    return (
       detailed ||
-      (this.bootFirstContentMs > 0 && now - this.bootFirstContentMs >= BOOT_FIRST_CONTENT_MAX_MS);
-    if (ready || now >= this.bootHoldUntilMs) {
-      this.bootHoldUntilMs = 0;
-      this.bootFadeStartedMs = this.bootFrame ? monotonicMs() : 0;
-      return false;
-    }
-    // Keep clients drawing while held: their content is snapshotted, so frames may complete.
-    for (const client of this.clients)
-      for (const surface of client.surfaces())
-        if (surface.frameCallbacks.length || surface.releaseBuffers.length)
-          client.finishSurfaceFrame(surface);
-    this.scheduleBootHoldCheck();
-    return true;
+      (this.bootFirstContentMs > 0 && now - this.bootFirstContentMs >= BOOT_FIRST_CONTENT_MAX_MS)
+    );
   }
 
   private scheduleBootHoldCheck(): void {
@@ -7396,17 +7635,44 @@ export class CompositorServer {
     else content.destroy();
   }
 
-  /** During a stage handoff, client layers dissolve off the scene. */
+  /** Client opacity while a scene stage starts: hidden until they have drawn, then fading in. */
+  private clientRevealOpacity(): number {
+    if (this.clientRevealPending) {
+      if (!this.clientContentReady()) return 0;
+      this.clientRevealPending = false;
+      this.clientRevealStartedMs = monotonicMs();
+    }
+    if (this.clientRevealStartedMs === 0) return 1;
+    const u = Math.min(1, (monotonicMs() - this.clientRevealStartedMs) / BOOT_FADE_MS);
+    if (u >= 1) {
+      this.clientRevealStartedMs = 0;
+      return 1;
+    }
+    // Keep frames coming until the fade completes.
+    setImmediate(() => this.markDirty());
+    return u * u * (3 - 2 * u);
+  }
+
+  /** Client layers fade in as a scene stage starts and dissolve off it at a stage handoff. */
   private fadingClientLayer(layer: CompositionLayer): CompositionLayer {
-    if (this.clientFadeStartedMs === 0) return layer;
-    const u = Math.min(1, (monotonicMs() - this.clientFadeStartedMs) / CLIENT_HANDOFF_FADE_MS);
+    const reveal = this.clientRevealOpacity();
+    if (this.clientFadeStartedMs === 0 && reveal === 1) return layer;
+    const u =
+      this.clientFadeStartedMs === 0
+        ? 0
+        : Math.min(1, (monotonicMs() - this.clientFadeStartedMs) / CLIENT_HANDOFF_FADE_MS);
     const keep = 1 - u * u * (3 - 2 * u);
-    return { ...layer, opacity: (layer.opacity ?? 1) * keep };
+    return { ...layer, opacity: (layer.opacity ?? 1) * keep * reveal };
   }
 
   /** The boot stage's final frame, dissolving over the first frames of this session. */
   private bootFadeLayer(z: number, width: number, height: number): CompositionLayer | null {
     const frame = this.bootFrame;
+    if (this.bootFadePending) {
+      // The scene's first draw took this frame's time, so the dissolve starts only now.
+      this.bootFadePending = false;
+      this.bootFadeStartedMs = monotonicMs();
+    }
     if (!frame || this.bootFadeStartedMs === 0) return null;
     const u = Math.min(1, (monotonicMs() - this.bootFadeStartedMs) / BOOT_FADE_MS);
     if (u >= 1 || frame.width !== width || frame.height !== height) {
@@ -9554,7 +9820,7 @@ export class ClientSession {
     } else if (opcode === OP.activation_token_set_surface) {
       obj.data = { ...(obj.data ?? {}), surfaceId: r.object() };
     } else if (opcode === OP.activation_token_commit) {
-      const token = this.server.issueActivationToken();
+      const token = this.server.issueClientActivationToken(this);
       this.send(obj.id, EV.activation_token_done, (b) => b.string(token));
     }
   }

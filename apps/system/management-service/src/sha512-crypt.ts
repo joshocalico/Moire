@@ -1,7 +1,9 @@
 /**
  * SHA-512 crypt (`$6$`, Ulrich Drepper's specification), so a new password becomes a hash
- * inside this process: no helper sees the plaintext on its command line or stdin. AccountsService
- * then hands only the hash to `chpasswd -e`.
+ * inside moire-accounts: no helper sees the plaintext on its command line or stdin.
+ * AccountsService then hands only the hash to `chpasswd -e`. Plain `node:crypto`, no native
+ * code: glibc's crypt(3) would need an FFI boundary for no gain, as `$6$` is what
+ * AccountsService and pam_unix already accept.
  */
 import { createHash, randomBytes } from "node:crypto";
 
@@ -95,11 +97,15 @@ export function sha512Crypt(password: string | Buffer, setting: string): string 
   // Best effort: wipe the copies this function made (the caller's string is immutable).
   if (!Buffer.isBuffer(password)) key.fill(0);
   p.fill(0);
+  alternate.fill(0);
   return `$6$${custom ? `rounds=${rounds}$` : ""}${saltText}$${encode(current)}`;
 }
 
-/** A fresh `$6$rounds=…$<16 random salt characters>$…` hash for /etc/shadow. */
-export function hashNewPassword(password: string, rounds = PASSWORD_ROUNDS): string {
+/**
+ * A fresh `$6$rounds=…$<16 random salt characters>$…` hash for /etc/shadow. A Buffer is the
+ * caller's to wipe.
+ */
+export function hashNewPassword(password: string | Buffer, rounds = PASSWORD_ROUNDS): string {
   const bytes = randomBytes(16);
   const salt = Array.from(bytes, (byte) => ITOA64[byte & 0x3f]).join("");
   return sha512Crypt(password, `$6$rounds=${rounds}$${salt}`);

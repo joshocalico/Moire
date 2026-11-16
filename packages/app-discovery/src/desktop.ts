@@ -14,6 +14,11 @@ export type DesktopEntry = {
   mimeTypes?: string[];
   /** The window class the app's windows carry, often its reverse-DNS app id. */
   startupWMClass?: string;
+  /**
+   * `SingleMainWindow=true`: the app has one main window, so launching it again activates that
+   * window (and hands it any deep link) instead of opening another.
+   */
+  singleMainWindow?: boolean;
 };
 
 function parseLocaleKey(map: Map<string, string>, base: string): string | undefined {
@@ -88,6 +93,7 @@ export function parseDesktopFile(
     categories: (keys.get("Categories") ?? "").split(";").filter(Boolean),
     mimeTypes: (keys.get("MimeType") ?? "").split(";").filter(Boolean),
     startupWMClass: keys.get("StartupWMClass") || undefined,
+    singleMainWindow: keys.get("SingleMainWindow") === "true" || undefined,
   };
 }
 

@@ -282,6 +282,8 @@ try {
   const lines: string[] = [];
   const statuses: PolkitAgentStatus[] = [];
   const prompts = new FakePrompts();
+  // Why each Cancelled answer was given, for its subject (prompt-outcomes.ts).
+  const dismissals: [number, string, string][] = [];
   let clock = 1_000_000;
   const agentBuses: SessionBus[] = [];
   const start = async (overrides: Partial<PolkitAgentOptions> = {}) => {
@@ -302,11 +304,13 @@ try {
       now: () => clock,
       log: (line) => lines.push(line),
       onStatus: (status) => statuses.push(status),
+      onDismissed: (pid, actionId, dismissal) => dismissals.push([pid, actionId, dismissal]),
       resolveRequester: (pid) =>
         pid === 338
           ? {
               requester: { name: "Settings", pid, via: "Terminal", x11: false },
               executable: "/run/current-system/sw/bin/moire-settings",
+              key: "launch:moire-settings",
             }
           : null,
       ...overrides,
@@ -457,6 +461,7 @@ try {
       request.coolDownKey,
       "/run/current-system/sw/bin/moire-settings\norg.moire.test.admin",
     );
+    assert.equal(request.requesterKey, "launch:moire-settings", "the flood pause is per program");
 
     assert.equal(await prompts.type("wrong"), "rejected");
     assert.equal(await prompts.type(PASSWORD), "accepted");
@@ -539,6 +544,7 @@ try {
       lines.at(-1),
       "polkit-agent: code=authority-cancelled action=org.moire.test.admin",
     );
+    assert.deepEqual(dismissals.at(-1), [338, "org.moire.test.admin", "withdrawn"]);
     // Once closed, the checker is dead.
     const before = fakeHelper.exchanges.length;
     assert.equal(await prompts.type(PASSWORD, undefined, entry), "unavailable");
@@ -582,15 +588,31 @@ try {
       ["completed", POLKIT_FAILED, "failed"],
     ] as const) {
       const count = prompts.entries.length;
+      const recorded = dismissals.length;
       const reply = authority.begin(newCookie());
       await until(() => prompts.entries.length === count + 1, "prompt");
       prompts.last.settle({ outcome });
       await assert.rejects(reply, (error) => {
         assert.equal(errorName(error), name, outcome);
+        // The reason is kept before polkitd hears the answer, so a requester that asks as soon
+        // as polkit replies finds it.
+        if (name === POLKIT_CANCELLED)
+          assert.deepEqual(dismissals.at(-1), [338, "org.moire.test.admin", outcome]);
         return true;
       });
       assert.equal(lines.at(-1), `polkit-agent: code=${code} action=org.moire.test.admin`);
+      // Only Cancelled answers (polkit's `polkit.dismissed`) carry a reason.
+      assert.equal(dismissals.length, recorded + (name === POLKIT_CANCELLED ? 1 : 0), outcome);
     }
+    // A person's cancel, for another subject: kept for the subject, never the caller.
+    const count = prompts.entries.length;
+    const reply = authority.begin(newCookie(), {
+      details: { "polkit.caller-pid": "349", "polkit.subject-pid": "512" },
+    });
+    await until(() => prompts.entries.length === count + 1, "prompt");
+    prompts.last.settle({ outcome: "cancelled" });
+    await assert.rejects(reply);
+    assert.deepEqual(dismissals.at(-1), [512, "org.moire.test.admin", "cancelled"]);
     cases++;
   }
 
@@ -608,17 +630,21 @@ try {
       { label: "Action", value: "org.moire.test.admin" },
     ]);
     assert.equal(prompts.last.request.coolDownKey, "-\norg.moire.test.admin");
+    assert.equal(prompts.last.request.requesterKey, undefined);
     prompts.last.settle({ outcome: "cancelled" });
     await assert.rejects(reply);
 
     // The caller's pid stands in when the subject has none, and an unresolved pid names nobody.
+    // The reason is kept for the subject only: with none, for nobody (not the mechanism).
     count = prompts.entries.length;
+    const recorded = dismissals.length;
     reply = authority.begin(newCookie(), { details: { "polkit.caller-pid": "349" } });
     await until(() => prompts.entries.length === count + 1, "prompt");
     assert.equal(prompts.last.request.requester, null);
     assert.deepEqual(prompts.last.request.details.at(-1), { label: "Process ID", value: "349" });
     prompts.last.settle({ outcome: "cancelled" });
     await assert.rejects(reply);
+    assert.equal(dismissals.length, recorded, "no subject, no record");
 
     // polkitd 127 expands groups itself; an authority that does not is handled the same way.
     count = prompts.entries.length;
@@ -779,9 +805,9 @@ try {
       clients: () => [{ pid: 100, xwayland: false }, ...(xwayland ? [{ pid: 50, xwayland }] : [])],
       launchOf: (pid) =>
         pid === 100 || pid === 101 || pid === 102
-          ? { pid: 100, name: "Terminal" }
+          ? { pid: 100, name: "Terminal", command: "moire-terminal" }
           : pid === 200 || pid === 201
-            ? { pid: 200, name: "Moire Management" }
+            ? { pid: 200, name: "Moire Management", command: "moire-management" }
             : null,
       inspector: {
         parent: (pid) => parents.get(pid) ?? null,
@@ -792,6 +818,7 @@ try {
     assert.deepEqual(resolve(100), {
       requester: { name: "Terminal", pid: 100, x11: false },
       executable: "/run/current-system/sw/bin/moire-terminal",
+      key: "launch:moire-terminal",
     });
     // "systemctl, from Terminal": never flagged X11 under a Wayland app, whatever it links.
     assert.deepEqual(resolve(102)?.requester, {
@@ -809,6 +836,12 @@ try {
     });
     assert.deepEqual(resolve(300)?.requester, { name: "xterm", pid: 300, x11: true });
     assert.deepEqual(resolve(400)?.requester, { name: "tool", pid: 400, x11: false });
+    // The flood pause names the program: a launched service by its launch (its executable is
+    // node, like every Moire app's), anything else by its executable.
+    assert.equal(resolve(200)?.key, "launch:moire-management");
+    assert.equal(resolve(201)?.key, "launch:moire-management");
+    assert.equal(resolve(102)?.key, "launch:moire-terminal");
+    assert.equal(resolve(400)?.key, "exe:/usr/local/bin/tool");
     xwayland = false;
     assert.equal(resolve(300)?.requester.x11, false, "no Xwayland, no X11 flag");
     assert.equal(resolve(999), null, "a process that is gone");

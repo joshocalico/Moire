@@ -21,6 +21,10 @@ Deep links: `MOIRE_SETTINGS_PAGE=<page>[#<setting>]`, for example `appearance#wa
 `network#wifi`. The old `MOIRE_SETTINGS_TAB` index (0 Appearance, 1 Displays, 2 Sound,
 3 Search & Privacy, 4 About) still works.
 
+Settings has one main window (`SingleMainWindow=true`): starting it again, with or without a
+deep link, hands the link to the open window and exits. See
+[Activation](../../../docs/ui/application.md#activation-one-main-window-or-many).
+
 ```bash
 pnpm --filter @moire/settings start
 pnpm --filter @moire/settings smoke   # SETTINGS_PNG_DIR=<dir> also writes the pages as PNGs

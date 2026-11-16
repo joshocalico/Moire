@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- moire-accounts (docs/polkit-agent.md, "One prompt per change"). Every default is no:
+     nix/moire-admin.rules answers "an administrator's password" for active, local sessions, and
+     the message below is the prompt's headline. One check covers one change (adding a user
+     with its password is one change). The owner annotation lets the unprivileged moire-accounts
+     ask polkit about its callers (polkit allows that only to root otherwise). -->
+<policyconfig>
+  <vendor>Moire</vendor>
+  <action id="org.moire.accounts.administer">
+    <description>Add or delete user accounts, change their type or set their password</description>
+    <message>An administrator's password is needed to change user accounts</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>no</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.owner">unix-user:moire-accounts</annotate>
+  </action>
+</policyconfig>

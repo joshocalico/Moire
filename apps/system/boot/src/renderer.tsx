@@ -6,12 +6,14 @@ import {
   dropKmsMaster,
   presentKmsPixels,
   presentKmsFramebuffer,
-  listDrmConnectors,
+  markBootPresenting,
+  findConnectedCard,
   notifySystemdReady,
   monotonicMs,
   publishBootActive,
   watchBootReleaseRequest,
   watchBootPresented,
+  bootReleaseWantsFrame,
   completeBootRelease,
   EglOutputScaler,
   type EglCompositionLayer,
@@ -112,7 +114,7 @@ async function findCard(): Promise<string | null> {
   const deadline = performance.now() + 5000;
   for (;;) {
     try {
-      const card = listDrmConnectors().find((c) => c.connection === "connected")?.cardPath;
+      const card = findConnectedCard();
       if (card) return card;
     } catch {
       // No DRM device yet.
@@ -331,13 +333,18 @@ export async function runBootRenderer(): Promise<void> {
       const feedback: KmsPresentationFeedback = await presentKmsFramebuffer(output, draw());
       if (frames++ === 0) {
         console.log(`[boot] t+${since()}ms first frame presented`);
+        try {
+          markBootPresenting(handoffState(startedAtMs));
+        } catch (error) {
+          console.warn("[boot] display handoff unavailable:", error);
+        }
         await lifetime.notifyScanoutAccepted(feedback);
       }
     }
     if (frames) console.log(`[boot] ${frames} frames over ${seconds.toFixed(2)}s of scene time`);
     if (releaseRequested) {
       let pixels: Uint8Array | null = null;
-      if (frames) {
+      if (frames && bootReleaseWantsFrame()) {
         pixels = new Uint8Array(width * height * 4);
         gpuScaler.readDirectOutput(directOutput, pixels);
         rgbaToBgra(pixels);

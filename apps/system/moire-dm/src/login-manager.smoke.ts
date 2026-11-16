@@ -102,7 +102,7 @@ try {
     [greeter.name, 990],
   ]);
   // Polkit's answer per caller: the rule says "an administrator's password", so `yes` is a
-  // prompt answered (or an authorization kept), `dismissed` a prompt closed, `no` a refusal.
+  // prompt answered, `dismissed` a prompt closed, `no` a refusal.
   // Without interaction there is no prompt, and the answer is no.
   const answers = new Map<string | null, PolkitAnswer>([
     [admin.name, "yes"],
@@ -132,7 +132,8 @@ try {
     write: (record) => writeAutologinFile(config, file, record, self),
     log: (line) => logs.push(line),
   });
-  // As the management service calls: prepared to wait for the password prompt.
+  // As Settings calls (packages/system-management/src/login-settings.ts): prepared to wait for
+  // the password prompt.
   const call = (
     bus: SessionBus,
     member: string,

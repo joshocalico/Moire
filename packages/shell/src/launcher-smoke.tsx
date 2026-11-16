@@ -7,6 +7,7 @@ import React from "react";
 import { createShellRoot, rasterize, renderShell, type SceneNode } from "@moire/react-host";
 import { applyThemeFamily, getTheme, setTheme, themePalette, THEME_FAMILIES } from "@moire/theme";
 import { createShell, type ShellBridge, type ShellSpawn } from "./controller";
+import type { TaskWindowAction } from "./ssd";
 import { Launcher } from "./Launcher";
 import { tickAllMotions } from "@moire/ui";
 import { loadSettings, updateSettings } from "@moire/prefs";
@@ -36,7 +37,9 @@ const codes: Record<string, number> = {
   h: 35,
   i: 23,
   l: 38,
+  m: 50,
   p: 25,
+  r: 19,
   s: 31,
   t: 20,
   x: 45,
@@ -316,6 +319,55 @@ try {
     "pins changed in Settings were not re-read on open",
   );
   updateSettings({ launcherPins: [] });
+
+  // App activation: Settings has a single main window (SingleMainWindow), so launching it while
+  // it is open restores and focuses that window; Terminal opens a new window every time.
+  const terminalEntry = path.join(applications, "Terminal.desktop");
+  fs.writeFileSync(
+    terminalEntry,
+    "[Desktop Entry]\nType=Application\nName=Terminal Fixture\nExec=fixture-terminal\nStartupWMClass=org.example.Terminal\n",
+  );
+  const actions: TaskWindowAction[] = [];
+  const activation = createShell(success, (action) => actions.push(action));
+  activation.setPrimaryOutput({ x: 0, y: 0, width, height });
+  activation.chromeRaster(width, height);
+  const launchFromLauncher = (query: string) => {
+    if (!activation.isLauncherOpen()) {
+      activation.onKey({ code: 125, value: 1 });
+      activation.onKey({ code: 125, value: 0 });
+    }
+    assert.equal(activation.isLauncherOpen(), true, "Super opens the launcher");
+    type(activation, query);
+    key(activation, 28);
+    assert.equal(activation.isLauncherOpen(), false, `Enter on ${query} closes the launcher`);
+  };
+  const window = (clientId: number, appId: string, minimized = false) => ({
+    clientId,
+    surfaceId: 3,
+    title: appId,
+    appId,
+    focused: false,
+    minimized,
+  });
+  launchFromLauncher("setti");
+  assert.match(
+    commands.at(-1)!,
+    /moire-settings|@moire\/settings/,
+    "the first launch starts Settings",
+  );
+  const settingsStarts = commands.length;
+  activation.setTasks?.([window(7, "org.moire.Settings", true)]);
+  launchFromLauncher("setti");
+  assert.equal(commands.length, settingsStarts, "launching open Settings starts no second one");
+  assert.deepEqual(actions, [{ clientId: 7, surfaceId: 3, kind: "activate" }]);
+  launchFromLauncher("termi");
+  assert.equal(commands.at(-1), "fixture-terminal");
+  activation.setTasks?.([window(7, "org.moire.Settings"), window(8, "org.example.Terminal")]);
+  launchFromLauncher("termi");
+  assert.deepEqual(commands.slice(-2), ["fixture-terminal", "fixture-terminal"]);
+  assert.equal(commands.length, settingsStarts + 2, "Terminal opens a second window");
+  assert.equal(actions.length, 1, "Terminal never activates its open window");
+  fs.rmSync(terminalEntry);
 
   // Super alone toggles the launcher on release; Super used in a chord never opens it.
   const superKey = makeShell();

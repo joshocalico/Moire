@@ -7,12 +7,13 @@ import {
   lastBootRelease,
   monotonicMs,
   openLogindSeat,
+  readBootActive,
   type LogindSeat,
 } from "@moire/sys";
 import { SessionBus } from "@moire/dbus";
 import { createLocalUserProvider } from "./local-users";
 // oxlint-disable-next-line import/no-relative-parent-imports -- The installed trusted entry reuses the frozen native frontend.
-import { runNativeGreeter } from "../../greeter/src/native/main";
+import { runNativeGreeter, warmNativeGreeter } from "../../greeter/src/native/main";
 // oxlint-disable-next-line import/no-relative-parent-imports -- Greeter scene ships with its entry.
 import { greeterSceneBackdrop } from "../../greeter/src/native/scene";
 // oxlint-disable-next-line import/no-relative-parent-imports -- The greeter picks greetd or moire-dm by its session's socket variable.
@@ -132,22 +133,32 @@ export async function runPreLogin(
       .filter((name) => /^card\d+$/.test(name))
       .sort();
     if (!cards.length) throw new Error("No DRM card is available");
-    // The greeter is a single-output owner. No independent render-node opens or desktop services.
+    // The greeter is a single-output owner, with no desktop services. Its only other device is the
+    // same GPU's render node, which has no modeset rights (CompositorServer.start).
     server = new CompositorServer(runtime, display, {
       mode: "greeter",
       devices: seat,
       clientPid: process.pid,
     });
     server.onFatalError(stop);
-    // The compositor draws the greeter's backdrop, continuing the boot scene where the boot
-    // stage released the display (resolved at the first frame, after that handoff).
+    // The compositor draws the greeter's backdrop, continuing the boot scene.
     server.setSceneBackdrop(() => {
-      const boot = lastBootRelease();
-      const fresh = boot && monotonicMs() - boot.releasedAtMs < 30_000;
+      // The boot stage's clock runs straight through the takeover: same scene, same moment.
+      const released = lastBootRelease();
+      const active = released ? null : readBootActive();
+      const boot =
+        released && monotonicMs() - released.releasedAtMs < 30_000
+          ? released
+          : active?.presenting
+            ? active
+            : null;
       return greeterSceneBackdrop(
-        fresh ? () => boot.sceneSeconds + (monotonicMs() - boot.releasedAtMs) / 1000 : undefined,
+        boot ? () => (monotonicMs() - boot.startedAtMs) / 1000 : undefined,
       );
     });
+    await warmNativeGreeter({ sessionLabel }).catch((error) =>
+      console.warn("[pre-login] greeter warm-up skipped:", error),
+    );
     console.log("[pre-login] stage=start-compositor");
     await server.start(`/dev/dri/${cards[0]}`);
     process.env.WAYLAND_DISPLAY = display;

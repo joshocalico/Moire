@@ -1,7 +1,7 @@
 /** App display names for "last opened in": installed entries by every id form, else humanised. */
 import assert from "node:assert/strict";
 import { parseDesktopFile } from "./desktop";
-import { applicationDisplayName } from "./names";
+import { applicationDisplayName, applicationOwnsWindow } from "./names";
 import { FileActivationService } from "./open-with";
 
 const imageViewer = parseDesktopFile(
@@ -50,4 +50,28 @@ assert.equal(applicationDisplayName("moire", []), "Moire");
 const service = new FileActivationService(() => {}, apps);
 assert.equal(service.applicationName("org.moire.ImageViewer"), "Image Viewer");
 assert.equal(service.applicationName("org.moire.Calculator"), "Calculator");
+// Window ownership (single-window activation): exact desktop id or window class only.
+assert.equal(imageViewer.singleMainWindow, undefined);
+const settings = parseDesktopFile(
+  [
+    "[Desktop Entry]",
+    "Name=Settings",
+    "Exec=moire-settings",
+    "StartupWMClass=org.moire.Settings",
+    "SingleMainWindow=true",
+  ].join("\n"),
+  "moire-settings.desktop",
+  "Moire",
+);
+assert.ok(settings);
+assert.equal(settings.singleMainWindow, true);
+for (const id of [
+  "org.moire.Settings",
+  "org.moire.settings",
+  "moire-settings",
+  "moire-settings.desktop",
+])
+  assert.equal(applicationOwnsWindow(settings, id), true, id);
+for (const id of ["", "settings", "org.moire.SettingsHelper", "moire-settings-daemon"])
+  assert.equal(applicationOwnsWindow(settings, id), false, id);
 console.log("[app-discovery/names] desktop id, window class, exec and humanised names ok");

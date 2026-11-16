@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="xdg_activation_v1">
+  <copyright>
+    Copyright © 2020 Aleix Pol Gonzalez &lt;aleixpol@kde.org&gt;
+    Copyright © 2020 Carlos Garnacho &lt;carlosg@gnome.org&gt;
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+  <description summary="Protocol for requesting activation of surfaces">
+    Vendored from wayland-protocols (staging/xdg-activation). A client asks for
+    a token while it has the user's attention and hands it to whatever it
+    launches (XDG_ACTIVATION_TOKEN); that program activates its surface with it.
+  </description>
+  <interface name="xdg_activation_v1" version="1">
+    <description summary="interface for activating surfaces">
+      A global interface used for informing the compositor about applications
+      being activated or started, or for applications to request to be
+      activated.
+    </description>
+    <request name="destroy" type="destructor"/>
+    <request name="get_activation_token">
+      <arg name="id" type="new_id" interface="xdg_activation_token_v1"/>
+    </request>
+    <request name="activate">
+      <arg name="token" type="string"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+  <interface name="xdg_activation_token_v1" version="1">
+    <description summary="an exported activation handle">
+      An object for setting up a token and receiving a token handle that can
+      be passed as an activation token to another client.
+    </description>
+    <enum name="error">
+      <entry name="already_used" value="0"/>
+    </enum>
+    <request name="set_serial">
+      <arg name="serial" type="uint"/>
+      <arg name="seat" type="object" interface="wl_seat"/>
+    </request>
+    <request name="set_app_id">
+      <arg name="app_id" type="string"/>
+    </request>
+    <request name="set_surface">
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+    <request name="commit"/>
+    <event name="done">
+      <arg name="token" type="string"/>
+    </event>
+    <request name="destroy" type="destructor"/>
+  </interface>
+</protocol>

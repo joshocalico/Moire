@@ -93,9 +93,10 @@ export const SECURE_PROMPT_QUEUE_LIMIT = 3;
  * at once, but a person who cancelled by mistake and clicks again gets their prompt.
  */
 export const SECURE_PROMPT_COOL_DOWN_MS = 2_000;
-/** Three cancels within this window count as a flood. */
+/** Three cancels of one requester within this window, whatever it asked for, are a flood. */
 export const SECURE_PROMPT_FLOOD_WINDOW_MS = 120_000;
 export const SECURE_PROMPT_FLOOD_CANCELS = 3;
+/** A flood refuses that requester, for every action, this long. */
 export const SECURE_PROMPT_FLOOD_COOL_DOWN_MS = 300_000;
 export const SECURE_PROMPT_MAX_IDENTITIES = 8;
 const MAX_DETAILS = 8;
@@ -119,7 +120,7 @@ type Pending = {
   cancelWait: (() => void) | null;
 };
 
-type CoolDown = { cancels: number[]; until: number };
+type Flood = { cancels: number[]; until: number };
 
 export class SecurePromptQueue implements SecurePrompts {
   private readonly timers: IdleTimers;
@@ -141,7 +142,10 @@ export class SecurePromptQueue implements SecurePrompts {
   private cancelIdle: (() => void) | null = null;
   /** Keys pressed since this prompt armed; a key held from before is never in here. */
   private readonly fresh = new Set<number>();
-  private readonly coolDowns = new Map<string, CoolDown>();
+  /** The short cool-down's end, by `coolDownKey`. */
+  private readonly coolDowns = new Map<string, number>();
+  /** Recent cancels and the flood pause, by requester. */
+  private readonly floods = new Map<string, Flood>();
   private viewRevision = 0;
 
   constructor(private readonly options: SecurePromptQueueOptions = {}) {
@@ -167,7 +171,7 @@ export class SecurePromptQueue implements SecurePrompts {
     if (
       this.disposed ||
       !clean ||
-      (clean.coolDownKey !== undefined && this.coolingDown(clean.coolDownKey)) ||
+      this.coolingDown(clean) ||
       (this.current ? 1 : 0) + this.queue.length > SECURE_PROMPT_QUEUE_LIMIT
     )
       return { result: Promise.resolve({ outcome: "refused" }), cancel() {} };
@@ -463,8 +467,7 @@ export class SecurePromptQueue implements SecurePrompts {
     while (!this.locked && !this.disposed && !this.current) {
       const next = this.queue.shift();
       if (!next) break;
-      const key = next.request.coolDownKey;
-      if (key !== undefined && this.coolingDown(key)) {
+      if (this.coolingDown(next.request)) {
         // The cancel that started the cool-down answered this one too.
         this.noteCancel(next);
         this.settle(next, "refused");
@@ -506,41 +509,48 @@ export class SecurePromptQueue implements SecurePrompts {
     this.options.shown?.(visible);
   }
 
-  private coolingDown(key: string): boolean {
-    const state = this.coolDowns.get(key);
-    if (!state) return false;
+  /** Refused unseen: its action is in the short cool-down, or its requester is paused. */
+  private coolingDown(request: SecurePromptRequest): boolean {
     const now = this.timers.now();
-    if (now < state.until) return true;
-    if (state.cancels.every((at) => now - at > SECURE_PROMPT_FLOOD_WINDOW_MS))
-      this.coolDowns.delete(key);
+    const key = request.coolDownKey;
+    const until = key !== undefined ? this.coolDowns.get(key) : undefined;
+    if (until !== undefined) {
+      if (now < until) return true;
+      this.coolDowns.delete(key!);
+    }
+    const requester = floodKey(request);
+    const flood = requester !== undefined ? this.floods.get(requester) : undefined;
+    if (!flood) return false;
+    if (now < flood.until) return true;
+    if (flood.cancels.every((at) => now - at > SECURE_PROMPT_FLOOD_WINDOW_MS))
+      this.floods.delete(requester!);
     return false;
   }
 
   private noteCancel(pending: Pending): void {
-    const key = pending.request.coolDownKey;
-    if (key === undefined) return;
+    const { request } = pending;
+    const requester = floodKey(request);
+    if (requester === undefined) return;
     const now = this.timers.now();
-    let state = this.coolDowns.get(key);
-    if (!state) {
-      // Bounded: the oldest key goes first.
-      if (this.coolDowns.size >= MAX_COOL_DOWN_KEYS)
-        this.coolDowns.delete(this.coolDowns.keys().next().value!);
-      state = { cancels: [], until: 0 };
-      this.coolDowns.set(key, state);
+    let flood = this.floods.get(requester);
+    if (!flood) {
+      flood = { cancels: [], until: 0 };
+      remember(this.floods, requester, flood);
     }
-    // Already in the long cool-down: the flood was reported once.
-    if (now < state.until && state.cancels.length === 0) return;
-    state.cancels = state.cancels.filter((at) => now - at <= SECURE_PROMPT_FLOOD_WINDOW_MS);
-    state.cancels.push(now);
-    if (state.cancels.length >= SECURE_PROMPT_FLOOD_CANCELS) {
-      state.cancels = [];
-      state.until = now + SECURE_PROMPT_FLOOD_COOL_DOWN_MS;
+    // Already paused: the flood was reported once.
+    if (now < flood.until) return;
+    flood.cancels = flood.cancels.filter((at) => now - at <= SECURE_PROMPT_FLOOD_WINDOW_MS);
+    flood.cancels.push(now);
+    if (flood.cancels.length >= SECURE_PROMPT_FLOOD_CANCELS) {
+      flood.cancels = [];
+      flood.until = now + SECURE_PROMPT_FLOOD_COOL_DOWN_MS;
       try {
-        this.options.flood?.(pending.request.requester);
+        this.options.flood?.(request.requester);
       } catch {
         /* a failing notification never changes the cool-down */
       }
-    } else state.until = Math.max(state.until, now + SECURE_PROMPT_COOL_DOWN_MS);
+    } else if (request.coolDownKey !== undefined)
+      remember(this.coolDowns, request.coolDownKey, now + SECURE_PROMPT_COOL_DOWN_MS);
   }
 
   /** One timer measures idleness from the last activity, re-armed when it fires early. */
@@ -565,6 +575,17 @@ export class SecurePromptQueue implements SecurePrompts {
     this.viewRevision++;
     this.options.changed?.();
   }
+}
+
+/** Who a flood is counted against: the requester, else the executable and action. */
+function floodKey(request: SecurePromptRequest): string | undefined {
+  return request.requesterKey ?? request.coolDownKey;
+}
+
+/** Bounded: the oldest key goes first. */
+function remember<Value>(map: Map<string, Value>, key: string, value: Value): void {
+  if (!map.has(key) && map.size >= MAX_COOL_DOWN_KEYS) map.delete(map.keys().next().value!);
+  map.set(key, value);
 }
 
 /** No C0 controls or DEL: Enter, Tab, Escape and Ctrl+letter never become answer bytes. */
@@ -625,6 +646,7 @@ function sanitize(request: SecurePromptRequest): SecurePromptRequest | null {
       value: plain(detail.value, 200),
     })),
     ...(request.coolDownKey !== undefined ? { coolDownKey: String(request.coolDownKey) } : {}),
+    ...(request.requesterKey !== undefined ? { requesterKey: String(request.requesterKey) } : {}),
     ...(kind === "password" && request.check ? { check: request.check } : {}),
   };
 }

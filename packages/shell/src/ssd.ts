@@ -36,6 +36,9 @@ export type TaskWindowInfo = {
 export type TaskWindowAction = {
   surfaceId: number;
   clientId: number;
-  /** Activate/minimize toggle (the default), or ask the window to close. */
-  kind?: "toggle" | "close";
+  /**
+   * Activate/minimize toggle (the default, a taskbar press), activate only (restore and focus;
+   * a single-window app launched again), or ask the window to close.
+   */
+  kind?: "toggle" | "activate" | "close";
 };

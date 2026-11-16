@@ -56,37 +56,62 @@ and modes do not depend on connector enumeration order.
 
 The compositor owns `org.moire.Display1` at `/org/moire/Display1`:
 
-| Method | Signature | Role |
-| --- | --- | --- |
-| `GetModes` | `→ (as modes, s current, s preferred)` | Enumerate stable mode IDs |
-| `GetOutputInfo` | `→ (s name, i widthMm, i heightMm)` | Read live connector identity and physical size |
-| `ListOutputs` | `→ a(ssssssiiiiib)` | Read stable identity, labels, mode, geometry, scale and primary state |
-| `SetLayout` | `(a(siiub) outputs) → b changed` | Begin a whole-desktop position/scale/primary trial |
-| `ConfirmLayout` | `→ b confirmed` | Keep and persist the pending layout by display identity |
-| `RevertLayout` | `→ b reverted` | Restore the entire previous layout immediately |
-| `SetMode` | `(s mode) → b changed` | Begin a 15-second live mode trial |
-| `ConfirmMode` | `→ b confirmed` | Keep and persist the pending mode |
-| `RevertMode` | `→ b reverted` | Immediately restore the previous mode |
+| Method          | Signature                              | Role                                                                  |
+| --------------- | -------------------------------------- | --------------------------------------------------------------------- |
+| `GetModes`      | `→ (as modes, s current, s preferred)` | Enumerate stable mode IDs                                             |
+| `GetOutputInfo` | `→ (s name, i widthMm, i heightMm)`    | Read live connector identity and physical size                        |
+| `ListOutputs`   | `→ a(ssssssiiiiib)`                    | Read stable identity, labels, mode, geometry, scale and primary state |
+| `SetLayout`     | `(a(siiub) outputs) → b changed`       | Begin a whole-desktop position/scale/primary trial                    |
+| `ConfirmLayout` | `→ b confirmed`                        | Keep and persist the pending layout by display identity               |
+| `RevertLayout`  | `→ b reverted`                         | Restore the entire previous layout immediately                        |
+| `SetMode`       | `(s mode) → b changed`                 | Begin a 15-second live mode trial                                     |
+| `ConfirmMode`   | `→ b confirmed`                        | Keep and persist the pending mode                                     |
+| `RevertMode`    | `→ b reverted`                         | Immediately restore the previous mode                                 |
 
 The service emits `Changed(as modes, s current, s preferred, s name,
 i widthMm, i heightMm)` after a mode or connector update. Settings also polls
 the small state endpoint so it remains correct across service restarts.
 
 Settings consumes this service. It does not link Koffi or import `@moire/sys`.
+The layout and mode changes answer only Settings, and `CaptureScreenshot` only
+the Screenshot app; other callers get `AccessDenied`
+([Who may capture](../apps/screenshot.md#who-may-capture)).
+`CaptureScreenshot` reads a frame composed after the call, once window motion has settled, so a
+window minimized just before the call is not in it
+([Screenshot's own window](../apps/screenshot.md#screenshots-own-window)).
 For guest diagnostics, use `guest-display-mode.sh list`, `set` for a confirmed
 change, or `try` to exercise automatic rollback.
 
+`set`, `try` and `guest-smoke-display-layout-dbus.sh` change the configuration,
+so they need a test-only allowance (`testControlGate` in
+`apps/system/compositor/src/display-access.ts`). Two root-owned files must agree:
+
+- `/etc/moire/testing/display-control` says the machine is a test machine. The
+  NixOS test image installs it with `moire.testing.displayControl`
+  (`nix/moire-testing.nix`), which defaults off and is asserted off in any image
+  without the public `moire-pam-test` account. The Ubuntu dev VM gets it from
+  `guest-setup-inside.sh`.
+- `/run/moire-test/display-control` is the grant. The scripts, run as root,
+  write it for the length of the run (`scripts/guest-display-grant.sh`), naming
+  their own shell by pid and start time, and remove it on exit. The compositor
+  then also lets that shell's descendants through. A grant is ignored after
+  10 minutes.
+
+No user process can write either file or become a descendant of root's shell,
+so the allowance opens nothing to other programs, and there is no environment
+variable or argument that turns it on. Capture is never covered.
+
 ## Wayland protocol tranche
 
-| Protocol | Current behavior |
-| --- | --- |
-| `wl_output` v3 | Per-connector globals, modes/geometry, live updates and `wl_surface.enter`/`leave` membership |
-| `zxdg_output_manager_v1` v3 | Logical position/size plus stable connector name and EDID description |
-| `zwp_primary_selection_*` v1 | Independent middle-click selection transfer |
-| `xdg_activation_v1` | One-shot tokens and focus handoff |
-| `wp_fractional_scale_v1` | Preferred scale follows the output containing each surface, in 120ths |
-| `wp_viewporter` | Destination size and buffer scale drive logical surface geometry and scaled composition |
-| `wp_cursor_shape_v1` | Semantic text/resize/default cursor requests |
+| Protocol                     | Current behavior                                                                                                                 |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `wl_output` v3               | Per-connector globals, modes/geometry, live updates and `wl_surface.enter`/`leave` membership                                    |
+| `zxdg_output_manager_v1` v3  | Logical position/size plus stable connector name and EDID description                                                            |
+| `zwp_primary_selection_*` v1 | Independent middle-click selection transfer                                                                                      |
+| `xdg_activation_v1`          | One-shot, 30 s tokens; honoured only when asked for by the focused client or the shell's launch; activation restores and focuses |
+| `wp_fractional_scale_v1`     | Preferred scale follows the output containing each surface, in 120ths                                                            |
+| `wp_viewporter`              | Destination size and buffer scale drive logical surface geometry and scaled composition                                          |
+| `wp_cursor_shape_v1`         | Semantic text/resize/default cursor requests                                                                                     |
 
 `zwp_text_input_v3` is deliberately not advertised yet. Correct support needs
 an input-method broker, focus enter/leave, surrounding-text state, preedit and

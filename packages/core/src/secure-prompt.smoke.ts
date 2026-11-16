@@ -10,6 +10,7 @@ import {
   SECURE_PROMPT_ARMING_MS,
   SECURE_PROMPT_CAPACITY,
   SECURE_PROMPT_COOL_DOWN_MS,
+  SECURE_PROMPT_FLOOD_CANCELS,
   SECURE_PROMPT_FLOOD_COOL_DOWN_MS,
   SECURE_PROMPT_IDLE_MS,
   SECURE_PROMPT_WAIT_MS,
@@ -429,6 +430,51 @@ function harness() {
   assert.equal(h.queue.visible, true, "and asked again after them");
   free.cancel();
   assert.deepEqual(h.floods, ["Settings"], "still one notification");
+  cases++;
+}
+
+// The flood pauses the requester, not one action: three cancels of "change automatic login"
+// refuse its "add a user" too, and its waiting requests; another program is unaffected.
+{
+  const h = harness();
+  const management = { name: "Moire Management", pid: 4300, x11: false };
+  const from = (requesterKey: string, coolDownKey: string, requester = management) =>
+    h.password({ requester, requesterKey, coolDownKey });
+  const autologin = () => from("launch:moire-management", "node\norg.moire.dm.set-autologin");
+  const addUser = () => from("launch:moire-management", "node\naccounts.user-administration");
+  for (let cancel = 0; cancel < SECURE_PROMPT_FLOOD_CANCELS; cancel++) {
+    h.clock.advance(SECURE_PROMPT_COOL_DOWN_MS);
+    const ask = h.ask(autologin());
+    // The last time, an "add a user" is waiting behind it.
+    const waiting = cancel === SECURE_PROMPT_FLOOD_CANCELS - 1 ? h.ask(addUser()) : null;
+    h.arm();
+    h.tap(KEY.esc);
+    await flush();
+    assert.deepEqual(ask.result, { outcome: "cancelled" });
+    if (waiting) assert.deepEqual(waiting.result, { outcome: "refused" }, "waiting: refused");
+  }
+  assert.deepEqual(h.floods, ["Moire Management"], "one notification names the program");
+  assert.equal(h.queue.visible, false);
+  const other = h.ask(addUser());
+  await flush();
+  assert.deepEqual(other.result, { outcome: "refused" }, "another action of the same program");
+  const settings = h.ask(
+    from("launch:moire-settings", "node\naccounts.user-administration", {
+      name: "Settings",
+      pid: 4301,
+      x11: false,
+    }),
+  );
+  assert.equal(h.queue.visible, true, "another program is unaffected");
+  settings.cancel();
+  h.clock.advance(SECURE_PROMPT_FLOOD_COOL_DOWN_MS);
+  const again = h.ask(addUser());
+  assert.equal(h.queue.visible, true, "asked again after five minutes");
+  again.cancel();
+  const autologinAgain = h.ask(autologin());
+  assert.equal(h.queue.visible, true, "both actions");
+  autologinAgain.cancel();
+  assert.deepEqual(h.floods, ["Moire Management"], "still one notification");
   cases++;
 }
 

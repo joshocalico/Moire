@@ -1,0 +1,23 @@
+// AccountsService's administrator action, org.freedesktop.accounts.user-administration (other
+// users' accounts: create, delete, type, name, password). docs/polkit-agent.md, "One prompt per
+// change".
+//
+// - YES for the moire-accounts system account alone. moire-accounts asks polkit once per change,
+//   for org.moire.accounts.administer about its caller (an administrator's password,
+//   00-moire-admin.rules), then makes that change's AccountsService calls as itself; this lets
+//   it do so without AccountsService asking again. It is a system service with no login, run by
+//   systemd under its own uid, which polkit reads from the bus daemon (never from the caller),
+//   and it is in no session, so the session checks of 00-moire-admin.rules can't apply to it.
+// - NO for everyone else but root, at once and without a prompt. Nothing in Moire asks
+//   AccountsService for it from a session any more (Settings calls moire-accounts), so a
+//   session process calling CreateUser, DeleteUser, SetAccountType or another user's SetPassword
+//   (busctl, a rogue app) is refused rather than shown a prompt it could use to look like the
+//   system's. A person's own name, picture and password are other actions
+//   (change-own-user-data, change-own-password) and are not decided here.
+// - Root keeps stock authority.
+polkit.addRule(function(action, subject) {
+  if (action.id !== "org.freedesktop.accounts.user-administration") return;
+  if (subject.user === "moire-accounts") return polkit.Result.YES;
+  if (subject.user === "root") return;
+  return polkit.Result.NO;
+});

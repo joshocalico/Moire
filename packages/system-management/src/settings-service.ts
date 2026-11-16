@@ -11,6 +11,11 @@ export type SettingsErrorCode =
   | "permission"
   /** The user dismissed the system's password prompt. Not a failure to show: say nothing. */
   | "cancelled"
+  /**
+   * The system's password prompt turned the request away without showing itself: a cool-down
+   * after cancels, or too many requests waiting. Said calmly, near the control.
+   */
+  | "refused"
   | "wrong_password"
   | "rate_limited"
   | "invalid"
@@ -22,6 +27,7 @@ export type SettingsErrorCode =
 const CODES: readonly SettingsErrorCode[] = [
   "permission",
   "cancelled",
+  "refused",
   "wrong_password",
   "rate_limited",
   "invalid",
@@ -30,6 +36,10 @@ const CODES: readonly SettingsErrorCode[] = [
   "failed",
   "unknown",
 ];
+
+/** The fixed sentences for a password prompt that ended without authorizing. */
+export const PROMPT_CANCELLED = "The password request was cancelled.";
+export const PROMPT_REFUSED = "Password requests are paused. Try again in a little while.";
 
 export type SettingsFailure = { ok: false; code: SettingsErrorCode; message: string };
 /** Every setter resolves to this; it never rejects. `value` is `undefined` for plain setters. */

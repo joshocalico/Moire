@@ -14,6 +14,12 @@ export type RequesterInfo = {
   requester: SecurePromptRequester;
   /** `/proc/<pid>/exe`, for the cancel cool-down key. Null when it cannot be read. */
   executable: string | null;
+  /**
+   * The program, across actions, for the flood pause: the compositor's launch it belongs to,
+   * else its executable, as in sleep-blockers.ts. Never the pid, which is reused. Null when
+   * neither is known.
+   */
+  key: string | null;
 };
 export type RequesterResolver = (pid: number) => RequesterInfo | null;
 
@@ -52,7 +58,7 @@ export function createRequesterResolver(options: {
   /** The compositor's Wayland clients by the kernel's peer pid (`conn.peerPid`). */
   clients: () => readonly WaylandClientProcess[];
   /** The compositor's own launch a process belongs to, with the name it shows for that app. */
-  launchOf?: (pid: number) => { pid: number; name: string } | null;
+  launchOf?: (pid: number) => { pid: number; name: string; command: string } | null;
   inspector?: ProcessInspector;
   xClient?: (pid: number) => boolean;
 }): RequesterResolver {
@@ -74,7 +80,10 @@ export function createRequesterResolver(options: {
     const wayland = (candidate: number) =>
       clients.some((client) => client.pid === candidate && !client.xwayland);
     const name = nameOf(pid) || `Process ${pid}`;
-    if (wayland(pid)) return { requester: { name, pid, x11: false }, executable };
+    // Services the compositor starts run under node, so their executable alone names no program.
+    const launch = options.launchOf?.(pid);
+    const key = launch ? `launch:${launch.command}` : executable ? `exe:${executable}` : null;
+    if (wayland(pid)) return { requester: { name, pid, x11: false }, executable, key };
 
     // The nearest ancestor with a Wayland connection is the app the user sees ("Terminal").
     let via = "";
@@ -87,7 +96,6 @@ export function createRequesterResolver(options: {
       ancestor = inspector.parent(ancestor);
     }
     // Failing that, the launch it descends from (a windowless service the compositor started).
-    const launch = options.launchOf?.(pid);
     if (!via && launch && launch.pid !== pid) via = label(launch.name);
     // No Wayland connection of its own or above it, Xwayland is up, and it links an X library:
     // one of the X apps, which are a single trust zone (docs/polkit-agent.md, "Xwayland").
@@ -95,6 +103,6 @@ export function createRequesterResolver(options: {
       (ancestor === null || ancestor <= 1 || !wayland(ancestor)) &&
       clients.some((client) => client.xwayland) &&
       xClient(pid);
-    return { requester: { name, pid, ...(via ? { via } : {}), x11 }, executable };
+    return { requester: { name, pid, ...(via ? { via } : {}), x11 }, executable, key };
   };
 }

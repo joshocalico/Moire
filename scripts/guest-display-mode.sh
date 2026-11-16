@@ -4,6 +4,13 @@ set -euo pipefail
 ACTION="${1:-list}"
 MODE="${2:-}"
 
+# set and try change the mode, which org.moire.Display1 allows only Settings: they need root's
+# test-image grant (scripts/guest-display-grant.sh). list, output and outputs read only.
+if [[ "$ACTION" == "set" || "$ACTION" == "try" ]]; then
+  # shellcheck source=guest-display-grant.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/guest-display-grant.sh"
+fi
+
 PID="$(pgrep -u moire -f '@moire/compositor exec tsx src/main.ts' | head -n 1)"
 if [[ -z "$PID" ]]; then
   echo "Moire compositor is not running" >&2

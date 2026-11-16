@@ -8,3 +8,5 @@ Terminal=false
 Categories=Settings;System;
 OnlyShowIn=Moire;
 StartupNotify=true
+StartupWMClass=org.moire.Settings
+SingleMainWindow=true

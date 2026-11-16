@@ -8,7 +8,10 @@
 export type PowerProfile = "power-saver" | "balanced" | "performance";
 /** What closing the lid does while Moire holds logind's lid inhibitor. */
 export type LidCloseAction = "suspend" | "power-off" | "nothing";
-/** What the power key does; "ask" opens the session's power menu. */
+/**
+ * What the power key does; "ask" opens the session's power menu. No shell provides that menu
+ * yet, so "ask" acts as "nothing" and is neither offered nor the default.
+ */
 export type PowerButtonAction = "suspend" | "power-off" | "nothing" | "ask";
 /** A timeout chosen separately for mains power and battery. */
 export type PowerSourceTimeouts = { ac: number | null; battery: number | null };
@@ -66,7 +69,7 @@ export const DEFAULT_POWER_SETTINGS: PowerSettings = Object.freeze({
   lockOnSuspend: true,
   suspendAfterSeconds: Object.freeze({ ac: null, battery: 1800 }),
   lidCloseAction: "suspend",
-  powerButtonAction: "ask",
+  powerButtonAction: "suspend",
   showBatteryPercentage: false,
   powerProfile: null,
   sleepBlockers: Object.freeze([]),

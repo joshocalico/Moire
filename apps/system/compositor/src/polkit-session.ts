@@ -27,9 +27,9 @@ export function securePromptsOf(server: object): SecurePrompts | null {
  */
 export async function startSessionPolkitAgent(
   server: PromptHost,
-  options: Pick<PolkitAgentOptions, "sessionUser" | "onStatus"> & {
+  options: Pick<PolkitAgentOptions, "sessionUser" | "onStatus" | "onDismissed"> & {
     /** The compositor's own launch a process belongs to, with the app name it shows. */
-    launchOf?: (pid: number) => { pid: number; name: string } | null;
+    launchOf?: (pid: number) => { pid: number; name: string; command: string } | null;
   },
 ): Promise<PolkitAgent | null> {
   const prompts = securePromptsOf(server);
@@ -40,6 +40,7 @@ export async function startSessionPolkitAgent(
   return startPolkitAgent({
     sessionUser: options.sessionUser,
     onStatus: options.onStatus,
+    onDismissed: options.onDismissed,
     prompts,
     resolveRequester: createRequesterResolver({
       clients: () => server.clientProcesses(),

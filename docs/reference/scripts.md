@@ -4,27 +4,28 @@ Host and guest helpers under `scripts/`. Prefer these over ad-hoc `prlctl exec �
 
 ## Day-to-day guest
 
-| Script | Purpose |
-| --- | --- |
-| `guest-clean-restart.sh` | Clean compositor / session restart |
-| `guest-open-with-picker.sh [path]` | Open the portal-owned chooser for input and visual verification |
-| `guest-pointer-drag.sh x y dx dy` | Inject a deterministic pointer drag for compositor input regression checks |
-| `guest-key-tap.sh code` | Inject an evdev key tap (for example `125` for Super) |
-| `guest-status.sh` | Quick session / process status |
-| `guest-tail-logs.sh` | Follow compositor / session logs |
-| `guest-run-compositor.sh` | Run compositor alone; honors `MOIRE_RENDERER` and `MOIRE_EGL_PRESENT=auto|readback|direct` |
-| `guest-run-foot.sh` | Launch foot |
-| `guest-launch-files.sh` | Launch Moire Files |
-| `guest-launch-showcase.sh [sample-id]` | Launch the widget showcase, optionally deep-linked to a sample |
-| `guest-launch-settings.sh [tab]` | Launch Settings in the active session; optional tab index aids visual checks |
-| `guest-display-mode.sh [list \| output \| outputs \| set MODE \| try MODE]` | Query live modes, connector identity/layout, confirm, or trial a KMS mode through D-Bus |
-| `guest-smoke-multi-output.sh` | Run synthetic layout/crop checks, inject a DRM change, and verify topology/session survival |
-| `guest-smoke-egl-direct-output.sh` | Validate two rotating GBM BO → dma-buf EGLImage → GLES FBO → DRM FB targets without activating them |
-| `guest-smoke-display-layout-dbus.sh` | Exercise stable output identity plus layout array/struct decoding against the live display service |
-| `guest-kill-files.sh` | Kill Files clients |
-| `guest-seed-desktop.sh` | Seed `~/Desktop` test files |
-| `guest-prep-desktop-shot.sh` | Clear windows for icon screenshots |
-| `guest-check-desktop.sh` | Desktop icon sanity checks |
+| Script                                                                      | Purpose                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `guest-clean-restart.sh`                                                    | Clean compositor / session restart                                                                                                                                                                         |
+| `guest-open-with-picker.sh [path]`                                          | Open the portal-owned chooser for input and visual verification                                                                                                                                            |
+| `guest-pointer-drag.sh x y dx dy`                                           | Inject a deterministic pointer drag for compositor input regression checks                                                                                                                                 |
+| `guest-key-tap.sh code`                                                     | Inject an evdev key tap (for example `125` for Super)                                                                                                                                                      |
+| `guest-status.sh`                                                           | Quick session / process status                                                                                                                                                                             |
+| `guest-tail-logs.sh`                                                        | Follow compositor / session logs                                                                                                                                                                           |
+| `guest-run-compositor.sh`                                                   | Run compositor alone; honors `MOIRE_RENDERER` and `MOIRE_EGL_PRESENT=auto                                                                                                                                  | readback | direct` |
+| `guest-run-foot.sh`                                                         | Launch foot                                                                                                                                                                                                |
+| `guest-launch-files.sh`                                                     | Launch Moire Files                                                                                                                                                                                         |
+| `guest-launch-showcase.sh [sample-id]`                                      | Launch the widget showcase, optionally deep-linked to a sample                                                                                                                                             |
+| `guest-launch-settings.sh [tab]`                                            | Launch Settings in the active session; optional tab index aids visual checks                                                                                                                               |
+| `guest-display-mode.sh [list \| output \| outputs \| set MODE \| try MODE]` | Query live modes, connector identity/layout, confirm, or trial a KMS mode through D-Bus; `set`/`try` need the test-only display grant ([display-and-protocols.md](../compositor/display-and-protocols.md)) |
+| `guest-smoke-multi-output.sh`                                               | Run synthetic layout/crop checks, inject a DRM change, and verify topology/session survival                                                                                                                |
+| `guest-smoke-egl-direct-output.sh`                                          | Validate two rotating GBM BO → dma-buf EGLImage → GLES FBO → DRM FB targets without activating them                                                                                                        |
+| `guest-smoke-display-layout-dbus.sh`                                        | Exercise stable output identity plus layout array/struct decoding against the live display service; needs the test-only display grant                                                                      |
+| `guest-display-grant.sh`                                                    | Sourced by the two above, as root: writes and removes the grant that lets them change the display                                                                                                          |
+| `guest-kill-files.sh`                                                       | Kill Files clients                                                                                                                                                                                         |
+| `guest-seed-desktop.sh`                                                     | Seed `~/Desktop` test files                                                                                                                                                                                |
+| `guest-prep-desktop-shot.sh`                                                | Clear windows for icon screenshots                                                                                                                                                                         |
+| `guest-check-desktop.sh`                                                    | Desktop icon sanity checks                                                                                                                                                                                 |
 
 Example:
 
@@ -35,21 +36,21 @@ prlctl capture MoireDev --file ~/Projects/moire/vm/capture.png
 
 ## Prefs / Settings
 
-| Script | Purpose |
-| --- | --- |
-| `guest-set-ui-scale.sh` | Write scale into settings |
-| `guest-measure-scale.sh` | Measure applied scale |
-| `guest-verify-prefs-hotreload.sh` | Hot-reload check |
-| `guest-test-prefs-apply.sh` | Apply pipeline smoke |
-| `guest-launch-settings-only.sh` | Settings without full session noise |
-| `guest-relaunch-settings.sh` | Restart Settings |
-| `guest-verify-ui-settings.sh` | UI Settings verification |
+| Script                            | Purpose                             |
+| --------------------------------- | ----------------------------------- |
+| `guest-set-ui-scale.sh`           | Write scale into settings           |
+| `guest-measure-scale.sh`          | Measure applied scale               |
+| `guest-verify-prefs-hotreload.sh` | Hot-reload check                    |
+| `guest-test-prefs-apply.sh`       | Apply pipeline smoke                |
+| `guest-launch-settings-only.sh`   | Settings without full session noise |
+| `guest-relaunch-settings.sh`      | Restart Settings                    |
+| `guest-verify-ui-settings.sh`     | UI Settings verification            |
 
 ## Host bootstrap
 
-| Script | Purpose |
-| --- | --- |
-| `parallels-create-moire-vm.sh` | Create Parallels Ubuntu VM |
+| Script                                         | Purpose                      |
+| ---------------------------------------------- | ---------------------------- |
+| `parallels-create-moire-vm.sh`                 | Create Parallels Ubuntu VM   |
 | `guest-bootstrap.sh` / `guest-setup-inside.sh` | Guest packages / first setup |
 
 ## Build / check (host or guest)

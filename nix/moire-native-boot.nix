@@ -1,7 +1,9 @@
 { config, lib, pkgs, moire, ... }:
 let
   moireBoot = pkgs.callPackage ./boot.nix { pnpmDeps = moire.pnpmDeps; };
+  opengl = config.systemd.tmpfiles.settings.graphics-driver."/run/opengl-driver";
 in {
+  imports = [ ./moire-silent-iso.nix ];
   # A quiet console: the first thing drawn after firmware is the Moire boot scene.
   boot.consoleLogLevel = 3;
   # No boot menu: straight from firmware to the scene (hold a key in firmware for options).
@@ -13,18 +15,16 @@ in {
   boot.kernelParams = [
     "quiet" "loglevel=3" "udev.log_level=3" "systemd.show_status=false"
     "vt.global_cursor_default=0"
+    # A live image has no machine-id, so without this every boot runs first-boot preset handling.
+    "systemd.condition_first_boot=false"
   ];
   # The scene starts as soon as the GPU is probed, and animates until the greeter's
-  # compositor asks for the display (see packages/sys/src/boot-handoff.ts). Its final frame
-  # seeds the greeter's modeset, so boot → greeter has no blank or cut.
+  # compositor is ready to draw the same scene (see packages/sys/src/boot-handoff.ts). Its final
+  # frame seeds the greeter's modeset, so boot → greeter has no blank or cut.
   systemd.services.moire-boot-stage = {
     description = "Moire boot scene";
     wantedBy = [ "sysinit.target" ];
-    # tmpfiles creates /run/opengl-driver (GBM/EGL drivers); without it the stage falls back
-    # to its static frame.
-    after = [
-      "systemd-modules-load.service" "systemd-udev-trigger.service" "systemd-tmpfiles-setup.service"
-    ];
+    after = [ "systemd-modules-load.service" "systemd-udev-trigger.service" ];
     # Never ordered before sysinit: the stage runs alongside the rest of boot. (moire-dm.nix
     # adds moire-dm.service here when that backend owns the seat.)
     before = [ "greetd.service" ];
@@ -32,6 +32,9 @@ in {
     serviceConfig = {
       Type = "notify";
       NotifyAccess = "main";
+      # GBM/EGL load through /run/opengl-driver; without it the stage falls back to its static
+      # frame. tmpfiles would make the same link, but only after local-fs.target, ~0.8 s later.
+      ExecStartPre = "${pkgs.coreutils}/bin/ln -sfn ${opengl."L+".argument} /run/opengl-driver";
       ExecStart = "${moireBoot}/bin/moire-boot-stage";
       # Ready as soon as the handoff is open (before any GPU work), so greetd is not delayed.
       TimeoutStartSec = "5s";

@@ -50,8 +50,13 @@ export interface SecurePromptRequest {
   /** True when the session user is not among `identities`. */
   readonly needsAdministrator: boolean;
   readonly details: readonly SecurePromptDetail[];
-  /** Requests sharing a key share one cancel cool-down (executable plus action). */
+  /** Requests sharing a key share the short cancel cool-down (executable plus action). */
   readonly coolDownKey?: string;
+  /**
+   * Requests sharing a key are one program to the flood pause, whatever they ask for. Absent,
+   * `coolDownKey` stands in.
+   */
+  readonly requesterKey?: string;
   /**
    * Password prompts: judge one answer. `secret` is a view of bytes the prompt owns and wipes
    * once the promise settles; the checker must not keep or stringify it. "rejected" keeps the

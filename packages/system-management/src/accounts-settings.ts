@@ -1,17 +1,24 @@
 /**
- * Users & login settings through the management service, which talks to AccountsService
- * (`org.freedesktop.Accounts`) on the system bus.
+ * Users & login settings. The account list and the session user's own name, picture and
+ * password go through the management service, which talks to AccountsService
+ * (`org.freedesktop.Accounts`) on the system bus and never raises a prompt.
  *
- * - **Authorization** is polkit's. Changing another account raises the system's password prompt
- *   (drawn by the compositor, docs/polkit-agent.md); the call resolves when the prompt does, up
- *   to `PROMPT_TIMEOUT_MS`. A dismissed prompt is `cancelled`. No password for it passes through
- *   here.
- * - **New passwords** (data entry) travel only in D-Bus method bodies to the session service;
- *   they are never logged, stored or put on a command line.
+ * - **Administrator changes** (add, delete, account type, another user's password) go from this
+ *   process straight to moire-accounts (`account-admin.ts`), which asks polkit once per change
+ *   about this process. The system's password prompt (drawn by the compositor,
+ *   docs/polkit-agent.md) therefore names the app that asked. The call resolves when the
+ *   prompt does, up to `PROMPT_TIMEOUT_MS`. A dismissed prompt is `cancelled`; one the system
+ *   turned away without showing it (a pause after cancels, a full queue) is `refused`. No
+ *   password for it passes through here.
+ * - **New passwords** (data entry) travel only in D-Bus method bodies; they are never logged,
+ *   stored or put on a command line.
  */
 import { SessionBus } from "@moire/dbus";
+import type { AccountAdmin } from "./account-admin";
 import {
   bounded,
+  PROMPT_CANCELLED,
+  PROMPT_REFUSED,
   observeSettingsService,
   remoteSettingsFailure,
   settingsFailure,
@@ -83,6 +90,34 @@ export function passwordProblem(password: string): string | null {
   return null;
 }
 
+/**
+ * `passwordProblem` for a password held as UTF-8 bytes, without making a string of it (the
+ * account mechanism never turns a password into a JS string). Malformed UTF-8 is refused.
+ */
+export function passwordBytesProblem(bytes: Uint8Array): string | null {
+  if (bytes.length > MAX_PASSWORD_BYTES) return "That password is too long.";
+  let characters = 0;
+  for (let index = 0; index < bytes.length;) {
+    const lead = bytes[index]!;
+    if (lead === 0 || lead === 0x0a || lead === 0x0d)
+      return "Passwords cannot contain line breaks.";
+    const length =
+      lead < 0x80 ? 1 : lead < 0xc2 ? 0 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : lead < 0xf5 ? 4 : 0;
+    if (length === 0 || index + length > bytes.length) return "That password can't be used.";
+    for (let next = 1; next < length; next++) {
+      const byte = bytes[index + next]!;
+      // The second byte's range excludes overlong forms, surrogates and code points past U+10FFFF.
+      const low = next > 1 ? 0x80 : lead === 0xe0 ? 0xa0 : lead === 0xf0 ? 0x90 : 0x80;
+      const high = next > 1 ? 0xbf : lead === 0xed ? 0x9f : lead === 0xf4 ? 0x8f : 0xbf;
+      if (byte < low || byte > high) return "That password can't be used.";
+    }
+    index += length;
+    characters++;
+  }
+  if (characters < MIN_PASSWORD_LENGTH) return `Use at least ${MIN_PASSWORD_LENGTH} characters.`;
+  return null;
+}
+
 function uid(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 0xffff_fffe)
     throw new Error("Invalid uid");
@@ -148,9 +183,10 @@ export type AccountsSettingsClient = {
   readonly state: AccountsSettingsState;
   subscribe(listener: (state: AccountsSettingsState) => void): () => void;
   refresh(): Promise<SettingsResult>;
-  /** Own name is allowed outright; another user's raises the password prompt. */
+  /** The session user's own name; no prompt. */
   setRealName(uid: number, realName: string): Promise<SettingsResult>;
-  /** An image path (≤ 1 MiB PNG or JPEG) AccountsService copies, or null to clear. */
+  /** The session user's own picture: an image path (≤ 1 MiB PNG or JPEG) AccountsService
+   *  copies, or null to clear. No prompt. */
   setIcon(uid: number, path: string | null): Promise<SettingsResult>;
   /** The session user's own password; the current one is verified first. */
   changePassword(current: string, next: string): Promise<SettingsResult>;
@@ -177,7 +213,16 @@ function localProblem(...problems: (string | null)[]) {
   return problem ? Promise.resolve(settingsFailure("invalid", problem)) : null;
 }
 
-export async function observeAccountsSettings(bus: SessionBus): Promise<AccountsSettingsClient> {
+/** Another account's name or picture: Settings offers no way to, and nothing does it. */
+const OWN_ONLY = "Only your own name and picture can be changed here.";
+
+export async function observeAccountsSettings(
+  bus: SessionBus,
+  options: {
+    /** Administrator changes (moire-accounts). Without it they are unavailable. */
+    admin?: AccountAdmin;
+  } = {},
+): Promise<AccountsSettingsClient> {
   const observer = await observeSettingsService(bus, {
     path: ACCOUNTS_SETTINGS_PATH,
     iface: ACCOUNTS_SETTINGS_INTERFACE,
@@ -199,6 +244,21 @@ export async function observeAccountsSettings(bus: SessionBus): Promise<Accounts
       return remoteSettingsFailure(ACCOUNTS_SETTINGS_INTERFACE, error, FALLBACK);
     }
   };
+  const selfUid = () => {
+    const state = observer.state;
+    return state.kind === "ready" && state.status.kind === "ready" ? state.status.selfUid : null;
+  };
+  const ownOnly = (target: number) => localProblem(target === selfUid() ? null : OWN_ONLY);
+  /** An administrator change through moire-accounts, then the list read again. */
+  const admin = async <T>(
+    change: (admin: AccountAdmin) => Promise<SettingsResult<T>>,
+  ): Promise<SettingsResult<T>> => {
+    if (!options.admin)
+      return settingsFailure("unavailable", "Accounts can't be changed on this computer.");
+    const result = await change(options.admin);
+    if (result.ok) await run("Refresh", "", []);
+    return result;
+  };
   return {
     get state() {
       return observer.state;
@@ -206,9 +266,12 @@ export async function observeAccountsSettings(bus: SessionBus): Promise<Accounts
     subscribe: observer.subscribe,
     refresh: () => run("Refresh", "", []),
     setRealName: (target, name) =>
-      localProblem(realNameProblem(name)) ?? run("SetRealName", "us", [target, name.trim()]),
+      localProblem(realNameProblem(name)) ??
+      ownOnly(target) ??
+      run("SetRealName", "us", [target, name.trim()]),
     setIcon: (target, path) =>
       localProblem(path === null || path.startsWith("/") ? null : "Choose an image file.") ??
+      ownOnly(target) ??
       run("SetIcon", "us", [target, path ?? ""]),
     changePassword: (current, next) =>
       localProblem(
@@ -217,29 +280,27 @@ export async function observeAccountsSettings(bus: SessionBus): Promise<Accounts
         current === next ? "Choose a password different from the current one." : null,
       ) ?? run("ChangePassword", "ss", [current, next]),
     setPassword: (target, next) =>
-      localProblem(passwordProblem(next)) ?? run("SetPassword", "us", [target, next]),
+      localProblem(passwordProblem(next)) ??
+      admin((accounts) => accounts.setPassword(target, next)),
     createUser: (account) =>
       localProblem(
         usernameProblem(account.username),
         realNameProblem(account.realName),
         passwordProblem(account.password),
-      ) ??
-      run(
-        "CreateUser",
-        "ssss",
-        [account.username, account.realName.trim(), account.accountType, account.password],
-        ([created]) => ({ uid: uid(created) }),
-      ),
-    deleteUser: (target, options) => run("DeleteUser", "ub", [target, options.keepHome]),
-    setAccountType: (target, accountType) => run("SetAccountType", "us", [target, accountType]),
+      ) ?? admin((accounts) => accounts.addUser(account)),
+    deleteUser: (target, deletion) => admin((accounts) => accounts.deleteUser(target, deletion)),
+    setAccountType: (target, accountType) =>
+      admin((accounts) => accounts.setAccountType(target, accountType)),
     dispose: observer.dispose,
   };
 }
 
-export async function connectAccountsSettings(): Promise<AccountsSettingsClient> {
+export async function connectAccountsSettings(
+  options: { admin?: AccountAdmin } = {},
+): Promise<AccountsSettingsClient> {
   const bus = await SessionBus.connect();
   try {
-    const client = await observeAccountsSettings(bus);
+    const client = await observeAccountsSettings(bus, options);
     let disposal: Promise<void> | null = null;
     return {
       ...client,
@@ -260,8 +321,15 @@ export async function connectAccountsSettings(): Promise<AccountsSettingsClient>
 // ---------------------------------------------------------------------------------------------
 // Fake for UI smokes and the gallery. The fake's own (current) password is "correct horse".
 
-/** Stands in for the system's password prompt: how it ended. */
-export type FakePrompt = () => Promise<"authorized" | "cancelled">;
+/** Stands in for the system's password prompt: how it ended. `refused`: it never showed. */
+export type FakePrompt = () => Promise<"authorized" | "cancelled" | "refused">;
+
+/** The failure a fake reports for a prompt that did not authorize, as the service words it. */
+export function fakePromptFailure(answer: "authorized" | "cancelled" | "refused") {
+  if (answer === "cancelled") return settingsFailure("cancelled", PROMPT_CANCELLED);
+  if (answer === "refused") return settingsFailure("refused", PROMPT_REFUSED);
+  return null;
+}
 
 export type FakeAccountsSettings = AccountsSettingsClient & {
   emit(status: AccountsStatus): void;
@@ -333,13 +401,13 @@ export function createFakeAccountsSettingsClient(
       return settingsFailure(code, `Fake ${code}`);
     }
     if (status.kind !== "ready") return settingsFailure("unavailable", status.message);
-    const needsAdmin =
-      options.admin || (options.target !== undefined && options.target !== status.selfUid);
+    // One prompt per administrator change, as moire-accounts asks polkit once per call.
+    const needsAdmin = options.admin === true;
     if (options.target !== undefined && !status.users.some((user) => user.uid === options.target))
       return settingsFailure("invalid", "That account no longer exists.");
     // Standard users are prompted too: an administrator answers for them.
-    if (needsAdmin && (await prompt()) === "cancelled")
-      return settingsFailure("cancelled", "The password request was cancelled.");
+    const refusal = needsAdmin ? fakePromptFailure(await prompt()) : null;
+    if (refusal) return refusal;
     const outcome = apply(status);
     if ("ok" in outcome) return outcome;
     if (outcome.status) emit(outcome.status);
@@ -366,13 +434,17 @@ export function createFakeAccountsSettingsClient(
     refresh: () => step("Refresh", {}, () => ({})),
     setRealName: (target, realName) =>
       localProblem(realNameProblem(realName)) ??
-      step("SetRealName", { target }, (ready) => ({
-        status: patchUser(ready, target, { realName: realName.trim() }),
-      })),
+      step("SetRealName", { target }, (ready) =>
+        target === ready.selfUid
+          ? { status: patchUser(ready, target, { realName: realName.trim() }) }
+          : settingsFailure("invalid", OWN_ONLY),
+      ),
     setIcon: (target, path) =>
-      step("SetIcon", { target }, (ready) => ({
-        status: patchUser(ready, target, { iconFile: path }),
-      })),
+      step("SetIcon", { target }, (ready) =>
+        target === ready.selfUid
+          ? { status: patchUser(ready, target, { iconFile: path }) }
+          : settingsFailure("invalid", OWN_ONLY),
+      ),
     changePassword: (current, next) =>
       localProblem(passwordProblem(next)) ??
       step("ChangePassword", {}, () =>

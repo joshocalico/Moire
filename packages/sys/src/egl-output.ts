@@ -157,6 +157,11 @@ export type EglTransferOperation =
 export type EglOutputOptions = {
   measureTransfers?: boolean;
   /**
+   * Render on this fd (the GPU's render node) instead of the KMS fd, so everything can be made
+   * ready before the display is owned; see `attachKmsDevice`.
+   */
+  renderFd?: number;
+  /**
    * Request a GLES 3 context so GPU scene producers can render into the composition (see
    * `producerGl`). Falls back to GLES 2 when the driver offers no ES3 config.
    */
@@ -680,7 +685,7 @@ export class EglOutputScaler {
   private readonly measureTransfers: boolean;
 
   constructor(
-    private readonly drmFd: number,
+    private drmFd: number,
     options: EglOutputOptions = {},
   ) {
     this.measureTransfers = options.measureTransfers ?? process.env.MOIRE_GPU_METRICS === "1";
@@ -691,7 +696,7 @@ export class EglOutputScaler {
 
     const gbmCreateDevice = this.gbm.func("void *gbm_create_device(int fd)") as NativeFunction;
     this.gbmDestroyDevice = this.gbm.func("void gbm_device_destroy(void *gbm)") as NativeFunction;
-    this.gbmDevice = gbmCreateDevice(drmFd);
+    this.gbmDevice = gbmCreateDevice(options.renderFd ?? drmFd);
     if (pointerAddress(this.gbmDevice) === 0n) {
       throw new Error("gbm_create_device failed for EGL output");
     }
@@ -2451,9 +2456,10 @@ void main() {
       this.glEglImageTargetTexture(GL_TEXTURE_2D, image);
       this.bindColorTarget(framebuffer, texture);
 
+      // Before the display is owned there is nothing to register with: attachKmsDevice replaces it.
       const handleOut = koffi.alloc("uint32_t", 1);
       const framebufferOut = koffi.alloc("uint32_t", 1);
-      try {
+      if (this.drmFd >= 0) try {
         const primeResult = Number(this.drmPrimeFdToHandle(this.drmFd, primeFd, handleOut));
         if (primeResult !== 0) {
           throw new Error(`drmPrimeFDToHandle failed (${primeResult})`);
@@ -2514,7 +2520,7 @@ void main() {
       };
       return target;
     } catch (error) {
-      if (framebufferId) this.drmModeRmFb(this.drmFd, framebufferId);
+      if (framebufferId && this.drmFd >= 0) this.drmModeRmFb(this.drmFd, framebufferId);
       if (framebuffer) {
         this.glDeleteFramebuffers(1, new Uint32Array([framebuffer]));
       }
@@ -2568,7 +2574,10 @@ void main() {
     const target = [
       pool.targets[pool.nextIndex]!,
       pool.targets[(pool.nextIndex + 1) % pool.targets.length]!,
-    ].find((candidate) => isKmsFramebufferWritable(this.drmFd, candidate.framebufferId, output.id));
+    ].find(
+      (candidate) =>
+        this.drmFd < 0 || isKmsFramebufferWritable(this.drmFd, candidate.framebufferId, output.id),
+    );
     if (!target) throw new Error(`No idle GBM scanout target for ${output.id}`);
     pool.nextIndex = target === pool.targets[0] ? 1 : 0;
     pool.lastRendered = target;
@@ -2578,11 +2587,13 @@ void main() {
   private destroyDirectTarget(target: DirectOutputTarget): void {
     // Failed shutdown/modeset leaves native ownership unresolved. Retain the BO
     // rather than unregistering storage that may still be scanned out.
-    if (!canRetireKmsFramebuffer(this.drmFd, target.framebufferId)) return;
-    try {
-      this.drmModeRmFb(this.drmFd, target.framebufferId);
-    } catch {
-      // best effort
+    if (this.drmFd >= 0) {
+      if (!canRetireKmsFramebuffer(this.drmFd, target.framebufferId)) return;
+      try {
+        this.drmModeRmFb(this.drmFd, target.framebufferId);
+      } catch {
+        // best effort
+      }
     }
     this.glDeleteFramebuffers(1, new Uint32Array([target.framebuffer]));
     this.glDeleteTextures(1, new Uint32Array([target.texture]));
@@ -3009,6 +3020,18 @@ void main() {
   }
 
   /** Render into a DRM-registered GBM BO without CPU readback. */
+  /**
+   * Own the display from here on. Everything rendered so far stays: only the output targets are
+   * replaced, because framebuffers are registered per KMS fd.
+   */
+  attachKmsDevice(fd: number): void {
+    this.bindContext();
+    for (const pool of this.directTargets.values())
+      for (const target of pool.targets) this.destroyDirectTarget(target);
+    this.directTargets.clear();
+    this.drmFd = fd;
+  }
+
   renderOutputDirect(output: EglDirectOutput): EglDirectPresent {
     this.bindContext();
     const target = this.directTargetFor(output, true);

@@ -3,7 +3,7 @@
  */
 export { isLinux, assertLinux } from "./platform";
 export { LinuxReadinessDispatcher } from "./readiness";
-export { listDrmConnectors, type DrmConnectorInfo } from "./drm";
+export { findConnectedCard, listDrmConnectors, renderNodeForCard, type DrmConnectorInfo } from "./drm";
 export { readDisplayIdentity, type DisplayIdentity } from "./display-identity";
 export { watchDrmHotplug, type DrmHotplugEvent, type DrmHotplugMonitor } from "./drm-hotplug";
 export {
@@ -133,7 +133,11 @@ export {
   publishStageHandoff,
   readStageHandoff,
   STAGE_HANDOFF_DIR,
+  bootReleaseWantsFrame,
   markBootPresented,
+  markBootPresenting,
+  readBootActive,
+  waitForBootPresenting,
   monotonicMs,
   publishBootActive,
   readBootFrame,

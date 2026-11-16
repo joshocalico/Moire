@@ -31,9 +31,17 @@ export function readyStatus<Status>(
   return state?.kind === "ready" ? (state.status ?? null) : null;
 }
 
-/** Run settings-service changes one name at a time, keeping which one is running. */
+/** How long the system's "password requests are paused" stays beside the control. */
+const REFUSED_MS = 8_000;
+
+/**
+ * Run settings-service changes one name at a time, keeping which one is running, and which one
+ * the system's password prompt last turned away unseen (`refused`), with its sentence, for a
+ * short while.
+ */
 export function useSettingsCalls() {
   const [busy, setBusy] = useState<string | null>(null);
+  const [refused, setRefused] = useState<{ name: string; message: string } | null>(null);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -41,12 +49,23 @@ export function useSettingsCalls() {
       mounted.current = false;
     };
   }, []);
+  useEffect(() => {
+    if (!refused) return;
+    const timer = setTimeout(() => setRefused(null), REFUSED_MS);
+    return () => clearTimeout(timer);
+  }, [refused]);
   return {
     busy,
+    /** The sentence for `name` if its last run was refused without a prompt; else null. */
+    refused: (name: string) => (refused?.name === name ? refused.message : null),
     async run<T>(name: string, call: () => Promise<SettingsResult<T>>): Promise<SettingsResult<T>> {
       setBusy(name);
+      setRefused(null);
       try {
-        return await call();
+        const result = await call();
+        if (mounted.current && !result.ok && result.code === "refused")
+          setRefused({ name, message: result.message });
+        return result;
       } finally {
         if (mounted.current) setBusy((current) => (current === name ? null : current));
       }

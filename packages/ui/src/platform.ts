@@ -233,6 +233,15 @@ export interface PlatformWindow {
   setFullscreen?(fullscreen: boolean): void;
   isFullscreen?(): boolean;
   minimize?(): void;
+  /**
+   * An xdg-activation token naming this window, for a program it launches or hands a request to;
+   * null when the compositor issues none.
+   */
+  requestActivationToken?(): Promise<string | null>;
+  /** Ask to be raised and focused with an xdg-activation token. */
+  activate?(token: string): void;
+  /** Resolve once the compositor has handled every request this window sent so far. */
+  sync?(): Promise<void>;
   /** Present ARGB8888 pixels and optional buffer-space damage. */
   present(
     pixels: Uint8Array,

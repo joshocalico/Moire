@@ -5,10 +5,14 @@ import React, { useLayoutEffect, type ReactNode } from "react";
 import {
   Application,
   Window,
+  WidgetThemeProvider,
+  createPersonalizedWidgetTheme,
   discoverPersonalization,
+  installUiFonts,
   type PersonalizationOverrides,
   type WindowSize,
 } from "@moire/ui";
+import { HeadlessPlatform } from "@moire/ui/testing";
 import type {
   NativeGreetdClient,
   // oxlint-disable-next-line import/no-relative-parent-imports -- Native adapter is source-only until its package is wired.
@@ -81,6 +85,65 @@ function Presentation(
   );
 }
 
+/**
+ * Draw the greeter once off screen, in its real theme and layout, with a placeholder account and
+ * no login client. Its first real frame runs on the compositor's thread and would stall the scene,
+ * so that cost is paid before the display is taken. Nothing here reaches the screen.
+ */
+export async function warmNativeGreeter(options: {
+  width?: number;
+  height?: number;
+  uiScale?: number;
+  colorScheme?: "light" | "dark";
+  sessionLabel?: string;
+}): Promise<void> {
+  await installUiFonts();
+  const platform = new HeadlessPlatform();
+  await platform.connect();
+  const theme = createPersonalizedWidgetTheme(
+    discoverPersonalization("linux", {
+      ...nativeGreeterPersonalization({
+        colorScheme: options.colorScheme,
+        fontScale: bounded(options.uiScale, 1, 0.75, 2),
+      }),
+      reducedMotion: false,
+    }),
+  );
+  const window = new Window({
+    title: "Sign in to Moire",
+    width: bounded(options.width, 1280, 320, 8192),
+    height: bounded(options.height, 800, 320, 8192),
+    decorated: false,
+    fullscreen: true,
+  });
+  const idle = async () => {};
+  const users = {
+    list: async () => [{ uid: 0n, username: "account", displayName: "Account" }],
+  };
+  try {
+    window.setContent((size) => (
+      <WidgetThemeProvider theme={theme}>
+        <NativeGreeterView
+          {...size}
+          state={{ kind: "ready", revision: 0, message: "" }}
+          actions={{ begin: idle, answer: idle, cancel: idle }}
+          sessionLabel={options.sessionLabel}
+          users={users}
+          compositorBackdrop
+        />
+      </WidgetThemeProvider>
+    ));
+    window.mount(platform);
+    // The account list arrives on a later turn.
+    for (let draw = 0; draw < 3; draw++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      window.tick();
+    }
+  } finally {
+    window.destroy();
+  }
+}
+
 export async function runNativeGreeter(
   options: RunNativeGreeterOptions,
 ): Promise<NativeGreeterRunResult> {
@@ -134,6 +197,8 @@ export async function runNativeGreeter(
       decorated: false,
       resizable: true,
       retainedMotionPolicy: "bounded-wave",
+      // Keystrokes must not run on from one sign-in prompt into the next, possibly secret, one.
+      restoreLostFocus: false,
     });
     window = createdWindow;
     const createdController = createNativeGreeterController({ client: options.client });

@@ -80,6 +80,7 @@ export function selectRow(
           options={choices}
           placeholder={options.placeholder}
           disabled={options.disabled}
+          focusId={`setting:${id}`}
           onChange={onChange}
         />
       ),

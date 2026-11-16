@@ -5,9 +5,11 @@
  *
  * - **Own account only, structurally:** the account to sign in is the caller's, taken from the
  *   bus's credentials for the calling connection. No method takes an account name.
- * - **Polkit:** `org.moire.dm.set-autologin`, checked for the calling connection.
- *   nix/moire-admin.rules answers "an administrator's password" (kept five minutes) for active,
- *   local sessions; the fallback denies everyone else. Polkit raises the prompt through the
+ * - **Polkit:** `org.moire.dm.set-autologin`, checked for the calling connection. Settings
+ *   calls this service itself (packages/system-management/src/login-settings.ts), so polkit's
+ *   subject, and the app the prompt names, is Settings.
+ *   nix/moire-admin.rules answers "an administrator's password" (every time, never kept) for
+ *   active, local sessions, and NO for the greeter account and everyone else. Polkit raises the prompt through the
  *   caller's session agent, the compositor (docs/polkit-agent.md). This service never sees a
  *   password.
  * - **Interaction** is allowed only for a caller that set D-Bus's

@@ -107,6 +107,18 @@ const DrmModeModeInfo = koffi.struct("drmModeModeInfo_kms", {
   name: koffi.array("char", 32),
 });
 
+const DrmModeCrtc = koffi.struct("drmModeCrtc_kms", {
+  crtc_id: "uint32_t",
+  buffer_id: "uint32_t",
+  x: "uint32_t",
+  y: "uint32_t",
+  width: "uint32_t",
+  height: "uint32_t",
+  mode_valid: "int",
+  mode: DrmModeModeInfo,
+  gamma_size: "int",
+});
+
 const DrmModeConnector = koffi.struct("drmModeConnector_kms", {
   connector_id: "uint32_t",
   encoder_id: "uint32_t",
@@ -340,8 +352,13 @@ export function openKmsOutput(
   /**
    * Tight BGRA shown by the initial modeset instead of black: the boot stage's final frame,
    * so taking over the display is invisible. Ignored unless its size matches the mode.
+   * `keepScanout`: no modeset if this mode is already up, so what the previous master left on
+   * screen stays there until the first page flip.
    */
-  initialFrame?: { pixels: Uint8Array; width: number; height: number } | { fill: number },
+  initialFrame?:
+    | { pixels: Uint8Array; width: number; height: number }
+    | { fill: number }
+    | { keepScanout: true },
 ): KmsOutput {
   assertLinux("KMS");
   if (
@@ -371,6 +388,8 @@ export function openKmsOutput(
     "int drmModeSetCrtc(int fd, uint32_t crtcId, uint32_t bufferId, uint32_t x, uint32_t y, uint32_t *connectors, int count, void *mode)",
   );
   const drmSetMaster = libdrm.func("int drmSetMaster(int fd)");
+  const drmModeGetCrtc = libdrm.func("void *drmModeGetCrtc(int fd, uint32_t crtcId)");
+  const drmModeFreeCrtc = libdrm.func("void drmModeFreeCrtc(void *ptr)");
   void DrmModeModeInfo;
   void DrmModeConnector;
   void DrmModeEncoder;
@@ -524,6 +543,7 @@ export function openKmsOutput(
           flushMmap(map, filled, Math.min(size, filled.byteLength));
         } else if (
           initialFrame &&
+          "pixels" in initialFrame &&
           initialFrame.width === width &&
           initialFrame.height === height &&
           initialFrame.pixels.byteLength === width * height * 4
@@ -564,7 +584,28 @@ export function openKmsOutput(
         const connectors = koffi.alloc("uint32_t", 1);
         koffi.encode(connectors, "uint32_t", connectorId);
 
-        const set = drmModeSetCrtc(fd, crtcId, fbId, 0, 0, connectors, 1, modePtr) as number;
+        let keeping = false;
+        if (initialFrame && "keepScanout" in initialFrame) {
+          const crtcPtr = drmModeGetCrtc(fd, crtcId);
+          if (crtcPtr) {
+            const crtc = koffi.decode(crtcPtr, DrmModeCrtc) as {
+              buffer_id: number;
+              mode_valid: number;
+              mode: { hdisplay: number; vdisplay: number; vrefresh: number };
+            };
+            const wanted = mode as { hdisplay: number; vdisplay: number; vrefresh: number };
+            keeping =
+              crtc.buffer_id !== 0 &&
+              crtc.mode_valid !== 0 &&
+              crtc.mode.hdisplay === wanted.hdisplay &&
+              crtc.mode.vdisplay === wanted.vdisplay &&
+              crtc.mode.vrefresh === wanted.vrefresh;
+            drmModeFreeCrtc(crtcPtr);
+          }
+        }
+        const set = keeping
+          ? 0
+          : (drmModeSetCrtc(fd, crtcId, fbId, 0, 0, connectors, 1, modePtr) as number);
         if (set !== 0) {
           throw new Error(
             `drmModeSetCrtc failed (${set}). Run on a free VT / as DRM master (see docs/dev-vm.md).`,

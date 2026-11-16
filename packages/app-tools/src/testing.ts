@@ -215,6 +215,34 @@ export function windowTexts(window: Window): string[] {
   return found;
 }
 
+/** The texts painted inside a live Window control (a menu button's current choice, say). */
+export function windowControlTexts(window: Window, focusId: string): string[] {
+  const internals = window as unknown as WindowInternals;
+  const hit = internals.hits.find((candidate) => candidate.focusId === focusId);
+  assert.ok(hit, `No control ${focusId}`);
+  const offset = (value: SceneNode["translateX"]) =>
+    typeof value === "number" ? value : (value?.get() ?? 0);
+  const found: string[] = [];
+  const walk = (node: SceneNode, x: number, y: number) => {
+    x += node.x + offset(node.translateX);
+    y += node.y + offset(node.translateY);
+    const cx = x + node.width / 2;
+    const cy = y + node.height / 2;
+    if (
+      node.kind === "text" &&
+      node.text &&
+      cx >= hit.x &&
+      cx <= hit.x + hit.width &&
+      cy >= hit.y &&
+      cy <= hit.y + hit.height
+    )
+      found.push(node.text);
+    for (const child of node.children) walk(child, x, y);
+  };
+  walk(internals.root.container, 0, 0);
+  return found;
+}
+
 export type MountedWindow = Awaited<ReturnType<typeof mountWindow>>;
 /**
  * Render content into a headless Window for workflow smokes, with helpers that inject real

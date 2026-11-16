@@ -495,9 +495,13 @@ export function NativeGreeterView(props: NativeGreeterViewProps): ReactNode {
   useLayoutEffect(() => {
     setAccessibilityIdentity(null);
   }, [currentIdentity]);
+  // Over the compositor's scene there is no silk of our own to load or render.
   const silk = useMemo(
-    () => nativeGreeterSilk({ bg: pal.bg, accent: pal.accent, muted: pal.muted }),
-    [pal.bg, pal.accent, pal.muted],
+    () =>
+      props.compositorBackdrop
+        ? null
+        : nativeGreeterSilk({ bg: pal.bg, accent: pal.accent, muted: pal.muted }),
+    [props.compositorBackdrop, pal.bg, pal.accent, pal.muted],
   );
   // Over the compositor's scene the login rises in while the ribbon pours into the wave.
   const entering = props.compositorBackdrop === true && props.reducedMotion !== true;
@@ -537,7 +541,7 @@ export function NativeGreeterView(props: NativeGreeterViewProps): ReactNode {
       fill={props.compositorBackdrop ? 0x00000000 : pal.surface}
       clip
     >
-      {!props.compositorBackdrop && (
+      {silk && (
         <Backdrop
           width={props.width}
           height={props.height}
