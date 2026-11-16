@@ -4,6 +4,17 @@ A TypeScript **compositing Wayland desktop environment** — DRM/KMS-first, alwa
 
 > Day-0 bar: session D-Bus, Moire Files, native Terminal, LibreOffice, overlapping composited windows with React decorations.
 
+## Screenshots
+
+![The Moire greeter, choosing an account](docs/screenshots/greeter.jpg)
+
+| | |
+|---|---|
+| ![Settings: Users & Login](docs/screenshots/settings-users.jpg) | ![The polkit password prompt](docs/screenshots/polkit-prompt.jpg) |
+| Settings: Users & Login | Moire's polkit prompt asking for an administrator's password |
+
+More in [docs/screenshots.md](docs/screenshots.md). All were captured from the ARM64 VM.
+
 ## Documentation
 
 Full docs tree (roadmap, architecture, widget catalog, shell/apps, DnD, prefs): **[docs/README.md](docs/README.md)**.
